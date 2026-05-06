@@ -1,0 +1,176 @@
+DreamPark SDK License
+=====================
+
+Copyright (c) 2026 Dream Park Immersive, Inc. All rights reserved.
+
+This Software is made source-available so that creators can build and
+publish content for the DreamPark platform. It is NOT open-source
+software and is NOT released under any of the OSI-approved licenses
+(MIT, Apache, GPL, BSD, etc.).
+
+
+1. DEFINITIONS
+
+   "Software" means the source code, compiled assemblies, prefabs,
+   scenes, scripts, assets, documentation, and any other materials in
+   this repository, excluding the Third-Party Components defined in
+   Section 6.
+
+   "DreamPark Platform" means the DreamPark mixed-reality platform
+   operated by Dream Park Immersive, Inc., including consumer
+   applications, backend services, hardware (DreamBox, DreamBand), and
+   any successor or related products.
+
+   "Content" means game experiences, attractions, prefabs, scripts,
+   audio, art, and other creative works produced using the Software
+   and intended to be deployed to the DreamPark Platform.
+
+   "You" (and "Your") means the individual or legal entity exercising
+   rights under this License.
+
+
+2. GRANT OF RIGHTS
+
+   Subject to Your continuing compliance with this License, Dream Park
+   Immersive, Inc. grants You a limited, non-exclusive, non-
+   transferable, revocable, royalty-free (subject to Section 4)
+   license to:
+
+   (a) download, install, and use the Software for the sole purpose of
+       authoring, building, testing, and publishing Content for
+       distribution on the DreamPark Platform;
+
+   (b) modify the Software locally as necessary to develop Your
+       Content; and
+
+   (c) include compiled artifacts of the Software in Your Content
+       packages submitted to the DreamPark Platform.
+
+
+3. RESTRICTIONS
+
+   Except as expressly permitted in Section 2, You may NOT:
+
+   (a) redistribute, sublicense, sell, rent, lease, lend, or otherwise
+       transfer the Software (or any portion of it, including
+       modifications) to any third party;
+
+   (b) publish, host, mirror, or make the Software available for
+       download from any location other than Dream Park Immersive,
+       Inc.'s official channels;
+
+   (c) use the Software, in whole or in part, to build, operate, or
+       support any product, service, or platform that competes with
+       the DreamPark Platform;
+
+   (d) use the Software to deploy Content to any platform other than
+       the DreamPark Platform without prior written permission from
+       Dream Park Immersive, Inc.;
+
+   (e) remove, alter, or obscure any copyright, trademark, or other
+       proprietary notices in the Software;
+
+   (f) reverse-engineer, decompile, or disassemble compiled portions
+       of the Software except to the extent expressly permitted by
+       applicable law notwithstanding this restriction;
+
+   (g) use the Software in a manner that violates any applicable law
+       or third-party right.
+
+
+4. REVENUE SHARE
+
+   By downloading, installing, or otherwise using the Software, You
+   agree to be bound by the DreamPark Developer Revenue Sharing
+   Agreement published at:
+
+       https://dreampark.app/developer-terms
+
+   The Developer Revenue Sharing Agreement is incorporated into this
+   License by reference. If that Agreement and this License conflict,
+   the Developer Revenue Sharing Agreement governs with respect to
+   revenue, payments, post-release support obligations, audit rights,
+   and termination of revenue-sharing arrangements; this License
+   governs all other matters (use of the Software itself, restrictions,
+   ownership, warranty, and liability).
+
+
+5. OWNERSHIP
+
+   The Software is licensed, not sold. Dream Park Immersive, Inc.
+   retains all right, title, and interest in and to the Software,
+   including all intellectual property rights. No rights are granted
+   to You other than those expressly stated in Section 2.
+
+   You retain all right, title, and interest in and to Content You
+   create using the Software, subject to the terms of the Revenue
+   Share Agreement.
+
+
+6. THIRD-PARTY COMPONENTS
+
+   The Software bundles or depends on third-party components that are
+   licensed under their own terms. Those licenses govern Your use of
+   the corresponding third-party components and are NOT superseded by
+   this License. See NOTICE.md for the list of third-party components
+   and their respective licenses.
+
+
+7. NO WARRANTY
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND
+   NON-INFRINGEMENT.
+
+
+8. LIMITATION OF LIABILITY
+
+   IN NO EVENT SHALL DREAM PARK IMMERSIVE, INC. BE LIABLE FOR ANY
+   CLAIM, DAMAGES, OR OTHER LIABILITY (INCLUDING DIRECT, INDIRECT,
+   INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES) ARISING
+   FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+   OTHER DEALINGS IN THE SOFTWARE.
+
+
+9. TERMINATION
+
+   This License terminates automatically and immediately upon any
+   breach of its terms by You. Dream Park Immersive, Inc. may also
+   terminate this License at any time, with or without cause, by
+   notice posted on its website or sent to You. Upon termination, You
+   must cease all use of the Software and destroy all copies in Your
+   possession or control. Sections 3, 5, 6, 7, 8, and 10 survive
+   termination.
+
+
+10. GOVERNING LAW
+
+    This License is governed by the laws of the State of California,
+    USA, without regard to its conflict-of-laws principles. Any
+    dispute arising under or in connection with this License shall be
+    resolved exclusively in the state or federal courts located in
+    California, and the parties consent to the personal jurisdiction
+    of those courts.
+
+
+11. CONTACT
+
+    Questions about this License or requests for additional rights
+    should be directed to:
+
+        Dream Park Immersive, Inc.
+        legal@dreampark.app
+
+
+----------------------------------------------------------------------
+NOTE FOR REVIEW: This license has been drafted as a starting point and
+should be reviewed by qualified legal counsel before reliance.
+Section 4 references the Developer Revenue Sharing Agreement at
+https://dreampark.app/developer-terms — confirm that page is live on
+prod (it is currently deployed via DreamPark-Web's web.routes.js
+'/developer-terms' route in the dev branch). Confirm the legal contact
+address (Section 11). Governing law is California (Section 10), which
+matches the dispute-resolution clause in the Developer Revenue Sharing
+Agreement (Section 11 of that agreement).
+----------------------------------------------------------------------
