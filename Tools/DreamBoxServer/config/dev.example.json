@@ -1,0 +1,38 @@
+{
+  // DreamBox Relay — developer config.
+  // Optimised for local testing on a dev machine. Loaded automatically
+  // when launched with --dev, or from the Unity Editor menu.
+
+  // UDP relay port the Unity DreamBoxClient connects to.
+  "port": 7777,
+
+  // LiteNetLib connection key — must match the Unity client.
+  "connectionKey": "dreambox",
+
+  // Verbose per-message logging. Leave on for dev.
+  "debug": true,
+
+  // Event loop poll cadence. 15ms is fine.
+  "pollIntervalMs": 15,
+
+  // Plenty for local testing.
+  "maxConnections": 16,
+
+  // LAN discovery beacon.
+  // On a flat home/office LAN this works — your Quest headsets will
+  // auto-discover this relay. If you're on a corporate / guest Wi-Fi
+  // that blocks UDP broadcast, set discoveryEnabled to false and
+  // point the headset at this machine manually.
+  "discoveryPort": 7700,
+  "discoveryEnabled": true,
+  "discoveryIntervalMs": 2000,
+  "dreamboxId": "dreambox-dev",
+
+  // Web-based control panel. Off by default on the Pi; on for dev.
+  // Open http://localhost:7780/ once the server is running.
+  "webPanel": {
+    "enabled": true,
+    "port": 7780,
+    "bindAddress": "127.0.0.1"
+  }
+}

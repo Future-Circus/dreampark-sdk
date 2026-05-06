@@ -1,0 +1,21 @@
+# .NET build artifacts
+bin/
+obj/
+
+# Published self-contained binaries
+dist/
+
+# Local dev configs (the .example.json files are tracked)
+config/dev.json
+config/dream-pub.json
+dream-pub.json
+
+# Legacy nested layout (stubbed out after flatten; can be deleted)
+DreamBoxRelay/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo

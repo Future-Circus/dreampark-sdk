@@ -1,0 +1,153 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!78 &1
+TagManager:
+  serializedVersion: 3
+  tags:
+  - Coin
+  - Ground
+  - Brick
+  - ActiveHit
+  - FxTemporaire
+  - Block
+  - GroundJubbo
+  - FlyingJubbo
+  - Lava
+  - Stone
+  - Mole
+  - Explosive
+  - Pengo
+  - Skip
+  - Kicker
+  - Fence
+  - Projectile
+  - Cannon
+  - Locomotion
+  - PassThrough
+  - PassThroughButton
+  - LocoButton
+  - LocoText
+  - Fruit
+  - Ball
+  - Mortar
+  - Bumper
+  - Fire
+  - Air
+  - Rune
+  - Spell
+  - EnemyAttack
+  - FloatingObjects
+  - Rock
+  - Entity
+  - Ice
+  - Electricity
+  - Enemy
+  - Dagger
+  - Levitate
+  - Light
+  - Wand
+  - QDSUIBackplateGradient
+  - QDSUIToggleSwitch
+  - QDSUITooltip
+  - QDSUISharedThemeColor
+  - QDSUIAccentColor
+  - QDSUIBorderlessButton
+  - QDSUIToggleButton
+  - QDSUISecondaryButton
+  - QDSUIToggleBorderlessButton
+  - QDSUIIcon
+  - QDSUITextSecondaryColor
+  - Laser
+  - PowerForceFloor
+  - FloorCrack
+  - Portals
+  - ForceGrab
+  - Pylon
+  - Boing
+  - Cube
+  - PlayerFloorLevel
+  - Hammer
+  - Barricade
+  - Body
+  - Trap
+  - Keyhole
+  - Occluder
+  - Music
+  - QDSUISection
+  - RollingBallOutputTube
+  - PFAssemblySet
+  - Target
+  - Missile
+  - TongueHit
+  - MainMenuCanvas
+  - SamplesInfoPanel
+  - QDSUIDestructiveButton
+  - QDSUIPrimaryButton
+  - QDSUITextInvertedColor
+  - QDSUITextSecondaryInvertedColor
+  - QDSUIToggleCheckboxRadio
+  - QDSUITextInputField
+  - DragonsFire
+  - Dragon
+  - Reversal
+  - Water
+  - Web
+  - Blastwave
+  - KingJubbo
+  - Lionheart
+  - Chessboard
+  - Cauldron
+  - Key
+  - Scale
+  - Weight
+  - Bird
+  - Vehicle
+  - Can
+  - ThrowTarget
+  - DuelTarget
+  - DuelObject
+  - Orc
+  - Dead
+  - Reversalhole
+  - Metallic
+  - Paddle
+  - Wall
+  layers:
+  - Default
+  - TransparentFX
+  - Ignore Raycast
+  - ARMesh
+  - Water
+  - UI
+  - Level
+  - Entity
+  - Item
+  - ItemNonInteractor
+  - Triggers
+  - Player
+  - Projectile
+  - Gizmo
+  - Spell
+  - SecondaryRenderer
+  - Portal
+  - Enemy
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  m_SortingLayers:
+  - name: Default
+    uniqueID: 0
+    locked: 0
+  m_RenderingLayers:
+  - Default

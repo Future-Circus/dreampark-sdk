@@ -1,0 +1,164 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 468a46d0ae32c3544b7d98094e6448a9, type: 3}
+  m_Name: AddressableAssetSettings
+  m_EditorClassIdentifier: 
+  m_DefaultGroup: de63b359689ab40ffbe3690dc84d500f
+  m_currentHash:
+    serializedVersion: 2
+    Hash: 00000000000000000000000000000000
+  m_OptimizeCatalogSize: 0
+  m_BuildRemoteCatalog: 1
+  m_BundleLocalCatalog: 0
+  m_CatalogRequestsTimeout: 0
+  m_DisableCatalogUpdateOnStart: 0
+  m_InternalIdNamingMode: 0
+  m_InternalBundleIdMode: 1
+  m_AssetLoadMode: 0
+  m_BundledAssetProviderType:
+    m_AssemblyName: Unity.ResourceManager, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null
+    m_ClassName: UnityEngine.ResourceManagement.ResourceProviders.BundledAssetProvider
+  m_AssetBundleProviderType:
+    m_AssemblyName: Unity.ResourceManager, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null
+    m_ClassName: UnityEngine.ResourceManagement.ResourceProviders.AssetBundleProvider
+  m_IgnoreUnsupportedFilesInBuild: 0
+  m_UniqueBundleIds: 0
+  m_EnableJsonCatalog: 1
+  m_NonRecursiveBuilding: 1
+  m_CCDEnabled: 0
+  m_maxConcurrentWebRequests: 3
+  m_UseUWRForLocalBundles: 0
+  m_BundleTimeout: 0
+  m_BundleRetryCount: 0
+  m_BundleRedirectLimit: -1
+  m_SharedBundleSettings: 0
+  m_SharedBundleSettingsCustomGroupIndex: 0
+  m_ContiguousBundles: 1
+  m_StripUnityVersionFromBundleBuild: 0
+  m_DisableVisibleSubAssetRepresentations: 0
+  m_BuiltInBundleNaming: 0
+  mBuiltInBundleCustomNaming: 
+  m_MonoScriptBundleNaming: 0
+  m_CheckForContentUpdateRestrictionsOption: 0
+  m_MonoScriptBundleCustomNaming: 
+  m_RemoteCatalogBuildPath:
+    m_Id: f1264b95de0884684a6c7e3fde4e5b2a
+  m_RemoteCatalogLoadPath:
+    m_Id: b765303d3443a4b5a83858ccce091a5a
+  m_ContentStateBuildPathProfileVariableName: <default settings path>
+  m_CustomContentStateBuildPath: 
+  m_ContentStateBuildPath: 
+  m_BuildAddressablesWithPlayerBuild: 2
+  m_overridePlayerVersion: '[UnityEditor.PlayerSettings.bundleVersion]'
+  m_GroupAssets:
+  - {fileID: 11400000, guid: 94af5c3bb226044ed95816ad24ee4abc, type: 2}
+  - {fileID: 11400000, guid: 34f687848bd7640dd92ceae7692d2bf4, type: 2}
+  - {fileID: 11400000, guid: 3b3d5d8f158e543738fd792de36ced99, type: 2}
+  - {fileID: 11400000, guid: 7fb5ce86b1e5149048f9c1163065f762, type: 2}
+  - {fileID: 11400000, guid: 73f1dda47549148bba1d5e8faf1936dc, type: 2}
+  - {fileID: 11400000, guid: d2fd78f04b14344fe90aeb840916f53d, type: 2}
+  - {fileID: 11400000, guid: 8113828c1c9de4ba6be5d86e45a216c7, type: 2}
+  - {fileID: 11400000, guid: a7e70251442854744a832c6eff0ac397, type: 2}
+  - {fileID: 11400000, guid: f19410f8e1f2e4b8989d1119c53eb7b6, type: 2}
+  - {fileID: 11400000, guid: 19b399119b34444c1bc18a2e797dbf43, type: 2}
+  - {fileID: 11400000, guid: 042ff445d1a7d4a288ecbceb6eb1d19f, type: 2}
+  - {fileID: 11400000, guid: 7718f032c03584f4c80717f38d7dda4c, type: 2}
+  - {fileID: 11400000, guid: 006a9f3c619e841379b0bb0fc1f3d16f, type: 2}
+  - {fileID: 11400000, guid: 6d5b941f577a449fcad5c140bf6a7d67, type: 2}
+  - {fileID: 11400000, guid: f977ed8ef28634f60b74f25d354da441, type: 2}
+  - {fileID: 11400000, guid: 92558e46de48341f08ec7532375aaa32, type: 2}
+  - {fileID: 11400000, guid: 5417b955f7d8248958ba43c026b81d6d, type: 2}
+  - {fileID: 11400000, guid: 91bb194dc58a24c37a8591a1339183c6, type: 2}
+  - {fileID: 11400000, guid: b8dbe1f3e5a2f4b1b96564cc0609a2b0, type: 2}
+  m_BuildSettings:
+    m_LogResourceManagerExceptions: 1
+    m_BundleBuildPath: Temp/com.unity.addressables/AssetBundles
+  m_ProfileSettings:
+    m_Profiles:
+    - m_InheritedParent: 
+      m_Id: fd9035f758a59470bb2db67111c0efec
+      m_ProfileName: Default
+      m_Values:
+      - m_Id: 10b630020f2dd4fb3b5bc4b1f5aa7314
+        m_Value: '[UnityEditor.EditorUserBuildSettings.activeBuildTarget]'
+      - m_Id: 2cab1703012b64e80a31887fa0368ced
+        m_Value: '[UnityEngine.AddressableAssets.Addressables.BuildPath]/[BuildTarget]'
+      - m_Id: 8a0b44e6fa1f84820b7cd81ebe2fa480
+        m_Value: '{UnityEngine.AddressableAssets.Addressables.RuntimePath}/[BuildTarget]'
+      - m_Id: b765303d3443a4b5a83858ccce091a5a
+        m_Value: '[RemoteLoadPath]'
+      - m_Id: f1264b95de0884684a6c7e3fde4e5b2a
+        m_Value: 'ServerData/[BuildTarget]'
+      - m_Id: f4d14bb3ec3804bb0bbd3aa37bdd83e3
+        m_Value: https://dreampark-dev-da8108e9492c.herokuapp.com/api/content/addressables/SuperAdventureLand/14/Android
+    - m_InheritedParent: 
+      m_Id: d282a62c802c748748115bb339d2de9d
+      m_ProfileName: DreamPark
+      m_Values:
+      - m_Id: 10b630020f2dd4fb3b5bc4b1f5aa7314
+        m_Value: '[UnityEditor.EditorUserBuildSettings.activeBuildTarget]'
+      - m_Id: 2cab1703012b64e80a31887fa0368ced
+        m_Value: '[UnityEngine.AddressableAssets.Addressables.BuildPath]/[BuildTarget]'
+      - m_Id: 8a0b44e6fa1f84820b7cd81ebe2fa480
+        m_Value: '{UnityEngine.AddressableAssets.Addressables.RuntimePath}/[BuildTarget]'
+      - m_Id: b765303d3443a4b5a83858ccce091a5a
+        m_Value: '[RemoteLoadPath]'
+      - m_Id: f1264b95de0884684a6c7e3fde4e5b2a
+        m_Value: 'ServerData/[BuildTarget]'
+      - m_Id: f4d14bb3ec3804bb0bbd3aa37bdd83e3
+        m_Value: https://dreampark-dev-da8108e9492c.herokuapp.com/app/content/addressables/SuperAdventureLand/51/StandaloneWindows
+    m_ProfileEntryNames:
+    - m_Id: 10b630020f2dd4fb3b5bc4b1f5aa7314
+      m_Name: BuildTarget
+      m_InlineUsage: 0
+    - m_Id: 2cab1703012b64e80a31887fa0368ced
+      m_Name: Local.BuildPath
+      m_InlineUsage: 0
+    - m_Id: 8a0b44e6fa1f84820b7cd81ebe2fa480
+      m_Name: Local.LoadPath
+      m_InlineUsage: 0
+    - m_Id: b765303d3443a4b5a83858ccce091a5a
+      m_Name: Remote.LoadPath
+      m_InlineUsage: 0
+    - m_Id: f1264b95de0884684a6c7e3fde4e5b2a
+      m_Name: Remote.BuildPath
+      m_InlineUsage: 0
+    - m_Id: f4d14bb3ec3804bb0bbd3aa37bdd83e3
+      m_Name: RemoteLoadPath
+      m_InlineUsage: 0
+    m_ProfileVersion: 1
+  m_LabelTable:
+    m_LabelNames:
+    - default
+    - SuperAdventureLand
+    - PowerForce
+    - WandDuel
+    - CrashCourse
+    - DreamPark
+    - Universal
+    - Anthony
+    - LionHeart
+    - MetaParty
+    - YOUR_GAME_HERE
+  m_SchemaTemplates: []
+  m_GroupTemplateObjects:
+  - {fileID: 11400000, guid: 4be45592fcc5245038da3adb58433abe, type: 2}
+  m_InitializationObjects: []
+  m_CertificateHandlerType:
+    m_AssemblyName: 
+    m_ClassName: 
+  m_ActivePlayerDataBuilderIndex: 2
+  m_DataBuilders:
+  - {fileID: 11400000, guid: 03bab75978733426e83b04d1add7b347, type: 2}
+  - {fileID: 11400000, guid: 2e82f6647d5a34abf8c0a2f96bb76cf7, type: 2}
+  - {fileID: 11400000, guid: f569de7dfa5774fadadfa0b2db1da844, type: 2}
+  m_ActiveProfileId: d282a62c802c748748115bb339d2de9d
