@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DreamBox Relay — Dev Control Panel</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #181b22;
+    --panel-2: #1f2430;
+    --border: #2a3040;
+    --text: #e6e9ef;
+    --muted: #8a94a7;
+    --accent: #6ea8ff;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --bad: #f87171;
+    --mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  header {
+    padding: 20px 28px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  header h1 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+  }
+  header .sub {
+    color: var(--muted);
+    font-size: 13px;
+    font-family: var(--mono);
+  }
+  .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--muted);
+    display: inline-block;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .dot.live { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+  .dot.stale { background: var(--warn); }
+  .dot.off { background: var(--bad); }
+  main {
+    padding: 24px 28px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 20px;
+    max-width: 1280px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+  }
+  .card h2 {
+    margin: 0 0 12px 0;
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--muted);
+  }
+  .kv {
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    row-gap: 8px;
+    column-gap: 12px;
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+  .kv .k { color: var(--muted); }
+  .kv .v { color: var(--text); word-break: break-all; }
+  .big {
+    font-family: var(--mono);
+    font-size: 32px;
+    font-weight: 600;
+    color: var(--accent);
+    margin: 2px 0 8px 0;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+  th, td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; }
+  tr:last-child td { border-bottom: none; }
+  .empty { color: var(--muted); font-style: italic; padding: 20px 10px; text-align: center; }
+  .feed {
+    max-height: 420px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel-2);
+  }
+  .feed table { font-size: 12px; }
+  .feed th {
+    position: sticky;
+    top: 0;
+    background: var(--panel-2);
+    z-index: 1;
+  }
+  .feed td.preview {
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 560px;
+  }
+  .feed td.time,
+  .feed td.peer,
+  .feed td.size { color: var(--muted); white-space: nowrap; }
+  .feed tr.new { animation: flash 1.2s ease-out; }
+  @keyframes flash {
+    0%   { background: rgba(110, 168, 255, 0.22); }
+    100% { background: transparent; }
+  }
+  .feed-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .feed-head label {
+    font-size: 12px;
+    color: var(--muted);
+    font-family: var(--mono);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+  }
+  .feed-head .count {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+  }
+  footer {
+    padding: 16px 28px;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 12px;
+    font-family: var(--mono);
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1><span id="liveDot" class="dot"></span>DreamBox Relay</h1>
+  <div class="sub" id="idLine">—</div>
+</header>
+
+<main>
+  <section class="card">
+    <h2>Connected peers</h2>
+    <div class="big" id="peerCount">—</div>
+    <div class="kv">
+      <div class="k">Max</div><div class="v" id="maxConn">—</div>
+      <div class="k">Last activity</div><div class="v" id="lastAct">—</div>
+      <div class="k">Uptime</div><div class="v" id="uptime">—</div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Server</h2>
+    <div class="kv">
+      <div class="k">Port (UDP)</div><div class="v" id="port">—</div>
+      <div class="k">Connection key</div><div class="v" id="key">—</div>
+      <div class="k">Debug</div><div class="v" id="debug">—</div>
+      <div class="k">Discovery</div><div class="v" id="discovery">—</div>
+      <div class="k">Discovery port</div><div class="v" id="discoveryPort">—</div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Traffic</h2>
+    <div class="kv">
+      <div class="k">Messages relayed</div><div class="v" id="msgs">—</div>
+      <div class="k">Bytes relayed</div><div class="v" id="bytes">—</div>
+    </div>
+  </section>
+
+  <section class="card" style="grid-column: 1 / -1;">
+    <h2>Peers</h2>
+    <table id="peerTable">
+      <thead>
+        <tr><th>Peer ID</th><th>Endpoint</th><th>Connected at</th><th>Duration</th></tr>
+      </thead>
+      <tbody id="peerBody">
+        <tr><td colspan="4" class="empty">no peers connected</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="card" style="grid-column: 1 / -1;">
+    <div class="feed-head">
+      <h2 style="margin: 0;">Recent messages</h2>
+      <div class="feed-head">
+        <span class="count" id="msgCount">0 messages</span>
+        <label><input type="checkbox" id="autoScroll" checked> auto-scroll</label>
+      </div>
+    </div>
+    <div class="feed" id="msgFeed">
+      <table>
+        <thead>
+          <tr><th style="width:110px;">Time</th><th style="width:60px;">Peer</th><th style="width:60px;">Size</th><th>Payload</th></tr>
+        </thead>
+        <tbody id="msgBody">
+          <tr><td colspan="4" class="empty">no messages yet — connect a client and send something</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <span>polling every 1s</span>
+  &nbsp;·&nbsp;
+  <span id="lastPoll">—</span>
+</footer>
+
+<script>
+(() => {
+  const el = id => document.getElementById(id);
+  const fmtBytes = n => {
+    if (n < 1024) return n + " B";
+    if (n < 1024*1024) return (n/1024).toFixed(1) + " KB";
+    if (n < 1024*1024*1024) return (n/1024/1024).toFixed(1) + " MB";
+    return (n/1024/1024/1024).toFixed(2) + " GB";
+  };
+  const fmtSecsAgo = (unix, now) => {
+    const d = now - unix;
+    if (d < 2) return "just now";
+    if (d < 60) return d + "s ago";
+    if (d < 3600) return Math.floor(d/60) + "m " + (d%60) + "s ago";
+    return Math.floor(d/3600) + "h " + Math.floor((d%3600)/60) + "m ago";
+  };
+  const fmtDuration = secs => {
+    if (secs < 60) return secs + "s";
+    if (secs < 3600) return Math.floor(secs/60) + "m " + (secs%60) + "s";
+    return Math.floor(secs/3600) + "h " + Math.floor((secs%3600)/60) + "m";
+  };
+  const fmtTime = unix => new Date(unix*1000).toLocaleTimeString();
+  const fmtTimeMs = ms => {
+    const d = new Date(ms);
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    const ss = String(d.getSeconds()).padStart(2, "0");
+    const mmm = String(d.getMilliseconds()).padStart(3, "0");
+    return `${hh}:${mm}:${ss}.${mmm}`;
+  };
+  const escapeHtml = s => String(s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+
+  // Track which message IDs we've already rendered so we can flash only newcomers.
+  let lastRenderedMaxId = 0;
+
+  async function tick() {
+    try {
+      const [statusRes, peersRes, msgsRes] = await Promise.all([
+        fetch("/api/status"), fetch("/api/peers"), fetch("/api/messages")
+      ]);
+      if (!statusRes.ok || !peersRes.ok || !msgsRes.ok) throw new Error("api error");
+      const s = await statusRes.json();
+      const p = await peersRes.json();
+      const m = await msgsRes.json();
+
+      el("liveDot").className = "dot live";
+      el("idLine").textContent = s.dreamboxId + " · :" + s.port;
+      el("peerCount").textContent = s.connectedCount;
+      el("maxConn").textContent = s.maxConnections;
+      el("lastAct").textContent = fmtSecsAgo(s.lastActivityAt, s.nowUnix);
+      el("uptime").textContent = fmtDuration(s.nowUnix - s.startedAt);
+      el("port").textContent = s.port;
+      el("key").textContent = s.connectionKey;
+      el("debug").textContent = s.debug ? "on" : "off";
+      el("discovery").textContent = s.discoveryEnabled ? "enabled" : "disabled";
+      el("discoveryPort").textContent = s.discoveryPort;
+      el("msgs").textContent = s.totalMessagesRelayed.toLocaleString();
+      el("bytes").textContent = fmtBytes(s.totalBytesRelayed);
+
+      const body = el("peerBody");
+      if (p.count === 0) {
+        body.innerHTML = '<tr><td colspan="4" class="empty">no peers connected</td></tr>';
+      } else {
+        body.innerHTML = p.peers.map(peer => `
+          <tr>
+            <td>${peer.peerId}</td>
+            <td>${peer.endpoint}</td>
+            <td>${fmtTime(peer.connectedAt)}</td>
+            <td>${fmtDuration(s.nowUnix - peer.connectedAt)}</td>
+          </tr>
+        `).join("");
+      }
+
+      // --- Recent messages feed ---
+      el("msgCount").textContent =
+        m.count === 1 ? "1 message" : `${m.count.toLocaleString()} messages`;
+      const msgBody = el("msgBody");
+      if (m.count === 0) {
+        msgBody.innerHTML =
+          '<tr><td colspan="4" class="empty">no messages yet — connect a client and send something</td></tr>';
+        lastRenderedMaxId = 0;
+      } else {
+        // Most recent first.
+        const sorted = m.messages.slice().sort((a, b) => b.id - a.id);
+        const prevMax = lastRenderedMaxId;
+        msgBody.innerHTML = sorted.map(msg => `
+          <tr class="${msg.id > prevMax ? "new" : ""}">
+            <td class="time">${fmtTimeMs(msg.timestampMs)}</td>
+            <td class="peer">#${msg.peerId}</td>
+            <td class="size">${msg.size}B</td>
+            <td class="preview" title="${escapeHtml(msg.preview)}">${escapeHtml(msg.preview)}</td>
+          </tr>
+        `).join("");
+        lastRenderedMaxId = sorted[0].id;
+
+        if (el("autoScroll").checked) {
+          const feed = el("msgFeed");
+          feed.scrollTop = 0; // newest-first so top = newest
+        }
+      }
+
+      el("lastPoll").textContent = "last update: " + new Date().toLocaleTimeString();
+    } catch (e) {
+      el("liveDot").className = "dot off";
+      el("lastPoll").textContent = "connection lost — retrying…";
+    }
+  }
+
+  tick();
+  setInterval(tick, 1000);
+})();
+</script>
+</body>
+</html>

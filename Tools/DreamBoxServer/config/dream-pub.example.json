@@ -1,0 +1,33 @@
+{
+  // DreamBox Relay (dream-pub) — production-style config.
+  // This mirrors the Pi deployment config. For local testing use dev.example.json.
+
+  // UDP port the relay listens on.
+  // For session-scoped relays, the session manager overrides this per instance.
+  "port": 7777,
+
+  // LiteNetLib connection key — must match the Unity DreamBoxClient.
+  "connectionKey": "dreambox",
+
+  // Print every relayed message to stdout (journald).
+  "debug": false,
+
+  // How often to poll for network events (ms). 15ms is fine for Pi 5.
+  "pollIntervalMs": 15,
+
+  // Max simultaneous peer connections. One session = 4-8 headsets typically.
+  "maxConnections": 32,
+
+  // UDP discovery beacon — headsets listen on this port to find the relay.
+  "discoveryPort": 7700,
+  "discoveryEnabled": true,
+  "discoveryIntervalMs": 2000,
+  "dreamboxId": "dreambox-local",
+
+  // Web panel stays off in production.
+  "webPanel": {
+    "enabled": false,
+    "port": 7780,
+    "bindAddress": "127.0.0.1"
+  }
+}

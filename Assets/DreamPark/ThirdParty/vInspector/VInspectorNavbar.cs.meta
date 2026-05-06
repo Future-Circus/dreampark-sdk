@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 6ccf1a08b5a284bd49addbdb70f8c2e2
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 252297
+  packageName: vInspector 2
+  packageVersion: 2.0.16
+  assetPath: Assets/vInspector/VInspectorNavbar.cs
+  uploadId: 829990
