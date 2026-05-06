@@ -37,7 +37,7 @@ namespace DreamPark.API
         // public SDK that legitimately needs to hit the backend goes through user auth.
         public static string GetAPIKey() {
 #if DREAMPARKCORE
-            return $"ApiKey {DreamPark.Internal.CoreSecrets.ApiKey}";
+            return $"ApiKey {CoreSecrets.ApiKey}";
 #else
             Debug.LogError("[AuthAPI] GetAPIKey() is core-only. SDK builds should use GetUserAuth() (session) instead.");
             return "";
