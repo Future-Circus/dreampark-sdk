@@ -798,7 +798,7 @@ namespace XLua
 
 #if !XLUA_GENERAL
         [PostProcessScene]
-        [MenuItem("XLua/Hotfix Inject In Editor", false, 3)]
+        // [MenuItem("XLua/Hotfix Inject In Editor", false, 3)] — DreamPark SDK: hidden from menu bar (still runs via PostProcessScene)
         public static void HotfixInject()
         {
             if (EditorApplication.isCompiling || Application.isPlaying)
@@ -1650,7 +1650,7 @@ namespace XLua
 #if !UNITY_2019_1_OR_NEWER
         [PostProcessScene]
 #endif
-        [MenuItem("XLua/Hotfix Inject In Editor", false, 3)]
+        // [MenuItem("XLua/Hotfix Inject In Editor", false, 3)] — DreamPark SDK: hidden from menu bar (still runs via PostProcessScene)
         public static void HotfixInject()
         {
             HotfixInject("./Library/ScriptAssemblies");
