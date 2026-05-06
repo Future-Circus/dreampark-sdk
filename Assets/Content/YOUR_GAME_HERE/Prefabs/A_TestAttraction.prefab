@@ -98,7 +98,7 @@ GameObject:
   - component: {fileID: 8571916534199612385}
   - component: {fileID: 8643342926973470237}
   m_Layer: 0
-  m_Name: DreamCube (2)
+  m_Name: DreamCube
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -184,7 +184,7 @@ GameObject:
   - component: {fileID: 1951301767458288060}
   - component: {fileID: 430973045622006937}
   m_Layer: 0
-  m_Name: DreamCube (1)
+  m_Name: DreamCube
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -267,12 +267,12 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 5755139069595054940}
-  - component: {fileID: 9015770722400162862}
+  - component: {fileID: 2128655009814069657}
   - component: {fileID: 5153624265514685240}
   - component: {fileID: 9051291708424337490}
   - component: {fileID: 451689730289817309}
   m_Layer: 0
-  m_Name: Level
+  m_Name: A_TestAttraction
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -297,7 +297,7 @@ Transform:
   - {fileID: 594439105821890309}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &9015770722400162862
+--- !u!114 &2128655009814069657
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -306,7 +306,7 @@ MonoBehaviour:
   m_GameObject: {fileID: 8637617984376972135}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 693fcf6e29c5a4fc3bb9c665f70d124e, type: 3}
+  m_Script: {fileID: 11500000, guid: eb413209906a24fdc8d751d6705ecf5c, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
   gameId: YOUR_GAME_HERE
@@ -388,7 +388,7 @@ GameObject:
   - component: {fileID: 248541823851340372}
   - component: {fileID: 7178315571302675534}
   m_Layer: 0
-  m_Name: DreamCube (3)
+  m_Name: DreamCube
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
