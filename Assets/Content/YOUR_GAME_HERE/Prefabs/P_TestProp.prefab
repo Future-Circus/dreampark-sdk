@@ -12,6 +12,7 @@ GameObject:
   - component: {fileID: 8897077609948177201}
   - component: {fileID: 6609210084985697528}
   - component: {fileID: 2045332894694903992}
+  - component: {fileID: 1280931526372756064}
   m_Layer: 0
   m_Name: DreamCube
   m_TagString: Untagged
@@ -108,6 +109,26 @@ BoxCollider:
   serializedVersion: 3
   m_Size: {x: 0.010000305, y: 0.010000305, z: 0.010000305}
   m_Center: {x: 0, y: 0, z: 0}
+--- !u!114 &1280931526372756064
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 730433570561153309}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 608856c4e359445bb81d563de52e1689, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  luaScript: {fileID: 0}
+  injections: []
+  floatInjections: []
+  stringInjections: []
+  boolInjections: []
+  intInjections: []
+  scriptInjections: []
+  audioClipInjections: []
 --- !u!1 &3036168673165343267
 GameObject:
   m_ObjectHideFlags: 0
@@ -134,7 +155,7 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 3036168673165343267}
   serializedVersion: 2
-  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 3.27, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0

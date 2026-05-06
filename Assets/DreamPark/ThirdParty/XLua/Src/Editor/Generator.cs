@@ -1647,7 +1647,7 @@ namespace CSObjectWrapEditor
             }
         }
 
-        [MenuItem("XLua/Generate Code", false, 1)]
+        // [MenuItem("XLua/Generate Code", false, 1)] — DreamPark SDK: hidden from menu bar (still callable programmatically)
         public static void GenAll()
         {
 #if UNITY_2018 && (UNITY_EDITOR_WIN || UNITY_EDITOR_OSX)
@@ -1731,7 +1731,7 @@ namespace CSObjectWrapEditor
         }
 #endif
 
-        [MenuItem("XLua/Clear Generated Code", false, 2)]
+        // [MenuItem("XLua/Clear Generated Code", false, 2)] — DreamPark SDK: hidden from menu bar (still callable programmatically)
         public static void ClearAll()
         {
             clear(GeneratorConfig.common_path);
