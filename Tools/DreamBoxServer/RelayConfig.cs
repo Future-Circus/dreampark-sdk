@@ -76,17 +76,30 @@ public class RelayConfig
     }
 
     /// <summary>
-    /// Resolve config file path from CLI args or well-known locations.
-    /// Priority: --config arg > DREAM_PUB_CONFIG env > ./dream-pub.json > ./config/dev.json > /etc/dream-pub/dream-pub.json
+    /// Result of config path resolution — includes both the path and how it was found.
     /// </summary>
-    public static string? ResolveConfigPath(string[] args)
+    public class ConfigResolution
+    {
+        public string? Path { get; set; }
+        public string ResolvedVia { get; set; } = "not found";
+    }
+
+    /// <summary>
+    /// Resolve config file path from CLI args or well-known locations.
+    /// Priority: --config arg > --dev flag > DREAM_PUB_CONFIG env > ./dream-pub.json > ./config/dev.json > /etc/dream-pub/dream-pub.json
+    /// </summary>
+    public static ConfigResolution ResolveConfig(string[] args)
     {
         // Check --config CLI argument
         for (int i = 0; i < args.Length - 1; i++)
         {
             if (args[i] == "--config")
-                return args[i + 1];
+            {
+                Console.WriteLine($"[config] checking --config arg... found: {args[i + 1]}");
+                return new ConfigResolution { Path = args[i + 1], ResolvedVia = "--config CLI argument" };
+            }
         }
+        Console.WriteLine("[config] checking --config arg... not provided");
 
         // --dev flag: use the shipped dev config
         foreach (var a in args)
@@ -94,34 +107,69 @@ public class RelayConfig
             if (a == "--dev")
             {
                 var devPath = Path.Combine(AppContext.BaseDirectory, "config", "dev.json");
-                if (File.Exists(devPath)) return devPath;
+                if (File.Exists(devPath))
+                {
+                    Console.WriteLine($"[config] checking --dev flag... found {devPath}");
+                    return new ConfigResolution { Path = devPath, ResolvedVia = "--dev flag → config/dev.json" };
+                }
+                Console.WriteLine($"[config] checking --dev flag... {devPath} not found");
+
                 var devExamplePath = Path.Combine(AppContext.BaseDirectory, "config", "dev.example.json");
-                if (File.Exists(devExamplePath)) return devExamplePath;
+                if (File.Exists(devExamplePath))
+                {
+                    Console.WriteLine($"[config] checking --dev flag fallback... found {devExamplePath}");
+                    return new ConfigResolution { Path = devExamplePath, ResolvedVia = "--dev flag → config/dev.example.json (fallback)" };
+                }
+                Console.WriteLine($"[config] checking --dev flag fallback... {devExamplePath} not found");
             }
         }
+        if (!args.Contains("--dev"))
+            Console.WriteLine("[config] checking --dev flag... not provided");
 
         // Check environment variable
         var envPath = Environment.GetEnvironmentVariable("DREAM_PUB_CONFIG");
         if (!string.IsNullOrEmpty(envPath))
-            return envPath;
+        {
+            Console.WriteLine($"[config] checking DREAM_PUB_CONFIG env... found: {envPath}");
+            return new ConfigResolution { Path = envPath, ResolvedVia = "DREAM_PUB_CONFIG environment variable" };
+        }
+        Console.WriteLine("[config] checking DREAM_PUB_CONFIG env... not set");
 
         // Check local directory
         var localPath = Path.Combine(AppContext.BaseDirectory, "dream-pub.json");
         if (File.Exists(localPath))
-            return localPath;
+        {
+            Console.WriteLine($"[config] checking local dream-pub.json... found: {localPath}");
+            return new ConfigResolution { Path = localPath, ResolvedVia = "local dream-pub.json" };
+        }
+        Console.WriteLine($"[config] checking local dream-pub.json... not found at {localPath}");
 
         // Check shipped config folder
         var shippedDev = Path.Combine(AppContext.BaseDirectory, "config", "dev.json");
         if (File.Exists(shippedDev))
-            return shippedDev;
+        {
+            Console.WriteLine($"[config] checking config/dev.json... found: {shippedDev}");
+            return new ConfigResolution { Path = shippedDev, ResolvedVia = "shipped config/dev.json" };
+        }
+        Console.WriteLine($"[config] checking config/dev.json... not found at {shippedDev}");
 
         // Check /etc/dream-pub/ (Pi deployment)
         const string etcPath = "/etc/dream-pub/dream-pub.json";
         if (File.Exists(etcPath))
-            return etcPath;
+        {
+            Console.WriteLine($"[config] checking /etc/dream-pub/... found: {etcPath}");
+            return new ConfigResolution { Path = etcPath, ResolvedVia = "/etc/dream-pub/ (Pi deployment)" };
+        }
+        Console.WriteLine($"[config] checking /etc/dream-pub/... not found at {etcPath}");
 
-        return null;
+        Console.Error.WriteLine("[config] no config file found in any of the checked locations");
+        return new ConfigResolution();
     }
+
+    /// <summary>
+    /// Convenience wrapper that returns just the path string (backward compat).
+    /// </summary>
+    public static string? ResolveConfigPath(string[] args) => ResolveConfig(args).Path;
 }
 
 public class WebPanelConfig
