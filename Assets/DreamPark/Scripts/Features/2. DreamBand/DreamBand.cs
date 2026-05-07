@@ -2,6 +2,7 @@ using UnityEngine;
 using Text = TMPro.TMP_Text;
 using System;
 using System.Collections.Generic;
+using XLua;
 public enum DreamBandState {
     START,
     STANDBY,
@@ -31,8 +32,41 @@ public class DreamBand : StandardEntity<DreamBandState>
     [ReadOnly] public string gameId;
     public static DreamBand Instance;
     public Text timerText;
+    [Tooltip("When assigned, the Lua script drives DreamBand behavior instead of the C# state machine.")]
+    public LuaBehaviour luaBehaviour;
+
+    /// <summary>True when a LuaBehaviour is linked and should drive behavior.</summary>
+    public bool isLuaDriven => luaBehaviour != null;
+
+    // Lua callbacks — resolved once from the script scope
+    private Action luaOnShow;
+    private Action luaOnHide;
+    private Action<string> luaOnStateChange;
+    private bool luaCallbacksResolved;
+
+    private void ResolveLuaCallbacks() {
+        if (luaCallbacksResolved || !isLuaDriven) return;
+        var scope = luaBehaviour.ScriptScope;
+        if (scope == null) return;
+        scope.Get("onshow", out luaOnShow);
+        scope.Get("onhide", out luaOnHide);
+        scope.Get("onstatechange", out luaOnStateChange);
+        luaCallbacksResolved = true;
+    }
+
+    public override void SetState(DreamBandState newState) {
+        base.SetState(newState);
+        if (isLuaDriven) {
+            ResolveLuaCallbacks();
+            luaOnStateChange?.Invoke(newState.ToString());
+        }
+    }
+
     public override void ExecuteState()
     {
+        // Registration (START) always runs in C#. After that, Lua takes over if linked.
+        if (state != DreamBandState.START && isLuaDriven) return;
+
         switch (state) {
             case DreamBandState.START:
 
@@ -117,6 +151,10 @@ public class DreamBand : StandardEntity<DreamBandState>
         }
         Instance = this;
         SetState(DreamBandState.PLAY);
+        if (isLuaDriven) {
+            ResolveLuaCallbacks();
+            luaOnShow?.Invoke();
+        }
     }
 
     public void Hide() {
@@ -124,6 +162,10 @@ public class DreamBand : StandardEntity<DreamBandState>
             return;
         }
         SetState(DreamBandState.STANDBY);
+        if (isLuaDriven) {
+            ResolveLuaCallbacks();
+            luaOnHide?.Invoke();
+        }
     }
     
     public bool isPlaying {
@@ -151,3 +193,57 @@ public class DreamBand : StandardEntity<DreamBandState>
         }
     }
 }
+
+#if UNITY_EDITOR
+[UnityEditor.CustomEditor(typeof(DreamBand))]
+public class DreamBandEditor : StandardEntityEditor<DreamBandState>
+{
+    private UnityEditor.SerializedProperty luaBehaviourProp;
+
+    public override void OnEnable()
+    {
+        if (target == null || serializedObject == null) return;
+        base.OnEnable();
+        luaBehaviourProp = serializedObject.FindProperty("luaBehaviour");
+    }
+
+    public override void OnInspectorGUI()
+    {
+        if (target == null || serializedObject == null) return;
+
+        serializedObject.Update();
+
+        // Always show the Lua behaviour field
+        UnityEditor.EditorGUILayout.PropertyField(luaBehaviourProp);
+
+        if (luaBehaviourProp.objectReferenceValue != null)
+        {
+            UnityEditor.EditorGUILayout.Space(4);
+            UnityEditor.EditorGUILayout.HelpBox(
+                "DreamBand is in Lua mode.\n\n" +
+                "All behavior is driven by the linked LuaBehaviour script. " +
+                "To customize DreamBand, edit the Lua script instead of these C# properties.",
+                UnityEditor.MessageType.Info
+            );
+        }
+        else
+        {
+            // No Lua linked — show the normal C# inspector
+            UnityEditor.EditorGUILayout.Space(4);
+            base.OnInspectorGUI();
+        }
+
+        serializedObject.ApplyModifiedProperties();
+    }
+
+    public override string[] GetIgnorables()
+    {
+        // Hide luaBehaviour from the base draw since we draw it ourselves
+        var baseIgnorables = base.GetIgnorables();
+        var combined = new string[baseIgnorables.Length + 1];
+        baseIgnorables.CopyTo(combined, 0);
+        combined[combined.Length - 1] = "luaBehaviour";
+        return combined;
+    }
+}
+#endif
