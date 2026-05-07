@@ -35,10 +35,20 @@ namespace DreamPark
         private const int DefaultPanelPort = 7780;
         // How long we'll wait for the panel port to come up after launching.
         private const double PanelStartupTimeoutSec = 20.0;
+        // If the process exits within this window, show an error dialog.
+        private const double EarlyCrashWindowSec = 5.0;
 
         // Background-poll state (static because Editor menu callbacks can't carry state).
         private static double s_panelDeadlineTime;
         private static bool s_waitingForPanel;
+
+        // Process reference — kept alive so async output handlers stay active.
+        private static Process s_serverProcess;
+        // Last stderr lines for crash dialog.
+        private static readonly System.Collections.Generic.Queue<string> s_recentStderr = new();
+        private const int MaxStderrLines = 20;
+        // Track launch time to detect early crashes.
+        private static double s_launchTime;
 
         // --------------------------------------------------------------------
         // Menu items
@@ -71,6 +81,68 @@ namespace DreamPark
                         "Failed to start the server process.", "OK");
                     return;
                 }
+
+                // Keep the process reference alive for async output handlers.
+                s_serverProcess = proc;
+                s_recentStderr.Clear();
+                s_launchTime = EditorApplication.timeSinceStartup;
+
+                // Register async output/error handlers to surface logs in Unity console.
+                proc.OutputDataReceived += (s, e) =>
+                {
+                    if (e.Data != null) Debug.Log($"[DreamBox] {e.Data}");
+                };
+                proc.ErrorDataReceived += (s, e) =>
+                {
+                    if (e.Data != null)
+                    {
+                        Debug.LogError($"[DreamBox] {e.Data}");
+                        lock (s_recentStderr)
+                        {
+                            s_recentStderr.Enqueue(e.Data);
+                            while (s_recentStderr.Count > MaxStderrLines)
+                                s_recentStderr.Dequeue();
+                        }
+                    }
+                };
+                proc.EnableRaisingEvents = true;
+                proc.Exited += (s, e) =>
+                {
+                    var exitCode = -1;
+                    try { exitCode = proc.ExitCode; } catch { }
+                    if (exitCode != 0)
+                    {
+                        var elapsed = EditorApplication.timeSinceStartup - s_launchTime;
+                        Debug.LogError($"[DreamBox Dev Server] process exited unexpectedly (code {exitCode}, after {elapsed:F1}s)");
+
+                        if (elapsed < EarlyCrashWindowSec)
+                        {
+                            string stderrSummary;
+                            lock (s_recentStderr)
+                            {
+                                stderrSummary = s_recentStderr.Count > 0
+                                    ? string.Join("\n", s_recentStderr)
+                                    : "(no stderr captured)";
+                            }
+
+                            // EditorUtility.DisplayDialog must run on main thread.
+                            EditorApplication.delayCall += () =>
+                            {
+                                EditorUtility.DisplayDialog("DreamBox Dev Server — Crash",
+                                    $"Server exited with code {exitCode} within {elapsed:F1}s.\n\n" +
+                                    "Last stderr output:\n" + stderrSummary +
+                                    "\n\nTry running from terminal for full output:\n" +
+                                    "  cd Tools/DreamBoxServer\n" +
+                                    "  dotnet run -- --dev",
+                                    "OK");
+                            };
+                        }
+                    }
+                    EditorPrefs.DeleteKey(PidPrefKey);
+                    s_serverProcess = null;
+                };
+                proc.BeginOutputReadLine();
+                proc.BeginErrorReadLine();
 
                 EditorPrefs.SetInt(PidPrefKey, proc.Id);
                 Debug.Log($"[DreamBox Dev Server] launched (pid {proc.Id}). " +
@@ -251,7 +323,10 @@ namespace DreamPark
                     FileName = dotnetPath,
                     Arguments = "run --project \"" + toolsDir + "\" --configuration Release -- --dev",
                     WorkingDirectory = toolsDir,
-                    UseShellExecute = true // opens its own console window — visible logs
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
                 };
             }
 
@@ -268,7 +343,10 @@ namespace DreamPark
                         FileName = binaryPath,
                         Arguments = "--dev",
                         WorkingDirectory = Path.GetDirectoryName(binaryPath),
-                        UseShellExecute = true
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        CreateNoWindow = true
                     };
                 }
             }

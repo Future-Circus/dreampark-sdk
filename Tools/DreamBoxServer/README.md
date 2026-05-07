@@ -11,18 +11,58 @@ Your Unity `DreamBoxClient` auto-discovers this relay over UDP broadcast on port
 From the Unity Editor:
 
 ```
-DreamPark → Dev Server → Start Local Server
+DreamPark → Multiplayer → Start Local Server
 ```
 
 That single command:
 
 1. Starts the relay (incremental build via `dotnet run`, or a prebuilt binary if present).
-2. Waits for the browser control panel to come up.
-3. Opens http://localhost:7780 for you.
+2. Captures server output into the Unity console (stdout as `Debug.Log`, stderr as `Debug.LogError`).
+3. Waits for the browser control panel to come up.
+4. Opens http://localhost:7780 for you.
 
-Stop it later with `DreamPark → Dev Server → Stop Server`.
+Stop it later with `DreamPark → Multiplayer → Stop Server`.
 
-**Prerequisite:** either the [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0) installed (fastest dev loop), *or* run `DreamPark → Dev Server → Rebuild Binaries` once to generate a self-contained binary that doesn't need the SDK.
+**Prerequisite:** either the [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0) installed (fastest dev loop), *or* run `DreamPark → Multiplayer → Rebuild Binaries` once to generate a self-contained binary that doesn't need the SDK.
+
+---
+
+## First-time setup
+
+Run the automated setup script to install prerequisites, build, and verify:
+
+**macOS / Linux:**
+
+```bash
+cd Tools/DreamBoxServer
+./setup.sh
+```
+
+**Windows (PowerShell):**
+
+```powershell
+cd Tools\DreamBoxServer
+.\setup.ps1
+```
+
+The script will:
+
+1. Check for the .NET 9 SDK (and offer to install it if missing)
+2. Restore NuGet packages
+3. Build the project in Release mode
+4. Run a smoke test — starts the server, verifies port 7780 responds, then shuts down
+
+To validate the environment without installing anything, pass `--check` (or `-Check` on Windows):
+
+```bash
+./setup.sh --check
+```
+
+**macOS PATH issue:** Unity launched from Finder/Dock may not find `dotnet` because it inherits a minimal PATH. Either launch Unity from Terminal, or symlink dotnet into `/usr/local/bin/`:
+
+```bash
+sudo ln -s /usr/local/share/dotnet/dotnet /usr/local/bin/dotnet
+```
 
 ---
 
@@ -140,6 +180,29 @@ Allow it — the relay needs to accept inbound UDP connections from the headset.
 **Menu says "control panel didn't come up" but the server log looks fine.**
 Likely port 7780 is already in use by another service. Change `webPanel.port` in `config/dev.json` and restart.
 
+**Server crashes immediately with no output.**
+Run from a terminal to see the actual error:
+
+```bash
+cd Tools/DreamBoxServer
+dotnet run -- --dev
+```
+
+Or run the setup script in check mode to validate your environment:
+
+```bash
+./setup.sh --check
+```
+
+**.NET 9 SDK not found.**
+Run `setup.sh` (or `setup.ps1` on Windows) for automated detection and installation. Or install manually from https://dotnet.microsoft.com/download/dotnet/9.0.
+
+**Server starts but Unity can't connect.**
+- Check your firewall — allow inbound UDP on ports 7777 and 7700.
+- Verify the headset and dev machine are on the same subnet.
+- Look for `[beacon] Broadcasting on :7700` in the server log — if missing, discovery is disabled in config.
+- Try disabling discovery and pointing the Unity client at your machine's IP directly.
+
 ---
 
 ## File layout
@@ -147,6 +210,8 @@ Likely port 7780 is already in use by another service. Change `webPanel.port` in
 ```
 Tools/DreamBoxServer/
 ├── README.md                 ← this file
+├── setup.sh                  ← first-time setup (macOS/Linux)
+├── setup.ps1                 ← first-time setup (Windows)
 ├── build.sh                  ← cross-platform publish (bash)
 ├── build.ps1                 ← cross-platform publish (PowerShell)
 ├── .gitignore                ← ignores bin/ obj/ dist/

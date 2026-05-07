@@ -304,7 +304,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 1743641705836081853}
-  - component: {fileID: 8164566460439602382}
+  - component: {fileID: 1870023290681666658}
   m_Layer: 11
   m_Name: DreamBand
   m_TagString: Player
@@ -328,7 +328,7 @@ Transform:
   - {fileID: 6684985207141820501}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &8164566460439602382
+--- !u!114 &1870023290681666658
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -337,26 +337,18 @@ MonoBehaviour:
   m_GameObject: {fileID: 5480428570316317555}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: fd9e148f39bec48aeaaa4a777f9fa36b, type: 3}
+  m_Script: {fileID: 11500000, guid: 608856c4e359445bb81d563de52e1689, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  interactionFilters: []
-  debugger: 0
-  queue: 
-  stateChangeTime: 0
-  ogPosition: {fileID: 0}
-  use_late_update: 0
-  animator: {fileID: 0}
-  mainRenderer: {fileID: 0}
-  stateAnimations: []
-  animationEvents: []
-  waypoints: []
-  detectionRange: 5
-  targetPlayer: 0
-  targetRange: 5
-  currentTargetPosition: {x: 0, y: 0, z: 0}
-  currentTargetPositionLocal: {x: 0, y: 0, z: 0}
-  agent: {fileID: 0}
-  _currentWaypointIndex: 0
-  gameId: YOUR_GAME_HERE
-  timerText: {fileID: 5258624380770871241}
+  luaScript: {fileID: 4900000, guid: d7a1f9aad5bea4cc3910512920d4789c, type: 3}
+  injections:
+  - name: timerTextObj
+    value: {fileID: 1607082184839727868}
+  floatInjections:
+  - name: blinkRate
+    value: 0.5
+  stringInjections: []
+  boolInjections: []
+  intInjections: []
+  scriptInjections: []
+  audioClipInjections: []

@@ -1,0 +1,131 @@
+-- ============================================================
+-- lua_dreamband.lua.txt — Wrist band UI + session timer
+-- Lives on Player.prefab (DreamBand child). Other scripts call:
+--   dreamband.show()
+--   dreamband.hide()
+--   dreamband.pause()
+--   dreamband.unpause()
+--   dreamband.end_session()
+--   dreamband.is_playing()
+-- ============================================================
+
+-- @var timerTextObj gameobject
+
+-- ── Tuning ───────────────────────────────────────────────
+-- @var blinkRate float 0.5
+
+local UE = CS.UnityEngine
+local Time = UE.Time
+local Mathf = UE.Mathf
+
+-- ── State ─────────────────────────────────────────────────
+-- States: standby | playing | paused | ended
+local state = "standby"
+local sessionTime = 0
+local timerText = nil
+
+-- ── Helpers ───────────────────────────────────────────────
+local function is_valid(obj)
+    if obj == nil then return false end
+    local ok, _ = pcall(function() local _ = obj.name end)
+    return ok
+end
+
+local function format_time(seconds)
+    local m = Mathf.FloorToInt(seconds / 60)
+    local s = Mathf.FloorToInt(seconds % 60)
+    return string.format("%02d:%02d", m, s)
+end
+
+local function set_timer_visible(on)
+    if timerText then
+        pcall(function() timerText.enabled = on end)
+    end
+end
+
+-- ── Public API ────────────────────────────────────────────
+function show()
+    if state == "ended" then return end
+    state = "playing"
+    sessionTime = 0
+    set_timer_visible(true)
+end
+
+function hide()
+    if state == "ended" then return end
+    state = "standby"
+end
+
+function pause()
+    if state == "playing" then
+        state = "paused"
+    end
+end
+
+function unpause()
+    if state == "paused" then
+        state = "playing"
+        set_timer_visible(true)
+    end
+end
+
+function end_session()
+    state = "ended"
+    set_timer_visible(true)
+end
+
+function is_playing()
+    return state == "playing"
+end
+
+function is_paused()
+    return state == "paused"
+end
+
+function is_ended()
+    return state == "ended"
+end
+
+function get_session_time()
+    return sessionTime
+end
+
+-- ── Lifecycle ─────────────────────────────────────────────
+function start()
+    -- Cache TMP component
+    if is_valid(timerTextObj) then
+        pcall(function()
+            timerText = timerTextObj:GetComponent(typeof(CS.TMPro.TextMeshProUGUI))
+        end)
+        if not timerText then
+            pcall(function()
+                timerText = timerTextObj:GetComponent(typeof(CS.TMPro.TextMeshPro))
+            end)
+        end
+    end
+
+    set_timer_visible(true)
+    if timerText then
+        pcall(function() timerText.text = "00:00" end)
+    end
+
+    rawset(_G, "dreamband", self.lua)
+end
+
+function update()
+    if state == "playing" then
+        sessionTime = sessionTime + Time.deltaTime
+        if timerText then
+            pcall(function() timerText.text = format_time(sessionTime) end)
+        end
+
+    elseif state == "standby" or state == "paused" then
+        -- Blink the timer
+        local blink = Mathf.Floor(Time.time / blinkRate) % 2 == 0
+        set_timer_visible(blink)
+    end
+end
+
+function ondestroy()
+    rawset(_G, "dreamband", nil)
+end
