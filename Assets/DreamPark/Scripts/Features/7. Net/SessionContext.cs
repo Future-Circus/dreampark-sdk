@@ -1,4 +1,5 @@
 using System;
+using UnityEngine;
 
 namespace DreamPark
 {
@@ -27,6 +28,13 @@ namespace DreamPark
             SelectedContentIds = config.selectedContentIds;
             SessionLengthMinutes = config.sessionLengthMinutes;
             IsPaired = true;
+
+            if (!string.IsNullOrEmpty(config.dreamboxId))
+            {
+                UnityEngine.PlayerPrefs.SetString("lastDreamboxId", config.dreamboxId);
+                UnityEngine.PlayerPrefs.Save();
+            }
+
             OnSessionPaired?.Invoke(config);
         }
 
