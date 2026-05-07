@@ -1,0 +1,206 @@
+-- ============================================================
+-- lua_damage_effect.lua.txt — Screen damage effects (hit + lava/ice)
+-- Lives on Player.prefab. Other scripts call:
+--   damage_effect.player_hit()
+--   damage_effect.enter_lava(false)  -- lava (true = ice pit)
+--   damage_effect.exit_lava()
+-- ============================================================
+
+-- @var crackedScreenRenderer gameobject
+-- @var glassShatterVfx gameobject
+-- @var sfxGlassBreak audioclip
+-- @var lavaScreenRenderer gameobject
+-- @var lavaBubbleAudioSrc gameobject
+
+-- ── Tuning (edit these!) ──────────────────────────────────
+-- @var vignetteExpandTime float 1.0
+-- @var screenCrackHoldTime float 3.0
+-- @var lavaHeatEnterSpeed float 0.5
+-- @var lavaHeatExitSpeed float 2.0
+
+local UE = CS.UnityEngine
+local Time = UE.Time
+local Mathf = UE.Mathf
+local Color = UE.Color
+local Random = UE.Random
+
+-- ── State ─────────────────────────────────────────────────
+local state = "idle"   -- idle | crack_expand | crack_hold | crack_fade | lava_enter | lava_exit
+local timer = 0
+local overheat = 0
+local MIN_VIGNETTE = 0.12
+
+local crackRend = nil
+local lavaRend = nil
+local vfx = nil
+local lavaSrc = nil
+
+-- ── Helpers ───────────────────────────────────────────────
+local function is_valid(obj)
+    if obj == nil then return false end
+    local ok, _ = pcall(function() local _ = obj.name end)
+    return ok
+end
+
+local function smooth_step(t)
+    t = Mathf.Clamp01(t)
+    return t * t * (3 - 2 * t)
+end
+
+local function set_crack_active(on)
+    if is_valid(crackedScreenRenderer) then
+        pcall(function() crackedScreenRenderer:SetActive(on) end)
+    end
+end
+
+local function set_lava_active(on)
+    if is_valid(lavaScreenRenderer) then
+        pcall(function() lavaScreenRenderer:SetActive(on) end)
+    end
+end
+
+local function set_vignette(val)
+    if crackRend then
+        pcall(function() crackRend.material:SetFloat("_VignetteRadius", val) end)
+    end
+end
+
+local function set_overheat_val(val)
+    if lavaRend then
+        pcall(function() lavaRend.material:SetFloat("_Overheat", val) end)
+    end
+end
+
+local function stop_lava()
+    set_overheat_val(0)
+    set_lava_active(false)
+    if lavaSrc then pcall(function() lavaSrc:Stop(); lavaSrc.volume = 0 end) end
+    overheat = 0
+end
+
+local function is_ios()
+    local ok, plat = pcall(function() return UE.Application.platform end)
+    if ok and plat == UE.RuntimePlatform.IPhonePlayer then return true end
+    return false
+end
+
+-- ── Public API (called by other scripts) ──────────────────
+function player_hit()
+    print("PLAYER HIT")
+    if is_ios() then return end
+    print("PLAYER HIT 2")
+    if state == "crack_expand" or state == "crack_hold" or state == "crack_fade" then return end
+    print("PLAYER HIT 3")
+    set_crack_active(true)
+    set_vignette(MIN_VIGNETTE)
+    print("PLAYER HIT 4")
+    if is_valid(sfxGlassBreak) then
+        UE.AudioSource.PlayClipAtPoint(sfxGlassBreak, self.transform.position, 1)
+    end
+    print("PLAYER HIT 5")
+    if vfx then pcall(function() vfx:Play() end) end
+
+    state = "crack_expand"
+    timer = 0
+end
+
+function enter_lava(is_ice)
+    if is_ios() then return end
+    if state == "lava_exit" then state = "idle" end  -- cancel exit
+
+    if is_ice then
+        pcall(function()
+            lavaRend.material:SetColor("_StartColor", Color(0.93, 0.99, 1, 1))
+            lavaRend.material:SetColor("_EndColor", Color(0.227, 0.855, 0.984, 1))
+        end)
+    else
+        pcall(function()
+            lavaRend.material:SetColor("_StartColor", Color(1, 1, 0, 1))
+            lavaRend.material:SetColor("_EndColor", Color(1, 0, 0, 1))
+        end)
+    end
+
+    set_lava_active(true)
+    pcall(function() overheat = lavaRend.material:GetFloat("_Overheat") end)
+    if lavaSrc then pcall(function() lavaSrc.volume = 0; lavaSrc:Play() end) end
+
+    state = "lava_enter"
+end
+
+function exit_lava()
+    if is_ios() then return end
+    if state ~= "lava_enter" then return end
+    if lavaSrc then pcall(function() lavaSrc:Stop() end) end
+    state = "lava_exit"
+end
+
+-- ── Lifecycle ─────────────────────────────────────────────
+function awake()
+    -- Cache renderer components
+    pcall(function() crackRend = crackedScreenRenderer:GetComponent(typeof(UE.Renderer)) end)
+    pcall(function() lavaRend = lavaScreenRenderer:GetComponent(typeof(UE.Renderer)) end)
+    pcall(function() vfx = glassShatterVfx:GetComponent(typeof(UE.ParticleSystem)) end)
+    pcall(function() lavaSrc = lavaBubbleAudioSrc:GetComponent(typeof(UE.AudioSource)) end)
+
+    set_crack_active(false)
+    set_lava_active(false)
+end
+
+function update()
+    local dt = Time.deltaTime
+
+    -- ── Cracked screen state machine ──
+    if state == "crack_expand" then
+        timer = timer + dt / vignetteExpandTime
+        local eased = Mathf.Lerp(MIN_VIGNETTE, 1, smooth_step(timer))
+        set_vignette(eased)
+        if timer >= 1 then
+            timer = 0
+            state = "crack_hold"
+        end
+
+    elseif state == "crack_hold" then
+        timer = timer + dt
+        if timer >= screenCrackHoldTime then
+            timer = 0
+            state = "crack_fade"
+        end
+
+    elseif state == "crack_fade" then
+        timer = timer + dt / (vignetteExpandTime * 0.5)
+        local eased = Mathf.Lerp(1, MIN_VIGNETTE, smooth_step(timer))
+        set_vignette(eased)
+        if timer >= 1 then
+            set_vignette(MIN_VIGNETTE)
+            set_crack_active(false)
+            state = "idle"
+        end
+
+    -- ── Lava heat state machine ──
+    elseif state == "lava_enter" then
+        -- If screen cracked mid-lava, cancel
+        if is_valid(crackedScreenRenderer) then
+            local broken = false
+            pcall(function() broken = crackedScreenRenderer.activeSelf end)
+            if broken then stop_lava(); state = "idle"; return end
+        end
+
+        overheat = overheat + dt * lavaHeatEnterSpeed
+        set_overheat_val(overheat)
+        if lavaSrc then pcall(function() lavaSrc.volume = overheat end) end
+
+        if overheat >= 1 then
+            stop_lava()
+            state = "idle"
+            player_hit()  -- lava maxed out → crack the screen
+        end
+
+    elseif state == "lava_exit" then
+        overheat = overheat - dt * lavaHeatExitSpeed
+        set_overheat_val(overheat)
+        if overheat <= 0 then
+            stop_lava()
+            state = "idle"
+        end
+    end
+end

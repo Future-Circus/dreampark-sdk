@@ -1,0 +1,78 @@
+-- ============================================================
+-- lua_example_manager.lua.txt — Simple point tracker
+-- Lives on Player.prefab. Other scripts call:
+--   example_manager.add_point()
+--   example_manager.take_damage()
+--   example_manager.get_points()
+--   example_manager.reset()
+-- ============================================================
+
+-- @var startingPoints int 0
+-- @var textObj gameobject
+-- @var prefix string "Points: "
+-- @var sfxAddPoint audioclip
+-- @var damageEffect script
+
+local UE = CS.UnityEngine
+
+-- ── State ─────────────────────────────────────────────────
+local points = 0
+local tmp = nil
+
+local function refresh_display()
+    if tmp then
+        pcall(function() tmp.text = prefix .. tostring(points) end)
+    end
+end
+
+-- ── Public API (called by other scripts) ──────────────────
+function add_point()
+    points = points + 1
+    if sfxAddPoint then
+        UE.AudioSource.PlayClipAtPoint(sfxAddPoint, self.transform.position, 0.8)
+    end
+    refresh_display()
+end
+
+function take_damage()
+    points = points - 1
+    if points < 0 then points = 0 end
+    refresh_display()
+    -- Trigger screen crack if damage_effect exists
+    if damageEffect then
+        pcall(function() damageEffect.player_hit() end)
+    end
+end
+
+function get_points()
+    return points
+end
+
+function reset()
+    points = startingPoints
+    refresh_display()
+end
+
+-- ── Lifecycle ─────────────────────────────────────────────
+function start()
+    points = startingPoints
+    -- Grab TMP component from textObj (supports both world-space and UI)
+    if textObj then
+        pcall(function()
+            local t = textObj:GetComponent(typeof(CS.TMPro.TextMeshProUGUI))
+            if t then tmp = t return end
+        end)
+        if not tmp then
+            pcall(function()
+                local t = textObj:GetComponent(typeof(CS.TMPro.TextMeshPro))
+                if t then tmp = t end
+            end)
+        end
+    end
+    rawset(_G, "example_manager", self.lua)
+    refresh_display()
+end
+
+function ondestroy()
+    rawset(_G, "example_manager", nil)
+end

@@ -1,0 +1,41 @@
+-- ============================================================
+-- lua_example_collision.lua.txt — Player-side trigger callback
+-- Lives on a collider ON the Player (body, hand, etc.).
+-- When something enters, checks tag/layer filters, then calls
+-- the named function on the attached manager script.
+-- ============================================================
+
+-- @var manager script
+-- @var callFunction string "add_point"
+-- @var filterTag string ""
+-- @var filterLayer int -1
+
+local UE = CS.UnityEngine
+local Object = UE.Object
+
+function oncollisionenter(collider)
+    local go = nil
+    pcall(function() go = collider.gameObject end)
+    if go == nil then return end
+
+    -- Tag filter: skip if filterTag is set and doesn't match
+    if filterTag ~= "" then
+        local ok, tag = pcall(function() return go.tag end)
+        if not ok or tag ~= filterTag then return end
+    end
+
+    -- Layer filter: skip if filterLayer is set and doesn't match
+    if filterLayer >= 0 then
+        local ok, layer = pcall(function() return go.layer end)
+        if not ok or layer ~= filterLayer then return end
+    end
+
+    -- Call the named function on the manager
+    if manager and callFunction ~= "" then
+        print("CALLING FUNCTION: " .. callFunction)
+        print("MANAGER: " .. tostring(manager))
+        pcall(function() manager[callFunction]() end)
+    end
+
+    Object.Destroy(go)
+end
