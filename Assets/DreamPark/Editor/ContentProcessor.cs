@@ -103,6 +103,22 @@ namespace DreamPark {
             return name.Replace("[", "").Replace("]", "").Trim();
         }
 
+        // True if `groupName` is a group that SmartBundleGrouper manages —
+        // i.e., a per-root bundle group ({gameId}-Bundle-*) or the misc
+        // bundle ({gameId}-Misc). Used to detect when an incremental edit
+        // shouldn't disturb a Smart-organized addressable layout. Note: the
+        // {gameId}-Shared bundle was removed in favor of consolidating
+        // shared assets into the first-alphabetical root's bundle, so we
+        // no longer treat it as a managed group.
+        private static bool IsSmartManagedGroupName(string gameId, string groupName)
+        {
+            if (string.IsNullOrEmpty(groupName) || string.IsNullOrEmpty(gameId)) return false;
+            string prefix = gameId + "-";
+            if (!groupName.StartsWith(prefix, StringComparison.Ordinal)) return false;
+            return groupName.StartsWith(prefix + "Bundle-", StringComparison.Ordinal)
+                || groupName == prefix + "Misc";
+        }
+
         private static void EnsureGlobalLabel(AddressableAssetSettings settings, string gameId)
         {
             settings?.AddLabel(gameId);
@@ -111,7 +127,10 @@ namespace DreamPark {
         [MenuItem("DreamPark/Troubleshooting/Force Update All Content", false, 203)]
         public static void ForceUpdateAllContent()
         {
-            ExecuteWithWatchdogPaused(ForceUpdateAllContentInternal);
+            ExecuteWithWatchdogPaused(() => {
+                ForceUpdateAllContentInternal();
+                CleanupAddressableSettings();
+            });
         }
 
         private static void ForceUpdateAllContentInternal()
@@ -120,9 +139,102 @@ namespace DreamPark {
                 .Select(path => Path.GetFileName(path))
                 .Where(id => !string.IsNullOrEmpty(id))
                 .ToArray();
-        
+
             foreach (string contentId in contentIds) {
                 ForceUpdateContentInternal(contentId);
+            }
+        }
+
+        // Two-purpose janitor for the Addressables settings:
+        //
+        //   1. Drops entries whose GUID no longer resolves to a real asset on
+        //      disk — Unity's addressables window leaves these as "Missing
+        //      Reference" rows after assets get deleted/moved without going
+        //      through AssetDatabase. They serve no purpose at runtime and
+        //      pollute the inspector.
+        //
+        //   2. Drops empty groups whose contentId prefix (the segment before
+        //      the first '-') doesn't match any folder under Assets/Content/.
+        //      Catches YOUR_GAME_HERE-* groups left over from the SDK template
+        //      after the new-park.sh rename, plus any group from a contentId
+        //      that's been deleted entirely. Doesn't touch groups whose
+        //      prefix DOES match a current folder — those belong to the
+        //      Smart pass / Legacy logic to manage.
+        //
+        // Safe to run repeatedly. Always preserves Default Local Group and
+        // Built In Data (Addressables requires them).
+        [MenuItem("DreamPark/Troubleshooting/Cleanup Addressables", false, 206)]
+        public static void CleanupAddressables()
+        {
+            ExecuteWithWatchdogPaused(CleanupAddressableSettings);
+        }
+
+        public static void CleanupAddressableSettings()
+        {
+            var settings = AddressableAssetSettingsDefaultObject.Settings;
+            if (settings == null) return;
+
+            // Snapshot of which content folders currently exist on disk —
+            // anything else is fair game for empty-group removal.
+            var contentFolderPrefixes = new HashSet<string>(StringComparer.Ordinal);
+            if (Directory.Exists("Assets/Content"))
+            {
+                foreach (var dir in Directory.GetDirectories("Assets/Content"))
+                {
+                    string name = Path.GetFileName(dir);
+                    if (!string.IsNullOrEmpty(name)) contentFolderPrefixes.Add(name);
+                }
+            }
+
+            int removedEntries = 0;
+            int removedGroups = 0;
+
+            // Pass 1 — drop missing-reference entries from every group.
+            foreach (var group in settings.groups.Where(g => g != null).ToList())
+            {
+                var entriesToRemove = new List<string>();
+                foreach (var entry in group.entries.ToList())
+                {
+                    string path = AssetDatabase.GUIDToAssetPath(entry.guid);
+                    if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                    {
+                        entriesToRemove.Add(entry.guid);
+                    }
+                }
+                foreach (var guid in entriesToRemove)
+                {
+                    settings.RemoveAssetEntry(guid);
+                    removedEntries++;
+                }
+            }
+
+            // Pass 2 — drop empty groups for stale content prefixes.
+            var groupsToRemove = new List<AddressableAssetGroup>();
+            foreach (var group in settings.groups.Where(g => g != null))
+            {
+                if (group.entries.Count > 0) continue;
+                if (group.Default) continue;                    // protect Default Local Group
+                if (group.ReadOnly) continue;                   // protect Built In Data and similar
+                if (string.IsNullOrEmpty(group.Name)) continue;
+
+                int dashIdx = group.Name.IndexOf('-');
+                if (dashIdx <= 0) continue;                     // no recognizable contentId prefix
+
+                string prefix = group.Name.Substring(0, dashIdx);
+                if (contentFolderPrefixes.Contains(prefix)) continue; // belongs to a live content
+                groupsToRemove.Add(group);
+            }
+            foreach (var g in groupsToRemove)
+            {
+                settings.RemoveGroup(g);
+                removedGroups++;
+            }
+
+            if (removedEntries > 0 || removedGroups > 0)
+            {
+                Debug.Log($"🧹 Cleanup: removed {removedEntries} missing-reference entry/entries and {removedGroups} stale empty group(s).");
+                EditorUtility.SetDirty(settings);
+                AssetDatabase.SaveAssets();
             }
         }
 
@@ -179,9 +291,16 @@ namespace DreamPark {
 
             Debug.Log($"🔄 Force updating all prefabs and addressables for {contentId}...");
 
-            // Process all prefabs under this content folder
+            // Process all prefabs under this content folder, EXCLUDING
+            // ThirdPartyLocal — those prefabs never ship and frequently
+            // contain demo/example content with missing-script references
+            // (e.g. CFXR Dynamic Text Example, RunemarkStudio FPSController
+            // demo) that would crash EditPrefabContentsScope's auto-save
+            // when UpdateSpecificPrefabs touches them.
             string[] allPrefabs = AssetDatabase.FindAssets("t:Prefab", new[] { contentRoot })
                 .Select(AssetDatabase.GUIDToAssetPath)
+                .Where(p => !string.IsNullOrEmpty(p))
+                .Where(p => p.IndexOf("/ThirdPartyLocal/", StringComparison.OrdinalIgnoreCase) < 0)
                 .ToArray();
 
             UpdateSpecificPrefabs(allPrefabs.ToList(), contentId);
@@ -287,6 +406,28 @@ namespace DreamPark {
                     EnforceContentNamespaces(scriptPaths);
                 }
 
+                // Mark every addressable group that received a touched file
+                // as "dirty" since the last successful upload. The patch
+                // estimator reads this set to answer "what would change if
+                // I uploaded right now?" without having to actually run a
+                // build. Group lookup happens AFTER ApplyGameIdLabelToContentEntries
+                // has assigned the changed entries to their current groups.
+                var dirtyGroups = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var path in groupPaths)
+                {
+                    string guid = AssetDatabase.AssetPathToGUID(path);
+                    if (string.IsNullOrEmpty(guid)) continue;
+                    var entry = settings.FindAssetEntry(guid);
+                    if (entry?.parentGroup != null && !string.IsNullOrEmpty(entry.parentGroup.Name))
+                    {
+                        dirtyGroups.Add(entry.parentGroup.Name);
+                    }
+                }
+                if (dirtyGroups.Count > 0)
+                {
+                    DirtyGroupsStore.AddDirty(gameId, dirtyGroups);
+                }
+
                 totalPrefabs += prefabPaths.Count;
                 totalOther += otherAssets.Count;
                 totalScripts += scriptPaths.Count;
@@ -313,6 +454,15 @@ namespace DreamPark {
                 foreach (var path in prefabPaths)
                 {
                     if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                        continue;
+
+                    // Defensive: never edit ThirdPartyLocal prefabs.
+                    // Callers should already filter these out, but a missing-
+                    // script prefab in ThirdPartyLocal would crash the
+                    // EditPrefabContentsScope auto-save and abort the rest of
+                    // the pass. ThirdPartyLocal never ships, so injecting
+                    // gameId there is pointless anyway.
+                    if (path.IndexOf("/ThirdPartyLocal/", StringComparison.OrdinalIgnoreCase) >= 0)
                         continue;
 
                     using (var scope = new PrefabUtility.EditPrefabContentsScope(path))
@@ -447,6 +597,27 @@ namespace DreamPark {
             return false;
         }
 
+        // Lightweight version of ShouldSkipAsset used by the self-heal dep
+        // sweep. The full ShouldSkipAsset rejects when AssetDatabase.LoadMainAssetAtPath
+        // returns null, which can be transient for assets mid-import — using
+        // it during the sweep would re-create the same blind spot we're
+        // trying to plug. Here we filter purely on path / extension /
+        // ThirdPartyLocal exclusion, trusting that anything reachable through
+        // a tracked asset's dep graph is real even if Unity's import state
+        // is stale. ShouldSkipAsset still gates the *initial* FindAssets scan
+        // and the per-asset registration loop, so a genuinely broken asset
+        // would still get caught there.
+        private static bool ShouldSkipAssetForSweep(string assetPath)
+        {
+            if (string.IsNullOrEmpty(assetPath)) return true;
+            assetPath = assetPath.Replace("\\", "/");
+            if (disallowedExtensionsList.Any(ext => assetPath.EndsWith(ext, StringComparison.OrdinalIgnoreCase))) return true;
+            if (assetPath.Contains("/Editor/")) return true;
+            if (assetPath.IndexOf("/ThirdPartyLocal/", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (AssetDatabase.IsValidFolder(assetPath)) return true;
+            return false;
+        }
+
         private static List<string> disallowedExtensionsList = new List<string> {
             ".meta",
             ".cs",
@@ -514,21 +685,70 @@ namespace DreamPark {
             else
             {
                 string contentRoot = $"Assets/Content/{gameId}/";
+                // FindAssets accepts paths with or without trailing slash, but
+                // we strip it defensively because some Unity versions handle
+                // the trailing slash inconsistently and silently return fewer
+                // results.
+                string contentRootForFind = contentRoot.TrimEnd('/');
                 Debug.Log($"🔍 Searching for assets in {contentRoot}");
 
                 RestoreAssetSaveability(gameId);
 
-                // Build the complete list once (used for both labeling and removal)
-                var foundAssets = AssetDatabase.FindAssets("", new[] { contentRoot })
-                    .Select(AssetDatabase.GUIDToAssetPath)
-                    .Where(p => !ShouldSkipAsset(p))
-                    .ToList();
+                // Build the initial list from AssetDatabase.FindAssets.
+                var foundAssets = new HashSet<string>(
+                    AssetDatabase.FindAssets("", new[] { contentRootForFind })
+                        .Select(AssetDatabase.GUIDToAssetPath)
+                        .Where(p => !ShouldSkipAsset(p)),
+                    StringComparer.OrdinalIgnoreCase);
+
+                // ── Self-heal: walk transitive deps of every found asset and
+                // pull in anything reachable under Content/{gameId}/. This
+                // is conceptually the same job ThirdPartySyncTool does to
+                // decide what to move from ThirdPartyLocal — closure-walk a
+                // dep graph — but applied to addressable registration so a
+                // freshly-arrived asset like ThirdParty/.../Albedo.png that
+                // AssetDatabase.FindAssets missed (stale index, import
+                // timing) still ends up addressable as long as it's reachable
+                // from something that IS tracked.
+                //
+                // Critically, the sweep uses ShouldSkipAssetForSweep —
+                // a stripped-down version of ShouldSkipAsset that doesn't
+                // call AssetDatabase.LoadMainAssetAtPath. The full
+                // ShouldSkipAsset rejects assets when LoadMainAssetAtPath
+                // returns null, which can happen transiently for assets
+                // mid-import; relying on it here would re-create the same
+                // silent blind spot we're trying to fix.
+                int addedViaSweep = 0;
+                {
+                    var queue = new Queue<string>(foundAssets);
+                    while (queue.Count > 0)
+                    {
+                        var current = queue.Dequeue();
+                        string[] deps;
+                        try { deps = AssetDatabase.GetDependencies(current, recursive: false); }
+                        catch { continue; }
+                        foreach (var dep in deps)
+                        {
+                            if (string.IsNullOrEmpty(dep)) continue;
+                            if (string.Equals(dep, current, StringComparison.OrdinalIgnoreCase)) continue;
+                            if (!dep.StartsWith(contentRoot, StringComparison.OrdinalIgnoreCase)) continue;
+                            if (ShouldSkipAssetForSweep(dep)) continue;
+                            if (!foundAssets.Add(dep)) continue;
+                            queue.Enqueue(dep);
+                            addedViaSweep++;
+                        }
+                    }
+                }
+                if (addedViaSweep > 0)
+                {
+                    Debug.Log($"🩹 Self-heal: pulled {addedViaSweep} dep-reachable asset(s) into the addressable scan that AssetDatabase.FindAssets initially missed.");
+                }
 
                 assetPaths = foundAssets;
 
                 try
                 {
-                    var allowedAssetSet = foundAssets.ToHashSet();
+                    var allowedAssetSet = foundAssets;
 
                     // Gather all (group, entry) pairs to remove first to prevent collection modification during enumeration
                     var entriesToRemove = new List<(AddressableAssetGroup, AddressableAssetEntry)>();
@@ -602,7 +822,27 @@ namespace DreamPark {
                 bag.Compression = BundledAssetGroupSchema.BundleCompressionMode.LZ4;
 
                 var entry = settings.FindAssetEntry(guid);
-                if (entry == null || entry.parentGroup != group)
+
+                // In Smart mode, an entry is typically already in a
+                // Smart-managed group ({gameId}-Bundle-*, {gameId}-Shared,
+                // {gameId}-Misc) from the last full pass. Incremental edits
+                // must NOT move it back to the Legacy folder group computed
+                // above — doing so silently undoes Smart bundling for that
+                // asset (the next build would produce a Legacy-shaped bundle
+                // mismatched with the rest of the Smart layout) AND breaks
+                // dirty-group tracking because the post-move group name no
+                // longer matches the Smart bundle filenames in the baseline.
+                // Smart's full pass runs at upload time (gated to
+                // specificPaths == null), so this is the right place to
+                // protect Smart membership.
+                bool inSmartGroup = entry?.parentGroup != null
+                    && IsSmartManagedGroupName(gameId, entry.parentGroup.Name);
+                bool isIncremental = specificPaths != null && specificPaths.Count > 0;
+                bool preserveSmart = isIncremental
+                    && BundlingStrategyPrefs.Current == BundlingStrategy.Smart
+                    && inSmartGroup;
+
+                if (!preserveSmart && (entry == null || entry.parentGroup != group))
                 {
                     entry = settings.CreateOrMoveEntry(guid, group, false, false);
                     moved++;
@@ -674,6 +914,28 @@ namespace DreamPark {
 
             if (labeled > 0 || moved > 0)
                 Debug.Log($"🏷 Addressables: {moved} moved/created, {labeled} labeled for '{gameId}'.");
+
+            // ── Bundling strategy ────────────────────────────────────────
+            // After the Legacy folder-based grouping has finished assigning
+            // every content asset to a "{gameId}-{folder}" group, optionally
+            // re-partition into dependency-aware bundles. Legacy is the
+            // default and runs alone; Smart is an opt-in pass that re-slices
+            // those groups so a one-asset edit invalidates one small bundle
+            // instead of a folder-level one. See BundlingStrategy.cs.
+            //
+            // Only run the Smart pass on full updates (specificPaths == null),
+            // not on incremental file-change passes — Smart needs the full
+            // addressable set to compute correct shared-vs-unique refCounts,
+            // and the upload path always triggers a full ForceUpdateContent
+            // before building so a dropped Smart pass during incremental
+            // editing is recovered by the time we build.
+            if (specificPaths == null && BundlingStrategyPrefs.Current == BundlingStrategy.Smart)
+            {
+                var result = SmartBundleGrouper.ApplyDependencyAwareGrouping(settings, gameId);
+                Debug.Log($"📦 Smart bundling [experimental] for '{gameId}': " +
+                          $"{result.rootBundles} root bundles, {result.miscAssets} misc assets, " +
+                          $"+{result.groupsCreated}/-{result.groupsRemoved} groups.");
+            }
         }
 
         public static Texture2D CreateAlphaMask(Texture2D original, Color bg, float threshold = 0.1f)
@@ -726,9 +988,16 @@ namespace DreamPark {
                 var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
                 if (prefab == null) continue;
 
+                // Same root-prefab predicate the SmartBundleGrouper and the
+                // Park Assets preview grid use: LevelTemplate (catches
+                // AttractionTemplate via inheritance), PropTemplate, or
+                // PlayerRig. Keeping the three callsites in lockstep means
+                // every prefab that shows up in the panel grid also gets a
+                // PNG generated.
                 var levelTemplate = prefab.GetComponent<LevelTemplate>();
                 var propTemplate = prefab.GetComponent<PropTemplate>();
-                if (levelTemplate == null && propTemplate == null) continue;
+                var playerRig = prefab.GetComponent<PlayerRig>();
+                if (levelTemplate == null && propTemplate == null && playerRig == null) continue;
 
                 string previewPath = $"Assets/Content/{contentId}/Previews/{Path.GetFileNameWithoutExtension(prefabPath)}.png";
 
