@@ -13,16 +13,33 @@ namespace DreamPark.API
 {  
     public class UploadContentData {
         public string filePath = null;
+        // fileName is what gets sent as the "filename" field on the presigned-URL
+        // request, so it needs to match what the catalog expects. When a
+        // platformRoot is provided, this is the path *relative to that root* with
+        // forward slashes — that way bundles produced by PackSeparately groups
+        // (which live in subdirectories like
+        // <gameid>-models_assets_<gameid>/models/foo.bundle) preserve their
+        // relative path through the upload step instead of getting flattened by
+        // Path.GetFileName. When platformRoot is null we fall back to the leaf
+        // filename, which preserves the legacy PackTogether behavior.
         public string fileName = null;
         public string mimeType = null;
         public byte[] data = null;
 
-        public UploadContentData(string filePath, byte[] data) {
+        public UploadContentData(string filePath, byte[] data)
+            : this(filePath, data, null) { }
+
+        public UploadContentData(string filePath, byte[] data, string platformRoot) {
             this.filePath = filePath;
-            this.fileName = Path.GetFileName(filePath);
-            if (Path.GetExtension(fileName) == ".json") {
+            if (!string.IsNullOrEmpty(platformRoot)) {
+                this.fileName = Path.GetRelativePath(platformRoot, filePath).Replace('\\', '/');
+            } else {
+                this.fileName = Path.GetFileName(filePath);
+            }
+            string ext = Path.GetExtension(filePath);
+            if (ext == ".json") {
                 mimeType = "application/json";
-            } else if (Path.GetExtension(fileName) == ".hash") {
+            } else if (ext == ".hash") {
                 mimeType = "text/plain";
             } else {
                 mimeType = "application/octet-stream";
@@ -40,11 +57,21 @@ namespace DreamPark.API
             if (Directory.Exists(directory))
             {
                 data = new List<UploadContentData>();
-                var files = Directory.GetFiles(directory);
+                // Walk the whole ServerData/<platform>/ tree, not just the top
+                // level — bundles produced by PackSeparately groups land in
+                // per-group subdirectories (e.g. ServerData/StandaloneOSX/
+                // <gameid>-models_assets_<gameid>/models/foo.bundle) and
+                // were previously skipped by the non-recursive Directory.GetFiles
+                // call, which is what caused 404s at runtime for those bundles.
+                var files = Directory.GetFiles(directory, "*", SearchOption.AllDirectories);
                 foreach (var filePath in files)
                 {
                     byte[] fileBytes = File.ReadAllBytes(filePath);
-                    data.Add(new UploadContentData(filePath, fileBytes));
+                    // Pass the platform root so UploadContentData stores the
+                    // relative path (e.g. "<gameid>-models_assets_<gameid>/
+                    // models/foo.bundle") as the filename, preserving the
+                    // subdirectory structure the catalog references.
+                    data.Add(new UploadContentData(filePath, fileBytes, directory));
                 }
             }
             else
