@@ -56,12 +56,15 @@ public class TestNetObject : MonoBehaviour
         try
         {
             var json = new JSONObject(payload);
-            if (json.HasField("r") && json.HasField("g") && json.HasField("b"))
+            var payloadJson = json.GetField("payload"); 
+            if (payloadJson.HasField("r") && payloadJson.HasField("g") && payloadJson.HasField("b"))
             {
-                float r = (float)json.GetField("r").floatValue;
-                float g = (float)json.GetField("g").floatValue;
-                float b = (float)json.GetField("b").floatValue;
+                float r = (float)payloadJson.GetField("r").floatValue;
+                float g = (float)payloadJson.GetField("g").floatValue;
+                float b = (float)payloadJson.GetField("b").floatValue;
                 SetColor(new Color(r, g, b));
+            } else {
+                Debug.Log($"[TestNetObject] No color fields found");
             }
         }
         catch (Exception ex)
@@ -87,7 +90,7 @@ public class TestNetObject : MonoBehaviour
         var client = DreamBoxClient.Instance;
         if (client != null && client.ConnectionState == DreamBoxClient.State.Connected)
         {
-            string payload = $"{{\"r\":{r:F2},\"g\":{g:F2},\"b\":{b:F2}}}";
+            string payload = "{\"r\":" + r.ToString("F2") + ",\"g\":" + g.ToString("F2") + ",\"b\":" + b.ToString("F2") + "}";
             client.SendToNetId(_netId.Id, "color", payload);
         }
     }
