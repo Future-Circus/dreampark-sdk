@@ -586,10 +586,19 @@ namespace DreamPark {
                 bag.UseAssetBundleCache = true;
                 bag.UseAssetBundleCrc = true;
                 bag.UseAssetBundleCrcForCachedBundles = false;
-                bool useSeparate = folderName == "Models" || folderName == "Textures" || folderName == "Audio";
-                bag.BundleMode = useSeparate
-                    ? BundledAssetGroupSchema.BundlePackingMode.PackSeparately
-                    : BundledAssetGroupSchema.BundlePackingMode.PackTogether;
+                // TEMP: revert all groups to PackTogether to unblock uploads.
+                // PackSeparately produces nested-directory bundle layouts under
+                // ServerData/<platform>/ (e.g. <gameid>-models_assets_<gameid>/models/foo.bundle),
+                // and the uploader's recursive-walk + relative-path support is still
+                // being validated end-to-end. Re-enable the per-folder PackSeparately
+                // branch (Models / Textures / Audio) once that's confirmed working.
+                //
+                // Original behavior:
+                //   bool useSeparate = folderName == "Models" || folderName == "Textures" || folderName == "Audio";
+                //   bag.BundleMode = useSeparate
+                //       ? BundledAssetGroupSchema.BundlePackingMode.PackSeparately
+                //       : BundledAssetGroupSchema.BundlePackingMode.PackTogether;
+                bag.BundleMode = BundledAssetGroupSchema.BundlePackingMode.PackTogether;
                 bag.Compression = BundledAssetGroupSchema.BundleCompressionMode.LZ4;
 
                 var entry = settings.FindAssetEntry(guid);
