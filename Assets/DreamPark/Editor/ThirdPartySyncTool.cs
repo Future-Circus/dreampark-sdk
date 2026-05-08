@@ -62,6 +62,36 @@ namespace DreamPark.Editor
             RunSync(false);
         }
 
+        // Targeted variant invoked by the Content Uploader's Compile & Upload
+        // flow. Sets the internal content selection to the contentId being
+        // uploaded and runs a real sync (not analyze-only) so any
+        // ThirdPartyLocal assets referenced by the content are moved into
+        // ThirdParty/ before the Addressables build picks them up. Saves the
+        // selection back to EditorPrefs so reopening the ThirdParty Sync
+        // window after an upload shows the same content the user just shipped.
+        public static void RunSyncForContent(string contentId, bool analyzeOnly = false)
+        {
+            if (string.IsNullOrEmpty(contentId))
+            {
+                Debug.LogWarning("[ThirdParty Sync] RunSyncForContent called with empty contentId; skipping.");
+                return;
+            }
+
+            RefreshContentOptions();
+            int idx = contentOptions.IndexOf(contentId);
+            if (idx < 0)
+            {
+                Debug.LogWarning($"[ThirdParty Sync] No content folder found at Assets/Content/{contentId}; skipping.");
+                return;
+            }
+
+            selectedContentIndex = idx;
+            selectedContentId = contentId;
+            SaveContentSelection();
+
+            RunSync(analyzeOnly);
+        }
+
         private void OnEnable()
         {
             RefreshContentOptions();
