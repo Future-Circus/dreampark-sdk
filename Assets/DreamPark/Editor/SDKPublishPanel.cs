@@ -103,10 +103,70 @@ namespace DreamPark
             }
             GUI.enabled = true;
 
+            // ── Local testing ──────────────────────────────────────────
+            // Smaller secondary action: export Assets/DreamPark/ as a
+            // .unitypackage to <ProjectRoot>/Builds/ and reveal it in
+            // Finder/Explorer. No version bump, no backend upload — just
+            // a fast loop for testing SDK changes in another local Unity
+            // project before going through the formal Publish flow.
+            GUILayout.Space(8);
+            EditorGUILayout.LabelField("Local testing", EditorStyles.miniLabel);
+            GUI.enabled = !isPublishing;
+            if (GUILayout.Button("Export .unitypackage (local — no upload)", GUILayout.Height(22)))
+            {
+                ExportLocal();
+            }
+            GUI.enabled = true;
+
             if (!string.IsNullOrEmpty(status))
             {
                 GUILayout.Space(8);
                 EditorGUILayout.HelpBox(status, statusIsError ? MessageType.Error : MessageType.Info);
+            }
+        }
+
+        // Mirror of Publish()'s export step, minus the version bump and the
+        // backend upload. Lands the .unitypackage in the project's Builds/
+        // folder (gitignored by default) and pops Finder/Explorer focused on
+        // the file so the user can drag it straight into a target project.
+        private void ExportLocal()
+        {
+            try
+            {
+                status = "Exporting...";
+                statusIsError = false;
+                Repaint();
+
+                string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+                string buildsDir = Path.Combine(projectRoot, "Builds");
+                Directory.CreateDirectory(buildsDir);
+
+                // Timestamp keeps successive exports distinguishable; current
+                // SDK version is included so the filename is self-describing
+                // when dragged into another project.
+                string timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+                string fileName = $"dreampark-sdk-v{SDKVersion.Current}-{timestamp}.unitypackage";
+                string outPath = Path.Combine(buildsDir, fileName);
+
+                AssetDatabase.ExportPackage(SDKAssetPath, outPath, ExportPackageOptions.Recurse);
+
+                if (!File.Exists(outPath))
+                {
+                    FailWith("Export failed — .unitypackage was not created.");
+                    return;
+                }
+
+                long sizeKB = new FileInfo(outPath).Length / 1024;
+                Debug.Log($"[DreamPark] Exported SDK to {outPath} ({sizeKB} KB)");
+                EditorUtility.RevealInFinder(outPath);
+
+                status = $"✅ Exported {fileName} ({sizeKB} KB). Revealed in Finder.";
+                statusIsError = false;
+                Repaint();
+            }
+            catch (Exception e)
+            {
+                FailWith("Export failed: " + e.Message);
             }
         }
 

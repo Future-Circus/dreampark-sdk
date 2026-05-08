@@ -55,7 +55,7 @@ public class DreamBoxClientEditor : Editor
             float r = UnityEngine.Random.value;
             float g = UnityEngine.Random.value;
             float b = UnityEngine.Random.value;
-            string json = "{\"netId\":" + client._testNetId.Id + ",\"r\":" + r.ToString("F2") + ",\"g\":" + g.ToString("F2") + ",\"b\":" + b.ToString("F2") + "}";
+            string json = $"{{\"netId\":{client._testNetId.Id},\"r\":{r:F2},\"g\":{g:F2},\"b\":{b:F2}}}";
             NetRegistry.Dispatch(client._testNetId.Id, json);
         }
     }
@@ -286,7 +286,7 @@ public class DreamBoxClient : MonoBehaviour
     /// </summary>
     public void SendToNetId(uint netId, string eventType, string payloadJson)
     {
-        Send(eventType, $"{{\"netId\":{netId},{payloadJson.TrimStart('{').TrimEnd('}')}}}");
+        Send(eventType, $"{{\"netId\":{netId},{payloadJson.TrimStart('{')}}}");
     }
 
     // -----------------------------------------------------------
@@ -307,7 +307,7 @@ public class DreamBoxClient : MonoBehaviour
             }
         }
 
-#if UNITY_IOS && DREAMPARKCORE
+#if UNITY_IOS
         // Periodically send ping updates to Swift when connected
         if (ConnectionState == State.Connected)
         {
@@ -462,7 +462,7 @@ public class DreamBoxClient : MonoBehaviour
         ConnectionState = newState;
         OnConnectionStateChanged?.Invoke(newState);
 
-#if UNITY_IOS && DREAMPARKCORE
+#if UNITY_IOS
         // Send relay status to Swift for SpectateView indicator
         switch (newState)
         {
