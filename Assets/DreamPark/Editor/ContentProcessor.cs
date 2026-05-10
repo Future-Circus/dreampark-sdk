@@ -1513,7 +1513,59 @@ namespace DreamPark {
             {
                 Debug.Log($"ℹ️ No unsaveable addressable assets found for {gameId}.");
             }
-        }  
+        }
+
+        [MenuItem("DreamPark/Troubleshooting/Generate XLua Code", false, 207)]
+        public static void GenerateXLuaCode()
+        {
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                EditorUtility.DisplayDialog("Generate XLua Code",
+                    "Exit Play mode before generating XLua code.", "OK");
+                return;
+            }
+
+            if (EditorApplication.isCompiling)
+            {
+                EditorUtility.DisplayDialog("Generate XLua Code",
+                    "Wait for script compilation to finish, then try again.", "OK");
+                return;
+            }
+
+            // Clean up XLua's legacy default output folder. The new output path
+            // (set via [GenPath] in DreamParkXLuaGenPath) lives inside the synced
+            // Assets/DreamPark/ThirdParty/XLua/Gen/ bundle. If the old folder
+            // sticks around, both wrapper sets compile and you get duplicate-type
+            // errors.
+            const string legacyGen = "Assets/XLua/Gen";
+            const string legacyRoot = "Assets/XLua";
+            if (AssetDatabase.IsValidFolder(legacyGen))
+            {
+                AssetDatabase.DeleteAsset(legacyGen);
+                Debug.Log($"🧹 Removed legacy {legacyGen}");
+            }
+            if (AssetDatabase.IsValidFolder(legacyRoot))
+            {
+                var leftover = AssetDatabase.FindAssets("", new[] { legacyRoot });
+                if (leftover == null || leftover.Length == 0)
+                {
+                    AssetDatabase.DeleteAsset(legacyRoot);
+                }
+            }
+
+            try
+            {
+                Debug.Log("🔧 Generating XLua wrappers...");
+                CSObjectWrapEditor.Generator.GenAll();
+                Debug.Log($"✅ XLua wrappers generated to {CSObjectWrapEditor.GeneratorConfig.common_path}");
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("❌ XLua codegen failed: " + e);
+                EditorUtility.DisplayDialog("Generate XLua Code",
+                    "XLua codegen failed. See Console for details.", "OK");
+            }
+        }
     }
 }
 #endif // !DREAMPARKCORE
