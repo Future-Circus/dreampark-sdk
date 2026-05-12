@@ -819,6 +819,36 @@ namespace DreamPark {
         {
             EditorGUILayout.LabelField("Patch Estimate", EditorStyles.boldLabel);
 
+            bool patchingEnabled = IsPatchUploadEnabled();
+            if (!patchingEnabled)
+            {
+                EditorGUILayout.HelpBox(
+                    "Patch uploads are disabled while using Legacy bundling. " +
+                    "Compile & Upload will send the full contents of ServerData/ each time. " +
+                    "Switch to Smart bundling to enable unchanged-file skipping.",
+                    MessageType.None);
+
+                if (patchCurrentSnapshot == null || patchCurrentSnapshot.TotalFileCount == 0)
+                {
+                    EditorGUILayout.LabelField(
+                        "No build artifacts in ServerData/ yet — run Compile & Upload to populate.",
+                        EditorStyles.miniLabel);
+                }
+                else
+                {
+                    EditorGUILayout.LabelField(
+                        $"Next upload: {patchCurrentSnapshot.TotalFileCount} files · " +
+                        $"{BuildManifestStore.FormatBytes(patchCurrentSnapshot.TotalBytes)} (full upload)",
+                        EditorStyles.label);
+                }
+
+                if (GUILayout.Button("Refresh estimate", GUILayout.Height(22)))
+                {
+                    RefreshPatchEstimate();
+                }
+                return;
+            }
+
             // Baseline summary
             if (patchBaseline == null)
             {
@@ -934,18 +964,27 @@ namespace DreamPark {
 
             try
             {
-                patchBaseline = BuildManifestStore.LoadBaseline(contentId);
                 var platforms = GetEnabledPlatformsForManifest();
                 patchCurrentSnapshot = BuildManifestStore.BuildFromServerData(contentId, /*versionNumber*/ 0, platforms);
-                patchDiff = BuildManifestStore.Diff(patchBaseline, patchCurrentSnapshot);
+                if (IsPatchUploadEnabled())
+                {
+                    patchBaseline = BuildManifestStore.LoadBaseline(contentId);
+                    patchDiff = BuildManifestStore.Diff(patchBaseline, patchCurrentSnapshot);
 
-                // Source-aware estimate: read dirty-groups (maintained
-                // real-time by the watchdog) and match them against the
-                // baseline's bundle filenames for a quick "patch size" guess
-                // that reflects current source state, not the (possibly
-                // stale) ServerData/.
-                var dirtyGroups = DirtyGroupsStore.Load(contentId);
-                dirtyGroupsEstimate = DirtyGroupsEstimator.Estimate(patchBaseline, dirtyGroups);
+                    // Source-aware estimate: read dirty-groups (maintained
+                    // real-time by the watchdog) and match them against the
+                    // baseline's bundle filenames for a quick "patch size" guess
+                    // that reflects current source state, not the (possibly
+                    // stale) ServerData/.
+                    var dirtyGroups = DirtyGroupsStore.Load(contentId);
+                    dirtyGroupsEstimate = DirtyGroupsEstimator.Estimate(patchBaseline, dirtyGroups);
+                }
+                else
+                {
+                    patchBaseline = null;
+                    patchDiff = BuildManifestStore.Diff(null, patchCurrentSnapshot);
+                    dirtyGroupsEstimate = null;
+                }
             }
             catch (System.Exception e)
             {
@@ -956,6 +995,24 @@ namespace DreamPark {
             }
 
             Repaint();
+        }
+
+        private static bool IsPatchUploadEnabled()
+        {
+            return BundlingStrategyPrefs.Current == BundlingStrategy.Smart;
+        }
+
+        private static JSONObject BuildUploaderMetadata()
+        {
+            var bundlingStrategy = BundlingStrategyPrefs.Current;
+            bool patchingEnabled = bundlingStrategy == BundlingStrategy.Smart;
+
+            var uploaderMetadata = new JSONObject(JSONObject.Type.Object);
+            uploaderMetadata.AddField("packer", bundlingStrategy == BundlingStrategy.Smart ? "smart" : "legacy");
+            uploaderMetadata.AddField("bundlingStrategy", bundlingStrategy.ToString().ToLowerInvariant());
+            uploaderMetadata.AddField("patching", patchingEnabled ? "enabled" : "disabled");
+            uploaderMetadata.AddField("patchingEnabled", patchingEnabled);
+            return uploaderMetadata;
         }
 
         // ── "What you're uploading" preview ──────────────────────────────
@@ -2329,35 +2386,48 @@ namespace DreamPark {
                             reportStep("Computing patch estimate...");
 
                             // Build a manifest of what's currently in ServerData (the just-built
-                            // output, or whatever existed for "Try Reupload"), diff it against
-                            // the saved baseline, and use the diff to skip re-uploading bundles
-                            // whose contents didn't change. The same diff drives the panel's
-                            // patch-size estimate; computing it here ensures the displayed
-                            // estimate matches what we actually upload.
+                            // output, or whatever existed for "Try Reupload"). In Smart mode we
+                            // diff it against the saved baseline and use the diff to skip
+                            // re-uploading unchanged files. In Legacy mode we always send the
+                            // full build and only use the manifest for size summary/UI.
                             BuildManifest currentManifest = null;
                             HashSet<string> skipSet = null;
+                            bool patchingEnabled = IsPatchUploadEnabled();
                             try
                             {
                                 var manifestPlatforms = GetEnabledPlatformsForManifest();
                                 currentManifest = BuildManifestStore.BuildFromServerData(contentId, versionNumber, manifestPlatforms);
-                                var baseline = BuildManifestStore.LoadBaseline(contentId);
+                                BuildManifest baseline = patchingEnabled
+                                    ? BuildManifestStore.LoadBaseline(contentId)
+                                    : null;
                                 var diff = BuildManifestStore.Diff(baseline, currentManifest);
-                                skipSet = BuildManifestStore.BuildSkipSet(diff);
+                                skipSet = patchingEnabled ? BuildManifestStore.BuildSkipSet(diff) : null;
 
-                                long changed = diff.TotalChangedBytes;
-                                long total = diff.TotalCurrentBytes;
-                                int changedFiles = diff.TotalChangedFileCount;
-                                Debug.Log(
-                                    $"📦 Patch estimate: {changedFiles} changed file(s) · " +
-                                    $"{BuildManifestStore.FormatBytes(changed)} of " +
-                                    $"{BuildManifestStore.FormatBytes(total)} will upload " +
-                                    $"({skipSet.Count} unchanged file(s) skipped).");
+                                if (patchingEnabled)
+                                {
+                                    long changed = diff.TotalChangedBytes;
+                                    long total = diff.TotalCurrentBytes;
+                                    int changedFiles = diff.TotalChangedFileCount;
+                                    Debug.Log(
+                                        $"📦 Patch estimate: {changedFiles} changed file(s) · " +
+                                        $"{BuildManifestStore.FormatBytes(changed)} of " +
+                                        $"{BuildManifestStore.FormatBytes(total)} will upload " +
+                                        $"({skipSet.Count} unchanged file(s) skipped).");
+                                }
+                                else
+                                {
+                                    Debug.Log(
+                                        $"📦 Legacy bundling: patch uploads disabled; " +
+                                        $"sending full upload of {currentManifest.TotalFileCount} file(s) · " +
+                                        $"{BuildManifestStore.FormatBytes(currentManifest.TotalBytes)}.");
+                                }
 
                                 // Refresh the panel's cached state so the UI reflects what
                                 // we're about to do.
                                 patchBaseline = baseline;
                                 patchCurrentSnapshot = currentManifest;
                                 patchDiff = diff;
+                                dirtyGroupsEstimate = null;
                                 Repaint();
                             }
                             catch (Exception manifestEx)
@@ -2375,7 +2445,9 @@ namespace DreamPark {
                             {
                                 if (currentManifest != null)
                                 {
-                                    var diffForSummary = BuildManifestStore.Diff(BuildManifestStore.LoadBaseline(contentId), currentManifest);
+                                    var diffForSummary = patchingEnabled
+                                        ? BuildManifestStore.Diff(BuildManifestStore.LoadBaseline(contentId), currentManifest)
+                                        : null;
                                     manifestSummary = BuildManifestStore.BuildCommitSummary(currentManifest, diffForSummary);
                                 }
                             }
@@ -2383,6 +2455,20 @@ namespace DreamPark {
                             {
                                 Debug.LogWarning($"[ContentUploader] Could not build manifest summary: {summaryEx.Message}");
                                 manifestSummary = null;
+                            }
+
+                            try
+                            {
+                                if (manifestSummary == null || manifestSummary.type != JSONObject.Type.Object)
+                                {
+                                    manifestSummary = new JSONObject(JSONObject.Type.Object);
+                                }
+
+                                manifestSummary.AddField("uploader", BuildUploaderMetadata());
+                            }
+                            catch (Exception uploaderMetadataEx)
+                            {
+                                Debug.LogWarning($"[ContentUploader] Could not attach uploader metadata: {uploaderMetadataEx.Message}");
                             }
 
                             // Hand off to the upload step. Its own progress UI
@@ -2401,7 +2487,8 @@ namespace DreamPark {
                             // a divergent baseline (e.g. partial upload failure
                             // in an older SDK that incorrectly saved the
                             // baseline).
-                            bool everythingSkipped = currentManifest != null
+                            bool everythingSkipped = patchingEnabled
+                                && currentManifest != null
                                 && skipSet != null
                                 && currentManifest.TotalFileCount > 0
                                 && skipSet.Count >= currentManifest.TotalFileCount;
@@ -2435,7 +2522,7 @@ namespace DreamPark {
                                     // so the *next* upload's diff is "what changed since the
                                     // last successful upload." Only save on success — a failed
                                     // upload shouldn't move the baseline forward.
-                                    if (currentManifest != null)
+                                    if (patchingEnabled && currentManifest != null)
                                     {
                                         try
                                         {
