@@ -26,13 +26,31 @@ namespace DreamPark {
         private Texture2D logoTexture = null;
         private bool isUploading = false;
         private bool isLoadingMetadata = false;
+        private int? latestPublishedVersionNumber = null;
         private int? lastSchemaVersion = null;
-        private Vector2 uploadProgressScroll;
+        private string uploadStatusTitle = "";
+        private string uploadStatusMessage = "";
+        private float uploadStatusProgress = -1f;
+        private bool uploadStatusIsError = false;
+        private bool uploadCompleted = false;
+        private bool uploadSucceeded = false;
+        private bool uploadBuildMode = true;
 
         // Main panel scroll. Persists for the lifetime of the window so scroll
         // position doesn't reset every time OnGUI runs (which is many times
         // per second). Reset would feel jumpy as the user types.
         private Vector2 mainScroll;
+
+        private const string SectionContentInfoPrefKey = "DreamPark.ContentUploader.Section.ContentInfo";
+        private const string SectionTeamPrefKey = "DreamPark.ContentUploader.Section.Team";
+        private const string SectionContentOverviewPrefKey = "DreamPark.ContentUploader.Section.ContentOverview";
+        private const string SectionTroubleshootingPrefKey = "DreamPark.ContentUploader.Section.Troubleshooting";
+        private const string SectionReleaseLaunchPrefKey = "DreamPark.ContentUploader.Section.ReleaseLaunch";
+        private bool foldContentInfo = true;
+        private bool foldTeam = true;
+        private bool foldContentOverview = true;
+        private bool foldTroubleshooting = false;
+        private bool foldReleaseLaunch = true;
 
         // Foldout state for the "Park Assets" preview block. EditorPrefs-
         // backed so collapse choices survive Unity restarts and domain
@@ -216,6 +234,7 @@ namespace DreamPark {
             RestoreContentIdSelection();
             LoadBuildTargetSelection();
             LoadFoldoutPrefs();
+            LoadSectionFoldoutPrefs();
 
             LoadLogoSelection();
             FetchContentMetadata();
@@ -230,6 +249,15 @@ namespace DreamPark {
             foldAttractions = EditorPrefs.GetBool(ParkAssetsAttractionsPrefKey, true);
             foldProps       = EditorPrefs.GetBool(ParkAssetsPropsPrefKey,       true);
             foldPlayer      = EditorPrefs.GetBool(ParkAssetsPlayerPrefKey,      true);
+        }
+
+        private void LoadSectionFoldoutPrefs()
+        {
+            foldContentInfo = EditorPrefs.GetBool(SectionContentInfoPrefKey, true);
+            foldTeam = EditorPrefs.GetBool(SectionTeamPrefKey, true);
+            foldContentOverview = EditorPrefs.GetBool(SectionContentOverviewPrefKey, true);
+            foldTroubleshooting = EditorPrefs.GetBool(SectionTroubleshootingPrefKey, false);
+            foldReleaseLaunch = EditorPrefs.GetBool(SectionReleaseLaunchPrefKey, true);
         }
 
         // ProjectChanged fires for every asset save/import/move which can be
@@ -336,24 +364,9 @@ namespace DreamPark {
                 return;
             }
 
-            // Upload-in-progress takeover. While an upload is running we hide
-            // the entire configuration UI (content selector, name, team,
-            // bundling strategy, patch estimate, action buttons) and give the
-            // whole panel to a focused progress view. Otherwise the per-file
-            // progress list gets buried below ~400px of fields the user
-            // can't interact with mid-upload anyway.
-            if (isUploading)
-            {
-                DrawUploadInProgressView();
-                return;
-            }
-
             // Wrap the entire configuration UI in a scroll view. Without this
-            // the panel runs off-screen on smaller windows once Park Assets +
-            // Patch Estimate + Build Targets all expand at once. We exclude
-            // only the upload-in-progress takeover (which has its own
-            // dedicated layout) — the post-upload progress strip below is
-            // inside this scroll so completed/failed status is reachable.
+            // the panel runs off-screen on smaller windows once the content
+            // preview and troubleshooting sections both open up.
             mainScroll = EditorGUILayout.BeginScrollView(mainScroll);
 
             // Compact logged-in header — full email + Logout
@@ -368,7 +381,7 @@ namespace DreamPark {
             GUILayout.EndHorizontal();
 
             GUILayout.Space(10);
-            GUILayout.Label("Upload New Content", EditorStyles.boldLabel);
+            GUILayout.Label("Content Uploader", EditorStyles.boldLabel);
 
             // ContentId dropdown
             GUILayout.BeginHorizontal();
@@ -472,39 +485,33 @@ namespace DreamPark {
             }
 
             GUILayout.Space(5);
-            contentName = EditorGUILayout.TextField("Name", contentName);
-            EditorGUILayout.LabelField("Description");
-            contentDescription = EditorGUILayout.TextArea(contentDescription, GUILayout.MinHeight(52));
-            logoTexture = (Texture2D)EditorGUILayout.ObjectField("Logo", logoTexture, typeof(Texture2D), false);
-            if (GUILayout.Button("Use Default Logo (Assets/Resources/Logos/<ContentId>.png)"))
+            if (BeginSectionBox(ref foldContentInfo, SectionContentInfoPrefKey, "Content Info", "d_Prefab Icon"))
             {
-                string defaultLogoPath = $"Assets/Resources/Logos/{contentId}.png";
-                logoTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(defaultLogoPath);
-                SaveLogoSelection();
+                contentName = EditorGUILayout.TextField("Name", contentName);
+                EditorGUILayout.LabelField("Description");
+                contentDescription = EditorGUILayout.TextArea(contentDescription, GUILayout.MinHeight(52));
+                logoTexture = (Texture2D)EditorGUILayout.ObjectField("Logo", logoTexture, typeof(Texture2D), false);
+                if (isLoadingMetadata)
+                {
+                    EditorGUILayout.HelpBox("Loading content metadata from backend...", MessageType.Info);
+                }
+                EndSectionBox();
             }
 
-            GUILayout.Space(5);
-            EditorGUILayout.LabelField("Release Notes");
-            releaseNotes = EditorGUILayout.TextArea(releaseNotes, GUILayout.MinHeight(70));
-            if (isLoadingMetadata)
+            if (BeginSectionBox(ref foldTeam, SectionTeamPrefKey, "Team", "d_UnityEditor.InspectorWindow"))
             {
-                EditorGUILayout.HelpBox("Loading content metadata from backend...", MessageType.Info);
+                DrawTeamSection();
+                EndSectionBox();
             }
 
-            GUILayout.Space(10);
-            DrawTeamSection();
+            if (BeginSectionBox(ref foldContentOverview, SectionContentOverviewPrefKey, "Content Overview", "d_SceneViewFx"))
+            {
+                DrawBundlingStrategySection();
+                GUILayout.Space(6);
+                DrawContentPreviewSection();
+                EndSectionBox();
+            }
 
-            GUILayout.Space(10);
-            DrawBundlingStrategySection();
-            GUILayout.Space(6);
-
-            DrawBuildTargetSelection();
-            GUILayout.Space(10);
-
-            DrawContentPreviewSection();
-            GUILayout.Space(10);
-
-            DrawPatchEstimateSection();
             GUILayout.Space(6);
 
             // Upload gate: if the manifest fetch succeeded AND the local SDK
@@ -531,44 +538,90 @@ namespace DreamPark {
                 GUILayout.Space(6);
             }
 
-            // Compile & Upload runs the full pipeline (third-party sync,
-            // build, upload). Gated on having at least one shippable root
-            // (Attraction or Prop) — a bare Player rig isn't a deliverable
-            // on its own.
+            if (BeginSectionBox(ref foldTroubleshooting, SectionTroubleshootingPrefKey, "Troubleshooting", "d_console.warnicon"))
+            {
+                DrawTroubleshootingSection();
+                EndSectionBox();
+            }
+
+            if (BeginSectionBox(ref foldReleaseLaunch, SectionReleaseLaunchPrefKey, "Release Launch", "d_BuildSettings.Editor.Small"))
+            {
+                DrawLaunchActions(sdkOutOfDate);
+                EndSectionBox();
+            }
+
+            EditorGUILayout.EndScrollView();
+        }
+
+        private bool BeginSectionBox(ref bool foldState, string prefKey, string title, string iconName)
+        {
+            GUILayout.BeginVertical(EditorStyles.helpBox);
+            var icon = EditorGUIUtility.IconContent(iconName);
+            string headerTitle = icon != null && icon.image != null ? $" {title}" : title;
+            bool nextState = EditorGUILayout.BeginFoldoutHeaderGroup(foldState, new GUIContent(headerTitle, icon != null ? icon.image : null));
+            if (nextState != foldState)
+            {
+                foldState = nextState;
+                EditorPrefs.SetBool(prefKey, foldState);
+            }
+
+            if (!foldState)
+            {
+                EditorGUILayout.EndFoldoutHeaderGroup();
+                GUILayout.EndVertical();
+                return false;
+            }
+
+            GUILayout.Space(4);
+            return true;
+        }
+
+        private void EndSectionBox()
+        {
+            EditorGUILayout.EndFoldoutHeaderGroup();
+            GUILayout.EndVertical();
+        }
+
+        private void DrawLaunchActions(bool sdkOutOfDate)
+        {
             bool shippable = HasShippableContent();
-            GUI.enabled = !isUploading
-                          && !string.IsNullOrEmpty(contentId)
-                          && !string.IsNullOrEmpty(contentName)
-                          && !sdkOutOfDate
-                          && shippable;
+            bool hasBuildArtifacts = patchCurrentSnapshot != null && patchCurrentSnapshot.TotalFileCount > 0;
+            bool canLaunch = !isUploading
+                             && !string.IsNullOrEmpty(contentId)
+                             && !string.IsNullOrEmpty(contentName)
+                             && !sdkOutOfDate
+                             && shippable;
+
+            if (isUploading)
+            {
+                EditorGUILayout.HelpBox(
+                    "An upload is currently running in the launch window. You can keep editing prep here, but upload actions stay locked until that run finishes.",
+                    MessageType.Info);
+                if (GUILayout.Button("Open Upload Window", GUILayout.Height(24)))
+                {
+                    ContentUploadFlowPopup.Show(this, uploadBuildMode);
+                }
+                GUILayout.Space(6);
+            }
+            else
+            {
+                EditorGUILayout.HelpBox(
+                    "Final title, description, release notes, build targets, and live progress now happen in the launch window so this screen can stay focused on setup.",
+                    MessageType.None);
+            }
+
+            GUI.enabled = canLaunch;
             string compileLabel = shippable
                 ? "Compile & Upload"
                 : "Compile & Upload (add an Attraction or Prop first)";
-            if (GUILayout.Button(compileLabel, GUILayout.Height(32)))
+            if (GUILayout.Button(compileLabel, GUILayout.Height(34)))
             {
-                if (!SaveModifiedScenesBeforeCompile())
-                {
-                    EditorUtility.DisplayDialog("Compile Cancelled", "Save all modified scenes before compiling.", "OK");
-                    EditorGUILayout.EndScrollView();
-                    return;
-                }
                 SaveLogoSelection();
-                UploadContent(true);
+                ContentUploadFlowPopup.Show(this, true);
             }
             GUI.enabled = true;
 
-            // Try Reupload skips the build and pushes whatever's currently in
-            // ServerData/. Only meaningful if a build has actually populated
-            // it — otherwise we'd ship zero files and waste the user's click.
-            // patchCurrentSnapshot is refreshed on panel-open and after every
-            // build, so checking its file count is the cheapest accurate gate.
-            bool hasBuildArtifacts = patchCurrentSnapshot != null && patchCurrentSnapshot.TotalFileCount > 0;
-            GUI.enabled = !isUploading
-                          && !string.IsNullOrEmpty(contentId)
-                          && !string.IsNullOrEmpty(contentName)
-                          && !sdkOutOfDate
-                          && hasBuildArtifacts
-                          && shippable;
+            GUI.enabled = canLaunch && hasBuildArtifacts;
             string reuploadLabel = hasBuildArtifacts
                 ? "Try Reupload"
                 : "Try Reupload (no build artifacts)";
@@ -576,19 +629,39 @@ namespace DreamPark {
                 hasBuildArtifacts
                     ? "Re-upload the contents of ServerData/ without rebuilding."
                     : "Run Compile & Upload first — ServerData/ is empty."),
-                GUILayout.Height(32)))
+                GUILayout.Height(28)))
             {
                 SaveLogoSelection();
-                UploadContent(false);
+                ContentUploadFlowPopup.Show(this, false);
             }
             GUI.enabled = true;
 
-            // Diagnostic: full build pipeline for the active platform only,
-            // no upload, then opens the Addressables Groups window so the
-            // user can review what the bundling pass actually produced.
-            // Useful for validating Smart's partitioning before committing
-            // to a real upload.
-            GUILayout.Space(4);
+            if (uploadCompleted)
+            {
+                GUILayout.Space(8);
+                EditorGUILayout.HelpBox(
+                    string.IsNullOrEmpty(uploadStatusMessage)
+                        ? (uploadSucceeded ? "Upload complete." : "Upload ended with an issue.")
+                        : uploadStatusMessage,
+                    uploadSucceeded ? MessageType.Info : MessageType.Error);
+            }
+        }
+
+        private void DrawTroubleshootingSection()
+        {
+            EditorGUILayout.HelpBox(
+                "Use these tools when a release needs a little extra inspection before you send it.",
+                MessageType.None);
+
+            bool newCleanBeforeEachTarget = EditorGUILayout.ToggleLeft("Clean Addressables Before Each Target", cleanBeforeEachTarget);
+            if (newCleanBeforeEachTarget != cleanBeforeEachTarget)
+            {
+                cleanBeforeEachTarget = newCleanBeforeEachTarget;
+                SaveBuildTargetSelection();
+            }
+
+            GUILayout.Space(6);
+            bool shippable = HasShippableContent();
             GUI.enabled = !isUploading && !string.IsNullOrEmpty(contentId) && shippable;
             if (GUILayout.Button(new GUIContent(
                 "Build & Inspect Groups (no upload)",
@@ -608,115 +681,6 @@ namespace DreamPark {
                 }
             }
             GUI.enabled = true;
-
-            // The upload-in-progress takeover at the top of OnGUI early-returns,
-            // so this only renders post-upload — showing the final completed/
-            // failed state of the most recent attempt until the user starts
-            // another one.
-            DrawUploadProgressArea();
-
-            EditorGUILayout.EndScrollView();
-        }
-
-        private void DrawUploadProgressArea()
-        {
-            var progressEntries = ContentAPI.GetUploadProgressSnapshot();
-            if (!isUploading && (progressEntries == null || progressEntries.Count == 0))
-            {
-                return;
-            }
-
-            GUILayout.Space(12);
-            GUILayout.Label("Upload Progress", EditorStyles.boldLabel);
-
-            if (progressEntries == null || progressEntries.Count == 0)
-            {
-                EditorGUILayout.HelpBox("Collecting files and initializing upload...", MessageType.Info);
-                return;
-            }
-
-            float overall = progressEntries.Average(e => e.progress);
-            EditorGUILayout.LabelField($"Overall: {(overall * 100f):0.0}% ({progressEntries.Count} files)");
-            Rect overallRect = GUILayoutUtility.GetRect(18, 18, "TextField");
-            EditorGUI.ProgressBar(overallRect, overall, $"{overall * 100f:0.0}%");
-            GUILayout.Space(6);
-
-            uploadProgressScroll = EditorGUILayout.BeginScrollView(uploadProgressScroll, GUILayout.MinHeight(140), GUILayout.MaxHeight(220));
-            foreach (var entry in progressEntries)
-            {
-                string status = entry.failed ? "Failed" : (entry.completed ? "Done" : "Uploading");
-                string header = $"{entry.platform} / {entry.fileName}";
-                string sizeText = $"{FormatBytes(entry.uploadedBytes)} / {FormatBytes(entry.totalBytes)}";
-
-                EditorGUILayout.LabelField(header, EditorStyles.miniBoldLabel);
-                EditorGUILayout.LabelField($"{status}  -  {sizeText}  -  {(entry.progress * 100f):0.0}%", EditorStyles.miniLabel);
-                Rect rowRect = GUILayoutUtility.GetRect(18, 18, "TextField");
-                EditorGUI.ProgressBar(rowRect, Mathf.Clamp01(entry.progress), $"{entry.progress * 100f:0.0}%");
-                GUILayout.Space(4);
-            }
-            EditorGUILayout.EndScrollView();
-        }
-
-        // Full-panel takeover during upload. Replaces the entire configuration
-        // UI with a focused progress view so the per-file list isn't buried
-        // below ~400px of fields the user can't interact with anyway. The
-        // file list expands to fill all remaining vertical space.
-        private void DrawUploadInProgressView()
-        {
-            // Compact header so the user still sees who they're uploading as.
-            GUILayout.BeginHorizontal();
-            string displayEmail = !string.IsNullOrEmpty(AuthAPI.email) ? AuthAPI.email : ("uid: " + AuthAPI.userId);
-            EditorGUILayout.LabelField("Signed in as " + displayEmail, EditorStyles.miniLabel);
-            GUILayout.EndHorizontal();
-
-            GUILayout.Space(8);
-
-            string title = string.IsNullOrEmpty(contentName) ? contentId : contentName;
-            GUILayout.Label($"Uploading {title}", EditorStyles.boldLabel);
-            GUILayout.Space(4);
-
-            var progressEntries = ContentAPI.GetUploadProgressSnapshot();
-            if (progressEntries == null || progressEntries.Count == 0)
-            {
-                EditorGUILayout.HelpBox(
-                    "Preparing upload — building bundles and computing patch estimate. " +
-                    "Per-file progress will appear here once the upload starts.",
-                    MessageType.Info);
-                return;
-            }
-
-            // Overall summary row: percent, file count, and bytes.
-            float overall = progressEntries.Average(e => e.progress);
-            long uploadedBytes = progressEntries.Sum(e => e.uploadedBytes);
-            long totalBytes = progressEntries.Sum(e => e.totalBytes);
-            int doneCount = progressEntries.Count(e => e.completed);
-            int failedCount = progressEntries.Count(e => e.failed);
-
-            string overallStatus = $"{doneCount}/{progressEntries.Count} files done";
-            if (failedCount > 0) overallStatus += $" · {failedCount} failed";
-            overallStatus += $" · {FormatBytes(uploadedBytes)} of {FormatBytes(totalBytes)}";
-            EditorGUILayout.LabelField(overallStatus);
-
-            Rect overallRect = GUILayoutUtility.GetRect(22, 22, "TextField");
-            EditorGUI.ProgressBar(overallRect, Mathf.Clamp01(overall), $"{overall * 100f:0.0}%");
-            GUILayout.Space(8);
-
-            // File list takes all remaining vertical space.
-            uploadProgressScroll = EditorGUILayout.BeginScrollView(uploadProgressScroll,
-                GUILayout.ExpandHeight(true));
-            foreach (var entry in progressEntries)
-            {
-                string status = entry.failed ? "Failed" : (entry.completed ? "Done" : "Uploading");
-                string header = $"{entry.platform} / {entry.fileName}";
-                string sizeText = $"{FormatBytes(entry.uploadedBytes)} / {FormatBytes(entry.totalBytes)}";
-
-                EditorGUILayout.LabelField(header, EditorStyles.miniBoldLabel);
-                EditorGUILayout.LabelField($"{status}  -  {sizeText}  -  {(entry.progress * 100f):0.0}%", EditorStyles.miniLabel);
-                Rect rowRect = GUILayoutUtility.GetRect(18, 18, "TextField");
-                EditorGUI.ProgressBar(rowRect, Mathf.Clamp01(entry.progress), $"{entry.progress * 100f:0.0}%");
-                GUILayout.Space(4);
-            }
-            EditorGUILayout.EndScrollView();
         }
 
         private static string FormatBytes(long bytes)
@@ -733,37 +697,196 @@ namespace DreamPark {
             return $"{value:0.##} {units[unit]}";
         }
 
-        private void DrawBuildTargetSelection()
+        internal string ContentId => contentId;
+        internal string ContentName => contentName;
+        internal string ContentDescription => contentDescription;
+        internal bool IsUploading => isUploading;
+        internal bool UploadCompleted => uploadCompleted;
+        internal bool UploadSucceeded => uploadSucceeded;
+        internal bool UploadBuildMode => uploadBuildMode;
+        internal string UploadStatusTitle => uploadStatusTitle;
+        internal string UploadStatusMessage => uploadStatusMessage;
+        internal float UploadStatusProgress => uploadStatusProgress;
+        internal bool UploadStatusIsError => uploadStatusIsError;
+        internal int? LatestPublishedVersionNumber => latestPublishedVersionNumber;
+        internal Texture2D LogoTexture => logoTexture;
+
+        internal string ReleaseNotes
         {
-            EditorGUILayout.LabelField("Build Targets", EditorStyles.boldLabel);
+            get => releaseNotes;
+            set => releaseNotes = value ?? "";
+        }
 
-            bool changed = false;
+        internal string GetBuildTargetSummary()
+        {
+            var targets = new List<string>();
+            targets.Add("Android");
+            targets.Add("iOS");
+            if (buildOsx) targets.Add("Editor (Mac)");
+            if (buildWindows) targets.Add("Editor (Windows)");
+            if (targets.Count == 0) return "No targets selected";
+            return string.Join(" · ", targets);
+        }
 
-            bool newBuildAndroid = EditorGUILayout.ToggleLeft("Android", buildAndroid);
-            if (newBuildAndroid != buildAndroid) { buildAndroid = newBuildAndroid; changed = true; }
-
-            bool newBuildIos = EditorGUILayout.ToggleLeft("iOS", buildIos);
-            if (newBuildIos != buildIos) { buildIos = newBuildIos; changed = true; }
-
-            bool newBuildOsx = EditorGUILayout.ToggleLeft("StandaloneOSX", buildOsx);
-            if (newBuildOsx != buildOsx) { buildOsx = newBuildOsx; changed = true; }
-
-            bool newBuildWindows = EditorGUILayout.ToggleLeft("StandaloneWindows", buildWindows);
-            if (newBuildWindows != buildWindows) { buildWindows = newBuildWindows; changed = true; }
-
-            bool newCleanBeforeEachTarget = EditorGUILayout.ToggleLeft("Clean Addressables Before Each Target", cleanBeforeEachTarget);
-            if (newCleanBeforeEachTarget != cleanBeforeEachTarget) { cleanBeforeEachTarget = newCleanBeforeEachTarget; changed = true; }
-
-            if (!buildAndroid && !buildIos && !buildOsx && !buildWindows)
+        internal string GetUploadModeSummary(bool build)
+        {
+            if (build)
             {
-                EditorGUILayout.HelpBox("Select at least one target for Compile & Upload.", MessageType.Warning);
+                return "Fresh compile, bundle build, and upload";
+            }
+            return "Reuse current ServerData build artifacts and upload only";
+        }
+
+        internal string GetVersionSummary()
+        {
+            int current = latestPublishedVersionNumber ?? 0;
+            int next = current + 1;
+            return current <= 0 ? $"First release → v{next}" : $"v{current} → v{next}";
+        }
+
+        private static string GetVersionSummaryAfterUpload(int uploadedVersion)
+        {
+            return $"v{uploadedVersion}";
+        }
+
+        internal string GetPatchEstimateSummary()
+        {
+            bool patchingEnabled = IsPatchUploadEnabled();
+            if (patchCurrentSnapshot == null || patchCurrentSnapshot.TotalFileCount == 0)
+            {
+                return "No build artifacts yet. Compile & Upload will create the first bundle set.";
             }
 
-            if (changed)
+            if (!patchingEnabled)
             {
+                return $"Full upload: {patchCurrentSnapshot.TotalFileCount} files · {BuildManifestStore.FormatBytes(patchCurrentSnapshot.TotalBytes)}";
+            }
+
+            if (patchDiff == null)
+            {
+                return $"Build snapshot ready: {patchCurrentSnapshot.TotalFileCount} files · {BuildManifestStore.FormatBytes(patchCurrentSnapshot.TotalBytes)}";
+            }
+
+            string baselineLine;
+            if (patchBaseline == null)
+            {
+                baselineLine = "No baseline yet. The next upload will establish the first patch baseline.";
+            }
+            else
+            {
+                string baselineWhen = "recently";
+                if (System.DateTime.TryParse(patchBaseline.buildTimestampUtc, out var ts))
+                    baselineWhen = ts.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+                baselineLine = $"Last upload: v{patchBaseline.versionNumber} at {baselineWhen}.";
+            }
+
+            long changed = patchDiff.TotalChangedBytes;
+            long total = patchDiff.TotalCurrentBytes;
+            int changedFiles = patchDiff.TotalChangedFileCount;
+            if (patchBaseline == null)
+            {
+                return $"{baselineLine}\nPending upload: {changedFiles} files · {BuildManifestStore.FormatBytes(changed)}";
+            }
+
+            double reduction = total > 0 ? (1.0 - (double)changed / total) * 100.0 : 0.0;
+            string dirtyLine = "Source changes since last upload: none detected.";
+            if (dirtyGroupsEstimate != null && dirtyGroupsEstimate.matchedGroups + dirtyGroupsEstimate.unmatchedGroupNames.Count > 0)
+            {
+                int totalDirty = dirtyGroupsEstimate.matchedGroups + dirtyGroupsEstimate.unmatchedGroupNames.Count;
+                string sizeLabel = dirtyGroupsEstimate.isIncomplete
+                    ? $"≥ {BuildManifestStore.FormatBytes(dirtyGroupsEstimate.estimatedBytes)}"
+                    : $"~{BuildManifestStore.FormatBytes(dirtyGroupsEstimate.estimatedBytes)}";
+                dirtyLine = $"Source changes since last upload: {totalDirty} group(s) modified · {sizeLabel}";
+            }
+
+            return $"{baselineLine}\nPending changes: {changedFiles} files · {BuildManifestStore.FormatBytes(changed)} of {BuildManifestStore.FormatBytes(total)} ({reduction:0.0}% smaller)\n{dirtyLine}";
+        }
+
+        internal List<ContentAPI.UploadProgressEntry> GetProgressEntries()
+        {
+            return ContentAPI.GetUploadProgressSnapshot();
+        }
+
+        internal bool BuildOsx
+        {
+            get => buildOsx;
+            set
+            {
+                if (buildOsx == value) return;
+                buildOsx = value;
                 SaveBuildTargetSelection();
                 RefreshPatchEstimate();
             }
+        }
+
+        internal bool BuildWindows
+        {
+            get => buildWindows;
+            set
+            {
+                if (buildWindows == value) return;
+                buildWindows = value;
+                SaveBuildTargetSelection();
+                RefreshPatchEstimate();
+            }
+        }
+
+        internal bool CleanBeforeEachTarget => cleanBeforeEachTarget;
+
+        internal bool BeginUploadFromPopup(bool build)
+        {
+            if (isUploading)
+            {
+                return false;
+            }
+
+            buildAndroid = true;
+            buildIos = true;
+            SaveBuildTargetSelection();
+
+            if (build && !SaveModifiedScenesBeforeCompile())
+            {
+                EditorUtility.DisplayDialog("Compile Cancelled", "Save all modified scenes before compiling.", "OK");
+                return false;
+            }
+
+            SaveLogoSelection();
+            ResetUploadPresentationState(build);
+            UploadContent(build);
+            return true;
+        }
+
+        private void ResetUploadPresentationState(bool build)
+        {
+            uploadBuildMode = build;
+            uploadCompleted = false;
+            uploadSucceeded = false;
+            uploadStatusIsError = false;
+            uploadStatusProgress = 0f;
+            uploadStatusTitle = build ? "Preparing compile" : "Preparing upload";
+            uploadStatusMessage = build
+                ? "Checking content metadata, syncing schemas, and getting the build pipeline ready."
+                : "Checking content metadata and preparing the existing build artifacts for upload.";
+        }
+
+        private void SetUploadStatus(string title, string message, float progress = -1f, bool isError = false)
+        {
+            uploadStatusTitle = title ?? "";
+            uploadStatusMessage = message ?? "";
+            uploadStatusProgress = progress;
+            uploadStatusIsError = isError;
+            Repaint();
+        }
+
+        private void CompleteUploadStatus(bool success, string message)
+        {
+            uploadCompleted = true;
+            uploadSucceeded = success;
+            uploadStatusIsError = !success;
+            uploadStatusProgress = success ? 1f : uploadStatusProgress;
+            uploadStatusTitle = success ? "Release complete" : "Release interrupted";
+            uploadStatusMessage = message ?? (success ? "Upload complete." : "Upload failed.");
+            Repaint();
         }
 
         // ── Bundling strategy ────────────────────────────────────────────
@@ -806,143 +929,6 @@ namespace DreamPark {
                 EditorGUILayout.HelpBox(
                     "Smart bundling is experimental. Verify the next upload behaves correctly before relying on it.",
                     MessageType.Info);
-            }
-        }
-
-        // ── Patch estimator ──────────────────────────────────────────────
-        // Compares the current ServerData/ output against the saved baseline
-        // (= what was on the server at the last successful upload) and shows
-        // how many bytes will actually need to ship. The same diff drives the
-        // upload-skip logic in ContentAPI.UploadContent so the estimate
-        // matches reality.
-        private void DrawPatchEstimateSection()
-        {
-            EditorGUILayout.LabelField("Patch Estimate", EditorStyles.boldLabel);
-
-            bool patchingEnabled = IsPatchUploadEnabled();
-            if (!patchingEnabled)
-            {
-                EditorGUILayout.HelpBox(
-                    "Patch uploads are disabled while using Legacy bundling. " +
-                    "Compile & Upload will send the full contents of ServerData/ each time. " +
-                    "Switch to Smart bundling to enable unchanged-file skipping.",
-                    MessageType.None);
-
-                if (patchCurrentSnapshot == null || patchCurrentSnapshot.TotalFileCount == 0)
-                {
-                    EditorGUILayout.LabelField(
-                        "No build artifacts in ServerData/ yet — run Compile & Upload to populate.",
-                        EditorStyles.miniLabel);
-                }
-                else
-                {
-                    EditorGUILayout.LabelField(
-                        $"Next upload: {patchCurrentSnapshot.TotalFileCount} files · " +
-                        $"{BuildManifestStore.FormatBytes(patchCurrentSnapshot.TotalBytes)} (full upload)",
-                        EditorStyles.label);
-                }
-
-                if (GUILayout.Button("Refresh estimate", GUILayout.Height(22)))
-                {
-                    RefreshPatchEstimate();
-                }
-                return;
-            }
-
-            // Baseline summary
-            if (patchBaseline == null)
-            {
-                EditorGUILayout.HelpBox(
-                    "No baseline yet — the next upload will be a full upload. After that, " +
-                    "subsequent uploads will only ship bundles whose contents changed.",
-                    MessageType.None);
-            }
-            else
-            {
-                string baselineWhen = "—";
-                if (System.DateTime.TryParse(patchBaseline.buildTimestampUtc, out var ts))
-                    baselineWhen = ts.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
-                EditorGUILayout.LabelField(
-                    $"Last upload: v{patchBaseline.versionNumber} · {patchBaseline.TotalFileCount} files · " +
-                    $"{BuildManifestStore.FormatBytes(patchBaseline.TotalBytes)} · {baselineWhen}",
-                    EditorStyles.miniLabel);
-            }
-
-            // Diff summary
-            if (patchDiff == null || patchCurrentSnapshot == null
-                || patchCurrentSnapshot.TotalFileCount == 0)
-            {
-                EditorGUILayout.LabelField(
-                    "No build artifacts in ServerData/ yet — run Compile & Upload to populate.",
-                    EditorStyles.miniLabel);
-            }
-            else
-            {
-                long changed = patchDiff.TotalChangedBytes;
-                long total = patchDiff.TotalCurrentBytes;
-                int changedFiles = patchDiff.TotalChangedFileCount;
-                double reduction = total > 0 ? (1.0 - (double)changed / total) * 100.0 : 0.0;
-
-                if (patchBaseline == null)
-                {
-                    EditorGUILayout.LabelField(
-                        $"Pending: {changedFiles} files · {BuildManifestStore.FormatBytes(changed)} (full upload)",
-                        EditorStyles.label);
-                }
-                else
-                {
-                    EditorGUILayout.LabelField(
-                        $"Pending changes: {changedFiles} files · " +
-                        $"{BuildManifestStore.FormatBytes(changed)} of {BuildManifestStore.FormatBytes(total)} " +
-                        $"({reduction:0.0}% reduction)",
-                        EditorStyles.label);
-                }
-
-                // Per-platform breakdown (compact)
-                foreach (var p in patchDiff.platforms)
-                {
-                    string line = $"  {p.platform}: {BuildManifestStore.FormatBytes(p.changedBytes)} " +
-                                  $"({p.changedFiles.Count} of {p.changedFiles.Count + p.unchangedFiles.Count})";
-                    EditorGUILayout.LabelField(line, EditorStyles.miniLabel);
-                }
-            }
-
-            // ── Source-aware estimate ─────────────────────────────────────
-            // Reflects edits the watchdog has seen since the last upload —
-            // doesn't require a fresh build to update. Sits underneath the
-            // ServerData-based "Pending changes" line so the user can compare:
-            // "ServerData says 4.2 MB pending, but I've also touched files in
-            // 3 more groups — those would change on next build, ~12 MB more."
-            GUILayout.Space(4);
-            if (dirtyGroupsEstimate == null || dirtyGroupsEstimate.matchedGroups + dirtyGroupsEstimate.unmatchedGroupNames.Count == 0)
-            {
-                EditorGUILayout.LabelField(
-                    "Source changes since last upload: none detected.",
-                    EditorStyles.miniLabel);
-            }
-            else
-            {
-                int totalDirty = dirtyGroupsEstimate.matchedGroups + dirtyGroupsEstimate.unmatchedGroupNames.Count;
-                string sizeLabel = dirtyGroupsEstimate.isIncomplete
-                    ? $"≥ {BuildManifestStore.FormatBytes(dirtyGroupsEstimate.estimatedBytes)} (incomplete — see below)"
-                    : $"~{BuildManifestStore.FormatBytes(dirtyGroupsEstimate.estimatedBytes)}";
-                EditorGUILayout.LabelField(
-                    $"Source changes since last upload: {totalDirty} group(s) modified · {sizeLabel}",
-                    EditorStyles.label);
-                if (dirtyGroupsEstimate.isIncomplete)
-                {
-                    string unmatchedSample = string.Join(", ", dirtyGroupsEstimate.unmatchedGroupNames.Take(3));
-                    if (dirtyGroupsEstimate.unmatchedGroupNames.Count > 3)
-                        unmatchedSample += $" … (+{dirtyGroupsEstimate.unmatchedGroupNames.Count - 3} more)";
-                    EditorGUILayout.LabelField(
-                        $"  Some dirty groups have no match in the baseline (new groups, or Smart re-partitioned): {unmatchedSample}",
-                        EditorStyles.miniLabel);
-                }
-            }
-
-            if (GUILayout.Button("Refresh estimate", GUILayout.Height(22)))
-            {
-                RefreshPatchEstimate();
             }
         }
 
@@ -1515,8 +1501,45 @@ namespace DreamPark {
                 }
             }
 
-            string defaultLogoPath = $"Assets/Resources/Logos/{contentId}.png";
-            logoTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(defaultLogoPath);
+            logoTexture = FindAutoLogoTexture();
+        }
+
+        private Texture2D FindAutoLogoTexture()
+        {
+            string contentRoot = $"Assets/Content/{contentId}";
+            if (!AssetDatabase.IsValidFolder(contentRoot))
+            {
+                return null;
+            }
+
+            var contentTextures = AssetDatabase.FindAssets("t:Texture2D", new[] { contentRoot })
+                .Select(AssetDatabase.GUIDToAssetPath)
+                .Where(p => !string.IsNullOrEmpty(p))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            string logoNamedPath = contentTextures
+                .Where(p => Path.GetFileNameWithoutExtension(p).IndexOf("logo", StringComparison.OrdinalIgnoreCase) >= 0)
+                .OrderBy(p => p.Count(c => c == '/' || c == '\\'))
+                .ThenBy(p => p, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+            if (!string.IsNullOrEmpty(logoNamedPath))
+            {
+                return AssetDatabase.LoadAssetAtPath<Texture2D>(logoNamedPath);
+            }
+
+            string rootPngPath = contentTextures
+                .Where(p => string.Equals(Path.GetExtension(p), ".png", StringComparison.OrdinalIgnoreCase))
+                .Where(p => string.Equals(
+                    Path.GetDirectoryName(p)?.Replace("\\", "/"),
+                    contentRoot,
+                    StringComparison.OrdinalIgnoreCase))
+                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+
+            return string.IsNullOrEmpty(rootPngPath)
+                ? null
+                : AssetDatabase.LoadAssetAtPath<Texture2D>(rootPngPath);
         }
 
         private void SaveLogoSelection()
@@ -1591,8 +1614,8 @@ namespace DreamPark {
 
         private void LoadBuildTargetSelection()
         {
-            buildAndroid = EditorPrefs.GetBool(BuildAndroidPrefKey, true);
-            buildIos = EditorPrefs.GetBool(BuildIosPrefKey, true);
+            buildAndroid = true;
+            buildIos = true;
             buildOsx = EditorPrefs.GetBool(BuildOsxPrefKey, true);
             buildWindows = EditorPrefs.GetBool(BuildWindowsPrefKey, true);
             cleanBeforeEachTarget = EditorPrefs.GetBool(CleanBeforeEachTargetPrefKey, false);
@@ -1600,8 +1623,10 @@ namespace DreamPark {
 
         private void SaveBuildTargetSelection()
         {
-            EditorPrefs.SetBool(BuildAndroidPrefKey, buildAndroid);
-            EditorPrefs.SetBool(BuildIosPrefKey, buildIos);
+            buildAndroid = true;
+            buildIos = true;
+            EditorPrefs.SetBool(BuildAndroidPrefKey, true);
+            EditorPrefs.SetBool(BuildIosPrefKey, true);
             EditorPrefs.SetBool(BuildOsxPrefKey, buildOsx);
             EditorPrefs.SetBool(BuildWindowsPrefKey, buildWindows);
             EditorPrefs.SetBool(CleanBeforeEachTargetPrefKey, cleanBeforeEachTarget);
@@ -1784,6 +1809,7 @@ namespace DreamPark {
 
             if (string.IsNullOrEmpty(contentId) || !AuthAPI.isLoggedIn)
             {
+                latestPublishedVersionNumber = null;
                 return;
             }
 
@@ -1812,11 +1838,15 @@ namespace DreamPark {
 
                 if (!success || response?.json == null || !response.json.HasField("content"))
                 {
+                    latestPublishedVersionNumber = null;
                     Repaint();
                     return;
                 }
 
                 JSONObject content = response.json.GetField("content");
+                latestPublishedVersionNumber = content.HasField("versions") && content.GetField("versions").list != null
+                    ? content.GetField("versions").list.Count
+                    : 0;
                 if (content.HasField("contentName"))
                 {
                     contentName = content.GetField("contentName").stringValue ?? contentName;
@@ -2227,6 +2257,14 @@ namespace DreamPark {
                 }
 
                 isUploading = true;
+                uploadCompleted = false;
+                uploadSucceeded = false;
+                SetUploadStatus(
+                    build ? "Preparing release" : "Preparing reupload",
+                    build
+                        ? "Fetching metadata and staging the full compile pipeline."
+                        : "Fetching metadata and getting the existing build artifacts ready.",
+                    0.05f);
 
                 Debug.Log($"🚀 Uploading content for {contentId}...");
 
@@ -2257,10 +2295,15 @@ namespace DreamPark {
                         Action<string> reportStep = (message) =>
                         {
                             currentStep++;
+                            float stageProgress = Mathf.Clamp01((float)currentStep / Mathf.Max(1, totalSteps));
+                            SetUploadStatus(
+                                build ? "Compiling release" : "Preparing upload",
+                                message,
+                                stageProgress);
                             EditorUtility.DisplayProgressBar(
                                 "Compile & Upload",
                                 $"({currentStep}/{totalSteps}) {message}",
-                                Mathf.Clamp01((float)currentStep / Mathf.Max(1, totalSteps)));
+                                stageProgress);
                         };
 
                         bool buildSuccess = true;
@@ -2471,11 +2514,14 @@ namespace DreamPark {
                                 Debug.LogWarning($"[ContentUploader] Could not attach uploader metadata: {uploaderMetadataEx.Message}");
                             }
 
-                            // Hand off to the upload step. Its own progress UI
-                            // (DrawUploadProgressArea) takes over from here, so
-                            // clear our compile-progress bar to avoid the two
-                            // visually fighting.
+                            // Hand off to the upload step. Clear the compile-
+                            // progress bar here so the dedicated launch window
+                            // owns the rest of the user-facing status display.
                             EditorUtility.ClearProgressBar();
+                            SetUploadStatus(
+                                "Uploading release",
+                                "Bundles are ready. Secure handoff in progress...",
+                                1f);
 
                             // Zero-change short-circuit: if the diff says nothing
                             // changed since the last successful upload, don't
@@ -2508,10 +2554,15 @@ namespace DreamPark {
                                     Debug.Log("[ContentUploader] Local baseline cleared. Click Try Reupload to send everything.");
                                     Repaint();
                                 }
+                                CompleteUploadStatus(true, "No content changes were detected, so nothing needed to upload.");
                                 isUploading = false;
                                 return;
                             }
 
+                            SetUploadStatus(
+                                "Uploading release",
+                                "Sending changed files to DreamPark. Live file progress will appear below.",
+                                1f);
                             ContentAPI.UploadContent(contentId, releaseNotes, lastSchemaVersion, skipSet, manifestSummary, (success, apiResponse) =>
                             {
                                 if (success)
@@ -2556,11 +2607,13 @@ namespace DreamPark {
                                         Debug.LogWarning($"[ContentUploader] Failed to clear dirty groups: {dgEx.Message}");
                                     }
 
-                                    EditorUtility.DisplayDialog("Success", $"'{contentName}' uploaded successfully!", "OK");
+                                    latestPublishedVersionNumber = versionNumber;
+                                    CompleteUploadStatus(true, $"'{contentName}' uploaded successfully as {GetVersionSummaryAfterUpload(versionNumber)}.");
                                 }
                                 else
                                 {
                                     Debug.LogError($"❌ Content uploaded failed: {apiResponse.error}");
+                                    CompleteUploadStatus(false, $"Upload failed: {apiResponse.error}");
                                     EditorUtility.DisplayDialog("Error", $"Upload failed: {apiResponse.error}", "OK");
                                 }
                                 isUploading = false;
@@ -2572,6 +2625,7 @@ namespace DreamPark {
                             // isn't competing with a stale progress overlay.
                             EditorUtility.ClearProgressBar();
                             Debug.LogError("❌ Addressable build failed: " + e);
+                            CompleteUploadStatus(false, $"Release failed: {e.Message}");
                             EditorUtility.DisplayDialog("Error", $"Error: {e.Message}", "OK");
                             isUploading = false;
                         }
@@ -2579,11 +2633,16 @@ namespace DreamPark {
 
                     Action continueAfterSchemaSync = () =>
                     {
+                        SetUploadStatus(
+                            "Syncing schema",
+                            "Checking tags and layers so the release lands cleanly on the backend.",
+                            0.12f);
                         SyncTagLayerSchema((syncSuccess, syncError) =>
                         {
                             if (!syncSuccess)
                             {
                                 Debug.LogError($"❌ Schema sync failed: {syncError}");
+                                CompleteUploadStatus(false, $"Schema sync failed: {syncError}");
                                 EditorUtility.DisplayDialog("Schema Sync Failed", syncError, "OK");
                                 isUploading = false;
                                 return;
@@ -2609,6 +2668,7 @@ namespace DreamPark {
                             if (!updateSuccess)
                             {
                                 Debug.LogError($"❌ Failed to update content metadata: {updateResponse.error}");
+                                CompleteUploadStatus(false, $"Metadata update failed: {updateResponse.error}");
                                 EditorUtility.DisplayDialog("Error", $"Metadata update failed: {updateResponse.error}", "OK");
                                 isUploading = false;
                                 return;
@@ -2620,6 +2680,7 @@ namespace DreamPark {
                     else if (response.statusCode == 403)
                     {
                         Debug.LogError($"❌ Content '{contentId}' is owned by another user.");
+                        CompleteUploadStatus(false, "Access denied. This content ID belongs to another owner.");
                         EditorUtility.DisplayDialog("Access Denied",
                             $"Content '{contentId}' is owned by another user. Choose a different folder name in Assets/Content/ or ask the content owner to add you as a collaborator.",
                             "OK");
@@ -2634,11 +2695,16 @@ namespace DreamPark {
                             if (success)
                             {
                                 Debug.Log($"✅ Content '{contentName}' uploaded successfully!");
+                                SetUploadStatus(
+                                    "Creating release record",
+                                    "Project created. Moving straight into the first release build.",
+                                    0.1f);
                                 UploadContent(build);
                             }
                             else
                             {
                                 Debug.LogError($"❌ Failed to create new content: {response.error}");
+                                CompleteUploadStatus(false, $"Failed to create content: {response.error}");
                                 EditorUtility.DisplayDialog("Error", $"Failed to create new content: {response.error}", "OK");
                                 isUploading = false;
                             }
@@ -2648,6 +2714,7 @@ namespace DreamPark {
                     {
                         // Other errors (401, 500, network issues)
                         Debug.LogError($"❌ Failed to check content: {response.error}. Make sure you are logged in.");
+                        CompleteUploadStatus(false, $"Failed to check content: {response.error}");
                         EditorUtility.DisplayDialog("Error",
                             $"Failed to check content: {response.error}\n\nMake sure you are logged in with a valid session.",
                             "OK");
@@ -2658,6 +2725,7 @@ namespace DreamPark {
             catch (Exception e)
             {
                 Debug.LogError("❌ Upload failed: " + e);
+                CompleteUploadStatus(false, $"Release failed: {e.Message}");
                 EditorUtility.DisplayDialog("Error", $"Error: {e.Message}", "OK");
                 isUploading = false;
             }

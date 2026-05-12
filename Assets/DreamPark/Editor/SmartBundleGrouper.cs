@@ -60,6 +60,7 @@ namespace DreamPark
     {
         private const string GroupPrefix = "Bundle";  // gives "{contentId}-Bundle-{root}"
         private const string MiscSuffix = "Misc";
+        private const string PreviewsSuffix = "Previews";
 
         // Extensions checked when pairing a preview with its prefab/scene by name.
         // GenerateAllLevelPreviews writes .png today; .jpg / .jpeg are accepted
@@ -172,13 +173,16 @@ namespace DreamPark
                     refCount[d] = refCount.TryGetValue(d, out var c) ? c + 1 : 1;
             }
 
-            // 4. Create or reuse the Misc group. Note: there's no Shared
-            //    group anymore — when an asset is referenced by multiple
-            //    roots, we pack it with the first-alphabetical root that
-            //    uses it instead of stranding it in a generic Shared bundle.
-            //    That root's bundle becomes the "hub" for that family of
-            //    assets, and Addressables auto-loads it whenever a peer
-            //    root needs the shared content.
+            // 4. Create or reuse the special managed groups:
+            //    - Previews: lightweight PNG/JPG screenshots for browser UI
+            //    - Misc:     addressables that aren't roots or walked deps
+            //  Previews intentionally live outside the root bundles so the
+            //  admin/content-manager UI can fetch thumbnails without pulling
+            //  the heavy gameplay prefab bundles over the wire.
+            var previewGroup = GetOrCreateGroup(settings, $"{gameId}-{PreviewsSuffix}", out bool previewCreated);
+            ConfigureBundleSchema(settings, previewGroup);
+            if (previewCreated) result.groupsCreated++;
+
             var miscGroup = GetOrCreateGroup(settings, $"{gameId}-{MiscSuffix}", out bool miscCreated);
             ConfigureBundleSchema(settings, miscGroup);
             if (miscCreated) result.groupsCreated++;
@@ -230,28 +234,24 @@ namespace DreamPark
                     MoveEntryToGroup(settings, dep, rootGroup);
                 }
 
-                // Co-pack the matching preview, if any. Convention:
-                //   Assets/Content/{gameId}/Previews/{rootName}.{png|jpg|jpeg}
-                // belongs with the prefab named {rootName}.prefab. Previews
-                // aren't picked up by GetDependencies — the prefab doesn't
-                // reference its own preview — so without this rule they'd
-                // all land in Misc and a single prop edit would invalidate
-                // every preview's bundle. Pairing by name mirrors how
-                // ContentProcessor / GenerateAllLevelPreviews already pair
-                // previews to prefabs at write time.
-                string rootBaseName = Path.GetFileNameWithoutExtension(rootPath);
-                string previewFolder = $"Assets/Content/{gameId}/Previews/";
-                foreach (var previewExt in PreviewExtensions)
-                {
-                    string previewPath = previewFolder + rootBaseName + previewExt;
-                    if (allEntryPaths.Contains(previewPath))
-                    {
-                        MoveEntryToGroup(settings, previewPath, rootGroup);
-                    }
-                }
             }
 
-            // 7. Stragglers: any addressable still sitting in a Legacy
+            // 7. Move all preview images into the dedicated preview bundle.
+            //    Convention:
+            //      Assets/Content/{gameId}/Previews/{rootName}.{png|jpg|jpeg}
+            //    Mirrors the preview-generator output and keeps the browser
+            //    UX cheap: loading a preview no longer drags in the root
+            //    prefab's gameplay bundle.
+            string previewFolderPrefix = $"Assets/Content/{gameId}/Previews/";
+            foreach (string previewPath in allEntryPaths
+                .Where(path => path.StartsWith(previewFolderPrefix, StringComparison.OrdinalIgnoreCase)
+                    && PreviewExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            {
+                MoveEntryToGroup(settings, previewPath, previewGroup);
+            }
+
+            // 8. Stragglers: any addressable still sitting in a Legacy
             //    folder group (not reached by any root's deps and not yet
             //    moved to a Bundle-* or Misc) goes to Misc. These are
             //    typically Lua-loaded audio/textures referenced by name at
@@ -262,6 +262,7 @@ namespace DreamPark
             {
                 if (!group.Name.StartsWith(gameId + "-")) continue;
                 if (group.Name == $"{gameId}-{MiscSuffix}") continue;
+                if (group.Name == $"{gameId}-{PreviewsSuffix}") continue;
                 if (group.Name.StartsWith($"{gameId}-{GroupPrefix}-")) continue;
                 if (group.Name.EndsWith("-Logos")) continue;
 
@@ -276,7 +277,7 @@ namespace DreamPark
                 result.miscAssets++;
             }
 
-            // 8. Sweep empty Legacy folder groups so the Addressables window
+            // 9. Sweep empty Legacy folder groups so the Addressables window
             //    stays tidy. Don't touch groups owned by other contentIds or
             //    by the Default Local Group / Built In Data, which Addressables
             //    requires.
@@ -285,6 +286,7 @@ namespace DreamPark
             {
                 if (!group.Name.StartsWith(gameId + "-")) continue;
                 if (group.Name == $"{gameId}-{MiscSuffix}") continue;
+                if (group.Name == $"{gameId}-{PreviewsSuffix}") continue;
                 if (group.Name.StartsWith($"{gameId}-{GroupPrefix}-")) continue;
                 if (group.Name.EndsWith("-Logos")) continue;
                 if (group.entries.Count == 0)
@@ -301,7 +303,8 @@ namespace DreamPark
             var emptyManaged = settings.groups
                 .Where(g => g != null && g.Name.StartsWith(gameId + "-")
                             && (g.Name.StartsWith($"{gameId}-{GroupPrefix}-")
-                                || g.Name == $"{gameId}-{MiscSuffix}")
+                                || g.Name == $"{gameId}-{MiscSuffix}"
+                                || g.Name == $"{gameId}-{PreviewsSuffix}")
                             && g.entries.Count == 0)
                 .ToList();
             foreach (var g in emptyManaged)
