@@ -60,11 +60,24 @@ namespace DreamPark
     {
         private const string GroupPrefix = "Bundle";  // gives "{contentId}-Bundle-{root}"
         private const string MiscSuffix = "Misc";
+        private const string PreviewsSuffix = "Previews";
+        private const string CodeSuffix = "Code";
 
         // Extensions checked when pairing a preview with its prefab/scene by name.
         // GenerateAllLevelPreviews writes .png today; .jpg / .jpeg are accepted
         // defensively in case anyone hand-drops a different format.
         private static readonly string[] PreviewExtensions = new[] { ".png", ".jpg", ".jpeg" };
+
+        // Suffix used to identify game Lua scripts. Path.GetExtension would
+        // return just ".txt", so we match the full compound suffix instead.
+        private const string LuaScriptSuffix = ".lua.txt";
+
+        // Public so callers (e.g. the upload-mode filter in ContentUploaderPanel)
+        // can identify which built bundles belong to the Code / Previews groups
+        // from filename alone — Addressables' AppendHash naming embeds the
+        // lowercased group name in the resulting bundle filename.
+        public static string CodeGroupName(string gameId) => $"{gameId}-{CodeSuffix}";
+        public static string PreviewsGroupName(string gameId) => $"{gameId}-{PreviewsSuffix}";
 
         public struct Result
         {
@@ -172,13 +185,24 @@ namespace DreamPark
                     refCount[d] = refCount.TryGetValue(d, out var c) ? c + 1 : 1;
             }
 
-            // 4. Create or reuse the Misc group. Note: there's no Shared
-            //    group anymore — when an asset is referenced by multiple
-            //    roots, we pack it with the first-alphabetical root that
-            //    uses it instead of stranding it in a generic Shared bundle.
-            //    That root's bundle becomes the "hub" for that family of
-            //    assets, and Addressables auto-loads it whenever a peer
-            //    root needs the shared content.
+            // 4. Create or reuse the special managed groups:
+            //    - Previews: lightweight PNG/JPG screenshots for browser UI
+            //    - Code:     game Lua scripts (.lua.txt under Assets/Content/{gameId}/)
+            //    - Misc:     addressables that aren't roots or walked deps
+            //  Previews intentionally live outside the root bundles so the
+            //  admin/content-manager UI can fetch thumbnails without pulling
+            //  the heavy gameplay prefab bundles over the wire.
+            //  Code lives outside the root bundles for the same reason —
+            //  iterating on Lua should ship a few KB, not the parent prefab
+            //  bundle the LuaBehaviour reference happens to point at.
+            var previewGroup = GetOrCreateGroup(settings, $"{gameId}-{PreviewsSuffix}", out bool previewCreated);
+            ConfigureBundleSchema(settings, previewGroup);
+            if (previewCreated) result.groupsCreated++;
+
+            var codeGroup = GetOrCreateGroup(settings, $"{gameId}-{CodeSuffix}", out bool codeCreated);
+            ConfigureBundleSchema(settings, codeGroup);
+            if (codeCreated) result.groupsCreated++;
+
             var miscGroup = GetOrCreateGroup(settings, $"{gameId}-{MiscSuffix}", out bool miscCreated);
             ConfigureBundleSchema(settings, miscGroup);
             if (miscCreated) result.groupsCreated++;
@@ -230,28 +254,55 @@ namespace DreamPark
                     MoveEntryToGroup(settings, dep, rootGroup);
                 }
 
-                // Co-pack the matching preview, if any. Convention:
-                //   Assets/Content/{gameId}/Previews/{rootName}.{png|jpg|jpeg}
-                // belongs with the prefab named {rootName}.prefab. Previews
-                // aren't picked up by GetDependencies — the prefab doesn't
-                // reference its own preview — so without this rule they'd
-                // all land in Misc and a single prop edit would invalidate
-                // every preview's bundle. Pairing by name mirrors how
-                // ContentProcessor / GenerateAllLevelPreviews already pair
-                // previews to prefabs at write time.
-                string rootBaseName = Path.GetFileNameWithoutExtension(rootPath);
-                string previewFolder = $"Assets/Content/{gameId}/Previews/";
-                foreach (var previewExt in PreviewExtensions)
-                {
-                    string previewPath = previewFolder + rootBaseName + previewExt;
-                    if (allEntryPaths.Contains(previewPath))
-                    {
-                        MoveEntryToGroup(settings, previewPath, rootGroup);
-                    }
-                }
             }
 
-            // 7. Stragglers: any addressable still sitting in a Legacy
+            // 7. Move all preview images into the dedicated preview bundle.
+            //    Convention:
+            //      Assets/Content/{gameId}/Previews/{rootName}.{png|jpg|jpeg}
+            //    Mirrors the preview-generator output and keeps the browser
+            //    UX cheap: loading a preview no longer drags in the root
+            //    prefab's gameplay bundle.
+            string previewFolderPrefix = $"Assets/Content/{gameId}/Previews/";
+            foreach (string previewPath in allEntryPaths
+                .Where(path => path.StartsWith(previewFolderPrefix, StringComparison.OrdinalIgnoreCase)
+                    && PreviewExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            {
+                MoveEntryToGroup(settings, previewPath, previewGroup);
+            }
+
+            // 7b. Move all game Lua scripts into the dedicated code bundle.
+            //     Convention: every *.lua.txt under Assets/Content/{gameId}/
+            //     is treated as game code, regardless of subfolder. Lua text
+            //     assets are normally pulled into a prefab's bundle as a
+            //     dep of LuaBehaviour.luaScript; promoting them to their
+            //     own addressable entries in a dedicated Code group lets
+            //     code-only patches ship a few-KB Lua bundle without
+            //     re-uploading the parent prefab bundles. Prefab references
+            //     resolve by GUID so moving the TextAsset doesn't break
+            //     LuaBehaviour wiring at runtime.
+            //
+            //     Scope is intentionally restricted to Assets/Content/{gameId}/
+            //     so SDK-shipped Lua under ThirdParty/XLua/Resources/ (engine
+            //     scripts, tutorial samples) doesn't get yanked into game
+            //     content.
+            string contentRoot = $"Assets/Content/{gameId}";
+            string[] luaGuids = AssetDatabase.IsValidFolder(contentRoot)
+                ? AssetDatabase.FindAssets("t:TextAsset", new[] { contentRoot })
+                : Array.Empty<string>();
+            foreach (string luaGuid in luaGuids)
+            {
+                string luaPath = AssetDatabase.GUIDToAssetPath(luaGuid);
+                if (string.IsNullOrEmpty(luaPath)) continue;
+                if (!luaPath.EndsWith(LuaScriptSuffix, StringComparison.OrdinalIgnoreCase)) continue;
+                // CreateOrMoveEntry inside MoveEntryToGroup will both promote
+                // a previously-implicit dep to an explicit entry and reassign
+                // an explicit entry from its prior folder group — same call
+                // covers both cases.
+                MoveEntryToGroup(settings, luaPath, codeGroup);
+            }
+
+            // 8. Stragglers: any addressable still sitting in a Legacy
             //    folder group (not reached by any root's deps and not yet
             //    moved to a Bundle-* or Misc) goes to Misc. These are
             //    typically Lua-loaded audio/textures referenced by name at
@@ -262,6 +313,8 @@ namespace DreamPark
             {
                 if (!group.Name.StartsWith(gameId + "-")) continue;
                 if (group.Name == $"{gameId}-{MiscSuffix}") continue;
+                if (group.Name == $"{gameId}-{PreviewsSuffix}") continue;
+                if (group.Name == $"{gameId}-{CodeSuffix}") continue;
                 if (group.Name.StartsWith($"{gameId}-{GroupPrefix}-")) continue;
                 if (group.Name.EndsWith("-Logos")) continue;
 
@@ -276,7 +329,7 @@ namespace DreamPark
                 result.miscAssets++;
             }
 
-            // 8. Sweep empty Legacy folder groups so the Addressables window
+            // 9. Sweep empty Legacy folder groups so the Addressables window
             //    stays tidy. Don't touch groups owned by other contentIds or
             //    by the Default Local Group / Built In Data, which Addressables
             //    requires.
@@ -285,6 +338,8 @@ namespace DreamPark
             {
                 if (!group.Name.StartsWith(gameId + "-")) continue;
                 if (group.Name == $"{gameId}-{MiscSuffix}") continue;
+                if (group.Name == $"{gameId}-{PreviewsSuffix}") continue;
+                if (group.Name == $"{gameId}-{CodeSuffix}") continue;
                 if (group.Name.StartsWith($"{gameId}-{GroupPrefix}-")) continue;
                 if (group.Name.EndsWith("-Logos")) continue;
                 if (group.entries.Count == 0)
@@ -296,12 +351,14 @@ namespace DreamPark
                 result.groupsRemoved++;
             }
 
-            // Also drop empty Smart groups (Bundle-* or Misc when nothing
-            // qualified) so the next pass starts clean.
+            // Also drop empty Smart groups (Bundle-* or Misc / Previews / Code
+            // when nothing qualified) so the next pass starts clean.
             var emptyManaged = settings.groups
                 .Where(g => g != null && g.Name.StartsWith(gameId + "-")
                             && (g.Name.StartsWith($"{gameId}-{GroupPrefix}-")
-                                || g.Name == $"{gameId}-{MiscSuffix}")
+                                || g.Name == $"{gameId}-{MiscSuffix}"
+                                || g.Name == $"{gameId}-{PreviewsSuffix}"
+                                || g.Name == $"{gameId}-{CodeSuffix}")
                             && g.entries.Count == 0)
                 .ToList();
             foreach (var g in emptyManaged)

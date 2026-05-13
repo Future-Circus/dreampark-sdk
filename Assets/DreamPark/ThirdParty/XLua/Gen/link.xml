@@ -1,0 +1,11 @@
+﻿
+
+<linker>
+
+	<assembly fullname="Assembly-CSharp">
+	    <type fullname="EasyLua" preserve="all"/>
+		<type fullname="LuaBehaviour" preserve="all"/>
+		
+	</assembly>
+
+</linker>

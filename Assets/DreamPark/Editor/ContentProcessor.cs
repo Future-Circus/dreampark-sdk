@@ -1296,17 +1296,41 @@ namespace DreamPark {
         public static bool BuildUnityPackage(string contentId) {
             Debug.Log($"Building unity package for {contentId}");
             try {
-            string sourceFolder = "Assets/Content/" + contentId;
+                string sourceFolder = "Assets/Content/" + contentId;
                 string[] guids = AssetDatabase.FindAssets("t:Script", new[] { sourceFolder })
-                .Where(g => !g.Contains("/Editor/")).ToArray();
+                    .Where(g => !g.Contains("/Editor/")).ToArray();
 
                 string[] assetPaths = guids
                     .Select(AssetDatabase.GUIDToAssetPath)
                     .ToArray();
 
+                // Resolve the canonical destination up front so the
+                // no-scripts branch can clean up any stale package
+                // left over from a previous build that did ship code.
+                string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+                string unityPath = Path.Combine(projectRoot, "ServerData", "Unity");
+                string destPath = Path.Combine(unityPath, $"{contentId}.unitypackage");
+
                 if (assetPaths.Length == 0)
                 {
-                    Debug.LogError("No scripts found in folder: " + sourceFolder);
+                    // Pure-content release: no C# to ship. Skip packing entirely
+                    // and make sure no stale .unitypackage sneaks into the
+                    // upload — UploadContentRequest's PlatformContentData("Unity")
+                    // reads from ServerData/Unity/, so an empty directory
+                    // here causes the Unity platform to be omitted from the
+                    // catalog, which causes the backend's commitUpload route
+                    // to skip the code-change diff entirely. Net effect:
+                    // pure-content updates never trip the "requires core
+                    // app update" gate, which is exactly what we want.
+                    if (File.Exists(destPath))
+                    {
+                        File.Delete(destPath);
+                        Debug.Log("🧹 No scripts under " + sourceFolder + " — removed stale package at " + destPath);
+                    }
+                    else
+                    {
+                        Debug.Log("✅ No scripts under " + sourceFolder + " — skipping .unitypackage step (pure-content release).");
+                    }
                     return true;
                 }
 
@@ -1315,9 +1339,7 @@ namespace DreamPark {
                 AssetDatabase.ExportPackage(assetPaths, tempPath, ExportPackageOptions.Default);
 
                 // Ensure the "ServerData" and "Unity" directories exist
-                string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
                 string serverDataPath = Path.Combine(projectRoot, "ServerData");
-                string unityPath = Path.Combine(serverDataPath, "Unity");
 
                 if (!Directory.Exists(serverDataPath))
                 {
@@ -1332,7 +1354,6 @@ namespace DreamPark {
                 }
 
                 // Move/copy to persistent storage
-                string destPath = Path.Combine(unityPath, $"{contentId}.unitypackage");
                 File.Copy(tempPath, destPath, overwrite: true);
 
                 Debug.Log("Scripts exported to: " + destPath);
@@ -1513,7 +1534,59 @@ namespace DreamPark {
             {
                 Debug.Log($"ℹ️ No unsaveable addressable assets found for {gameId}.");
             }
-        }  
+        }
+
+        [MenuItem("DreamPark/Troubleshooting/Generate XLua Code", false, 207)]
+        public static void GenerateXLuaCode()
+        {
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                EditorUtility.DisplayDialog("Generate XLua Code",
+                    "Exit Play mode before generating XLua code.", "OK");
+                return;
+            }
+
+            if (EditorApplication.isCompiling)
+            {
+                EditorUtility.DisplayDialog("Generate XLua Code",
+                    "Wait for script compilation to finish, then try again.", "OK");
+                return;
+            }
+
+            // Clean up XLua's legacy default output folder. The new output path
+            // (set via [GenPath] in DreamParkXLuaGenPath) lives inside the synced
+            // Assets/DreamPark/ThirdParty/XLua/Gen/ bundle. If the old folder
+            // sticks around, both wrapper sets compile and you get duplicate-type
+            // errors.
+            const string legacyGen = "Assets/XLua/Gen";
+            const string legacyRoot = "Assets/XLua";
+            if (AssetDatabase.IsValidFolder(legacyGen))
+            {
+                AssetDatabase.DeleteAsset(legacyGen);
+                Debug.Log($"🧹 Removed legacy {legacyGen}");
+            }
+            if (AssetDatabase.IsValidFolder(legacyRoot))
+            {
+                var leftover = AssetDatabase.FindAssets("", new[] { legacyRoot });
+                if (leftover == null || leftover.Length == 0)
+                {
+                    AssetDatabase.DeleteAsset(legacyRoot);
+                }
+            }
+
+            try
+            {
+                Debug.Log("🔧 Generating XLua wrappers...");
+                CSObjectWrapEditor.Generator.GenAll();
+                Debug.Log($"✅ XLua wrappers generated to {CSObjectWrapEditor.GeneratorConfig.common_path}");
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("❌ XLua codegen failed: " + e);
+                EditorUtility.DisplayDialog("Generate XLua Code",
+                    "XLua codegen failed. See Console for details.", "OK");
+            }
+        }
     }
 }
 #endif // !DREAMPARKCORE
