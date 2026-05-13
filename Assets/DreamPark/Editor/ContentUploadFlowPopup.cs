@@ -10,17 +10,39 @@ namespace DreamPark
     {
         private ContentUploaderPanel owner;
         private bool buildBeforeUpload = true;
+        // Mirrored from UploadModePrefs on Show(). Carrying it on the popup
+        // (rather than reading prefs every OnGUI tick) keeps the mode stable
+        // during a long-running flow even if some other tool flips prefs
+        // mid-upload, and lets the user override their saved default for
+        // just this run without persisting.
+        private UploadMode uploadMode = UploadMode.Patch;
         private Vector2 progressScroll;
         private Vector2 notesScroll;
         private Vector2 mainScroll;
 
         public static void Show(ContentUploaderPanel owner, bool buildBeforeUpload)
         {
+            // Whether we're reusing an existing window or spawning a new one,
+            // (re)opening the popup is the user's "I want to do an upload"
+            // signal — so wipe any leftover completion state from the last
+            // run that would otherwise pin the popup to its DrawCompletionView
+            // branch. Mid-upload re-opens are a no-op (the panel guards on
+            // isUploading) so we can call this unconditionally.
+            if (owner != null) owner.ResetCompletionStateForNextRun();
+
+            // First uploads must use Upload All — Patch needs a baseline and
+            // Code/Previews-only need prior-version bundles to fall back to,
+            // neither of which exist when v1 is the first thing this contentId
+            // has ever shipped. Override the saved pref for this run only so
+            // the user's normal default isn't trampled.
+            UploadMode initialMode = IsFirstUpload(owner) ? UploadMode.All : UploadModePrefs.Current;
+
             var existing = Resources.FindObjectsOfTypeAll<ContentUploadFlowPopup>();
             if (existing != null && existing.Length > 0)
             {
                 existing[0].owner = owner;
                 existing[0].buildBeforeUpload = buildBeforeUpload;
+                existing[0].uploadMode = initialMode;
                 existing[0].titleContent = new GUIContent(buildBeforeUpload ? "Compile & Upload" : "Try Reupload");
                 existing[0].Focus();
                 existing[0].Repaint();
@@ -30,6 +52,7 @@ namespace DreamPark
             var win = CreateInstance<ContentUploadFlowPopup>();
             win.owner = owner;
             win.buildBeforeUpload = buildBeforeUpload;
+            win.uploadMode = initialMode;
             win.titleContent = new GUIContent(buildBeforeUpload ? "Compile & Upload" : "Try Reupload");
             win.minSize = new Vector2(620f, 720f);
             win.maxSize = new Vector2(820f, 1100f);
@@ -87,6 +110,8 @@ namespace DreamPark
             GUILayout.Space(8);
             DrawBuildTargetsCard();
             GUILayout.Space(8);
+            DrawUploadModeCard();
+            GUILayout.Space(8);
             DrawReleaseNotesCard();
             GUILayout.Space(8);
             DrawReleaseInsightsCard();
@@ -98,11 +123,18 @@ namespace DreamPark
             GUILayout.Space(8);
 
             const float actionButtonHeight = 34f;
-            string cta = "Start";
-            GUI.enabled = !owner.IsUploading;
+            // The Start button label hints at the chosen scope so the user
+            // gets one more chance to spot a mis-selected mode before
+            // committing. CodeOnly/PreviewsOnly modes also gate the button
+            // when the active bundling strategy doesn't support them.
+            string cta = $"Start · {UploadModePrefs.ShortLabel(uploadMode)}";
+            bool modeRequiresSmart = UploadModePrefs.RequiresSmart(uploadMode);
+            bool smartActive = BundlingStrategyPrefs.Current == BundlingStrategy.Smart;
+            bool modeBlocked = modeRequiresSmart && !smartActive;
+            GUI.enabled = !owner.IsUploading && !modeBlocked;
             if (GUILayout.Button(cta, GUILayout.Height(actionButtonHeight)))
             {
-                bool started = owner.BeginUploadFromPopup(buildBeforeUpload);
+                bool started = owner.BeginUploadFromPopup(buildBeforeUpload, uploadMode);
                 if (started)
                 {
                     GUI.FocusControl(null);
@@ -111,6 +143,113 @@ namespace DreamPark
             }
             GUI.enabled = true;
             EditorGUILayout.EndScrollView();
+        }
+
+        // True when this contentId hasn't published a server-side version
+        // yet (or we haven't loaded that metadata yet, in which case we
+        // err on the cautious side — All is still the safe option). Used
+        // to lock the upload mode to All for the first release, since
+        // Patch needs a saved baseline and Code/Previews-only need prior-
+        // version bundles to fall back to.
+        private static bool IsFirstUpload(ContentUploaderPanel owner)
+        {
+            if (owner == null) return true;
+            int? v = owner.LatestPublishedVersionNumber;
+            return !v.HasValue || v.Value <= 0;
+        }
+
+        // ── Upload mode picker ───────────────────────────────────────────
+        // Surfaces the four shipping shapes (All / Patch / Code only /
+        // Previews only) as a Popup. CodeOnly and PreviewsOnly are listed
+        // even when Smart isn't active so users can discover them, but the
+        // Start button gates on the strategy and a helpbox calls out the
+        // mismatch.
+        //
+        // Two contexts hide or lock the picker entirely:
+        //   - Legacy bundling: the carve-out groups Code/Previews depend on
+        //     don't exist, and Legacy always sends a full upload anyway.
+        //     Showing the picker would just be misleading clutter.
+        //   - First upload (no prior server version): only All works on a
+        //     cold start. The picker stays visible (so the user sees the
+        //     options will become available later) but locks to All.
+        private void DrawUploadModeCard()
+        {
+            // Legacy — every upload is a full re-upload by definition.
+            // Skip the whole card so the popup stays focused on what the
+            // user actually controls in this configuration.
+            if (BundlingStrategyPrefs.Current != BundlingStrategy.Smart)
+            {
+                // Keep uploadMode aligned with what the engine will actually
+                // do so the Start button label doesn't promise a mode the
+                // pipeline is about to downgrade away from.
+                if (uploadMode != UploadMode.All)
+                {
+                    uploadMode = UploadMode.All;
+                }
+                return;
+            }
+
+            bool firstUpload = IsFirstUpload(owner);
+            // First-upload override: lock to All. We don't persist this to
+            // UploadModePrefs because the user's saved default should
+            // re-apply once they have a prior version to patch against.
+            if (firstUpload && uploadMode != UploadMode.All)
+            {
+                uploadMode = UploadMode.All;
+            }
+
+            GUILayout.BeginVertical(EditorStyles.helpBox);
+            GUILayout.Label("Upload Scope", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField(
+                "Pick what this run pushes to the server. Code-only and Previews-only require a prior published version to patch against.",
+                EditorStyles.wordWrappedMiniLabel);
+
+            var values = (UploadMode[])System.Enum.GetValues(typeof(UploadMode));
+            var labels = values.Select(v => UploadModePrefs.Label(v)).ToArray();
+            int currentIdx = System.Array.IndexOf(values, uploadMode);
+            if (currentIdx < 0) currentIdx = System.Array.IndexOf(values, UploadMode.All);
+            if (currentIdx < 0) currentIdx = 0;
+
+            // Disable the whole picker on first upload — All is the only
+            // viable option, and showing it as a fixed "Mode: All" while
+            // every other entry would be greyed out one-by-one is noisier
+            // than a single dropdown locked to its only valid value.
+            using (new EditorGUI.DisabledScope(owner.IsUploading || firstUpload))
+            {
+                int newIdx = EditorGUILayout.Popup("Mode", currentIdx, labels);
+                if (newIdx != currentIdx)
+                {
+                    uploadMode = values[newIdx];
+                    UploadModePrefs.Current = uploadMode;
+                }
+            }
+
+            EditorGUILayout.LabelField(UploadModePrefs.Description(uploadMode), EditorStyles.wordWrappedMiniLabel);
+
+            if (firstUpload)
+            {
+                EditorGUILayout.HelpBox(
+                    "First release for this content — Upload All is the only valid mode because " +
+                    "there's no prior version yet to patch against. Patch, Code-only, and " +
+                    "Previews-only will be available starting with your second upload.",
+                    MessageType.Info);
+            }
+
+            // Reupload flow can't usefully ship Code/Previews-only because
+            // ServerData/ may not reflect the carved-out groups if it was
+            // populated by a Legacy build. We don't hard-block, but the
+            // user deserves a heads-up.
+            if (!buildBeforeUpload && UploadModePrefs.RequiresSmart(uploadMode))
+            {
+                EditorGUILayout.HelpBox(
+                    "Reupload uses the current ServerData/ output as-is. If the existing build " +
+                    "wasn't produced by Smart bundling, the Code/Previews bundles won't be there " +
+                    "and the upload will be empty. Compile & Upload is the safer route for " +
+                    $"{UploadModePrefs.ShortLabel(uploadMode)}.",
+                    MessageType.Info);
+            }
+
+            GUILayout.EndVertical();
         }
 
         private void DrawCompletionView()

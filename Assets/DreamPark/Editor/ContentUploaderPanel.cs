@@ -35,6 +35,12 @@ namespace DreamPark {
         private bool uploadCompleted = false;
         private bool uploadSucceeded = false;
         private bool uploadBuildMode = true;
+        // Set by BeginUploadFromPopup before the async UploadContent flow
+        // starts so the inner skip-set computation can route through
+        // UploadModeFilter for the chosen mode. Defaults to Patch — the
+        // historical behavior when older code paths call UploadContent
+        // without explicitly picking a mode.
+        private UploadMode pendingUploadMode = UploadMode.Patch;
 
         // Main panel scroll. Persists for the lifetime of the window so scroll
         // position doesn't reset every time OnGUI runs (which is many times
@@ -833,10 +839,25 @@ namespace DreamPark {
 
         internal bool CleanBeforeEachTarget => cleanBeforeEachTarget;
 
-        internal bool BeginUploadFromPopup(bool build)
+        internal bool BeginUploadFromPopup(bool build, UploadMode mode)
         {
             if (isUploading)
             {
+                return false;
+            }
+
+            // Gate at the entry point so a stale popup (e.g. user toggled
+            // Smart off in the main panel while the popup was open) can't
+            // sneak through with a strategy-incompatible mode.
+            if (UploadModePrefs.RequiresSmart(mode)
+                && BundlingStrategyPrefs.Current != BundlingStrategy.Smart)
+            {
+                EditorUtility.DisplayDialog(
+                    "Upload mode requires Smart bundling",
+                    $"{UploadModePrefs.ShortLabel(mode)} requires the Smart bundling strategy. " +
+                    "Switch to Smart in the Bundling section before trying this mode, or pick " +
+                    "Upload All / Upload Patch.",
+                    "OK");
                 return false;
             }
 
@@ -851,9 +872,18 @@ namespace DreamPark {
             }
 
             SaveLogoSelection();
+            pendingUploadMode = mode;
             ResetUploadPresentationState(build);
             UploadContent(build);
             return true;
+        }
+
+        // Legacy single-arg entry point kept so older menu items / scripts
+        // that still call BeginUploadFromPopup(bool) keep compiling. Routes
+        // through the persisted UploadModePrefs choice.
+        internal bool BeginUploadFromPopup(bool build)
+        {
+            return BeginUploadFromPopup(build, UploadModePrefs.Current);
         }
 
         private void ResetUploadPresentationState(bool build)
@@ -867,6 +897,28 @@ namespace DreamPark {
             uploadStatusMessage = build
                 ? "Checking content metadata, syncing schemas, and getting the build pipeline ready."
                 : "Checking content metadata and preparing the existing build artifacts for upload.";
+        }
+
+        // Called by ContentUploadFlowPopup.Show when the popup is being
+        // (re)opened. The previous run's completion flags are sticky on the
+        // panel — they persist until the next BeginUploadFromPopup resets
+        // them inside ResetUploadPresentationState — so without this nudge
+        // the popup's OnGUI early-return for UploadCompleted keeps drawing
+        // the completion view from the last upload even after the user
+        // closes and reopens it. Only clears state when nothing is in
+        // flight, so revisiting the popup mid-upload still shows live
+        // progress instead of jumping back to the prep view.
+        internal void ResetCompletionStateForNextRun()
+        {
+            if (isUploading) return;
+            if (!uploadCompleted) return;
+            uploadCompleted = false;
+            uploadSucceeded = false;
+            uploadStatusIsError = false;
+            uploadStatusProgress = 0f;
+            uploadStatusTitle = "";
+            uploadStatusMessage = "";
+            Repaint();
         }
 
         private void SetUploadStatus(string title, string message, float progress = -1f, bool isError = false)
@@ -2429,13 +2481,26 @@ namespace DreamPark {
                             reportStep("Computing patch estimate...");
 
                             // Build a manifest of what's currently in ServerData (the just-built
-                            // output, or whatever existed for "Try Reupload"). In Smart mode we
-                            // diff it against the saved baseline and use the diff to skip
-                            // re-uploading unchanged files. In Legacy mode we always send the
-                            // full build and only use the manifest for size summary/UI.
+                            // output, or whatever existed for "Try Reupload"), diff it against
+                            // the saved baseline, and route the diff through UploadModeFilter to
+                            // turn the active UploadMode into a skipSet.
+                            //
+                            // - All:        skipSet = null (full re-upload)
+                            // - Patch:      skipSet = unchanged-file keys, server fills gaps via fallback
+                            // - CodeOnly:   skipSet = everything except catalog + {gameId}-Code bundle.
+                            //               Aborts here if non-Code bundles also changed (would
+                            //               produce a catalog referencing local-only hashes).
+                            // - PreviewsOnly: same shape as CodeOnly for the Previews bundle.
+                            //
+                            // Legacy bundling forces UploadMode.All regardless of UI selection
+                            // because the carve-out groups for Code/Previews don't exist and
+                            // baseline-driven patching wasn't validated on Legacy output.
                             BuildManifest currentManifest = null;
                             HashSet<string> skipSet = null;
                             bool patchingEnabled = IsPatchUploadEnabled();
+                            UploadMode effectiveMode = patchingEnabled ? pendingUploadMode : UploadMode.All;
+                            bool modeWasDowngraded = effectiveMode != pendingUploadMode;
+                            UploadModeFilter.Result modeResult = null;
                             try
                             {
                                 var manifestPlatforms = GetEnabledPlatformsForManifest();
@@ -2444,9 +2509,73 @@ namespace DreamPark {
                                     ? BuildManifestStore.LoadBaseline(contentId)
                                     : null;
                                 var diff = BuildManifestStore.Diff(baseline, currentManifest);
-                                skipSet = patchingEnabled ? BuildManifestStore.BuildSkipSet(diff) : null;
 
-                                if (patchingEnabled)
+                                modeResult = UploadModeFilter.Build(effectiveMode, contentId, currentManifest, patchingEnabled ? diff : null);
+
+                                // Sanity check for Code/Previews-only: an empty target group
+                                // (no Lua scripts, no preview PNGs) leaves no bundle to ship.
+                                // SmartBundleGrouper's empty-group sweep removes the group,
+                                // Addressables skips producing a bundle, and we'd end up
+                                // uploading just a catalog — technically successful but a
+                                // no-op for the runtime. Flag it instead.
+                                if (string.IsNullOrEmpty(modeResult.blockingError)
+                                    && (effectiveMode == UploadMode.CodeOnly || effectiveMode == UploadMode.PreviewsOnly))
+                                {
+                                    var targetCat = effectiveMode == UploadMode.CodeOnly
+                                        ? UploadModeFilter.FileCategory.CodeBundle
+                                        : UploadModeFilter.FileCategory.PreviewsBundle;
+                                    bool hasTargetBundle = false;
+                                    foreach (var p in currentManifest.platforms)
+                                    {
+                                        foreach (var f in p.files)
+                                        {
+                                            if (UploadModeFilter.Categorize(contentId, f.fileName) == targetCat)
+                                            {
+                                                hasTargetBundle = true;
+                                                break;
+                                            }
+                                        }
+                                        if (hasTargetBundle) break;
+                                    }
+                                    if (!hasTargetBundle)
+                                    {
+                                        string what = effectiveMode == UploadMode.CodeOnly
+                                            ? "Lua scripts (*.lua.txt under Assets/Content/" + contentId + "/)"
+                                            : "preview images (PNG/JPG under Assets/Content/" + contentId + "/Previews/)";
+                                        modeResult.blockingError =
+                                            $"{UploadModePrefs.ShortLabel(effectiveMode)} upload aborted: " +
+                                            $"no {UploadModePrefs.ShortLabel(effectiveMode)} bundle was produced by this build. " +
+                                            $"Add some {what} and rebuild, or pick a different upload mode.";
+                                    }
+                                }
+
+                                // Hard-block path: a Code/Previews-only mode that would ship a
+                                // broken catalog. Surface the same message to the EditorLog and
+                                // a modal, then bail cleanly without touching the version
+                                // counter on the backend.
+                                if (!string.IsNullOrEmpty(modeResult.blockingError))
+                                {
+                                    Debug.LogError($"[ContentUploader] {modeResult.blockingError}");
+                                    EditorUtility.ClearProgressBar();
+                                    EditorUtility.DisplayDialog(
+                                        $"{UploadModePrefs.ShortLabel(effectiveMode)} upload blocked",
+                                        modeResult.blockingError,
+                                        "OK");
+                                    CompleteUploadStatus(false, modeResult.blockingError);
+                                    isUploading = false;
+                                    return;
+                                }
+
+                                skipSet = modeResult.skipSet;
+
+                                if (effectiveMode == UploadMode.All)
+                                {
+                                    Debug.Log(
+                                        $"📦 Upload All: sending full upload of {currentManifest.TotalFileCount} file(s) · " +
+                                        $"{BuildManifestStore.FormatBytes(currentManifest.TotalBytes)}" +
+                                        (modeWasDowngraded ? $" (Legacy bundling forced All; requested {pendingUploadMode})." : "."));
+                                }
+                                else if (effectiveMode == UploadMode.Patch)
                                 {
                                     long changed = diff.TotalChangedBytes;
                                     long total = diff.TotalCurrentBytes;
@@ -2455,14 +2584,15 @@ namespace DreamPark {
                                         $"📦 Patch estimate: {changedFiles} changed file(s) · " +
                                         $"{BuildManifestStore.FormatBytes(changed)} of " +
                                         $"{BuildManifestStore.FormatBytes(total)} will upload " +
-                                        $"({skipSet.Count} unchanged file(s) skipped).");
+                                        $"({(skipSet?.Count ?? 0)} unchanged file(s) skipped).");
                                 }
                                 else
                                 {
                                     Debug.Log(
-                                        $"📦 Legacy bundling: patch uploads disabled; " +
-                                        $"sending full upload of {currentManifest.TotalFileCount} file(s) · " +
-                                        $"{BuildManifestStore.FormatBytes(currentManifest.TotalBytes)}.");
+                                        $"📦 {UploadModePrefs.ShortLabel(effectiveMode)} upload: " +
+                                        $"{modeResult.filesToUpload} file(s) · " +
+                                        $"{BuildManifestStore.FormatBytes(modeResult.bytesToUpload)} will upload " +
+                                        $"({modeResult.filesSkipped} file(s) intentionally skipped).");
                                 }
 
                                 // Refresh the panel's cached state so the UI reflects what
@@ -2478,6 +2608,7 @@ namespace DreamPark {
                                 Debug.LogWarning($"[ContentUploader] Patch estimate failed; falling back to full upload: {manifestEx.Message}");
                                 skipSet = null;
                                 currentManifest = null;
+                                modeResult = null;
                             }
 
                             // Build the compact manifest summary that rides along on commitUpload —
