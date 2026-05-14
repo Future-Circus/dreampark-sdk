@@ -140,7 +140,7 @@ namespace DreamPark
             // codeChangeDetected. Treated separately because C# changes are
             // a "needs full app build" signal, not a hot-patchable bundle.
             UnityPackage = 3,
-            // Any other bundle (root prefab bundles, Misc, MonoScript bundle,
+            // Any other bundle (root prefab bundles, Runtime, MonoScript bundle,
             // Shared bundle if it ever comes back, etc.).
             OtherBundle = 4,
         }
@@ -182,14 +182,19 @@ namespace DreamPark
             string previewsPrefix = SmartBundleGrouper.PreviewsGroupName(contentId).ToLowerInvariant();
 
             // AppendHash naming: "<groupname-lowercased>_assets_…_<hash>.bundle".
-            // We match against the start of the filename so an asset path
-            // that happens to contain "-code" later in the bundle filename
-            // (e.g. a folder named "code") doesn't get misclassified.
-            if (fileName.StartsWith(codePrefix + "_", StringComparison.Ordinal))
+            // Match either form:
+            //   "<prefix>_assets_…"   → unchunked, the original single bundle
+            //   "<prefix>-N_assets_…" → chunked variant (N = 2, 3, ...) from
+            //                            SmartBundleGrouper's hash-bucketing pass
+            // Both belong to the same logical Code/Previews group, so CodeOnly /
+            // PreviewsOnly upload modes need to ship all chunks together.
+            if (fileName.StartsWith(codePrefix + "_", StringComparison.Ordinal)
+                || fileName.StartsWith(codePrefix + "-", StringComparison.Ordinal))
             {
                 return FileCategory.CodeBundle;
             }
-            if (fileName.StartsWith(previewsPrefix + "_", StringComparison.Ordinal))
+            if (fileName.StartsWith(previewsPrefix + "_", StringComparison.Ordinal)
+                || fileName.StartsWith(previewsPrefix + "-", StringComparison.Ordinal))
             {
                 return FileCategory.PreviewsBundle;
             }

@@ -226,6 +226,12 @@ namespace DreamPark
 
             EditorGUILayout.LabelField(UploadModePrefs.Description(uploadMode), EditorStyles.wordWrappedMiniLabel);
 
+            // Show a size estimate so the user can sanity-check the choice
+            // before committing to a build/upload. The estimate is derived
+            // from the local baseline manifest + dirty-groups set — no build
+            // is run to compute it, so it's cheap to render every OnGUI tick.
+            DrawUploadSizeEstimate();
+
             if (firstUpload)
             {
                 EditorGUILayout.HelpBox(
@@ -250,6 +256,110 @@ namespace DreamPark
             }
 
             GUILayout.EndVertical();
+        }
+
+        // Renders a one-line size estimate under the mode picker so the user
+        // can see roughly how much this upload will ship before committing.
+        // All numbers come from the locally-stored baseline manifest plus the
+        // dirty-groups set; no build is run, so this is cheap and OK to
+        // render on every OnGUI tick.
+        //
+        //   All           → total content of the last build (or "unknown" if
+        //                   no baseline yet)
+        //   Patch         → estimated bytes of dirty bundles (or zero if
+        //                   nothing has changed since last upload, or
+        //                   "everything" if no baseline)
+        //   CodeOnly      → sum of bundle sizes whose names match the Code
+        //                   group's prefix (including chunked variants)
+        //   PreviewsOnly  → same idea for Previews
+        private void DrawUploadSizeEstimate()
+        {
+            if (owner == null) return;
+            string contentId = owner.ContentId;
+            if (string.IsNullOrEmpty(contentId)) return;
+
+            var baseline = BuildManifestStore.LoadBaseline(contentId);
+
+            switch (uploadMode)
+            {
+                case UploadMode.All:
+                {
+                    if (baseline == null)
+                    {
+                        EditorGUILayout.LabelField(
+                            "Estimated size: unknown (no baseline yet — first build will determine total).",
+                            EditorStyles.wordWrappedMiniLabel);
+                    }
+                    else
+                    {
+                        EditorGUILayout.LabelField(
+                            $"Estimated upload: {BuildManifestStore.FormatBytes(baseline.TotalBytes)} (full content based on last successful upload).",
+                            EditorStyles.wordWrappedMiniLabel);
+                    }
+                    return;
+                }
+
+                case UploadMode.Patch:
+                {
+                    if (baseline == null)
+                    {
+                        EditorGUILayout.LabelField(
+                            "Estimated patch size: full upload (no baseline yet — first Patch ships everything).",
+                            EditorStyles.wordWrappedMiniLabel);
+                        return;
+                    }
+                    var dirty = DirtyGroupsStore.Load(contentId);
+                    if (dirty.Count == 0)
+                    {
+                        EditorGUILayout.LabelField(
+                            "Estimated patch size: ~few MB (catalog only — no content changes detected since last upload).",
+                            EditorStyles.wordWrappedMiniLabel);
+                        return;
+                    }
+                    var est = DirtyGroupsEstimator.Estimate(baseline, dirty);
+                    string sizeStr = BuildManifestStore.FormatBytes(est.estimatedBytes);
+                    string note = est.isIncomplete
+                        ? $"  (estimate incomplete — {est.unmatchedGroupNames.Count} dirty group(s) without a baseline match; could be smaller or larger)"
+                        : "";
+                    EditorGUILayout.LabelField(
+                        $"Estimated patch size: ~{sizeStr} across {est.matchedBundles} bundle(s) from {dirty.Count} dirty group(s).{note}",
+                        EditorStyles.wordWrappedMiniLabel);
+                    return;
+                }
+
+                case UploadMode.CodeOnly:
+                case UploadMode.PreviewsOnly:
+                {
+                    if (baseline == null)
+                    {
+                        EditorGUILayout.LabelField(
+                            "Estimated size: unknown (Code-only / Previews-only need a prior upload to estimate against).",
+                            EditorStyles.wordWrappedMiniLabel);
+                        return;
+                    }
+                    var target = uploadMode == UploadMode.CodeOnly
+                        ? UploadModeFilter.FileCategory.CodeBundle
+                        : UploadModeFilter.FileCategory.PreviewsBundle;
+                    long total = 0;
+                    int count = 0;
+                    foreach (var p in baseline.platforms)
+                    {
+                        foreach (var f in p.files)
+                        {
+                            if (UploadModeFilter.Categorize(contentId, f.fileName) == target)
+                            {
+                                total += f.sizeBytes;
+                                count++;
+                            }
+                        }
+                    }
+                    string targetName = uploadMode == UploadMode.CodeOnly ? "code" : "previews";
+                    EditorGUILayout.LabelField(
+                        $"Estimated upload: ~{BuildManifestStore.FormatBytes(total)} across {count} {targetName} bundle(s) (catalog ships too).",
+                        EditorStyles.wordWrappedMiniLabel);
+                    return;
+                }
+            }
         }
 
         private void DrawCompletionView()
