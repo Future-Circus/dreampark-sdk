@@ -51,11 +51,18 @@ namespace DreamPark {
         private const string SectionTeamPrefKey = "DreamPark.ContentUploader.Section.Team";
         private const string SectionContentOverviewPrefKey = "DreamPark.ContentUploader.Section.ContentOverview";
         private const string SectionTroubleshootingPrefKey = "DreamPark.ContentUploader.Section.Troubleshooting";
+        private const string SectionPreLaunchPrefKey = "DreamPark.ContentUploader.Section.PreLaunch";
         private const string SectionReleaseLaunchPrefKey = "DreamPark.ContentUploader.Section.ReleaseLaunch";
         private bool foldContentInfo = true;
         private bool foldTeam = true;
         private bool foldContentOverview = true;
         private bool foldTroubleshooting = false;
+        // Pre Launch Options defaults to expanded — these are the
+        // "do-this-before-you-publish" tools (texture optimizer, etc.),
+        // and we want them visible at the moment the creator's about to
+        // hit Release. Hiding them behind a foldout would defeat the
+        // point of moving the optimizer into the upload flow.
+        private bool foldPreLaunch = true;
         private bool foldReleaseLaunch = true;
 
         // Foldout state for the "Park Assets" preview block. EditorPrefs-
@@ -263,6 +270,7 @@ namespace DreamPark {
             foldTeam = EditorPrefs.GetBool(SectionTeamPrefKey, true);
             foldContentOverview = EditorPrefs.GetBool(SectionContentOverviewPrefKey, true);
             foldTroubleshooting = EditorPrefs.GetBool(SectionTroubleshootingPrefKey, false);
+            foldPreLaunch = EditorPrefs.GetBool(SectionPreLaunchPrefKey, true);
             foldReleaseLaunch = EditorPrefs.GetBool(SectionReleaseLaunchPrefKey, true);
         }
 
@@ -550,6 +558,16 @@ namespace DreamPark {
                 EndSectionBox();
             }
 
+            // Pre Launch Options sits right above Release Launch so the
+            // optimization tools are visible at the moment the creator's
+            // about to publish. Anything that should be sanity-checked
+            // before sending content to the OTA pipeline lives here.
+            if (BeginSectionBox(ref foldPreLaunch, SectionPreLaunchPrefKey, "Pre Launch Options", "d_CustomTool"))
+            {
+                DrawPreLaunchSection();
+                EndSectionBox();
+            }
+
             if (BeginSectionBox(ref foldReleaseLaunch, SectionReleaseLaunchPrefKey, "Release Launch", "d_BuildSettings.Editor.Small"))
             {
                 DrawLaunchActions(sdkOutOfDate);
@@ -650,6 +668,39 @@ namespace DreamPark {
                         ? (uploadSucceeded ? "Upload complete." : "Upload ended with an issue.")
                         : uploadStatusMessage,
                     uploadSucceeded ? MessageType.Info : MessageType.Error);
+            }
+        }
+
+        // Pre Launch Options: optimization tools the creator should run
+        // before publishing. Today this hosts the Texture Optimizer;
+        // future entries (audio compression, mesh decimation, addressable
+        // tightening) belong here too.
+        private void DrawPreLaunchSection()
+        {
+            EditorGUILayout.HelpBox(
+                "Run these before you publish — they shrink the bundle size your players download and "
+                + "speed up first-launch attraction load times.",
+                MessageType.None);
+
+            GUILayout.Space(4);
+
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                EditorGUILayout.LabelField("Texture Optimizer", EditorStyles.boldLabel);
+                EditorGUILayout.LabelField(
+                    "Scan every texture in this park's content folder. Converts oversized .tga / .tif "
+                    + "sources to PNG (alpha) or JPG (opaque), and picks 256 / 512 / 1024 based on the "
+                    + "largest prop using each texture. Per-row review before any file is touched — "
+                    + "Unity GUIDs are preserved across the rename.",
+                    EditorStyles.wordWrappedMiniLabel);
+
+                if (GUILayout.Button(new GUIContent(
+                        "Open Texture Optimizer...",
+                        "Scan and re-encode textures under Assets/Content. Review every change before committing."),
+                    GUILayout.Height(24)))
+                {
+                    DreamPark.EditorTools.TextureOptimization.TextureOptimizerWindow.Open();
+                }
             }
         }
 
@@ -1050,6 +1101,11 @@ namespace DreamPark {
             uploaderMetadata.AddField("bundlingStrategy", bundlingStrategy.ToString().ToLowerInvariant());
             uploaderMetadata.AddField("patching", patchingEnabled ? "enabled" : "disabled");
             uploaderMetadata.AddField("patchingEnabled", patchingEnabled);
+            // SDK version this release was built with. The web admin dashboard
+            // surfaces this so support / ops can correlate creator issues with
+            // a specific SDK release, and the backend can flag releases built
+            // against EOL SDK versions for forced re-upload before they break.
+            uploaderMetadata.AddField("sdkVersion", SDKVersion.Current ?? "");
             return uploaderMetadata;
         }
 
@@ -2029,6 +2085,23 @@ namespace DreamPark {
                 settings.MonoScriptBundleNaming = MonoScriptBundleNaming.Custom;
                 settings.MonoScriptBundleCustomNaming = contentId + "_";
                 settings.OverridePlayerVersion = contentId;
+                // NonRecursiveBuilding pinned to Unity's default (true).
+                //
+                // We previously toggled this to false for the Smart strategy to
+                // get per-bundle embedded MonoScript metadata — that would have
+                // eliminated the shared monoscripts.bundle dep-hash cascade
+                // (single C# edit → ~91% byte churn across bundles). But the
+                // change broke production: Quest 3S started throwing "Could not
+                // produce class with ID X" and iOS hit missing-StreamingAssets/
+                // Addressables errors, because without the shared monoscripts
+                // bundle Unity loses the implicit "preserve every MonoBehaviour
+                // / ScriptableObject type" safety net that IL2CPP's stripper
+                // depends on at runtime.
+                //
+                // Reverted while we work on a cleaner fix that doesn't change
+                // the runtime bundle layout — see CASCADE_WORKAROUND_DEFERRED.md
+                // for the catalog-rewrite / decompress-then-hash plan.
+                settings.NonRecursiveBuilding = true;
                 EditorUtility.SetDirty(settings);
                 AssetDatabase.SaveAssets();
 
@@ -2392,6 +2465,11 @@ namespace DreamPark {
                                 Debug.Log($"📛 [BEFORE] OverridePlayerVersion = '{settings.OverridePlayerVersion}', PlayerBuildVersion = '{settings.PlayerBuildVersion}'");
                                 settings.OverridePlayerVersion = contentId;
                                 Debug.Log($"📛 [AFTER]  OverridePlayerVersion = '{settings.OverridePlayerVersion}', PlayerBuildVersion = '{settings.PlayerBuildVersion}'");
+                                // Pinned to Unity's default (true) — see the
+                                // longer comment in BeginUploadFromPopup's
+                                // configure step for the production-crash
+                                // context that drove this revert.
+                                settings.NonRecursiveBuilding = true;
                                 EditorUtility.SetDirty(settings);
                                 AssetDatabase.SaveAssets();
 
@@ -3037,6 +3115,14 @@ namespace DreamPark {
                     settings.OverridePlayerVersion = contentId;
                     Debug.Log($"📛 [BuildForTarget] OverridePlayerVersion = '{settings.OverridePlayerVersion}', PlayerBuildVersion = '{settings.PlayerBuildVersion}'");
                 }
+
+                // Re-apply NonRecursiveBuilding defensively — any
+                // AssetDatabase.Refresh() between the configure step and the
+                // build could re-read AddressableAssetSettings.asset from disk
+                // and lose the value we just set. Pinned to Unity's default
+                // (true); see the longer comment at the configure step for the
+                // production-crash context that drove this revert.
+                settings.NonRecursiveBuilding = true;
 
                 if (EditorPrefs.GetBool(CleanBeforeEachTargetPrefKey, false))
                 {

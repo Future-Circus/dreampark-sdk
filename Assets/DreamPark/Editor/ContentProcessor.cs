@@ -104,19 +104,26 @@ namespace DreamPark {
         }
 
         // True if `groupName` is a group that SmartBundleGrouper manages —
-        // i.e., a per-root bundle group ({gameId}-Bundle-*) or the misc
-        // bundle ({gameId}-Misc). Used to detect when an incremental edit
-        // shouldn't disturb a Smart-organized addressable layout. Note: the
-        // {gameId}-Shared bundle was removed in favor of consolidating
-        // shared assets into the first-alphabetical root's bundle, so we
-        // no longer treat it as a managed group.
+        // i.e., a per-root bundle group ({gameId}-Bundle-*), the misc / code
+        // / previews groups, or any of their chunked siblings produced by
+        // the hash-bucketed chunking pass ({gameId}-Runtime-2, Bundle-X-3, etc.).
+        // Used to detect when an incremental watchdog edit shouldn't disturb
+        // a Smart-organized addressable layout. Note: the {gameId}-Shared
+        // bundle was removed in favor of consolidating shared assets into
+        // the highest-priority root's bundle, so we no longer treat it as
+        // a managed group.
         private static bool IsSmartManagedGroupName(string gameId, string groupName)
         {
             if (string.IsNullOrEmpty(groupName) || string.IsNullOrEmpty(gameId)) return false;
             string prefix = gameId + "-";
             if (!groupName.StartsWith(prefix, StringComparison.Ordinal)) return false;
-            return groupName.StartsWith(prefix + "Bundle-", StringComparison.Ordinal)
-                || groupName == prefix + "Misc";
+            return groupName.StartsWith(prefix + "Bundle-", StringComparison.Ordinal)        // Bundle-X, Bundle-X-Content, Bundle-X-N, Bundle-X-Content-N
+                || groupName == prefix + "Runtime"
+                || groupName.StartsWith(prefix + "Runtime-", StringComparison.Ordinal)          // Runtime-2, Runtime-3, ...
+                || groupName == prefix + "Previews"
+                || groupName.StartsWith(prefix + "Previews-", StringComparison.Ordinal)      // Previews-2, ...
+                || groupName == prefix + "Code"
+                || groupName.StartsWith(prefix + "Code-", StringComparison.Ordinal);         // Code-2, ...
         }
 
         private static void EnsureGlobalLabel(AddressableAssetSettings settings, string gameId)
@@ -825,7 +832,7 @@ namespace DreamPark {
 
                 // In Smart mode, an entry is typically already in a
                 // Smart-managed group ({gameId}-Bundle-*, {gameId}-Shared,
-                // {gameId}-Misc) from the last full pass. Incremental edits
+                // {gameId}-Runtime) from the last full pass. Incremental edits
                 // must NOT move it back to the Legacy folder group computed
                 // above — doing so silently undoes Smart bundling for that
                 // asset (the next build would produce a Legacy-shaped bundle
@@ -933,7 +940,7 @@ namespace DreamPark {
             {
                 var result = SmartBundleGrouper.ApplyDependencyAwareGrouping(settings, gameId);
                 Debug.Log($"📦 Smart bundling [experimental] for '{gameId}': " +
-                          $"{result.rootBundles} root bundles, {result.miscAssets} misc assets, " +
+                          $"{result.rootBundles} root bundles, {result.runtimeAssets} runtime assets, " +
                           $"+{result.groupsCreated}/-{result.groupsRemoved} groups.");
             }
         }
@@ -1332,6 +1339,26 @@ namespace DreamPark {
                         Debug.Log("✅ No scripts under " + sourceFolder + " — skipping .unitypackage step (pure-content release).");
                     }
                     return true;
+                }
+
+                // Auto-generate the link.xml that preserves every MonoBehaviour /
+                // ScriptableObject / StateMachineBehaviour declared in this content
+                // title. The file is written to Assets/Content/{contentId}/link.xml
+                // and included in the unitypackage below so that dreampark-core's
+                // app build picks it up automatically when it imports the
+                // unitypackage. Without this, IL2CPP managed stripping can remove
+                // content types that are only referenced by addressable bundles,
+                // causing "Could not produce class with ID X" errors at runtime
+                // when bundles try to deserialize prefabs with those components.
+                // See ContentLinkXmlGenerator for the full rationale.
+                string linkXmlPath = ContentLinkXmlGenerator.GenerateForContent(contentId);
+
+                // Include the generated link.xml in the export alongside the
+                // scripts. If GenerateForContent returned null (no preservable
+                // types found, no link.xml needed), assetPaths stays unchanged.
+                if (!string.IsNullOrEmpty(linkXmlPath))
+                {
+                    assetPaths = assetPaths.Concat(new[] { linkXmlPath }).ToArray();
                 }
 
                 // Export to a temporary location
