@@ -16,11 +16,23 @@ namespace DreamPark
         // mid-upload, and lets the user override their saved default for
         // just this run without persisting.
         private UploadMode uploadMode = UploadMode.Patch;
+        // Set to true when this popup was opened from the "Upload Failed
+        // Bundles" choice on the Try Reupload dialog. Overrides the upload
+        // mode picker (we always re-send the persisted failed set), shows a
+        // banner explaining the scope, and gets passed to
+        // BeginUploadFromPopup so the panel routes through FailedBundleStore
+        // instead of UploadModeFilter.
+        private bool failedOnly = false;
         private Vector2 progressScroll;
         private Vector2 notesScroll;
         private Vector2 mainScroll;
 
         public static void Show(ContentUploaderPanel owner, bool buildBeforeUpload)
+        {
+            Show(owner, buildBeforeUpload, failedOnly: false);
+        }
+
+        public static void Show(ContentUploaderPanel owner, bool buildBeforeUpload, bool failedOnly)
         {
             // Whether we're reusing an existing window or spawning a new one,
             // (re)opening the popup is the user's "I want to do an upload"
@@ -37,13 +49,20 @@ namespace DreamPark
             // the user's normal default isn't trampled.
             UploadMode initialMode = IsFirstUpload(owner) ? UploadMode.All : UploadModePrefs.Current;
 
+            // Title shifts when the user picked "Upload Failed Bundles" so
+            // the window header reflects the reduced scope of the run.
+            string windowTitle = failedOnly
+                ? "Retry Failed Bundles"
+                : (buildBeforeUpload ? "Compile & Upload" : "Try Reupload");
+
             var existing = Resources.FindObjectsOfTypeAll<ContentUploadFlowPopup>();
             if (existing != null && existing.Length > 0)
             {
                 existing[0].owner = owner;
                 existing[0].buildBeforeUpload = buildBeforeUpload;
                 existing[0].uploadMode = initialMode;
-                existing[0].titleContent = new GUIContent(buildBeforeUpload ? "Compile & Upload" : "Try Reupload");
+                existing[0].failedOnly = failedOnly;
+                existing[0].titleContent = new GUIContent(windowTitle);
                 existing[0].Focus();
                 existing[0].Repaint();
                 return;
@@ -53,7 +72,8 @@ namespace DreamPark
             win.owner = owner;
             win.buildBeforeUpload = buildBeforeUpload;
             win.uploadMode = initialMode;
-            win.titleContent = new GUIContent(buildBeforeUpload ? "Compile & Upload" : "Try Reupload");
+            win.failedOnly = failedOnly;
+            win.titleContent = new GUIContent(windowTitle);
             win.minSize = new Vector2(620f, 720f);
             win.maxSize = new Vector2(820f, 1100f);
             var main = EditorGUIUtility.GetMainWindowPosition();
@@ -108,6 +128,19 @@ namespace DreamPark
             mainScroll = EditorGUILayout.BeginScrollView(mainScroll);
             DrawSummaryCard();
             GUILayout.Space(8);
+            if (failedOnly)
+            {
+                // Visible scope reminder so the user can spot at a glance
+                // that this run won't touch the bundles that succeeded last
+                // time, and that the upload-mode picker below it isn't
+                // driving the file selection.
+                EditorGUILayout.HelpBox(
+                    "Failed-Bundles retry mode. Only the bundles that failed last run will be re-uploaded; " +
+                    "the bundles that already succeeded will be reused via their previously-issued upload paths " +
+                    "and committed together. The Upload Scope picker below doesn't apply on this path.",
+                    MessageType.Info);
+                GUILayout.Space(8);
+            }
             DrawBuildTargetsCard();
             GUILayout.Space(8);
             DrawUploadModeCard();
@@ -127,14 +160,21 @@ namespace DreamPark
             // gets one more chance to spot a mis-selected mode before
             // committing. CodeOnly/PreviewsOnly modes also gate the button
             // when the active bundling strategy doesn't support them.
-            string cta = $"Start · {UploadModePrefs.ShortLabel(uploadMode)}";
+            // Failed-Only overrides the mode label since UploadMode doesn't
+            // apply when the file set is "whichever bundles failed last run."
+            string cta = failedOnly
+                ? "Start · Retry Failed Bundles"
+                : $"Start · {UploadModePrefs.ShortLabel(uploadMode)}";
             bool modeRequiresSmart = UploadModePrefs.RequiresSmart(uploadMode);
             bool smartActive = BundlingStrategyPrefs.Current == BundlingStrategy.Smart;
-            bool modeBlocked = modeRequiresSmart && !smartActive;
+            // Failed-Only ignores the upload-mode strategy gate entirely —
+            // we're not running UploadModeFilter on this path, so the Smart
+            // requirement that drives modeBlocked doesn't apply.
+            bool modeBlocked = !failedOnly && modeRequiresSmart && !smartActive;
             GUI.enabled = !owner.IsUploading && !modeBlocked;
             if (GUILayout.Button(cta, GUILayout.Height(actionButtonHeight)))
             {
-                bool started = owner.BeginUploadFromPopup(buildBeforeUpload, uploadMode);
+                bool started = owner.BeginUploadFromPopup(buildBeforeUpload, uploadMode, failedOnly);
                 if (started)
                 {
                     GUI.FocusControl(null);

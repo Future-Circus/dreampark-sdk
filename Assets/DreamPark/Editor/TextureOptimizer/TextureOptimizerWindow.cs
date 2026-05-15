@@ -595,12 +595,37 @@ namespace DreamPark.EditorTools.TextureOptimization
                     EditorUtility.DisplayProgressBar("Texture Optimizer", msg, p));
 
                 EditorUtility.ClearProgressBar();
+
+                // Roll up the first few failures into the dialog text so
+                // the user doesn't have to dig through Console to see
+                // which specific files refused — and what the exception
+                // was. Limited to the first 5 to keep the dialog from
+                // ballooning on a bad batch.
+                string failedDetails = "";
+                if (result.failed > 0)
+                {
+                    var sb = new System.Text.StringBuilder();
+                    sb.Append("\n\nFailed rows (first 5):");
+                    int shown = 0;
+                    foreach (var rr in result.rows)
+                    {
+                        if (rr.ok) continue;
+                        sb.Append("\n  • ").Append(System.IO.Path.GetFileName(rr.sourcePath))
+                          .Append(" — ").Append(string.IsNullOrEmpty(rr.error) ? "unknown error" : rr.error);
+                        if (++shown >= 5) break;
+                    }
+                    if (result.failed > shown)
+                        sb.Append("\n  …and ").Append(result.failed - shown).Append(" more (see Console).");
+                    failedDetails = sb.ToString();
+                }
+
                 EditorUtility.DisplayDialog(
                     "Texture Optimizer",
                     $"Processed: {result.processed}\nSucceeded: {result.succeeded}\nFailed: {result.failed}\n\n"
                     + $"Before: {FormatBytes(result.bytesBefore)}\n"
                     + $"After:  {FormatBytes(result.bytesAfter)}\n"
-                    + $"Saved:  {FormatBytes(result.BytesSaved)}  ({result.PercentSaved:0.#}%)",
+                    + $"Saved:  {FormatBytes(result.BytesSaved)}  ({result.PercentSaved:0.#}%)"
+                    + failedDetails,
                     "OK");
 
                 // Re-scan to refresh the table with the new state.

@@ -142,7 +142,9 @@ namespace DreamPark.EditorTools.TextureOptimization
                 string srcAbs = Path.GetFullPath(srcAssetPath);
                 if (!File.Exists(srcAbs))
                 {
-                    rr.error = "Source file missing.";
+                    rr.error = "Source file missing at " + srcAbs;
+                    Debug.LogError($"[TextureOptimizer] {row.usage.assetPath}: source not found at {srcAbs}. "
+                                 + "AssetDatabase path may not match disk (case, special characters, or Unity reimport pending).");
                     return rr;
                 }
 
@@ -180,12 +182,40 @@ namespace DreamPark.EditorTools.TextureOptimization
                 // We never write directly to the final path — if the
                 // encoder throws halfway, the original file is still
                 // intact.
-                MagickNetBootstrap.ReEncode(
-                    srcAbs,
-                    tempAbs,
-                    row.targetFormat,
-                    row.targetMaxSize,
-                    TextureOptimizationPlanner.JpgQuality);
+                //
+                // Strategy: try Magick.NET first (faster, Lanczos resize,
+                // direct file access). If it throws — usually because a
+                // vendor TGA/TIF has a non-standard layout Magick.NET's
+                // reader refuses — fall back to UnityImageProcessor,
+                // which goes through AssetDatabase and Unity's more
+                // permissive TextureImporter. Slower but handles the
+                // weird edge cases.
+                try
+                {
+                    MagickNetBootstrap.ReEncode(
+                        srcAbs,
+                        tempAbs,
+                        row.targetFormat,
+                        row.targetMaxSize,
+                        TextureOptimizationPlanner.JpgQuality);
+                }
+                catch (Exception magickError)
+                {
+                    Debug.LogWarning(
+                        $"[TextureOptimizer] {row.usage.assetPath}: Magick.NET rejected this file " +
+                        $"({magickError.GetType().Name}: {magickError.Message}). " +
+                        "Falling back to Unity's built-in encoder.");
+                    // Clean any half-written temp from the failed Magick
+                    // attempt before retrying.
+                    try { if (File.Exists(tempAbs)) File.Delete(tempAbs); } catch { /* ignore */ }
+
+                    UnityImageProcessor.ReEncode(
+                        srcAssetPath,           // Unity path needs the Assets-relative form
+                        tempAbs,
+                        row.targetFormat,
+                        row.targetMaxSize,
+                        TextureOptimizationPlanner.JpgQuality);
+                }
 
                 long afterBytes = new FileInfo(tempAbs).Length;
                 rr.bytesAfter = afterBytes;

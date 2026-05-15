@@ -1023,6 +1023,24 @@ namespace DreamPark {
                     continue;
                 }
 
+                // GUID preservation. Unity's v2 asset pipeline regenerates
+                // the .meta — and the GUID — when a file's content changes
+                // substantially between imports. That breaks every prefab,
+                // material, or addressable group that references the
+                // preview by GUID. Stashing the whole .meta and writing it
+                // back wholesale would protect the GUID but throw out the
+                // updated importer settings we configure below, so instead
+                // we extract ONLY the `guid:` line from the original .meta
+                // before the rewrite, let Unity emit a fresh .meta with the
+                // current importer settings, and then surgically restore
+                // the GUID line at the end. First-time generation finds
+                // no existing .meta and gets a fresh GUID — that's fine,
+                // every subsequent regen will preserve it.
+                string previewMetaPath = previewPath + ".meta";
+                string stashedGuidLine = File.Exists(previewMetaPath)
+                    ? ExtractGuidLine(File.ReadAllText(previewMetaPath))
+                    : null;
+
                 byte[] png = preview.EncodeToPNG();
                 File.WriteAllBytes(previewPath, png);
 
@@ -1032,11 +1050,62 @@ namespace DreamPark {
                 var importer = AssetImporter.GetAtPath(previewPath) as TextureImporter;
                 if (importer != null)
                 {
+                    // These are UI thumbnails for the Park Assets grid —
+                    // they're displayed at a fixed small size in the
+                    // panel and never sampled by gameplay. So:
+                    //  - No mipmaps (UI doesn't minify).
+                    //  - Not readable (no GPU readback needed; halves
+                    //    memory because Unity drops the CPU-side copy).
+                    //  - Compressed + crunched (~5-10× smaller on disk
+                    //    than the Uncompressed default this code shipped
+                    //    with originally; ASTC/BC compression for runtime).
+                    //  - Cap at 512 — that's what PrefabPreviewRenderer
+                    //    outputs, so no reason to leave maxTextureSize
+                    //    at the 1024 default.
                     importer.alphaIsTransparency = true;
-                    importer.isReadable = true;
-                    importer.textureCompression = TextureImporterCompression.Uncompressed;
                     importer.sRGBTexture = true;
+                    importer.isReadable = false;
+                    importer.mipmapEnabled = false;
+                    importer.maxTextureSize = 512;
+                    importer.textureCompression = TextureImporterCompression.Compressed;
+                    importer.crunchedCompression = true;
+                    importer.compressionQuality = 50;
+
+                    // Mirror the settings onto the default platform entry.
+                    // Without this, Unity's per-platform overrides can
+                    // still build the default-platform variant uncompressed
+                    // (which is exactly what the old code was producing —
+                    // textureCompression: 0 on the default platform even
+                    // though Standalone/Android/iOS were Compressed).
+                    var defaultSettings = importer.GetDefaultPlatformTextureSettings();
+                    defaultSettings.maxTextureSize = importer.maxTextureSize;
+                    defaultSettings.textureCompression = importer.textureCompression;
+                    defaultSettings.crunchedCompression = importer.crunchedCompression;
+                    defaultSettings.compressionQuality = importer.compressionQuality;
+                    importer.SetPlatformTextureSettings(defaultSettings);
+
                     importer.SaveAndReimport();
+                }
+
+                // Surgical GUID restore. SaveAndReimport above has just
+                // rewritten the .meta with the configured importer
+                // settings — possibly with a freshly-minted GUID. We
+                // swap ONLY the `guid:` line back to the stashed value
+                // so the asset identity is preserved while the new
+                // importer settings stick. Then ForceUpdate causes
+                // Unity to re-read the .meta from disk and update its
+                // in-memory path→GUID mapping; without this, Unity's
+                // cache would still think the asset has the fresh GUID
+                // until the next domain reload.
+                if (stashedGuidLine != null && File.Exists(previewMetaPath))
+                {
+                    string currentMeta = File.ReadAllText(previewMetaPath);
+                    string currentGuidLine = ExtractGuidLine(currentMeta);
+                    if (currentGuidLine != null && currentGuidLine != stashedGuidLine)
+                    {
+                        File.WriteAllText(previewMetaPath, ReplaceGuidLine(currentMeta, stashedGuidLine));
+                        AssetDatabase.ImportAsset(previewPath, ImportAssetOptions.ForceUpdate);
+                    }
                 }
 
                 generated++;
@@ -1045,6 +1114,36 @@ namespace DreamPark {
 
             AssetDatabase.Refresh();
             Debug.Log($"✅ Preview generation complete. Generated {generated} preview(s).");
+        }
+
+        // ── GUID-line helpers for preview .meta preservation ────────────
+        //
+        // A Unity .meta is YAML and always carries a `guid: <32 hex>` line
+        // near the top. These two helpers extract and replace that line
+        // without touching anything else — which is what lets us preserve
+        // the GUID across a regen while still picking up the fresh
+        // importer settings emitted by SaveAndReimport.
+        //
+        // Regex anchored to start-of-line (RegexOptions.Multiline) so a
+        // future field that happens to contain the substring "guid:"
+        // somewhere mid-line doesn't get clobbered. The 32-hex-char body
+        // is what Unity emits (no separators, lowercase).
+        private static readonly System.Text.RegularExpressions.Regex GuidLineRegex =
+            new System.Text.RegularExpressions.Regex(
+                @"^guid: [0-9a-fA-F]{32}",
+                System.Text.RegularExpressions.RegexOptions.Multiline);
+
+        private static string ExtractGuidLine(string metaText)
+        {
+            if (string.IsNullOrEmpty(metaText)) return null;
+            var m = GuidLineRegex.Match(metaText);
+            return m.Success ? m.Value : null;
+        }
+
+        private static string ReplaceGuidLine(string metaText, string newGuidLine)
+        {
+            if (string.IsNullOrEmpty(metaText) || string.IsNullOrEmpty(newGuidLine)) return metaText;
+            return GuidLineRegex.Replace(metaText, newGuidLine, 1);
         }
 
         [MenuItem("DreamPark/Troubleshooting/Remove Broken Addressables", false, 200)]

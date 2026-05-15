@@ -15,7 +15,7 @@ MonoBehaviour:
   m_DefaultGroup: de63b359689ab40ffbe3690dc84d500f
   m_currentHash:
     serializedVersion: 2
-    Hash: 00000000000000000000000000000000
+    Hash: 7c6d7afce3ff8adf2d9922a397010102
   m_OptimizeCatalogSize: 0
   m_BuildRemoteCatalog: 1
   m_BundleLocalCatalog: 0
@@ -60,40 +60,41 @@ MonoBehaviour:
   m_BuildAddressablesWithPlayerBuild: 2
   m_overridePlayerVersion: '[UnityEditor.PlayerSettings.bundleVersion]'
   m_GroupAssets:
-  - {fileID: 11400000, guid: 5417b955f7d8248958ba43c026b81d6d, type: 2}
   - {fileID: 11400000, guid: 74eb213e192f64d7bb4cac4fec32ee73, type: 2}
+  - {fileID: 11400000, guid: 5417b955f7d8248958ba43c026b81d6d, type: 2}
   - {fileID: 11400000, guid: 41349ab8c4db04b399a58825873ae9d8, type: 2}
+  - {fileID: 11400000, guid: b8dbe1f3e5a2f4b1b96564cc0609a2b0, type: 2}
+  - {fileID: 11400000, guid: a7e70251442854744a832c6eff0ac397, type: 2}
   - {fileID: 11400000, guid: 61197a460b0f2438cb6ae93c863b5d1d, type: 2}
-  - {fileID: 11400000, guid: 006a9f3c619e841379b0bb0fc1f3d16f, type: 2}
+  - {fileID: 11400000, guid: 8113828c1c9de4ba6be5d86e45a216c7, type: 2}
   - {fileID: 11400000, guid: d96bf8f892fc249f2adb93ac68e02f22, type: 2}
   - {fileID: 11400000, guid: 6630d9b5aa953420eb39f7898a855d88, type: 2}
-  - {fileID: 11400000, guid: 92558e46de48341f08ec7532375aaa32, type: 2}
-  - {fileID: 11400000, guid: 73f1dda47549148bba1d5e8faf1936dc, type: 2}
-  - {fileID: 11400000, guid: 3b3d5d8f158e543738fd792de36ced99, type: 2}
   - {fileID: 11400000, guid: 70202f0909ec84942aa24cc489166b73, type: 2}
-  - {fileID: 11400000, guid: 042ff445d1a7d4a288ecbceb6eb1d19f, type: 2}
   - {fileID: 11400000, guid: d390f50cc86f64621a3ce9be82ec25fd, type: 2}
   - {fileID: 11400000, guid: 1742589b95ff1449c9f73b404d0076d8, type: 2}
   - {fileID: 11400000, guid: a359872bd26a747a784eb6860d300c41, type: 2}
   - {fileID: 11400000, guid: e3f1ca756ba5e41f8ac444ec9322a981, type: 2}
-  - {fileID: 11400000, guid: d2fd78f04b14344fe90aeb840916f53d, type: 2}
-  - {fileID: 11400000, guid: 6d5b941f577a449fcad5c140bf6a7d67, type: 2}
-  - {fileID: 11400000, guid: a7e70251442854744a832c6eff0ac397, type: 2}
-  - {fileID: 11400000, guid: 34f687848bd7640dd92ceae7692d2bf4, type: 2}
+  - {fileID: 11400000, guid: 92558e46de48341f08ec7532375aaa32, type: 2}
+  - {fileID: 11400000, guid: 94af5c3bb226044ed95816ad24ee4abc, type: 2}
+  - {fileID: 11400000, guid: 91bb194dc58a24c37a8591a1339183c6, type: 2}
   - {fileID: 11400000, guid: 33504a10ffafa487e8373233cbc14284, type: 2}
+  - {fileID: 11400000, guid: 7fb5ce86b1e5149048f9c1163065f762, type: 2}
   - {fileID: 11400000, guid: 3ee6ed6a5e7124a3280a2a9238208a8c, type: 2}
   - {fileID: 11400000, guid: 32faf1b598ea146248cd13b0a5924d0e, type: 2}
-  - {fileID: 11400000, guid: 91bb194dc58a24c37a8591a1339183c6, type: 2}
   - {fileID: 11400000, guid: 197ebd74a820d4cd09feeee7908e5edb, type: 2}
   - {fileID: 11400000, guid: e4e7c3ce29ac54d4f8732d89fb1f66d8, type: 2}
-  - {fileID: 11400000, guid: f19410f8e1f2e4b8989d1119c53eb7b6, type: 2}
-  - {fileID: 11400000, guid: 94af5c3bb226044ed95816ad24ee4abc, type: 2}
-  - {fileID: 11400000, guid: b8dbe1f3e5a2f4b1b96564cc0609a2b0, type: 2}
-  - {fileID: 11400000, guid: 7fb5ce86b1e5149048f9c1163065f762, type: 2}
-  - {fileID: 11400000, guid: 8113828c1c9de4ba6be5d86e45a216c7, type: 2}
+  - {fileID: 11400000, guid: 01c119fb25b034f8898fbb8a746486fe, type: 2}
+  - {fileID: 11400000, guid: 6d5b941f577a449fcad5c140bf6a7d67, type: 2}
+  - {fileID: 11400000, guid: d2fd78f04b14344fe90aeb840916f53d, type: 2}
+  - {fileID: 11400000, guid: 042ff445d1a7d4a288ecbceb6eb1d19f, type: 2}
+  - {fileID: 11400000, guid: 34f687848bd7640dd92ceae7692d2bf4, type: 2}
+  - {fileID: 11400000, guid: 73f1dda47549148bba1d5e8faf1936dc, type: 2}
+  - {fileID: 11400000, guid: 006a9f3c619e841379b0bb0fc1f3d16f, type: 2}
   - {fileID: 11400000, guid: 96e654af414c34bea9848cfab4ddd7e2, type: 2}
   - {fileID: 11400000, guid: a8f93231c0547448e9c3bb7915e9e01b, type: 2}
+  - {fileID: 11400000, guid: 3b3d5d8f158e543738fd792de36ced99, type: 2}
   - {fileID: 11400000, guid: 2e1774a44cee74af19d357599c6dc4f2, type: 2}
+  - {fileID: 11400000, guid: f19410f8e1f2e4b8989d1119c53eb7b6, type: 2}
   m_BuildSettings:
     m_LogResourceManagerExceptions: 1
     m_BundleBuildPath: Temp/com.unity.addressables/AssetBundles

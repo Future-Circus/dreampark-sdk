@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Cysharp.Threading.Tasks;
 using Defective.JSON;
@@ -12,6 +13,28 @@ using APIResponse = DreamPark.API.DreamParkAPI.APIResponse;
 
 namespace DreamPark.API
 {  
+    // Snapshot of a bundle that uploaded successfully in a *previous* run but
+    // never made it to commitUpload because some other bundle in the same run
+    // failed. Used to plumb the prior run's uploadPaths back into the retry's
+    // commitUpload payload so the resulting version references the full set
+    // of files, not just the ones we re-sent this time.
+    //
+    // Editor code (ContentUploaderPanel) builds these from FailedBundleStore
+    // before calling UploadContent on a "Failed Only" retry; runtime callers
+    // can ignore the new parameter (it has a null default).
+    public class UploadedFileRecord {
+        public string platform;
+        public string fileName;   // Relative to ServerData/{platform}/, forward-slash normalized.
+        public string uploadPath; // Storage key the backend handed back from /uploadUrl in the prior run.
+
+        public UploadedFileRecord() {}
+        public UploadedFileRecord(string platform, string fileName, string uploadPath) {
+            this.platform = platform;
+            this.fileName = fileName;
+            this.uploadPath = uploadPath;
+        }
+    }
+
     public class UploadContentData {
         public string filePath = null;
         // fileName is what gets sent as the "filename" field on the presigned-URL
@@ -377,6 +400,20 @@ namespace DreamPark.API
         // Firestore so the dreampark-core content manager can display
         // "Total: X MB" and "Last patch: Y MB" without walking Storage.
         public static void UploadContent(string contentId, string releaseNotes, int? schemaVersion, HashSet<string> skipFileKeys, JSONObject manifestSummary, Action<bool, APIResponse> callback) {
+            UploadContent(contentId, releaseNotes, schemaVersion, skipFileKeys, manifestSummary, null, callback);
+        }
+
+        // preUploadedFiles seeds commitUpload's uploadedFiles map with bundles
+        // that already landed in Storage during a *previous* run that failed
+        // before commit. This is the "Upload Failed Bundles" code path on the
+        // Try Reupload button: we only re-send the bundles that actually
+        // failed last time, but the version we commit has to reference *all*
+        // the files (succeeded-before + succeeded-now), or the player would
+        // pull a catalog that's missing entries.
+        //
+        // Pass null (or an empty list) for the normal "Reupload All" / first-
+        // upload path.
+        public static void UploadContent(string contentId, string releaseNotes, int? schemaVersion, HashSet<string> skipFileKeys, JSONObject manifestSummary, List<UploadedFileRecord> preUploadedFiles, Action<bool, APIResponse> callback) {
             // 1️⃣ Collect local files for all platforms
             UploadContentRequest data = new UploadContentRequest();
             var files = data.ToList();
@@ -410,21 +447,29 @@ namespace DreamPark.API
                 Debug.Log("[ContentAPI] No changed files to upload; proceeding to finalize.");
                 InitializeUploadProgress(files);
             #if UNITY_EDITOR
-                Unity.EditorCoroutines.Editor.EditorCoroutineUtility.StartCoroutineOwnerless(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, callback));
+                Unity.EditorCoroutines.Editor.EditorCoroutineUtility.StartCoroutineOwnerless(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, preUploadedFiles, callback));
             #else
-                CoroutineRunner.Run(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, callback));
+                CoroutineRunner.Run(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, preUploadedFiles, callback));
             #endif
                 return;
             }
 
             InitializeUploadProgress(files);
 
-            Debug.Log($"[ContentAPI] Uploading {files.Count} files for content {contentId}");
+            int preCount = preUploadedFiles != null ? preUploadedFiles.Count : 0;
+            if (preCount > 0)
+            {
+                Debug.Log($"[ContentAPI] Uploading {files.Count} files for content {contentId} (replaying {preCount} previously-uploaded file(s) in commitUpload).");
+            }
+            else
+            {
+                Debug.Log($"[ContentAPI] Uploading {files.Count} files for content {contentId}");
+            }
 
         #if UNITY_EDITOR
-            Unity.EditorCoroutines.Editor.EditorCoroutineUtility.StartCoroutineOwnerless(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, callback));
+            Unity.EditorCoroutines.Editor.EditorCoroutineUtility.StartCoroutineOwnerless(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, preUploadedFiles, callback));
         #else
-            CoroutineRunner.Run(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, callback));
+            CoroutineRunner.Run(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, preUploadedFiles, callback));
         #endif
         }
 
@@ -437,14 +482,14 @@ namespace DreamPark.API
             });
         }
 
-        private static IEnumerator UploadFlow(string contentId, List<KeyValuePair<string, UploadContentData>> files, string releaseNotes, int? schemaVersion, JSONObject manifestSummary, Action<bool, APIResponse> callback)
+        private static IEnumerator UploadFlow(string contentId, List<KeyValuePair<string, UploadContentData>> files, string releaseNotes, int? schemaVersion, JSONObject manifestSummary, List<UploadedFileRecord> preUploadedFiles, Action<bool, APIResponse> callback)
         {
             // Convert coroutine to async UniTask for concurrency
-            UploadFlowAsync(contentId, files, releaseNotes, schemaVersion, manifestSummary, callback).Forget();
+            UploadFlowAsync(contentId, files, releaseNotes, schemaVersion, manifestSummary, preUploadedFiles, callback).Forget();
             yield break;
         }
 
-        private static async UniTaskVoid UploadFlowAsync(string contentId, List<KeyValuePair<string, UploadContentData>> files, string releaseNotes, int? schemaVersion, JSONObject manifestSummary, Action<bool, DreamParkAPI.APIResponse> callback)
+        private static async UniTaskVoid UploadFlowAsync(string contentId, List<KeyValuePair<string, UploadContentData>> files, string releaseNotes, int? schemaVersion, JSONObject manifestSummary, List<UploadedFileRecord> preUploadedFiles, Action<bool, DreamParkAPI.APIResponse> callback)
         {
             int uploaded = 0;
             int failed = 0;
@@ -452,34 +497,70 @@ namespace DreamPark.API
             var uploadTasks = new List<UniTask>();
             var uploadedFilesDict = new Dictionary<string, List<string>>();
 
-            // 🔹 Create a parallel upload task for each file
-            foreach (var kvp in files)
-            {
-                string platform = kvp.Key;
-                UploadContentData file = kvp.Value;
+            // Track per-(platform, fileName) success so we can record the
+            // full set of uploaded bundles into FailedBundleStore on a
+            // partial-failure run. uploadedFilesDict only carries uploadPaths,
+            // which is enough for commitUpload but loses the (platform,
+            // fileName) identity we need to know *which* bundles can be
+            // skipped on a Failed-Only retry.
+            var thisRunSucceeded = new List<UploadedFileRecord>();
+            var thisRunFailed = new List<UploadedFileRecord>();
 
-                uploadTasks.Add(HandleFileUpload(contentId, platform, file)
-                    .ContinueWith(result =>
-                    {
-                        if (result.success)
-                        {
-                            uploaded++;
-                            lock (uploadedFilesDict)
-                            {
-                                if (!uploadedFilesDict.ContainsKey(platform))
-                                    uploadedFilesDict[platform] = new List<string>();
-                                uploadedFilesDict[platform].Add(result.uploadPath);
-                            }
-                        }
-                        else
-                        {
-                            failed++;
-                        }
-                    }));
+            // 🔹 Seed the commit payload with previously-uploaded bundles
+            // (the "Upload Failed Bundles" retry path). Those uploadPaths
+            // came from /uploadUrl on a prior run; we never re-upload their
+            // bytes here, we just make sure they show up in commitUpload's
+            // uploadedFiles map.
+            if (preUploadedFiles != null && preUploadedFiles.Count > 0)
+            {
+                foreach (var rec in preUploadedFiles)
+                {
+                    if (rec == null || string.IsNullOrEmpty(rec.platform) || string.IsNullOrEmpty(rec.uploadPath))
+                        continue;
+                    if (!uploadedFilesDict.ContainsKey(rec.platform))
+                        uploadedFilesDict[rec.platform] = new List<string>();
+                    uploadedFilesDict[rec.platform].Add(rec.uploadPath);
+                }
             }
 
-            // 🔹 Wait for all uploads to complete concurrently
-            await UniTask.WhenAll(uploadTasks);
+            // 🔹 Create a parallel upload task for each file, gated by a
+            // SemaphoreSlim so only MaxConcurrentUploads pipelines run at
+            // once. Without this throttle, a 600-bundle upload fires 600
+            // parallel /uploadUrl requests at the backend; that flood
+            // (each call holds 2-5 MB of working memory in Express +
+            // Firebase Admin SDK state) drives the dyno into R14 and the
+            // worker gets killed mid-request, surfacing as H18s on the
+            // router. Throttling the *whole* per-file unit (presign + PUT
+            // to GCS) keeps the server's queue depth bounded and also
+            // avoids blowing past your client uplink — past 6 concurrent
+            // PUTs you're just splitting the same pipe more ways anyway.
+            //
+            // The semaphore wraps HandleFileUpload, which internally does
+            // presign → PUT → retry-up-to-3-times. Slot stays held for the
+            // full lifetime of a file's attempt(s), then releases.
+            using (var uploadGate = new SemaphoreSlim(MaxConcurrentUploads, MaxConcurrentUploads))
+            {
+                foreach (var kvp in files)
+                {
+                    string platform = kvp.Key;
+                    UploadContentData file = kvp.Value;
+
+                    uploadTasks.Add(GatedUpload(uploadGate, contentId, platform, file,
+                        uploadedFilesDict, thisRunSucceeded, thisRunFailed));
+                }
+
+                // 🔹 Wait for all uploads to complete concurrently
+                await UniTask.WhenAll(uploadTasks);
+            }
+
+            // Counts are derived from the per-result lists rather than
+            // tracked in shared int counters — the lists are written under
+            // the same lock that gates uploadedFilesDict, so once WhenAll
+            // returns the sizes are authoritative without needing
+            // Interlocked plumbing (which doesn't work for captured locals
+            // in C# anyway).
+            uploaded = thisRunSucceeded.Count;
+            failed = thisRunFailed.Count;
 
             bool overallSuccess = failed == 0;
             string summary = $"Uploaded {uploaded}/{files.Count} files ({failed} failed)";
@@ -493,9 +574,71 @@ namespace DreamPark.API
             // a mismatched state where the next upload's diff says "nothing
             // changed" even though most bundles are missing on the server.
             // Surfacing the failure here lets the panel skip baseline save
-            // and the user simply Try Reupload to retry the whole batch.
+            // and the user simply Try Reupload to retry the whole batch (or
+            // just the failed bundles — see FailedBundleStore + the dialog
+            // on the Try Reupload button).
             if (!overallSuccess)
             {
+            #if UNITY_EDITOR && !DREAMPARKCORE
+                // Persist a record of this failed run so the Try Reupload
+                // dialog can offer "Upload Failed Bundles (X of Y)" next
+                // time. succeeded = preUploadedFiles (carried in from a
+                // prior failed run, if any) ∪ this run's successes; failed
+                // = this run's failures. Wrapped in #if UNITY_EDITOR
+                // because the store itself is editor-only (UNITY_EDITOR
+                // gate in FailedBundleStore.cs) and runtime builds have no
+                // use for the record. FailedBundleStore is in namespace
+                // DreamPark (a parent of this file's DreamPark.API),
+                // qualified explicitly here to keep the cross-namespace
+                // lookup unambiguous for anyone scanning the diff later.
+                try
+                {
+                    int totalFiles = files.Count + (preUploadedFiles?.Count ?? 0);
+                    var record = new global::DreamPark.FailedBundleRecord
+                    {
+                        contentId = contentId,
+                        failedAtUtc = DateTime.UtcNow.ToString("o"),
+                        totalFiles = totalFiles,
+                    };
+                    if (preUploadedFiles != null)
+                    {
+                        foreach (var p in preUploadedFiles)
+                        {
+                            if (p == null) continue;
+                            record.succeeded.Add(new global::DreamPark.FailedBundleEntry
+                            {
+                                platform = p.platform,
+                                fileName = p.fileName,
+                                uploadPath = p.uploadPath,
+                            });
+                        }
+                    }
+                    foreach (var s in thisRunSucceeded)
+                    {
+                        record.succeeded.Add(new global::DreamPark.FailedBundleEntry
+                        {
+                            platform = s.platform,
+                            fileName = s.fileName,
+                            uploadPath = s.uploadPath,
+                        });
+                    }
+                    foreach (var f in thisRunFailed)
+                    {
+                        record.failed.Add(new global::DreamPark.FailedBundleEntry
+                        {
+                            platform = f.platform,
+                            fileName = f.fileName,
+                            uploadPath = null,
+                        });
+                    }
+                    global::DreamPark.FailedBundleStore.Save(record);
+                }
+                catch (Exception storeEx)
+                {
+                    Debug.LogWarning($"[ContentUploader] Could not record failed-run state: {storeEx.Message}");
+                }
+            #endif
+
                 string errorMsg = $"{failed} of {files.Count} file(s) failed to upload — version not committed. Click Try Reupload to retry.";
                 Debug.LogError($"[ContentUploader] {errorMsg}");
                 callback?.Invoke(false, new DreamParkAPI.APIResponse(false, 0, errorMsg));
@@ -532,6 +675,19 @@ namespace DreamPark.API
                 (success, response) =>
                 {
                     Debug.Log(success ? "✅ Version committed!" : $"❌ Commit failed: {response.error}");
+                #if UNITY_EDITOR && !DREAMPARKCORE
+                    if (success)
+                    {
+                        // Everything for this contentId is now committed — the
+                        // failed-run record (if any) is stale and would only
+                        // confuse the Try Reupload dialog if left around.
+                        try { global::DreamPark.FailedBundleStore.Clear(contentId); }
+                        catch (Exception clearEx)
+                        {
+                            Debug.LogWarning($"[ContentUploader] Could not clear failed-run record: {clearEx.Message}");
+                        }
+                    }
+                #endif
                     callback?.Invoke(success, response);
                 });
         }
@@ -541,6 +697,61 @@ namespace DreamPark.API
         // are about absorbing transient network blips (SSL drops, DNS
         // hiccups, brief 5xx) without forcing the user to start over.
         private const int MaxFileUploadAttempts = 3;
+
+        // How many file pipelines (presign + PUT to GCS, including retries)
+        // run in parallel. Six is the sweet spot: enough to saturate a
+        // typical home/office uplink, low enough that the dev server's
+        // /uploadUrl handler doesn't pile up Express + Firebase Admin SDK
+        // state across hundreds of concurrent requests and OOM the dyno.
+        // Bump higher (12-16) once a server-side /uploadUrls plural
+        // endpoint exists that signs a batch of URLs in one round trip.
+        private const int MaxConcurrentUploads = 6;
+
+        // Per-file upload pipeline gated by a SemaphoreSlim. Only N of these
+        // run at a time across the whole upload run; the rest queue waiting
+        // for a slot. The slot is held for the *entire* HandleFileUpload
+        // duration (presign + PUT + any retries) so we throttle the actual
+        // resource we care about — concurrent server-side handler depth —
+        // not just the moment a request starts.
+        private static async UniTask GatedUpload(
+            SemaphoreSlim gate,
+            string contentId,
+            string platform,
+            UploadContentData file,
+            Dictionary<string, List<string>> uploadedFilesDict,
+            List<UploadedFileRecord> thisRunSucceeded,
+            List<UploadedFileRecord> thisRunFailed)
+        {
+            await gate.WaitAsync();
+            try
+            {
+                var result = await HandleFileUpload(contentId, platform, file);
+                if (result.success)
+                {
+                    lock (uploadedFilesDict)
+                    {
+                        if (!uploadedFilesDict.ContainsKey(platform))
+                            uploadedFilesDict[platform] = new List<string>();
+                        uploadedFilesDict[platform].Add(result.uploadPath);
+                        thisRunSucceeded.Add(new UploadedFileRecord(platform, file.fileName, result.uploadPath));
+                    }
+                }
+                else
+                {
+                    lock (uploadedFilesDict)
+                    {
+                        thisRunFailed.Add(new UploadedFileRecord(platform, file.fileName, null));
+                    }
+                }
+            }
+            finally
+            {
+                // Always release, even if HandleFileUpload threw — without
+                // this, one unexpected exception starves the rest of the
+                // queue and the upload hangs forever waiting for slots.
+                gate.Release();
+            }
+        }
 
         private static async UniTask<(bool success, string uploadPath)> HandleFileUpload(string contentId, string platform, UploadContentData file)
         {
