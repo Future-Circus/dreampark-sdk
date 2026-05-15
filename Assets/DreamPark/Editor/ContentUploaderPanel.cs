@@ -42,6 +42,16 @@ namespace DreamPark {
         // without explicitly picking a mode.
         private UploadMode pendingUploadMode = UploadMode.Patch;
 
+        // Set by BeginUploadFromPopup when the user picks "Upload Failed
+        // Bundles" on the Try Reupload dialog. Overrides pendingUploadMode
+        // and reroutes the upload through FailedBundleStore so only the
+        // bundles that failed in the previous run get re-sent, while the
+        // commitUpload payload still references the full set (previous
+        // successes + this run's successes). Cleared at the end of every
+        // upload run so a subsequent normal upload doesn't accidentally
+        // pick up the flag.
+        private bool pendingFailedOnly = false;
+
         // Main panel scroll. Persists for the lifetime of the window so scroll
         // position doesn't reset every time OnGUI runs (which is many times
         // per second). Reset would feel jumpy as the user types.
@@ -656,7 +666,38 @@ namespace DreamPark {
                 GUILayout.Height(28)))
             {
                 SaveLogoSelection();
-                ContentUploadFlowPopup.Show(this, false);
+
+                // If the previous upload for this content left a failed-run
+                // record behind, give the user the choice between re-sending
+                // only the bundles that failed last time vs. re-uploading the
+                // whole batch. No record (or no retryable failures in it)
+                // means the standard "Reupload All" path with no extra
+                // friction — same UX as before this feature existed.
+                bool useFailedOnly = false;
+                var failedRecord = !string.IsNullOrEmpty(contentId)
+                    ? FailedBundleStore.Load(contentId)
+                    : null;
+                if (failedRecord != null && failedRecord.HasRetryableFailures)
+                {
+                    // DisplayDialogComplex button slots:
+                    //   ok  → "Upload Failed Only ({failed})"  → choice 0
+                    //   cancel → "Cancel"                       → choice 1
+                    //   alt → "Reupload All ({total})"          → choice 2
+                    int choice = EditorUtility.DisplayDialogComplex(
+                        "Retry Upload",
+                        $"Last upload had {failedRecord.FailedCount} of {failedRecord.totalFiles} bundle(s) fail.\n\n" +
+                        $"• Upload Failed Only: re-send just the {failedRecord.FailedCount} failed bundle(s). " +
+                        $"The {failedRecord.SucceededCount} bundle(s) that already uploaded last time will be reused " +
+                        $"and committed alongside.\n\n" +
+                        $"• Reupload All: ignore the previous run and re-send every bundle currently in ServerData/.",
+                        $"Upload Failed Only ({failedRecord.FailedCount})",
+                        "Cancel",
+                        $"Reupload All ({failedRecord.totalFiles})");
+                    if (choice == 1) return; // Cancel — leave panel state untouched.
+                    useFailedOnly = (choice == 0);
+                }
+
+                ContentUploadFlowPopup.Show(this, false, useFailedOnly);
             }
             GUI.enabled = true;
 
@@ -672,9 +713,10 @@ namespace DreamPark {
         }
 
         // Pre Launch Options: optimization tools the creator should run
-        // before publishing. Today this hosts the Texture Optimizer;
-        // future entries (audio compression, mesh decimation, addressable
-        // tightening) belong here too.
+        // before publishing. Each tool opens its own review window — we
+        // keep this section minimal (just buttons) because every tool
+        // surfaces its own header card and description on open. Each
+        // button's tooltip carries the one-liner about what the tool does.
         private void DrawPreLaunchSection()
         {
             EditorGUILayout.HelpBox(
@@ -684,23 +726,34 @@ namespace DreamPark {
 
             GUILayout.Space(4);
 
-            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            if (GUILayout.Button(new GUIContent(
+                    "Open Texture Optimizer...",
+                    "Scan every texture in this park's content folder. Converts oversized .tga / .tif sources "
+                    + "to PNG (alpha) or JPG (opaque) and picks 256 / 512 / 1024 based on the largest prop "
+                    + "using each texture. Per-row review before any file is touched; Unity GUIDs preserved."),
+                GUILayout.Height(28)))
             {
-                EditorGUILayout.LabelField("Texture Optimizer", EditorStyles.boldLabel);
-                EditorGUILayout.LabelField(
-                    "Scan every texture in this park's content folder. Converts oversized .tga / .tif "
-                    + "sources to PNG (alpha) or JPG (opaque), and picks 256 / 512 / 1024 based on the "
-                    + "largest prop using each texture. Per-row review before any file is touched — "
-                    + "Unity GUIDs are preserved across the rename.",
-                    EditorStyles.wordWrappedMiniLabel);
+                DreamPark.EditorTools.TextureOptimization.TextureOptimizerWindow.Open();
+            }
 
-                if (GUILayout.Button(new GUIContent(
-                        "Open Texture Optimizer...",
-                        "Scan and re-encode textures under Assets/Content. Review every change before committing."),
-                    GUILayout.Height(24)))
-                {
-                    DreamPark.EditorTools.TextureOptimization.TextureOptimizerWindow.Open();
-                }
+            if (GUILayout.Button(new GUIContent(
+                    "Open Animation Optimizer...",
+                    "Scan every .anim and FBX sub-clip in this park's content folder. Routes each clip through "
+                    + "Unity's ModelImporter keyframe reducer — standalones round-trip through their source "
+                    + "FBX with GUID preservation, sub-clips compress in place."),
+                GUILayout.Height(28)))
+            {
+                DreamPark.EditorTools.AnimationOptimization.AnimationOptimizerWindow.Open();
+            }
+
+            if (GUILayout.Button(new GUIContent(
+                    "Open Bundle Size Breakdown...",
+                    "Pack this park's content into addressable bundles and inspect what's taking up space. "
+                    + "Use this to verify the texture and animation optimizers actually shrank what you "
+                    + "expected before you publish."),
+                GUILayout.Height(28)))
+            {
+                DreamPark.Diagnostics.BundleSizeBreakdown.Open();
             }
         }
 
@@ -892,6 +945,16 @@ namespace DreamPark {
 
         internal bool BeginUploadFromPopup(bool build, UploadMode mode)
         {
+            return BeginUploadFromPopup(build, mode, failedOnly: false);
+        }
+
+        // failedOnly = true comes from the "Upload Failed Bundles" choice on
+        // the Try Reupload dialog. It reroutes the upload through
+        // FailedBundleStore so only the bundles that failed last time get
+        // re-sent. The supplied UploadMode is ignored in that case — Failed
+        // Only is its own filter and stacks with neither Patch nor All.
+        internal bool BeginUploadFromPopup(bool build, UploadMode mode, bool failedOnly)
+        {
             if (isUploading)
             {
                 return false;
@@ -899,8 +962,11 @@ namespace DreamPark {
 
             // Gate at the entry point so a stale popup (e.g. user toggled
             // Smart off in the main panel while the popup was open) can't
-            // sneak through with a strategy-incompatible mode.
-            if (UploadModePrefs.RequiresSmart(mode)
+            // sneak through with a strategy-incompatible mode. Failed-Only
+            // overrides the mode entirely, so the Smart-requirement check
+            // doesn't apply to it.
+            if (!failedOnly
+                && UploadModePrefs.RequiresSmart(mode)
                 && BundlingStrategyPrefs.Current != BundlingStrategy.Smart)
             {
                 EditorUtility.DisplayDialog(
@@ -924,6 +990,7 @@ namespace DreamPark {
 
             SaveLogoSelection();
             pendingUploadMode = mode;
+            pendingFailedOnly = failedOnly;
             ResetUploadPresentationState(build);
             UploadContent(build);
             return true;
@@ -1091,16 +1158,35 @@ namespace DreamPark {
             return BundlingStrategyPrefs.Current == BundlingStrategy.Smart;
         }
 
-        private static JSONObject BuildUploaderMetadata()
+        private static JSONObject BuildUploaderMetadata(UploadMode effectiveMode)
         {
             var bundlingStrategy = BundlingStrategyPrefs.Current;
-            bool patchingEnabled = bundlingStrategy == BundlingStrategy.Smart;
+
+            // patching reflects what THIS upload actually did — anything other
+            // than Upload All shipped a partial payload (Patch, CodeOnly,
+            // PreviewsOnly). Previously we derived this from bundling strategy
+            // alone, which marked Upload-All-on-Smart-strategy releases as
+            // "patch" in the admin dashboard even though every bundle re-
+            // shipped. The bundling strategy is still recorded separately via
+            // `packer` / `bundlingStrategy`, so the "strategy was Smart but
+            // creator chose to re-upload everything" case is still
+            // recoverable from the metadata.
+            bool didPatch = effectiveMode != UploadMode.All;
 
             var uploaderMetadata = new JSONObject(JSONObject.Type.Object);
             uploaderMetadata.AddField("packer", bundlingStrategy == BundlingStrategy.Smart ? "smart" : "legacy");
             uploaderMetadata.AddField("bundlingStrategy", bundlingStrategy.ToString().ToLowerInvariant());
-            uploaderMetadata.AddField("patching", patchingEnabled ? "enabled" : "disabled");
-            uploaderMetadata.AddField("patchingEnabled", patchingEnabled);
+            uploaderMetadata.AddField("patching", didPatch ? "enabled" : "disabled");
+            uploaderMetadata.AddField("patchingEnabled", didPatch);
+            // The specific mode the creator picked for this upload. Lets the
+            // admin dashboard distinguish a full re-upload from a Patch /
+            // Code-only / Previews-only run instead of collapsing all three
+            // partial modes into one "patch" pill. The invariant lowercased
+            // enum name (`all` / `patch` / `codeonly` / `previewsonly`) is
+            // the stable key; uploadModeLabel is the human-friendly version
+            // that matches what the SDK's upload-mode picker shows.
+            uploaderMetadata.AddField("uploadMode", effectiveMode.ToString().ToLowerInvariant());
+            uploaderMetadata.AddField("uploadModeLabel", UploadModePrefs.ShortLabel(effectiveMode));
             // SDK version this release was built with. The web admin dashboard
             // surfaces this so support / ops can correlate creator issues with
             // a specific SDK release, and the backend can flag releases built
@@ -2575,10 +2661,126 @@ namespace DreamPark {
                             // baseline-driven patching wasn't validated on Legacy output.
                             BuildManifest currentManifest = null;
                             HashSet<string> skipSet = null;
+                            // Populated only on the Failed-Only retry path —
+                            // bundles that uploaded successfully in a previous
+                            // run but never reached commitUpload. Plumbed into
+                            // ContentAPI.UploadContent so commitUpload's
+                            // uploadedFiles map references the full set, not
+                            // just the bundles we re-sent this round.
+                            List<DreamPark.API.UploadedFileRecord> preUploadedFiles = null;
                             bool patchingEnabled = IsPatchUploadEnabled();
                             UploadMode effectiveMode = patchingEnabled ? pendingUploadMode : UploadMode.All;
                             bool modeWasDowngraded = effectiveMode != pendingUploadMode;
                             UploadModeFilter.Result modeResult = null;
+
+                            // Failed-Only short-circuit: the user clicked
+                            // "Upload Failed Bundles" on the Try Reupload
+                            // dialog. Build a skip-set that excludes only the
+                            // bundles that failed last time, and seed the
+                            // commit payload with the previous run's successes.
+                            // The Failed-Only filter takes precedence over the
+                            // UploadMode picker (Patch/All/Code/Previews) —
+                            // mixing them doesn't have well-defined semantics.
+                            if (pendingFailedOnly)
+                            {
+                                try
+                                {
+                                    var manifestPlatformsFO = GetEnabledPlatformsForManifest();
+                                    currentManifest = BuildManifestStore.BuildFromServerData(contentId, versionNumber, manifestPlatformsFO);
+
+                                    var failedRecord = FailedBundleStore.Load(contentId);
+                                    if (failedRecord == null || !failedRecord.HasRetryableFailures)
+                                    {
+                                        // The dialog gated on Load() returning a
+                                        // retryable record, so this is the "the
+                                        // store got cleared between dialog and
+                                        // upload" race. Fall back to Reupload
+                                        // All by leaving skipSet null and
+                                        // logging an explanation.
+                                        Debug.LogWarning("[ContentUploader] Failed-Only requested but no failed-run record exists — falling back to Reupload All.");
+                                        pendingFailedOnly = false;
+                                    }
+                                    else
+                                    {
+                                        // Build the set of "{platform}/{fileName}"
+                                        // keys currently in ServerData so we can
+                                        // intersect with the persisted failed
+                                        // keys. A failed bundle that no longer
+                                        // exists on disk (e.g. the user
+                                        // rebuilt with different content) is
+                                        // silently dropped — there's nothing
+                                        // to retry.
+                                        var currentKeys = new HashSet<string>(System.StringComparer.Ordinal);
+                                        foreach (var p in currentManifest.platforms)
+                                        {
+                                            foreach (var f in p.files)
+                                                currentKeys.Add($"{p.platform}/{f.fileName}");
+                                        }
+
+                                        var failedKeys = FailedBundleStore.FailedKeys(failedRecord);
+                                        var failedKeysInBuild = new HashSet<string>(System.StringComparer.Ordinal);
+                                        foreach (var k in failedKeys)
+                                            if (currentKeys.Contains(k)) failedKeysInBuild.Add(k);
+
+                                        if (failedKeysInBuild.Count == 0)
+                                        {
+                                            EditorUtility.ClearProgressBar();
+                                            string msg = "The failed bundles from the previous run are no longer in this build — none of them matched a file currently in ServerData/. Use Reupload All to re-send everything.";
+                                            Debug.LogWarning($"[ContentUploader] {msg}");
+                                            EditorUtility.DisplayDialog("Nothing failed to retry", msg, "OK");
+                                            CompleteUploadStatus(false, msg);
+                                            isUploading = false;
+                                            pendingFailedOnly = false;
+                                            return;
+                                        }
+
+                                        skipSet = FailedBundleStore.BuildSkipSetForFailedOnly(currentKeys, failedKeysInBuild);
+
+                                        // Filter the persisted succeeded list
+                                        // to only entries whose file is still
+                                        // in the current build — a stale
+                                        // uploadPath would commit a reference
+                                        // to a bundle that's no longer part
+                                        // of this version.
+                                        preUploadedFiles = new List<DreamPark.API.UploadedFileRecord>();
+                                        foreach (var s in failedRecord.succeeded)
+                                        {
+                                            if (s == null || string.IsNullOrEmpty(s.platform) || string.IsNullOrEmpty(s.fileName) || string.IsNullOrEmpty(s.uploadPath))
+                                                continue;
+                                            string key = $"{s.platform}/{s.fileName}";
+                                            if (!currentKeys.Contains(key)) continue;
+                                            preUploadedFiles.Add(new DreamPark.API.UploadedFileRecord(s.platform, s.fileName, s.uploadPath));
+                                        }
+
+                                        // Snapshot baseline / diff fields for
+                                        // the panel UI without affecting the
+                                        // upload logic — keeps the visual
+                                        // state in sync with what's about to
+                                        // happen.
+                                        patchBaseline = patchingEnabled ? BuildManifestStore.LoadBaseline(contentId) : null;
+                                        patchCurrentSnapshot = currentManifest;
+                                        patchDiff = BuildManifestStore.Diff(patchBaseline, currentManifest);
+                                        dirtyGroupsEstimate = null;
+
+                                        Debug.Log(
+                                            $"📦 Failed-Only retry: re-sending {failedKeysInBuild.Count} bundle(s) that failed last run · " +
+                                            $"replaying {preUploadedFiles.Count} previously-uploaded path(s) in commitUpload · " +
+                                            $"{currentKeys.Count - failedKeysInBuild.Count} file(s) intentionally skipped.");
+                                        Repaint();
+                                    }
+                                }
+                                catch (Exception failedOnlyEx)
+                                {
+                                    Debug.LogWarning($"[ContentUploader] Failed-Only setup failed; falling back to Reupload All: {failedOnlyEx.Message}");
+                                    skipSet = null;
+                                    preUploadedFiles = null;
+                                    currentManifest = null;
+                                    pendingFailedOnly = false;
+                                }
+                            }
+
+                            if (!pendingFailedOnly)
+                            {
                             try
                             {
                                 var manifestPlatforms = GetEnabledPlatformsForManifest();
@@ -2688,6 +2890,7 @@ namespace DreamPark {
                                 currentManifest = null;
                                 modeResult = null;
                             }
+                            } // end !pendingFailedOnly
 
                             // Build the compact manifest summary that rides along on commitUpload —
                             // gives dreampark-core's content manager UI both "full content size"
@@ -2716,7 +2919,7 @@ namespace DreamPark {
                                     manifestSummary = new JSONObject(JSONObject.Type.Object);
                                 }
 
-                                manifestSummary.AddField("uploader", BuildUploaderMetadata());
+                                manifestSummary.AddField("uploader", BuildUploaderMetadata(effectiveMode));
                             }
                             catch (Exception uploaderMetadataEx)
                             {
@@ -2742,7 +2945,14 @@ namespace DreamPark {
                             // a divergent baseline (e.g. partial upload failure
                             // in an older SDK that incorrectly saved the
                             // baseline).
-                            bool everythingSkipped = patchingEnabled
+                            // Failed-Only uploads can legitimately have a skipSet
+                            // that covers most-or-all of currentManifest — that's
+                            // the whole point of "only re-send what failed." The
+                            // zero-change short-circuit and its "Force full
+                            // reupload" prompt are only meaningful for the Patch
+                            // path, so gate this check on !pendingFailedOnly.
+                            bool everythingSkipped = !pendingFailedOnly
+                                && patchingEnabled
                                 && currentManifest != null
                                 && skipSet != null
                                 && currentManifest.TotalFileCount > 0
@@ -2772,7 +2982,7 @@ namespace DreamPark {
                                 "Uploading release",
                                 "Sending changed files to DreamPark. Live file progress will appear below.",
                                 1f);
-                            ContentAPI.UploadContent(contentId, releaseNotes, lastSchemaVersion, skipSet, manifestSummary, (success, apiResponse) =>
+                            ContentAPI.UploadContent(contentId, releaseNotes, lastSchemaVersion, skipSet, manifestSummary, preUploadedFiles, (success, apiResponse) =>
                             {
                                 if (success)
                                 {
@@ -2825,6 +3035,14 @@ namespace DreamPark {
                                     CompleteUploadStatus(false, $"Upload failed: {apiResponse.error}");
                                     EditorUtility.DisplayDialog("Error", $"Upload failed: {apiResponse.error}", "OK");
                                 }
+                                // Reset the Failed-Only flag at the end of every
+                                // run so a subsequent normal upload (Compile &
+                                // Upload, or a Try Reupload with no failed-run
+                                // record) doesn't accidentally pick up the
+                                // retry-only scope. BeginUploadFromPopup re-
+                                // initializes this on every call too, so this
+                                // is belt-and-suspenders.
+                                pendingFailedOnly = false;
                                 isUploading = false;
                             });
                         }
@@ -2836,6 +3054,7 @@ namespace DreamPark {
                             Debug.LogError("❌ Addressable build failed: " + e);
                             CompleteUploadStatus(false, $"Release failed: {e.Message}");
                             EditorUtility.DisplayDialog("Error", $"Error: {e.Message}", "OK");
+                            pendingFailedOnly = false;
                             isUploading = false;
                         }
                     };
