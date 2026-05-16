@@ -29,7 +29,13 @@ namespace DreamPark.EditorTools.MaterialConversion
     /// </summary>
     public class MaterialConverterWindow : EditorWindow
     {
-        [MenuItem("DreamPark/Material Converter...", false, 119)]
+        // Lives under DreamPark/Optimization/ alongside the Texture, Audio,
+        // and Animation optimizers. The menu label says "Material Optimizer"
+        // because that's the user-visible category these tools belong to,
+        // even though the static API and the window title still say
+        // "Material Converter" (the function this tool actually performs —
+        // converting vendor materials to DreamPark shaders).
+        [MenuItem("DreamPark/Optimization/Material Optimizer...", false, 119)]
         public static void Open()
         {
             var w = GetWindow<MaterialConverterWindow>("Material Converter");

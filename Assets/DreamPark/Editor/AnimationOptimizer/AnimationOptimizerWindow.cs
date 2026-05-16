@@ -27,7 +27,9 @@ namespace DreamPark.EditorTools.AnimationOptimization
     /// </summary>
     public class AnimationOptimizerWindow : EditorWindow
     {
-        [MenuItem("DreamPark/Animation Optimizer...", false, 121)]
+        // Sits under DreamPark/Optimization/ alongside Texture (120) and
+        // Audio (122) optimizers.
+        [MenuItem("DreamPark/Optimization/Animation Optimizer...", false, 121)]
         public static void Open()
         {
             var w = GetWindow<AnimationOptimizerWindow>("Animation Optimizer");

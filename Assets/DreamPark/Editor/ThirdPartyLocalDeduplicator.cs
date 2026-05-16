@@ -84,7 +84,11 @@ namespace DreamPark.Editor
         private bool showOrphans = false;
         private bool dryRun = true;
 
-        [MenuItem("DreamPark/Deduplicate ThirdPartyLocal", false, 106)]
+        // Sits under DreamPark/Troubleshooting/ — it's a recovery tool for
+        // an asset-import edge case, not part of the normal authoring flow.
+        // Priority 208 lands at the bottom of the existing Troubleshooting
+        // group (200–207 are ContentProcessor's recovery utilities).
+        [MenuItem("DreamPark/Troubleshooting/Deduplicate ThirdPartyLocal", false, 208)]
         public static void ShowWindow()
         {
             var w = GetWindow<ThirdPartyLocalDeduplicator>("Local Dedup");

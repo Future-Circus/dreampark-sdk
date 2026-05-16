@@ -31,9 +31,9 @@ namespace DreamPark.EditorTools.AudioOptimization
     {
         // ─── Menu ────────────────────────────────────────────────────────
         // Priority 122 lines up with the other optimizers: Texture at 120,
-        // Animation at 121, Audio at 122. Same top-level slot keeps them
-        // visually grouped.
-        [MenuItem("DreamPark/Audio Optimizer...", false, 122)]
+        // Animation at 121, Audio at 122. All three live under
+        // DreamPark/Optimization/ so they're visually grouped.
+        [MenuItem("DreamPark/Optimization/Audio Optimizer...", false, 122)]
         public static void Open()
         {
             var w = GetWindow<AudioOptimizerWindow>("Audio Optimizer");

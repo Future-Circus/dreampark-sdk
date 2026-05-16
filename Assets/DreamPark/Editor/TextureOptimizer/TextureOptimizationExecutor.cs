@@ -183,38 +183,66 @@ namespace DreamPark.EditorTools.TextureOptimization
                 // encoder throws halfway, the original file is still
                 // intact.
                 //
-                // Strategy: try Magick.NET first (faster, Lanczos resize,
-                // direct file access). If it throws — usually because a
-                // vendor TGA/TIF has a non-standard layout Magick.NET's
-                // reader refuses — fall back to UnityImageProcessor,
-                // which goes through AssetDatabase and Unity's more
-                // permissive TextureImporter. Slower but handles the
-                // weird edge cases.
-                try
+                // Routing:
+                //   (a) TIFFs with ExtraSamples=unspecified → Unity path
+                //       directly. ImageMagick's TIFF reader interprets the
+                //       4th channel as matte (transparency) and inverts on
+                //       PNG write — even with the Negate(Channels.Alpha)
+                //       workaround in MagickNetBootstrap. Unity's
+                //       TextureImporter reads these files correctly (proven
+                //       by "alpha works in-game" on the imported texture),
+                //       so we use its EncodeToPNG() and bypass Magick.NET's
+                //       interpretation entirely.
+                //   (b) Everything else → Magick.NET first (faster, Lanczos
+                //       resize, direct file access). If it throws — usually
+                //       a vendor TGA/TIF with a non-standard layout
+                //       Magick.NET's reader refuses — fall back to
+                //       UnityImageProcessor (slower but more permissive).
+                bool routeToUnityFirst =
+                    row.targetFormat == TargetFormat.PNG
+                    && MagickNetBootstrap.IsTiffExtraSamplesUnspecified(srcAbs);
+
+                if (routeToUnityFirst)
                 {
-                    MagickNetBootstrap.ReEncode(
-                        srcAbs,
+                    Debug.Log(
+                        $"[TextureOptimizer] {row.usage.assetPath}: routing through Unity's "
+                        + "encoder (TIFF has ExtraSamples=unspecified — Magick.NET's interpretation "
+                        + "would invert the alpha channel).");
+                    UnityImageProcessor.ReEncode(
+                        srcAssetPath,
                         tempAbs,
                         row.targetFormat,
                         row.targetMaxSize,
                         TextureOptimizationPlanner.JpgQuality);
                 }
-                catch (Exception magickError)
+                else
                 {
-                    Debug.LogWarning(
-                        $"[TextureOptimizer] {row.usage.assetPath}: Magick.NET rejected this file " +
-                        $"({magickError.GetType().Name}: {magickError.Message}). " +
-                        "Falling back to Unity's built-in encoder.");
-                    // Clean any half-written temp from the failed Magick
-                    // attempt before retrying.
-                    try { if (File.Exists(tempAbs)) File.Delete(tempAbs); } catch { /* ignore */ }
+                    try
+                    {
+                        MagickNetBootstrap.ReEncode(
+                            srcAbs,
+                            tempAbs,
+                            row.targetFormat,
+                            row.targetMaxSize,
+                            TextureOptimizationPlanner.JpgQuality);
+                    }
+                    catch (Exception magickError)
+                    {
+                        Debug.LogWarning(
+                            $"[TextureOptimizer] {row.usage.assetPath}: Magick.NET rejected this file " +
+                            $"({magickError.GetType().Name}: {magickError.Message}). " +
+                            "Falling back to Unity's built-in encoder.");
+                        // Clean any half-written temp from the failed Magick
+                        // attempt before retrying.
+                        try { if (File.Exists(tempAbs)) File.Delete(tempAbs); } catch { /* ignore */ }
 
-                    UnityImageProcessor.ReEncode(
-                        srcAssetPath,           // Unity path needs the Assets-relative form
-                        tempAbs,
-                        row.targetFormat,
-                        row.targetMaxSize,
-                        TextureOptimizationPlanner.JpgQuality);
+                        UnityImageProcessor.ReEncode(
+                            srcAssetPath,           // Unity path needs the Assets-relative form
+                            tempAbs,
+                            row.targetFormat,
+                            row.targetMaxSize,
+                            TextureOptimizationPlanner.JpgQuality);
+                    }
                 }
 
                 long afterBytes = new FileInfo(tempAbs).Length;

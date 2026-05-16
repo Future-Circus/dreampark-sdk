@@ -726,43 +726,71 @@ namespace DreamPark {
 
             GUILayout.Space(4);
 
-            if (GUILayout.Button(new GUIContent(
+            // Helper: build a 28px-tall button with a Unity built-in icon
+            // (asset-type icon matching the tool's domain). The icons make
+            // the optimizer suite read as a first-class, official part of
+            // the SDK — same visual weight as Unity's own toolbars.
+            //
+            // EditorGUIUtility.IconContent auto-picks the right theme
+            // variant (light / dark), so we just pass the canonical name.
+            // Asset-type icons like "Material Icon", "Texture Icon",
+            // "AudioClip Icon" have been stable across every Unity 2019+
+            // release.
+            bool ToolButton(string label, string iconName, string tooltip)
+            {
+                var iconContent = EditorGUIUtility.IconContent(iconName);
+                var content = new GUIContent(" " + label, iconContent?.image, tooltip);
+                return GUILayout.Button(content, GUILayout.Height(28));
+            }
+
+            if (ToolButton(
                     "Open Material Converter...",
+                    "Material Icon",
                     "Scan every material in this park's content folder. Flips Standard / URP / vendor "
                     + "shaders to DreamPark-Universal (lit), DreamPark-Unlit (flat), or DreamPark/Particles. "
                     + "Per-row review before any material is touched; GUIDs preserved so prefab "
-                    + "references stay intact. Cuts shader-variant duplication across bundles."),
-                GUILayout.Height(28)))
+                    + "references stay intact. Cuts shader-variant duplication across bundles."))
             {
                 DreamPark.EditorTools.MaterialConversion.MaterialConverterWindow.Open();
             }
 
-            if (GUILayout.Button(new GUIContent(
+            if (ToolButton(
                     "Open Texture Optimizer...",
+                    "Texture Icon",
                     "Scan every texture in this park's content folder. Converts oversized .tga / .tif sources "
                     + "to PNG (alpha) or JPG (opaque) and picks 256 / 512 / 1024 based on the largest prop "
-                    + "using each texture. Per-row review before any file is touched; Unity GUIDs preserved."),
-                GUILayout.Height(28)))
+                    + "using each texture. Per-row review before any file is touched; Unity GUIDs preserved."))
             {
                 DreamPark.EditorTools.TextureOptimization.TextureOptimizerWindow.Open();
             }
 
-            if (GUILayout.Button(new GUIContent(
+            if (ToolButton(
                     "Open Animation Optimizer...",
+                    "AnimationClip Icon",
                     "Scan every .anim and FBX sub-clip in this park's content folder. Routes each clip through "
                     + "Unity's ModelImporter keyframe reducer — standalones round-trip through their source "
-                    + "FBX with GUID preservation, sub-clips compress in place."),
-                GUILayout.Height(28)))
+                    + "FBX with GUID preservation, sub-clips compress in place."))
             {
                 DreamPark.EditorTools.AnimationOptimization.AnimationOptimizerWindow.Open();
             }
 
-            if (GUILayout.Button(new GUIContent(
+            if (ToolButton(
+                    "Open Audio Optimizer...",
+                    "AudioClip Icon",
+                    "Scan every AudioClip in this park's content folder. Re-encodes oversized WAVs as "
+                    + "Vorbis or ADPCM (matched to clip duration and use case), down-mixes to mono where "
+                    + "appropriate, and resamples to 22 kHz / 44 kHz based on the clip's role. Per-row "
+                    + "review before any file is re-encoded; GUIDs preserved."))
+            {
+                DreamPark.EditorTools.AudioOptimization.AudioOptimizerWindow.Open();
+            }
+
+            if (ToolButton(
                     "Open Bundle Size Breakdown...",
+                    "Package Manager",
                     "Pack this park's content into addressable bundles and inspect what's taking up space. "
-                    + "Use this to verify the texture and animation optimizers actually shrank what you "
-                    + "expected before you publish."),
-                GUILayout.Height(28)))
+                    + "Use this to verify the texture, audio, and animation optimizers actually shrank what "
+                    + "you expected before you publish."))
             {
                 DreamPark.Diagnostics.BundleSizeBreakdown.Open();
             }
