@@ -727,6 +727,17 @@ namespace DreamPark {
             GUILayout.Space(4);
 
             if (GUILayout.Button(new GUIContent(
+                    "Open Material Converter...",
+                    "Scan every material in this park's content folder. Flips Standard / URP / vendor "
+                    + "shaders to DreamPark-Universal (lit), DreamPark-Unlit (flat), or DreamPark/Particles. "
+                    + "Per-row review before any material is touched; GUIDs preserved so prefab "
+                    + "references stay intact. Cuts shader-variant duplication across bundles."),
+                GUILayout.Height(28)))
+            {
+                DreamPark.EditorTools.MaterialConversion.MaterialConverterWindow.Open();
+            }
+
+            if (GUILayout.Button(new GUIContent(
                     "Open Texture Optimizer...",
                     "Scan every texture in this park's content folder. Converts oversized .tga / .tif sources "
                     + "to PNG (alpha) or JPG (opaque) and picks 256 / 512 / 1024 based on the largest prop "
