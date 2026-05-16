@@ -29,11 +29,10 @@ namespace DreamPark.EditorTools.TextureOptimization
     public class TextureOptimizerWindow : EditorWindow
     {
         // ─── Menu ────────────────────────────────────────────────────────
-        // Priority 120 puts this between top-level utilities (1-50) and
-        // Troubleshooting (200+). Texture optimization is both a
-        // diagnostic and a mutator, so it lives in its own top-level slot
-        // rather than nested under Diagnostics/.
-        [MenuItem("DreamPark/Texture Optimizer...", false, 120)]
+        // Lives under DreamPark/Optimization/ alongside the audio and
+        // animation optimizers — same category of "size-reducing batch
+        // processor with a review window".
+        [MenuItem("DreamPark/Optimization/Texture Optimizer...", false, 120)]
         public static void Open()
         {
             var w = GetWindow<TextureOptimizerWindow>("Texture Optimizer");

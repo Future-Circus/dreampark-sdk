@@ -31,6 +31,15 @@ namespace DreamPark.EditorTools
         const string DreamParkShaderName = "Shader Graphs/DreamPark-UniversalShader";
         const string FallbackShaderPath = "Assets/DreamPark/Shaders/DreamPark-UniversalShader.shadergraph";
 
+        // Unlit variant — used by the MaterialConverter Tool window for materials
+        // whose source shader is obviously flat-shaded (URP/Unlit, Mobile/Diffuse,
+        // toon shaders, UI/sprite materials). Same property naming convention as
+        // DreamPark-UniversalShader (`_baseTex`, `_baseColor`, `_emissionTex`,
+        // `_emissionStrength`) so the same mapping tables work; we just skip the
+        // PBR-specific property writes (metallic, roughness, AO, normal).
+        const string DreamParkUnlitShaderName = "Shader Graphs/DreamPark-Unlit";
+        const string DreamParkUnlitFallbackPath = "Assets/DreamPark/Shaders/DreamPark-Unlit.shadergraph";
+
         // ─── Property name mappings ──────────────────────────────────────────
         // For each DreamPark-UniversalShader property, we list every common
         // alias used in Standard, URP/Lit, HDRP/Lit, Built-in, and the messy
@@ -247,6 +256,85 @@ namespace DreamPark.EditorTools
 
             EditorUtility.SetDirty(src);
             Debug.Log($"[MaterialConverter] ✓ '{src.name}' converted from '{srcShaderName}' → DreamPark-UniversalShader (textures: {texHits})");
+            return true;
+        }
+
+        /// <summary>
+        /// Convert a material to DreamPark-Unlit in place. Same property-mapping
+        /// approach as ConvertMaterial but only writes the subset that exists on
+        /// the unlit shader (base color, base texture, emission color/texture,
+        /// emission strength). Source PBR data (metallic, roughness, AO, normal)
+        /// is captured for the log but not written.
+        ///
+        /// Use when the source material is clearly flat-shaded — vendor UI
+        /// shaders, toon/diffuse-only shaders, sprite materials, skybox/decal
+        /// shaders. The right-click converter doesn't auto-route here (it always
+        /// targets DreamPark-UniversalShader for opaque materials); the
+        /// Material Converter window's planner is the canonical caller.
+        /// </summary>
+        public static bool ConvertMaterialToUnlit(Material src)
+        {
+            if (src == null) return false;
+            if (src.shader != null && src.shader.name == DreamParkUnlitShaderName) return false;
+
+            // Particles never route to Unlit — they have their own pipeline.
+            if (IsParticleMaterial(src))
+            {
+                Debug.LogWarning($"[MaterialConverter] '{src.name}' is a particle material — use ConvertParticleMaterial instead.");
+                return false;
+            }
+
+            Shader dpUnlit = Shader.Find(DreamParkUnlitShaderName);
+            if (dpUnlit == null)
+                dpUnlit = AssetDatabase.LoadAssetAtPath<Shader>(DreamParkUnlitFallbackPath);
+            if (dpUnlit == null)
+            {
+                Debug.LogError($"[MaterialConverter] DreamPark-Unlit shader not found at '{DreamParkUnlitShaderName}' or '{DreamParkUnlitFallbackPath}'");
+                return false;
+            }
+
+            string srcShaderName = src.shader != null ? src.shader.name : "(none)";
+
+            // Capture everything before the shader swap (Unity drops unmapped props).
+            var capturedTextures = new Dictionary<string, Texture>();
+            var capturedColors   = new Dictionary<string, Color>();
+            var capturedFloats   = new Dictionary<string, float>();
+            CaptureAllProperties(src, capturedTextures, capturedColors, capturedFloats);
+
+            src.shader = dpUnlit;
+
+            // Base albedo / color texture — same alias list as the lit path.
+            if (src.HasProperty("_baseTex"))
+            {
+                Texture baseTex = ResolveTexture(capturedTextures, TextureMap["_baseTex"]);
+                if (baseTex != null) src.SetTexture("_baseTex", baseTex);
+            }
+
+            // Tint / base color.
+            if (src.HasProperty("_baseColor")
+                && TryResolveColor(capturedColors, ColorMap["_baseColor"], out Color tint))
+            {
+                src.SetColor("_baseColor", tint);
+            }
+
+            // Emission texture + strength, when the unlit shader supports them.
+            // Most unlit materials don't write emission separately (the base color
+            // IS the emission for unlit), but we copy the data through anyway in
+            // case the shader graph exposes both.
+            if (src.HasProperty("_emissionTex"))
+            {
+                Texture emTex = ResolveTexture(capturedTextures, TextureMap["_emissionTex"]);
+                if (emTex != null) src.SetTexture("_emissionTex", emTex);
+            }
+            if (src.HasProperty("_emissionStrength")
+                && TryResolveColor(capturedColors, new[] { "_EmissionColor", "_EmissiveColor", "_GlowColor" }, out Color emCol))
+            {
+                float lum = emCol.maxColorComponent;
+                if (lum > 0f) src.SetFloat("_emissionStrength", lum);
+            }
+
+            EditorUtility.SetDirty(src);
+            Debug.Log($"[MaterialConverter] ✓ '{src.name}' converted from '{srcShaderName}' → DreamPark-Unlit");
             return true;
         }
 
@@ -495,24 +583,31 @@ namespace DreamPark.EditorTools
         const string DreamParkParticleShaderName = "DreamPark/Particles";
 
         // Source-shader feature flags we DON'T translate — materials with any of
-        // these keywords get left on their original shader. Updated 2026-05-01
-        // after v2 of the unified shader added dissolve + distortion support.
-        // Now covers ~98% of materials surveyed.
-        static readonly string[] ExoticParticleKeywords = new[]
-        {
-            "_FLIPBOOK_BLENDING",     // smooth flipbook frame interp — needs ParticleSystem
-                                       // Custom Vertex Streams; shader-side is easy but each
-                                       // PS has to be configured to feed UV0 + UV2 + blend.
-                                       // ~rare in our packs, defer to v3.
-            // _CFXR_DISSOLVE         → supported in v2 (mapped to _DISSOLVE_ON)
-            // _CFXR_UV_DISTORTION    → supported in v2 (mapped to _DISTORTION_ON)
-            // _CFXR_DITHERED_SHADOWS → no-op in our pipeline (DreamPark particles
-            //                          are unlit and don't cast shadows in MR), so
-            //                          materials with this keyword convert fine —
-            //                          the keyword just goes nowhere in our shader.
-            // _REQUIRE_UV2           → harmless; particle systems already feed UV2
-            //                          when present.
-        };
+        // these keywords get left on their original shader.
+        //
+        // History (what used to live here, all promoted out):
+        //   _FLIPBOOK_BLENDING     → now Approximated. The post-convert
+        //                             pass in MaterialConverterExecutor
+        //                             auto-enables Unity's TextureSheetAnimation
+        //                             module so the flipbook plays
+        //                             frame-by-frame (not motion-vector
+        //                             smooth, but it plays). Diff marks
+        //                             _MotionVector / _FLIPBOOKBLENDING_ON
+        //                             as Approximated severity.
+        //   _CFXR_DISSOLVE         → supported (mapped to _DISSOLVE_ON)
+        //   _CFXR_UV_DISTORTION    → supported (mapped to _DISTORTION_ON)
+        //   _CFXR_DITHERED_SHADOWS → no-op in our pipeline (DreamPark particles
+        //                             are unlit and don't cast shadows in MR),
+        //                             so materials with this keyword convert
+        //                             fine — the keyword just goes nowhere in
+        //                             our shader.
+        //   _REQUIRE_UV2           → harmless; particle systems already feed
+        //                             UV2 when present.
+        //
+        // The list is currently empty. Kept as a hook for future genuinely-
+        // exotic features that we can't approximate (e.g. screen-space
+        // refraction, gradient remapping LUTs, full PBR particles).
+        static readonly string[] ExoticParticleKeywords = System.Array.Empty<string>();
 
         [Serializable]
         public struct ParticleConvertSummary
@@ -559,7 +654,16 @@ namespace DreamPark.EditorTools
         {
             if (src == null) return false;
             if (src.shader != null && src.shader.name == DreamParkParticleShaderName) return false;
-            if (!IsParticleMaterial(src)) return false;
+            // NOTE: we deliberately do NOT gate on IsParticleMaterial(src) here.
+            // The planner is the authoritative classifier — it can promote a
+            // material to ConvertParticle either because the source shader's
+            // name matches a particle naming convention OR because the
+            // material is attached to a ParticleSystemRenderer in some
+            // prefab (the latter catches vendor packs like Hovl Studio's
+            // HS_Explosion whose shader names don't include "particle").
+            // Trust the caller. Direct API callers (right-click handler,
+            // batch entry points) do their own IsParticleMaterial gating
+            // before invoking this method.
             if (HasExoticParticleFeature(src))
             {
                 Debug.Log($"[MaterialConverter] Keeping exotic particle '{src.name}' on '{src.shader.name}' " +
@@ -579,28 +683,90 @@ namespace DreamPark.EditorTools
             // Snapshot the properties we care about BEFORE we change the shader,
             // because Material.shader = newShader resets all props to defaults.
             var src_baseMap   = TryGetTextureFromAliases(src,
-                "_BaseMap", "_MainTex", "_BaseTexture", "_TexBase", "_MainTexture");
+                "_BaseMap", "_MainTex", "_BaseTexture", "_TexBase", "_MainTexture",
+                // Standard / vendor renames for the same albedo texture.
+                "_Albedo", "_AlbedoMap", "_AlbedoTex",
+                "_Diffuse", "_DiffuseMap", "_DiffuseTex",
+                "_BaseColorMap", "_ColorMap", "_Tex");
             var src_baseScale = src_baseMap != null
                 ? src.GetTextureScale(GetFirstSetTexture(src,
-                    "_BaseMap", "_MainTex", "_BaseTexture", "_TexBase", "_MainTexture") ?? "_MainTex")
+                    "_BaseMap", "_MainTex", "_BaseTexture", "_TexBase", "_MainTexture",
+                    "_Albedo", "_AlbedoMap", "_AlbedoTex",
+                    "_Diffuse", "_DiffuseMap", "_DiffuseTex",
+                    "_BaseColorMap", "_ColorMap", "_Tex") ?? "_MainTex")
                 : Vector2.one;
             var src_baseOffset = src_baseMap != null
                 ? src.GetTextureOffset(GetFirstSetTexture(src,
-                    "_BaseMap", "_MainTex", "_BaseTexture", "_TexBase", "_MainTexture") ?? "_MainTex")
+                    "_BaseMap", "_MainTex", "_BaseTexture", "_TexBase", "_MainTexture",
+                    "_Albedo", "_AlbedoMap", "_AlbedoTex",
+                    "_Diffuse", "_DiffuseMap", "_DiffuseTex",
+                    "_BaseColorMap", "_ColorMap", "_Tex") ?? "_MainTex")
                 : Vector2.zero;
 
             Color src_tint = TryGetColorFromAliases(src,
-                "_Color", "_BaseColor", "_TintColor", "_MainColor", "_AlbedoColor", "_DiffuseColor")
+                "_Color", "_BaseColor", "_TintColor", "_MainColor", "_AlbedoColor", "_DiffuseColor",
+                // Underscore-separated variants used by Hovl Studio + some stylized packs.
+                "_Albedo_Color", "_Tint", "_BaseColor_Color")
                 ?? Color.white;
+
+            // Emission: capture color, texture, strength, and any flavor
+            // of "is emission on" signal. The target shader's _EMISSION_ON
+            // keyword gets enabled when ANY of these is present, so a
+            // material that the vendor shader was illuminating from
+            // _EmissionMap or via _EMISSION keyword carries that intent
+            // through even if the color is at default.
             Color src_emission = TryGetColorFromAliases(src,
-                "_EmissionColor", "_EmissiveColor", "_HdrColor") ?? Color.black;
+                "_EmissionColor", "_EmissiveColor", "_HdrColor",
+                // Lowercase / underscore variants (Hovl uses _Emission_color),
+                // plus glow/selfillum naming.
+                "_Emission_color", "_Emission_Color", "_Glow", "_GlowColor", "_SelfIllumColor") ?? Color.black;
+            Texture src_emissionMap = TryGetTextureFromAliases(src,
+                "_EmissionMap", "_EmissiveMap", "_EmissionTex", "_EmissiveTex",
+                "_GlowMap", "_GlowTex", "_SelfIllumMap",
+                "_emissive");
+            Vector2 src_emissionMapScale = src_emissionMap != null
+                ? src.GetTextureScale(GetFirstSetTexture(src,
+                    "_EmissionMap", "_EmissiveMap", "_EmissionTex", "_EmissiveTex",
+                    "_GlowMap", "_GlowTex", "_SelfIllumMap", "_emissive") ?? "_EmissionMap")
+                : Vector2.one;
+            Vector2 src_emissionMapOffset = src_emissionMap != null
+                ? src.GetTextureOffset(GetFirstSetTexture(src,
+                    "_EmissionMap", "_EmissiveMap", "_EmissionTex", "_EmissiveTex",
+                    "_GlowMap", "_GlowTex", "_SelfIllumMap", "_emissive") ?? "_EmissionMap")
+                : Vector2.zero;
+            float src_emissionStrength = TryGetFloatFromAliases(src,
+                "_EmissionStrength", "_EmissionIntensity", "_EmissionScale",
+                "_EmissionMultiplier", "_EmissionValue", "_EmissionPower",
+                "_GlowIntensity", "_GlowStrength", "_GlowPower",
+                "_SelfIllumStrength", "_SelfIlluminationStrength")
+                ?? 1.0f;
+            bool src_emissionKeywordOn = src.IsKeywordEnabled("_EMISSION")
+                                      || src.IsKeywordEnabled("_EMISSION_ON")
+                                      || src.IsKeywordEnabled("_EMISSIVE_ON")
+                                      || src.IsKeywordEnabled("_GLOW_ON")
+                                      || src.IsKeywordEnabled("_SELFILLUM_ON")
+                                      // Float toggle conventions used by Hovl Studio and
+                                      // some Shader Graph particle shaders.
+                                      || (src.HasProperty("_UseEmission")
+                                          && src.GetFloat("_UseEmission") > 0.5f)
+                                      || (src.HasProperty("_UseGlow")
+                                          && src.GetFloat("_UseGlow") > 0.5f);
+
             float src_cutoff = src.HasProperty("_Cutoff") ? src.GetFloat("_Cutoff") : 0.5f;
             float src_hdrBoost = TryGetFloatFromAliases(src,
-                "_HdrBoost", "_HdrMultiply", "_EmissionMultiplier") ?? 1.0f;
+                "_HdrBoost", "_HdrMultiply") ?? 1.0f;
 
             // Vertex color mode: read source _ColorMode (0=Multiply, 1=Add, 2=Subtract,
             // 3=Overlay, 4=Color, 5=Difference). Most legacy particles use 0 (Multiply).
             int src_colorMode = src.HasProperty("_ColorMode") ? Mathf.RoundToInt(src.GetFloat("_ColorMode")) : 0;
+
+            // Legacy Particles/Additive shaders use a single _InvFade scalar
+            // as the soft-particle hint: a non-zero value implies the
+            // feature is intended. The numeric value is the inverse of the
+            // fade distance in the legacy math. Declared up here (not down
+            // by src_softOn) because the src_softFar derivation directly
+            // below also needs to read it.
+            float src_invFade = src.HasProperty("_InvFade") ? src.GetFloat("_InvFade") : 0f;
 
             // Soft particles: legacy shaders set _SoftParticlesNearFadeDistance/_FarFadeDistance
             // via vector properties or scalars. Try both forms.
@@ -610,37 +776,329 @@ namespace DreamPark.EditorTools
             float src_softFar  = TryGetFloatFromAliases(src,
                 "_SoftParticlesFadeDistanceFar", "_SoftParticlesFarFadeDistance",
                 "_SoftFadeFar", "_SoftParticleFar") ?? 1.0f;
+            // Legacy _InvFade fallback: if the source had _InvFade > 0 and
+            // didn't provide explicit far/near distances, derive a far
+            // distance from the inverse-fade hardness. _InvFade = 0.643 ≈
+            // 1.55m fade distance, which is reasonable for an MR play space.
+            // Clamped to keep absurd values (e.g. _InvFade near 0) from
+            // producing 100m fade ranges.
+            if (src_invFade > 0.01f && Mathf.Approximately(src_softFar, 1.0f))
+            {
+                src_softFar = Mathf.Clamp(1f / src_invFade, 0.25f, 5f);
+            }
+
+            // Hovl Studio _Depthpower fallback: same idea as _InvFade.
+            // Higher _Depthpower = sharper fade (small distance), lower =
+            // softer fade (large distance). 0.5 maps to ~2m fade which
+            // is a sensible default for MR particles.
+            float src_depthPower = src.HasProperty("_Depthpower") ? src.GetFloat("_Depthpower") : 0f;
+            if (src_depthPower > 0.01f && Mathf.Approximately(src_softFar, 1.0f))
+            {
+                src_softFar = Mathf.Clamp(1f / src_depthPower, 0.25f, 5f);
+            }
+            // ── Camera fade (URP/Particles) ──────────────────────────────
+            // Particle alpha fades out close to the camera plane to avoid
+            // clipping into the player's face. Signaled by a float toggle
+            // OR a keyword on various vendor shaders.
+            bool src_camFadeOn = src.IsKeywordEnabled("_CAMERAFADE_ON")
+                              || (src.HasProperty("_CameraFadingEnabled")
+                                  && src.GetFloat("_CameraFadingEnabled") > 0.5f);
+            float src_camNear = TryGetFloatFromAliases(src,
+                "_CameraNearFadeDistance", "_CameraFadeNear", "_NearFadeDistance") ?? 1.0f;
+            float src_camFar = TryGetFloatFromAliases(src,
+                "_CameraFarFadeDistance",  "_CameraFadeFar",  "_FarFadeDistance")  ?? 2.0f;
+
+            // Soft particles can be signaled by four different conventions
+            // on vendor materials — we union them all:
+            //   1. Keyword (URP older versions, Standard Particles):
+            //      SOFTPARTICLES_ON / _SOFTPARTICLES_ON / _FADING_ON
+            //   2. Float property (URP recent versions, ShaderGraph particles):
+            //      _SoftParticlesEnabled > 0.5
+            //   3. CFX convention (Cartoon FX Remaster, Epic Toon FX-style packs):
+            //      _UseSP > 0.5
+            //   4. Implicit (some vendor packs): non-zero fade distances even
+            //      without explicit enable — we DON'T infer from this because
+            //      legitimate "fully crisp" materials sometimes leave the
+            //      distances at non-default but rely on the disabled keyword.
+            //      Trust the explicit signals only.
+            // src_invFade was declared up by src_softFar (it's also needed
+            // for the legacy fade-distance derivation). Just check it here.
             bool src_softOn = src.IsKeywordEnabled("SOFTPARTICLES_ON")
                            || src.IsKeywordEnabled("_SOFTPARTICLES_ON")
-                           || src.IsKeywordEnabled("_FADING_ON");
+                           || src.IsKeywordEnabled("_FADING_ON")
+                           || (src.HasProperty("_SoftParticlesEnabled")
+                               && src.GetFloat("_SoftParticlesEnabled") > 0.5f)
+                           || (src.HasProperty("_UseSP")
+                               && src.GetFloat("_UseSP") > 0.5f)
+                           // Hovl Studio's float toggle.
+                           || (src.HasProperty("_Usedepth")
+                               && src.GetFloat("_Usedepth") > 0.5f)
+                           // Vendor short-form toggle ("Use Soft" → soft particles).
+                           || (src.HasProperty("_UseSoft")
+                               && src.GetFloat("_UseSoft") > 0.5f)
+                           // Same vendor's keyword variant.
+                           || src.IsKeywordEnabled("USE_SOFT_PARTICLES")
+                           || src_invFade > 0.01f;
 
-            // Single-channel mode (CFXR convention)
+            // Single-channel mode (CFXR convention). Three forms:
+            //   - _CFXR_SINGLE_CHANNEL keyword (older CFXR)
+            //   - _SINGLECHANNEL_ON keyword (our convention)
+            //   - _SingleChannel float (current CFXR)
             bool src_singleChannel = src.IsKeywordEnabled("_CFXR_SINGLE_CHANNEL")
-                                  || src.IsKeywordEnabled("_SINGLECHANNEL_ON");
+                                  || src.IsKeywordEnabled("_SINGLECHANNEL_ON")
+                                  || (src.HasProperty("_SingleChannel")
+                                      && src.GetFloat("_SingleChannel") > 0.5f);
 
-            // Dissolve (CFXR-style): noise tex + threshold + edge color/width
+            // Dissolve. Multiple signal conventions:
+            //   - _CFXR_DISSOLVE / _DISSOLVE_ON keywords (CFXR, our convention)
+            //   - _UseDissolve float toggle (newer CFXR materials)
             bool src_dissolveOn = src.IsKeywordEnabled("_CFXR_DISSOLVE")
-                               || src.IsKeywordEnabled("_DISSOLVE_ON");
+                               || src.IsKeywordEnabled("_DISSOLVE_ON")
+                               || (src.HasProperty("_UseDissolve")
+                                   && src.GetFloat("_UseDissolve") > 0.5f);
             Texture src_dissolveMap = TryGetTextureFromAliases(src,
                 "_DissolveTex", "_DissolveMap", "_NoiseTex", "_DissolveNoise", "_DissolveTexture");
             float src_dissolveAmount = TryGetFloatFromAliases(src,
                 "_DissolveAmount", "_Dissolve", "_DissolveProgress", "_DissolveValue") ?? 0f;
+            // _DissolveSmooth is CFXR's name for edge softness. Same axis
+            // as our _DissolveEdgeWidth — wider value = softer transition.
             float src_dissolveEdge = TryGetFloatFromAliases(src,
-                "_DissolveEdgeWidth", "_EdgeWidth", "_DissolveEdge") ?? 0.05f;
+                "_DissolveEdgeWidth", "_EdgeWidth", "_DissolveEdge", "_DissolveSmooth") ?? 0.05f;
             Color src_dissolveEdgeColor = TryGetColorFromAliases(src,
                 "_DissolveEdgeColor", "_EdgeColor", "_DissolveColor") ?? new Color(1f, 0.5f, 0f, 1f);
 
-            // UV distortion: distortion tex + strength + scroll speeds
-            bool src_distortionOn = src.IsKeywordEnabled("_CFXR_UV_DISTORTION")
-                                 || src.IsKeywordEnabled("_DISTORTION_ON");
+            // ── Noise modulation (Hovl Studio _Noise + _NoiseQuat) ───────
+            // Hovl Studio packs four params into a single Vector4 they
+            // call `_NoiseQuat`: xy = scroll velocity, z = base color
+            // modulation power, w = emission ("glow") modulation power.
+            // We unpack to individual scalars on the target so the
+            // Inspector is artist-friendly.
+            Texture src_noiseModTex = TryGetTextureFromAliases(src,
+                "_Noise", "_NoiseTex", "_NoiseMap", "_NoiseTexture");
+            Vector2 src_noiseModScale = src_noiseModTex != null
+                ? src.GetTextureScale(GetFirstSetTexture(src,
+                    "_Noise", "_NoiseTex", "_NoiseMap", "_NoiseTexture") ?? "_Noise")
+                : Vector2.one;
+            Vector2 src_noiseModOffset = src_noiseModTex != null
+                ? src.GetTextureOffset(GetFirstSetTexture(src,
+                    "_Noise", "_NoiseTex", "_NoiseMap", "_NoiseTexture") ?? "_Noise")
+                : Vector2.zero;
+            // Hovl Studio's noise control Vector4 ships under two names —
+            // the short "_NoiseQuat" or the descriptive
+            // "_NoisespeedXYNoisepowerZGlowpowerW". Same packing either way.
+            Vector4 src_noiseQuat =
+                src.HasProperty("_NoiseQuat")                        ? src.GetVector("_NoiseQuat") :
+                src.HasProperty("_NoisespeedXYNoisepowerZGlowpowerW") ? src.GetVector("_NoisespeedXYNoisepowerZGlowpowerW") :
+                                                                       Vector4.zero;
+
+            // ── Fresnel / rim glow ──────────────────────────────────────
+            // Carries over for materials authored with rim lighting. Our
+            // shader computes fresnel inside the pseudo-lit block (uses
+            // the same normal sample, ~5 extra ALU). Materials WITHOUT a
+            // normal map can still have these properties stored, but the
+            // visual effect requires the normal-map variation to produce
+            // anything visible — that's expected (vendor materials with
+            // fresnel basically always ship with normal maps too).
+            Color src_fresnelColor = TryGetColorFromAliases(src,
+                "_FresnelColor", "_RimColor", "_FresnelTint", "_RimTint",
+                "_EdgeColor", "_FresnelGlow") ?? Color.black;
+            float src_fresnelPower = TryGetFloatFromAliases(src,
+                "_FresnelPower", "_RimPower", "_FresnelExponent", "_RimExponent",
+                "_FresnelFalloff", "_RimFalloff") ?? 4.0f;
+
+            // ── Pseudo lighting (normal map from any source) ─────────────
+            // Whenever the source had ANY flavor of normal map bound, we
+            // wire it into DreamPark/Particles' pseudo-lit path. This
+            // covers CFXR lit materials, URP/Particles/Lit, Standard
+            // Particles with bumps, and vendor-pack lit particle shaders.
+            // The fake-lighting defaults are chosen so a freshly-converted
+            // material looks plausibly lit without per-asset tuning.
+            Texture src_bumpMap = TryGetTextureFromAliases(src,
+                "_BumpMap", "_NormalMap", "_NormalTex", "_NrmMap",
+                "_NormTex", "_BumpTex", "_NrmTex",
+                "_Normal", "_Normals", "_Norm", "_Bump",
+                "_DetailNormalMap");
+            float src_bumpScale = TryGetFloatFromAliases(src,
+                "_BumpScale", "_NormalScale", "_NormalStrength", "_NormalIntensity",
+                "_NrmStrength") ?? 1.0f;
+            Vector2 src_bumpScaleUV = src_bumpMap != null
+                ? src.GetTextureScale(GetFirstSetTexture(src,
+                    "_BumpMap", "_NormalMap", "_NormalTex", "_NrmMap",
+                    "_NormTex", "_BumpTex", "_NrmTex",
+                    "_Normal", "_Normals", "_Norm", "_Bump",
+                    "_DetailNormalMap") ?? "_BumpMap")
+                : Vector2.one;
+            Vector2 src_bumpOffsetUV = src_bumpMap != null
+                ? src.GetTextureOffset(GetFirstSetTexture(src,
+                    "_BumpMap", "_NormalMap", "_NormalTex", "_NrmMap",
+                    "_NormTex", "_BumpTex", "_NrmTex",
+                    "_Normal", "_Normals", "_Norm", "_Bump",
+                    "_DetailNormalMap") ?? "_BumpMap")
+                : Vector2.zero;
+
+            // ── Second color (CFXR two-tone tint) ────────────────────────
+            // Used by CFXR smoke / fire / magic effects that need a
+            // gradient between two colors driven by a mask texture.
+            Texture src_secondColorTex = TryGetTextureFromAliases(src,
+                "_SecondColorTex", "_SecondColor_Tex", "_2ndColorTex", "_ColorMaskTex");
+            Color src_secondColor = TryGetColorFromAliases(src,
+                "_SecondColor", "_2ndColor", "_TintColor2", "_SecondTint") ?? Color.white;
+            float src_secondColorSmooth = TryGetFloatFromAliases(src,
+                "_SecondColorSmooth", "_SecondColorSmoothness", "_2ndColorSmooth") ?? 0.5f;
+            bool src_secondColorOn = src.IsKeywordEnabled("_SECONDCOLOR_ON")
+                                  || src.IsKeywordEnabled("_CFXR_SECONDCOLOR_LERP")
+                                  || (src.HasProperty("_UseSecondColor")
+                                      && src.GetFloat("_UseSecondColor") > 0.5f);
+            Vector2 src_secondColorScale = src_secondColorTex != null
+                ? src.GetTextureScale(GetFirstSetTexture(src,
+                    "_SecondColorTex", "_SecondColor_Tex", "_2ndColorTex", "_ColorMaskTex") ?? "_SecondColorTex")
+                : Vector2.one;
+            Vector2 src_secondColorOffset = src_secondColorTex != null
+                ? src.GetTextureOffset(GetFirstSetTexture(src,
+                    "_SecondColorTex", "_SecondColor_Tex", "_2ndColorTex", "_ColorMaskTex") ?? "_SecondColorTex")
+                : Vector2.zero;
+
+            // ── Edge fade (CFXR) ─────────────────────────────────────────
+            // Soft alpha vignette on the rectangular quad borders. CFXR
+            // uses this on cloud / smoke / dust effects whose source
+            // texture has a hard rectangle silhouette.
+            bool src_edgeFadeOn = src.IsKeywordEnabled("_EDGE_FADE_ON")
+                               || src.IsKeywordEnabled("_CFXR_EDGE_FADING")
+                               || (src.HasProperty("_UseEF")
+                                   && src.GetFloat("_UseEF") > 0.5f);
+            float src_edgeFadeWidth = TryGetFloatFromAliases(src,
+                "_EdgeFadeWidth", "_EF_Width", "_EF_Range", "_EdgeFadeRange",
+                "_EFWidth") ?? 0.1f;
+
+            // ── Radial UV (polar transformation for ring effects) ───────
+            // Used by CFXR magic circles, shockwaves, halos, portal rings.
+            // Signaled by _UseRadialUV float toggle or _CFXR_RADIAL_UV
+            // keyword on the source. _RingTopOffset is CFXR's inner-radius
+            // cutoff (the size of the hole in the middle of the ring).
+            bool src_radialUVOn = src.IsKeywordEnabled("_RADIAL_UV_ON")
+                               || src.IsKeywordEnabled("_CFXR_RADIAL_UV")
+                               || (src.HasProperty("_UseRadialUV")
+                                   && src.GetFloat("_UseRadialUV") > 0.5f);
+            float src_ringInnerRadius = TryGetFloatFromAliases(src,
+                "_RingTopOffset", "_RadialUVInnerRadius", "_InnerRadius", "_RingInner") ?? 0f;
+
+            // ── Overlay (CFXR perlin overlay): second texture layer ──────
+            // Sampled from a second texture, blended over the base color.
+            // CFXR uses this for organic breakup detail (the "wisp" look
+            // in their smoke, the texture detail in their fire). We
+            // support both Multiply (0) and Additive (1) blend modes,
+            // with a strength dial and scrolling UVs.
+            Texture src_overlayMap = TryGetTextureFromAliases(src,
+                "_OverlayTex", "_OverlayMap", "_OverlayTexture", "_NoiseOverlay");
+            Vector2 src_overlayScale = src_overlayMap != null
+                ? src.GetTextureScale(GetFirstSetTexture(src,
+                    "_OverlayTex", "_OverlayMap", "_OverlayTexture", "_NoiseOverlay") ?? "_OverlayTex")
+                : Vector2.one;
+            Vector2 src_overlayOffset = src_overlayMap != null
+                ? src.GetTextureOffset(GetFirstSetTexture(src,
+                    "_OverlayTex", "_OverlayMap", "_OverlayTexture", "_NoiseOverlay") ?? "_OverlayTex")
+                : Vector2.zero;
+            // CFXR exposes scroll as a Vector4 (`_OverlayTex_Scroll`)
+            // where xy = scroll velocity (units/sec) and zw are vendor-
+            // specific extras we don't replicate. We take xy.
+            Vector4 src_overlayScroll = src.HasProperty("_OverlayTex_Scroll")
+                ? src.GetVector("_OverlayTex_Scroll")
+                : Vector4.zero;
+            // _CFXR_OVERLAYBLEND on CFXR materials is a float 0/1 that
+            // signals additive (1) vs multiply (0). Other vendors might
+            // use a similarly-named property; aliases cover them.
+            float src_overlayBlend = TryGetFloatFromAliases(src,
+                "_CFXR_OVERLAYBLEND", "_OverlayBlendMode", "_OverlayBlend") ?? 0f;
+            float src_overlayStrength = TryGetFloatFromAliases(src,
+                "_OverlayStrength", "_OverlayIntensity", "_OverlayAmount") ?? 1f;
+            bool src_overlayKeywordOn = src.IsKeywordEnabled("_OVERLAY_ON")
+                                     || src.IsKeywordEnabled("_CFXR_OVERLAY_ON")
+                                     || src.IsKeywordEnabled("_OVERLAY");
+
+            // UV distortion: distortion tex + strength + scroll speeds.
+            //
+            // Three signal conventions for the enable flag:
+            //   _CFXR_UV_DISTORTION / _DISTORTION_ON keywords (our + CFXR vintage)
+            //   _UseUVDistortion float toggle (current CFXR)
+            //
+            // The strength scalar adds `_Distort` (CFXR's name). Scroll
+            // speeds come from scalar pairs (URP convention) OR a packed
+            // Vector4 `_DistortScrolling` whose xy is the scroll velocity
+            // (CFXR convention). Scalars take priority when both are set.
+            // Look up the distortion texture first — the texture binding
+            // itself is a signal that the material intends distortion, even
+            // for vendor packs that don't ship a corresponding keyword/toggle
+            // (Hovl Studio's "_Flow" slot is the canonical example: they
+            // drive distortion entirely off the texture being bound).
+            // Layer 1: looks for _DistortTex1 first (the lightning-style
+            // dual-layer convention) before falling back to generic names.
             Texture src_distortMap = TryGetTextureFromAliases(src,
-                "_DistortionTex", "_DistortionMap", "_DisplacementMap", "_DistortTex");
+                "_DistortTex1",  // dual-layer (lightning) convention — try first
+                "_DistortionTex", "_DistortionMap", "_DisplacementMap", "_DistortTex",
+                // Hovl Studio aliases — flow map = distortion map for our
+                // purposes (we don't replicate true flow mapping's two-sample
+                // blend, just the basic UV warp).
+                "_Flow", "_FlowMap", "_FlowTex");
+
+            // Layer 2: only present on dual-noise materials (lightning,
+            // turbulent energy effects). Optional — most particle
+            // materials won't have this.
+            Texture src_distortMap2 = TryGetTextureFromAliases(src,
+                "_DistortTex2", "_DistortionMap2", "_DistortionTex2", "_DistortTex_2");
+            float src_distortStrength2 = TryGetFloatFromAliases(src,
+                "_DistortionStrength2", "_DistortStrength2", "_Distortion2") ?? 0.1f;
+            // Some lightning materials pack BOTH layers' scroll into a
+            // single Vector4 (xy = tex1 scroll, zw = tex2 scroll). This
+            // is distinct from CFXR's _DistortScrolling (xy only) and
+            // Hovl's _DistortionSpeedXYPowerZ (xy=scroll, z=strength).
+            Vector4 src_distortSpeed = src.HasProperty("_DistortSpeed")
+                ? src.GetVector("_DistortSpeed")
+                : Vector4.zero;
+            bool src_distortionOn = src.IsKeywordEnabled("_CFXR_UV_DISTORTION")
+                                 || src.IsKeywordEnabled("_DISTORTION_ON")
+                                 || (src.HasProperty("_UseUVDistortion")
+                                     && src.GetFloat("_UseUVDistortion") > 0.5f)
+                                 || src_distortMap != null;
+            // Vendor packs use a few different packed-vector conventions
+            // for distortion control:
+            //   CFXR:           _DistortScrolling          (xy = scroll velocity)
+            //   Hovl Studio:    _DistortionSpeedXYPowerZ   (xy = scroll, z = strength)
+            // Both declared up here so the strength + scroll derivations
+            // below can read them. Otherwise CS0841 (use-before-declared).
+            Vector4 src_distortScrollVec = src.HasProperty("_DistortScrolling")
+                ? src.GetVector("_DistortScrolling")
+                : Vector4.zero;
+            Vector4 src_distortHovlPacked = src.HasProperty("_DistortionSpeedXYPowerZ")
+                ? src.GetVector("_DistortionSpeedXYPowerZ")
+                : Vector4.zero;
+
+            // Distortion strength: explicit scalars first, then fall back
+            // to the .z component of Hovl's _DistortionSpeedXYPowerZ packed
+            // vector (their convention puts strength in Z).
             float src_distortStrength = TryGetFloatFromAliases(src,
-                "_DistortionStrength", "_DistortStrength", "_DistortAmount", "_DistortionAmount") ?? 0.1f;
+                "_DistortionStrength", "_DistortStrength", "_DistortAmount", "_DistortionAmount",
+                "_Distort")
+                ?? (src_distortHovlPacked.z != 0f ? src_distortHovlPacked.z : 0.1f);
+            // Layer 1 scroll velocity — try scalar aliases, then any of
+            // the three packed-vector forms (CFXR's _DistortScrolling.xy,
+            // Hovl's _DistortionSpeedXYPowerZ.xy, lightning's
+            // _DistortSpeed.xy). First non-zero wins.
             float src_distortScrollX = TryGetFloatFromAliases(src,
-                "_DistortionScrollX", "_DistortSpeedX", "_DistortionSpeedX") ?? 0f;
+                "_DistortionScrollX", "_DistortSpeedX", "_DistortionSpeedX")
+                ?? (src_distortScrollVec.x  != 0f ? src_distortScrollVec.x
+                  : src_distortHovlPacked.x != 0f ? src_distortHovlPacked.x
+                  : src_distortSpeed.x);
             float src_distortScrollY = TryGetFloatFromAliases(src,
-                "_DistortionScrollY", "_DistortSpeedY", "_DistortionSpeedY") ?? 0f;
+                "_DistortionScrollY", "_DistortSpeedY", "_DistortionSpeedY")
+                ?? (src_distortScrollVec.y  != 0f ? src_distortScrollVec.y
+                  : src_distortHovlPacked.y != 0f ? src_distortHovlPacked.y
+                  : src_distortSpeed.y);
+
+            // Layer 2 scroll velocity — pulled from _DistortSpeed.zw on
+            // dual-noise materials. No scalar aliases since layer 2 is a
+            // new feature on our side; vendors only ship the packed form.
+            float src_distortScroll2X = src_distortSpeed.z;
+            float src_distortScroll2Y = src_distortSpeed.w;
 
             // Detect blend mode from src/dst blend factors, or fall back to keyword.
             // 5 = SrcAlpha, 10 = OneMinusSrcAlpha, 1 = One.
@@ -651,7 +1109,19 @@ namespace DreamPark.EditorTools
             float src_cull = src.HasProperty("_Cull") ? src.GetFloat("_Cull") : 0f; // default Off (billboards)
             float src_zwrite = src.HasProperty("_ZWrite") ? src.GetFloat("_ZWrite") : 0f;
             int src_renderQueue = src.renderQueue;
-            bool src_alphaTest = src.IsKeywordEnabled("_ALPHATEST_ON");
+            // Alpha test signal — four conventions:
+            //   _ALPHATEST_ON keyword (URP / our convention)
+            //   _UseAlphaClip float toggle (CFXR)
+            //   _UseAlphaCliping float toggle (vendor typo, one 'p')
+            //   USE_ALPHA_CLIPING keyword (same vendor)
+            //   Clip_ON keyword (KriptoFX RFX1)
+            bool src_alphaTest = src.IsKeywordEnabled("_ALPHATEST_ON")
+                              || src.IsKeywordEnabled("Clip_ON")
+                              || src.IsKeywordEnabled("USE_ALPHA_CLIPING")
+                              || (src.HasProperty("_UseAlphaClip")
+                                  && src.GetFloat("_UseAlphaClip") > 0.5f)
+                              || (src.HasProperty("_UseAlphaCliping")
+                                  && src.GetFloat("_UseAlphaCliping") > 0.5f);
 
             // ── Switch shader ─────────────────────────────────────────────────
             src.shader = dpShader;
@@ -664,11 +1134,70 @@ namespace DreamPark.EditorTools
                 src.SetTextureOffset("_BaseMap", src_baseOffset);
             }
             src.SetColor("_BaseColor", src_tint);
-            src.SetColor("_EmissionColor", src_emission);
             src.SetFloat("_Cutoff", src_cutoff);
             src.SetFloat("_HdrBoostMultiplier", src_hdrBoost);
+
+            // ── Emission: full carry-over (color + map + strength + UVs) ──
+            // Emission counts as "intended" if any of the following signals
+            // were present on the source:
+            //   - Source had the _EMISSION keyword enabled (URP/Standard convention)
+            //   - _EmissionColor is non-black (artists set a glow color)
+            //   - An emission texture is bound in any alias slot
+            //   - A vendor "selfillum"/"glow" keyword is enabled
+            //
+            // When intended, we write the full emission set on the target
+            // (color, strength, map, map UVs) and enable _EMISSION_ON so
+            // the shader's gated emission path runs. When NOT intended, we
+            // still write _EmissionColor for fidelity (in case the target
+            // is later inspected and someone wants to enable emission
+            // manually), but we don't enable the keyword — keeps the
+            // material on the zero-cost variant.
+            bool emissionIntended =
+                src_emissionKeywordOn
+             || src_emission.maxColorComponent > 0.001f
+             || src_emissionMap != null;
+
+            src.SetColor("_EmissionColor", src_emission);
+            if (src.HasProperty("_EmissionStrength"))
+                src.SetFloat("_EmissionStrength", src_emissionStrength);
+            if (src.HasProperty("_EmissionMap"))
+            {
+                // Even when the source had no map, write Texture2D.whiteTexture
+                // so the keyword-gated path samples white (identity multiply)
+                // instead of pure black, which would silently disable color-
+                // only emission.
+                src.SetTexture("_EmissionMap", src_emissionMap != null
+                    ? src_emissionMap
+                    : (Texture)Texture2D.whiteTexture);
+                src.SetTextureScale("_EmissionMap", src_emissionMapScale);
+                src.SetTextureOffset("_EmissionMap", src_emissionMapOffset);
+            }
+            SetKeyword(src, "_EMISSION_ON", emissionIntended);
+            // Also flip Unity's standard _EMISSION keyword on the target.
+            // The DreamPark/Particles shader doesn't read it, but it
+            // matches what Unity's GlobalIllumination expects and keeps
+            // the material consistent with built-in tooling (Light Explorer,
+            // baking pipeline assertions, etc.).
+            SetKeyword(src, "_EMISSION", emissionIntended);
+            // GlobalIllumination flag — tells Unity's GI system "this
+            // material emits light at the inspector value." Realtime is
+            // safe even on baked scenes; we'd need a per-prefab decision
+            // to use Baked. Realtime is the right default for particles.
+            src.globalIlluminationFlags = emissionIntended
+                ? MaterialGlobalIlluminationFlags.RealtimeEmissive
+                : MaterialGlobalIlluminationFlags.None;
             src.SetFloat("_SoftParticlesNear", src_softNear);
             src.SetFloat("_SoftParticlesFar", src_softFar);
+
+            // Camera fade (URP /Particles parity). Activate the keyword only
+            // when the source had it intended; the near/far distances
+            // carry over regardless so a user who later enables the toggle
+            // in the Inspector gets sensible defaults.
+            if (src.HasProperty("_CameraNearFadeDistance"))
+                src.SetFloat("_CameraNearFadeDistance", src_camNear);
+            if (src.HasProperty("_CameraFarFadeDistance"))
+                src.SetFloat("_CameraFarFadeDistance", src_camFar);
+            SetKeyword(src, "_CAMERAFADE_ON", src_camFadeOn);
             src.SetFloat("_Cull", src_cull);
             src.SetFloat("_ZWrite", src_zwrite);
 
@@ -686,11 +1215,166 @@ namespace DreamPark.EditorTools
             if (src_distortionOn && src_distortMap != null)
             {
                 src.SetTexture("_DistortionMap", src_distortMap);
-                src.SetFloat("_DistortionStrength", src_distortStrength);
+                // Vendor packs use wildly different units for distortion
+                // (Hovl ships values like 600 because their shader divides
+                // internally by some scale factor). Clamp to our shader's
+                // Range(0, 0.5) — visual fidelity isn't perfect but we
+                // don't blow up the UV warp by passing in huge values.
+                // Abs handles vendors that use negative strength to flip
+                // direction; our scroll velocities already handle that
+                // independently.
+                src.SetFloat("_DistortionStrength", Mathf.Clamp(Mathf.Abs(src_distortStrength), 0f, 0.5f));
                 src.SetFloat("_DistortionScrollX", src_distortScrollX);
                 src.SetFloat("_DistortionScrollY", src_distortScrollY);
                 src.SetFloat("_Distortion", 1f);
             }
+
+            // Dual distortion layer (v9) — lightning, energy streams,
+            // magical turbulence. Activated whenever a second distortion
+            // texture is present on the source. The two layers sum their
+            // warps from the original quad UV — that's what gives the
+            // characteristic "wiggles but not in any one direction" look
+            // that single-layer distortion can't replicate.
+            bool distort2Intended = src_distortMap2 != null;
+            if (distort2Intended)
+            {
+                if (src.HasProperty("_DistortionMap2"))
+                    src.SetTexture("_DistortionMap2", src_distortMap2);
+                if (src.HasProperty("_DistortionStrength2"))
+                    src.SetFloat("_DistortionStrength2",
+                        Mathf.Clamp(Mathf.Abs(src_distortStrength2), 0f, 0.5f));
+                if (src.HasProperty("_DistortionScroll2X"))
+                    src.SetFloat("_DistortionScroll2X", src_distortScroll2X);
+                if (src.HasProperty("_DistortionScroll2Y"))
+                    src.SetFloat("_DistortionScroll2Y", src_distortScroll2Y);
+            }
+            SetKeyword(src, "_DISTORTION2_ON", distort2Intended);
+
+            // Overlay (v3) — CFXR perlin overlay support.
+            // Activated when the source had an overlay texture bound OR
+            // any flavor of overlay keyword set. Map present is the
+            // stronger signal (a material can't usefully render the
+            // feature without a texture), so we gate apply on it.
+            bool overlayIntended = src_overlayKeywordOn || src_overlayMap != null;
+            if (overlayIntended && src_overlayMap != null)
+            {
+                if (src.HasProperty("_OverlayTex"))
+                {
+                    src.SetTexture("_OverlayTex", src_overlayMap);
+                    src.SetTextureScale("_OverlayTex", src_overlayScale);
+                    src.SetTextureOffset("_OverlayTex", src_overlayOffset);
+                }
+                if (src.HasProperty("_OverlayBlendMode"))
+                    src.SetFloat("_OverlayBlendMode", src_overlayBlend > 0.5f ? 1f : 0f);
+                if (src.HasProperty("_OverlayStrength"))
+                    src.SetFloat("_OverlayStrength", Mathf.Clamp01(src_overlayStrength));
+                if (src.HasProperty("_OverlayScrollX"))
+                    src.SetFloat("_OverlayScrollX", src_overlayScroll.x);
+                if (src.HasProperty("_OverlayScrollY"))
+                    src.SetFloat("_OverlayScrollY", src_overlayScroll.y);
+                src.SetFloat("_Overlay", 1f);
+            }
+            SetKeyword(src, "_OVERLAY_ON", overlayIntended && src_overlayMap != null);
+
+            // Radial UV (v4). Center defaults to (0.5, 0.5) — middle of
+            // the texture — and rotation defaults to 0. CFXR doesn't
+            // expose either of those on its materials, so the converted
+            // material picks up sensible defaults. Inner-radius carries
+            // over from CFXR's _RingTopOffset.
+            if (src.HasProperty("_RadialUVInnerRadius"))
+                src.SetFloat("_RadialUVInnerRadius", Mathf.Clamp(src_ringInnerRadius, 0f, 0.5f));
+            SetKeyword(src, "_RADIAL_UV_ON", src_radialUVOn);
+
+            // Edge fade (v5).
+            if (src.HasProperty("_EdgeFadeWidth"))
+                src.SetFloat("_EdgeFadeWidth", Mathf.Clamp(src_edgeFadeWidth, 0f, 0.5f));
+            SetKeyword(src, "_EDGE_FADE_ON", src_edgeFadeOn);
+
+            // Pseudo lighting (v7) — wire a bump map through to the
+            // unlit-pipeline fake-lighting path. We unconditionally turn
+            // the keyword ON whenever a normal map is present, since the
+            // vendor author authored a normal map specifically because
+            // they wanted lighting. The fake-light defaults below match
+            // what looks good on most CFXR / URP lit particle materials
+            // (top-front light, moderate strength, soft ambient floor).
+            // Artists can tune per-material via the Inspector.
+            bool pseudoLitIntended = src_bumpMap != null;
+            if (pseudoLitIntended)
+            {
+                if (src.HasProperty("_BumpMap"))
+                {
+                    src.SetTexture("_BumpMap", src_bumpMap);
+                    src.SetTextureScale("_BumpMap", src_bumpScaleUV);
+                    src.SetTextureOffset("_BumpMap", src_bumpOffsetUV);
+                }
+                if (src.HasProperty("_BumpScale"))
+                    src.SetFloat("_BumpScale", Mathf.Clamp(src_bumpScale, 0f, 2f));
+                // First-pass defaults — chosen so a converted material
+                // looks plausibly lit without any artist tweaking.
+                if (src.HasProperty("_FakeLightDir"))
+                    src.SetVector("_FakeLightDir", new Vector4(0f, 1f, 1f, 0f));
+                if (src.HasProperty("_FakeLightStrength"))
+                    src.SetFloat("_FakeLightStrength", 0.7f);
+                if (src.HasProperty("_FakeLightAmbient"))
+                    src.SetFloat("_FakeLightAmbient", 0.3f);
+            }
+            SetKeyword(src, "_PSEUDO_LIT_ON", pseudoLitIntended);
+
+            // Fresnel — write the color/power regardless of whether
+            // pseudo-lit is enabled. The shader only computes fresnel
+            // inside the _PSEUDO_LIT_ON block, so without a normal map
+            // these values are stored but produce no visible effect.
+            // That matches the vendor's intent: same data, just gated
+            // by the same normal-map dependency it always had.
+            if (src.HasProperty("_FresnelColor"))
+                src.SetColor("_FresnelColor", src_fresnelColor);
+            if (src.HasProperty("_FresnelPower"))
+                src.SetFloat("_FresnelPower", Mathf.Clamp(src_fresnelPower, 1f, 16f));
+
+            // Noise modulation (v8) — Hovl Studio _NoiseQuat unpacked.
+            // Activate only when a noise texture is present; without it
+            // the keyword path would multiply by a default white texture
+            // (identity), which is technically harmless but wastes a
+            // variant slot. Gate on the texture binding.
+            bool noiseModIntended = src_noiseModTex != null;
+            if (noiseModIntended)
+            {
+                if (src.HasProperty("_NoiseModTex"))
+                {
+                    src.SetTexture("_NoiseModTex", src_noiseModTex);
+                    src.SetTextureScale("_NoiseModTex", src_noiseModScale);
+                    src.SetTextureOffset("_NoiseModTex", src_noiseModOffset);
+                }
+                if (src.HasProperty("_NoiseModSpeedX"))
+                    src.SetFloat("_NoiseModSpeedX", src_noiseQuat.x);
+                if (src.HasProperty("_NoiseModSpeedY"))
+                    src.SetFloat("_NoiseModSpeedY", src_noiseQuat.y);
+                if (src.HasProperty("_NoiseModBasePower"))
+                    src.SetFloat("_NoiseModBasePower", Mathf.Clamp01(src_noiseQuat.z));
+                if (src.HasProperty("_NoiseModGlowPower"))
+                    src.SetFloat("_NoiseModGlowPower", Mathf.Clamp01(src_noiseQuat.w));
+            }
+            SetKeyword(src, "_NOISE_MOD_ON", noiseModIntended);
+
+            // Second color (v6) — two-tone tint via mask texture.
+            // Gate on having a mask texture: the second-color path is
+            // useless without one (the lerp would have no driver). If
+            // the source had _UseSecondColor / _CFXR_SECONDCOLOR_LERP
+            // set but no mask, we leave _SECONDCOLOR_ON off so the
+            // material falls back to single-tone — better than rendering
+            // with a hard 50/50 lerp against an all-black mask default.
+            bool secondColorIntended = src_secondColorOn && src_secondColorTex != null;
+            if (src.HasProperty("_SecondColor"))
+                src.SetColor("_SecondColor", src_secondColor);
+            if (src.HasProperty("_SecondColorTex") && src_secondColorTex != null)
+            {
+                src.SetTexture("_SecondColorTex", src_secondColorTex);
+                src.SetTextureScale("_SecondColorTex", src_secondColorScale);
+                src.SetTextureOffset("_SecondColorTex", src_secondColorOffset);
+            }
+            if (src.HasProperty("_SecondColorSmooth"))
+                src.SetFloat("_SecondColorSmooth", Mathf.Clamp01(src_secondColorSmooth));
+            SetKeyword(src, "_SECONDCOLOR_ON", secondColorIntended);
 
             // Keywords
             ApplyBlendModeKeywords(src, blendMode);
