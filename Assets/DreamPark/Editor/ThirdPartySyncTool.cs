@@ -262,7 +262,7 @@ namespace DreamPark.Editor
                 EditorUtility.DisplayProgressBar("ThirdParty Sync", "Resolving dependencies...", 0.5f);
 
                 // Step 4: Resolve recursive dependencies within ThirdPartyLocal
-                var usedGuids = ResolveRecursiveDependencies(externalRefs, guidToPath, allLocalPaths);
+                var usedGuids = ResolveRecursiveDependencies(externalRefs, guidToPath, pathToGuid, allLocalPaths);
 
                 EditorUtility.DisplayProgressBar("ThirdParty Sync", "Calculating files to move...", 0.7f);
 
@@ -460,12 +460,15 @@ namespace DreamPark.Editor
             return externalRefs;
         }
 
-        private static HashSet<string> ResolveRecursiveDependencies(HashSet<string> initialGuids, Dictionary<string, string> guidToPath, HashSet<string> localPaths)
+        private static HashSet<string> ResolveRecursiveDependencies(HashSet<string> initialGuids, Dictionary<string, string> guidToPath, Dictionary<string, string> pathToGuid, HashSet<string> localPaths)
         {
             var usedGuids = new HashSet<string>();
             var toProcess = new Queue<string>(initialGuids);
             var processed = new HashSet<string>();
             var guidRegex = new Regex(@"guid:\s*([a-f0-9]{32})", RegexOptions.Compiled);
+
+            // Tracks assembly roots we've already bulk-pulled so we only walk each tree once.
+            var pulledAssemblyRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             while (toProcess.Count > 0)
             {
@@ -479,11 +482,13 @@ namespace DreamPark.Editor
 
                 // Check if this asset is in ThirdPartyLocal
                 bool isInLocal = false;
+                string matchingLocalRoot = null;
                 foreach (var localPath in localPaths)
                 {
                     if (assetPath.StartsWith(localPath, StringComparison.OrdinalIgnoreCase))
                     {
                         isInLocal = true;
+                        matchingLocalRoot = localPath;
                         break;
                     }
                 }
@@ -493,8 +498,38 @@ namespace DreamPark.Editor
 
                 usedGuids.Add(guid);
 
-                // Scan this asset for more dependencies
                 var ext = Path.GetExtension(assetPath).ToLowerInvariant();
+
+                // ── Script bulk-pull ────────────────────────────────────────
+                // C# type-name references (e.g., script A uses an enum/class
+                // defined in script B) are invisible to GUID scanning — .cs
+                // files don't contain `guid:` tokens for the types they
+                // reference, the compiler resolves those by namespace/name.
+                // Conservatively pull in every .cs/.asmdef/.asmref within
+                // the same assembly boundary so the moved code still
+                // compiles.
+                if (ext == ".cs" || ext == ".asmdef" || ext == ".asmref")
+                {
+                    var assemblyRoot = FindAssemblyRoot(assetPath, matchingLocalRoot);
+                    if (!string.IsNullOrEmpty(assemblyRoot) && pulledAssemblyRoots.Add(assemblyRoot))
+                    {
+                        int siblingCount = 0;
+                        foreach (var siblingPath in EnumerateAssemblyScripts(assemblyRoot))
+                        {
+                            if (pathToGuid.TryGetValue(siblingPath, out var siblingGuid) && !processed.Contains(siblingGuid))
+                            {
+                                toProcess.Enqueue(siblingGuid);
+                                siblingCount++;
+                            }
+                        }
+                        if (siblingCount > 0)
+                        {
+                            Debug.Log($"[ThirdParty Sync] Pulling in {siblingCount} script file(s) from assembly: {assemblyRoot}");
+                        }
+                    }
+                }
+
+                // Scan this asset for more dependencies (Unity asset GUID refs)
                 if (UnityFileExtensions.Contains(ext) && !BinaryExtensions.Contains(ext))
                 {
                     try
@@ -516,6 +551,115 @@ namespace DreamPark.Editor
             }
 
             return usedGuids;
+        }
+
+        /// <summary>
+        /// Finds the assembly boundary for a script under ThirdPartyLocal.
+        /// Returns the nearest ancestor folder containing an .asmdef, or
+        /// failing that, the top-level package folder directly under
+        /// ThirdPartyLocal (since packages almost always ship as one
+        /// cohesive top-level subfolder). Returns null for files that live
+        /// directly at the ThirdPartyLocal root (no clear package scope).
+        /// </summary>
+        private static string FindAssemblyRoot(string assetPath, string localRoot)
+        {
+            if (string.IsNullOrEmpty(assetPath) || string.IsNullOrEmpty(localRoot))
+                return null;
+
+            var normalizedAsset = assetPath.Replace("\\", "/");
+            var normalizedRoot = localRoot.Replace("\\", "/").TrimEnd('/');
+
+            if (!normalizedAsset.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            // Walk up looking for an .asmdef; stop before reaching the
+            // ThirdPartyLocal root itself (we never want to treat the entire
+            // ThirdPartyLocal as one assembly).
+            var dir = Path.GetDirectoryName(normalizedAsset)?.Replace("\\", "/");
+            while (!string.IsNullOrEmpty(dir) && dir.Length > normalizedRoot.Length)
+            {
+                try
+                {
+                    if (Directory.Exists(dir) && Directory.GetFiles(dir, "*.asmdef", SearchOption.TopDirectoryOnly).Length > 0)
+                    {
+                        return dir;
+                    }
+                }
+                catch { }
+
+                var parent = Path.GetDirectoryName(dir)?.Replace("\\", "/");
+                if (string.IsNullOrEmpty(parent) || parent == dir) break;
+                dir = parent;
+            }
+
+            // No .asmdef found — fall back to the top-level subfolder under
+            // ThirdPartyLocal. e.g. ThirdPartyLocal/PackageA/Scripts/Foo.cs
+            // → ThirdPartyLocal/PackageA
+            var relative = normalizedAsset.Substring(normalizedRoot.Length).TrimStart('/');
+            var firstSlash = relative.IndexOf('/');
+            if (firstSlash < 0) return null; // file is at ThirdPartyLocal root — no package scope
+            var topLevel = relative.Substring(0, firstSlash);
+            return $"{normalizedRoot}/{topLevel}";
+        }
+
+        /// <summary>
+        /// Enumerates every .cs/.asmdef/.asmref under an assembly root,
+        /// skipping files that live below a nested .asmdef (those belong
+        /// to a different assembly and shouldn't be bulk-pulled).
+        /// </summary>
+        private static IEnumerable<string> EnumerateAssemblyScripts(string assemblyRoot)
+        {
+            if (!Directory.Exists(assemblyRoot))
+                yield break;
+
+            string[] allFiles;
+            try
+            {
+                allFiles = Directory.GetFiles(assemblyRoot, "*.*", SearchOption.AllDirectories);
+            }
+            catch
+            {
+                yield break;
+            }
+
+            foreach (var path in allFiles)
+            {
+                var ext = Path.GetExtension(path).ToLowerInvariant();
+                if (ext != ".cs" && ext != ".asmdef" && ext != ".asmref")
+                    continue;
+
+                if (IsBelowDifferentAsmdef(path, assemblyRoot))
+                    continue;
+
+                yield return path.Replace("\\", "/");
+            }
+        }
+
+        /// <summary>
+        /// Returns true if there's a nested .asmdef between assemblyRoot
+        /// and filePath — i.e., the file belongs to a sub-assembly.
+        /// </summary>
+        private static bool IsBelowDifferentAsmdef(string filePath, string assemblyRoot)
+        {
+            var normRoot = assemblyRoot.Replace("\\", "/").TrimEnd('/');
+            var dir = Path.GetDirectoryName(filePath)?.Replace("\\", "/");
+
+            while (!string.IsNullOrEmpty(dir) && dir.Length > normRoot.Length)
+            {
+                try
+                {
+                    if (Directory.GetFiles(dir, "*.asmdef", SearchOption.TopDirectoryOnly).Length > 0)
+                    {
+                        return true;
+                    }
+                }
+                catch { }
+
+                var parent = Path.GetDirectoryName(dir)?.Replace("\\", "/");
+                if (string.IsNullOrEmpty(parent) || parent == dir) break;
+                dir = parent;
+            }
+            return false;
         }
 
         /// <summary>
