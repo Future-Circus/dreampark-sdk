@@ -62,6 +62,45 @@ namespace DreamPark
         private const string RuntimeSuffix = "Runtime";
         private const string PreviewsSuffix = "Previews";
         private const string CodeSuffix = "Code";
+        private const string SharedFoundationSuffix = "Shared-Foundation";
+
+        // Path prefixes whose referenced contents get promoted into the
+        // shared foundation bundle. Without this promotion, Unity's
+        // Addressables build pulls SDK shaders, URP shaders, and similar
+        // shared infra into EVERY consumer bundle as implicit deps —
+        // 50+ duplicate copies of the same shader across the build,
+        // which the Addressables Analyze report flagged as the top
+        // source of duplicate dependencies (~300 entries).
+        //
+        // Promoting these to a single shared group makes them explicit
+        // addressable entries; Unity then packs them into one foundation
+        // bundle and consumer bundles reference it via the runtime
+        // dep graph. Net effect: one extra small bundle per session,
+        // hundreds of MB shaved across the bundle set.
+        //
+        // Scope rationale:
+        //   - Assets/DreamPark/ — SDK assets that every park reuses
+        //     (shaders, materials, helper prefabs, default textures).
+        //   - Packages/com.unity.render-pipelines.universal/ — URP
+        //     shaders / shadergraphs referenced indirectly by content
+        //     materials.
+        //   - Packages/com.unity.render-pipelines.core/ — URP fallback /
+        //     resource shaders (FallbackShader.shader etc). The universal
+        //     pipeline depends on core's render-pipeline-resources, and
+        //     content materials transitively reference them.
+        //   - Packages/com.unity.shadergraph/ — ShaderGraph runtime
+        //     shaders (Hidden/* fallbacks). Same transitive-dep story
+        //     as core.
+        // ThirdParty content lives under Assets/Content/{gameId}/ThirdParty/
+        // and is intentionally NOT promoted — vendor packs are per-park
+        // content, not shared infra.
+        private static readonly string[] FoundationPathPrefixes = new[]
+        {
+            "Assets/DreamPark/",
+            "Packages/com.unity.render-pipelines.universal/",
+            "Packages/com.unity.render-pipelines.core/",
+            "Packages/com.unity.shadergraph/",
+        };
 
         // Extensions checked when pairing a preview with its prefab/scene by name.
         // GenerateAllLevelPreviews writes .png today; .jpg / .jpeg are accepted
@@ -78,6 +117,7 @@ namespace DreamPark
         // lowercased group name in the resulting bundle filename.
         public static string CodeGroupName(string gameId) => $"{gameId}-{CodeSuffix}";
         public static string PreviewsGroupName(string gameId) => $"{gameId}-{PreviewsSuffix}";
+        public static string SharedFoundationGroupName(string gameId) => $"{gameId}-{SharedFoundationSuffix}";
 
         public struct Result
         {
@@ -111,6 +151,23 @@ namespace DreamPark
             }
 
             if (contentEntries.Count == 0) return result;
+
+            // 1b. Promote SDK + URP package deps to a shared foundation bundle
+            //     BEFORE the rest of the grouper runs. Without this, those
+            //     assets stay as implicit deps that Unity inlines into every
+            //     consumer bundle, producing the ~300 duplicate-dep report
+            //     the Addressables Analyze window flags. Promoting them to
+            //     explicit addressable entries packs them into one shared
+            //     bundle that consumers reference at runtime.
+            //
+            //     Running first matters: subsequent steps walk content deps
+            //     and route them into root bundles. Foundation-scoped paths
+            //     live outside Assets/Content/{gameId}/ so the content-scope
+            //     filter in step 6 already excludes them — but having them
+            //     in an explicit group beforehand means Unity's bundle
+            //     builder sees them as owned by the foundation bundle and
+            //     doesn't re-inline them as implicit deps anywhere else.
+            PromoteFoundationDepsToSharedGroup(settings, gameId, ref result);
 
             // 2. Pick roots. A "root" is an addressable that players load by
             //    address: prefabs and scenes. Everything else either gets
@@ -425,10 +482,12 @@ namespace DreamPark
                 if (group.Name == $"{gameId}-{RuntimeSuffix}") continue;
                 if (group.Name == $"{gameId}-{PreviewsSuffix}") continue;
                 if (group.Name == $"{gameId}-{CodeSuffix}") continue;
+                if (group.Name == $"{gameId}-{SharedFoundationSuffix}") continue;
                 if (group.Name.StartsWith($"{gameId}-{GroupPrefix}-")) continue;
                 if (group.Name.StartsWith($"{gameId}-{RuntimeSuffix}-", StringComparison.Ordinal)) continue;
                 if (group.Name.StartsWith($"{gameId}-{PreviewsSuffix}-", StringComparison.Ordinal)) continue;
                 if (group.Name.StartsWith($"{gameId}-{CodeSuffix}-", StringComparison.Ordinal)) continue;
+                if (group.Name.StartsWith($"{gameId}-{SharedFoundationSuffix}-", StringComparison.Ordinal)) continue;
                 if (group.Name.EndsWith("-Logos")) continue;
 
                 foreach (var entry in group.entries.ToList())
@@ -509,6 +568,10 @@ namespace DreamPark
             if (runtimeGroup != null) allManagedEntries.AddRange(runtimeGroup.entries);
             if (previewGroup != null) allManagedEntries.AddRange(previewGroup.entries);
             if (codeGroup != null) allManagedEntries.AddRange(codeGroup.entries);
+            var foundationGroupForIndexing = settings.groups
+                .FirstOrDefault(g => g != null && g.Name == $"{gameId}-{SharedFoundationSuffix}");
+            if (foundationGroupForIndexing != null)
+                allManagedEntries.AddRange(foundationGroupForIndexing.entries);
 
             allManagedEntries.Sort((a, b) =>
             {
@@ -532,6 +595,13 @@ namespace DreamPark
             ChunkOversizedGroupIfNeeded(settings, previewGroup, kChunkInputBytesLimit, GetOrAssignPackingIndex, ref result);
             ChunkOversizedGroupIfNeeded(settings, codeGroup, kChunkInputBytesLimit, GetOrAssignPackingIndex, ref result);
 
+            // Foundation can grow large once URP shadergraphs + SDK textures
+            // pile up, so it gets the same chunk treatment as Runtime / Content.
+            var foundationGroupForChunking = settings.groups
+                .FirstOrDefault(g => g != null && g.Name == $"{gameId}-{SharedFoundationSuffix}");
+            if (foundationGroupForChunking != null)
+                ChunkOversizedGroupIfNeeded(settings, foundationGroupForChunking, kChunkInputBytesLimit, GetOrAssignPackingIndex, ref result);
+
             // Persist the (possibly-extended) packing order so the next build
             // sorts entries by the same indices. Save() short-circuits when
             // the file's on-disk content is already current, so this is a
@@ -549,7 +619,9 @@ namespace DreamPark
                 if (group.Name == $"{gameId}-{RuntimeSuffix}") continue;
                 if (group.Name == $"{gameId}-{PreviewsSuffix}") continue;
                 if (group.Name == $"{gameId}-{CodeSuffix}") continue;
+                if (group.Name == $"{gameId}-{SharedFoundationSuffix}") continue;
                 if (group.Name.StartsWith($"{gameId}-{GroupPrefix}-")) continue;
+                if (group.Name.StartsWith($"{gameId}-{SharedFoundationSuffix}-", StringComparison.Ordinal)) continue;
                 if (group.Name.EndsWith("-Logos")) continue;
                 if (group.entries.Count == 0)
                     toRemove.Add(group);
@@ -566,15 +638,18 @@ namespace DreamPark
             string runtimePrefix = $"{gameId}-{RuntimeSuffix}-";
             string previewsPrefix = $"{gameId}-{PreviewsSuffix}-";
             string codePrefix = $"{gameId}-{CodeSuffix}-";
+            string foundationPrefix = $"{gameId}-{SharedFoundationSuffix}-";
             var emptyManaged = settings.groups
                 .Where(g => g != null && g.Name.StartsWith(gameId + "-")
                             && (g.Name.StartsWith($"{gameId}-{GroupPrefix}-")          // Bundle-* (and Bundle-*-N chunks)
                                 || g.Name == $"{gameId}-{RuntimeSuffix}"
                                 || g.Name == $"{gameId}-{PreviewsSuffix}"
                                 || g.Name == $"{gameId}-{CodeSuffix}"
+                                || g.Name == $"{gameId}-{SharedFoundationSuffix}"
                                 || g.Name.StartsWith(runtimePrefix)                        // Runtime-2, Runtime-3, ...
                                 || g.Name.StartsWith(previewsPrefix)
-                                || g.Name.StartsWith(codePrefix))
+                                || g.Name.StartsWith(codePrefix)
+                                || g.Name.StartsWith(foundationPrefix))                    // Shared-Foundation-2, ...
                             && g.entries.Count == 0)
                 .ToList();
             foreach (var g in emptyManaged)
@@ -993,6 +1068,110 @@ namespace DreamPark
             if (ext == ".cs" || ext == ".asmdef" || ext == ".asmref") return true;
             if (ext == ".dll" || ext == ".meta") return true;
             return false;
+        }
+
+        // A foundation candidate is a dep that lives under a path we want to
+        // share across consumer bundles (Assets/DreamPark/, URP package).
+        // ShouldSkipAsDep is too aggressive for this purpose — it filters
+        // out the entire Packages/ tree as non-addressable. For the
+        // foundation promotion we DO want package shaders to become
+        // explicit addressables; that's the whole point. So this is a
+        // narrower allow-list check rather than a wider deny-list check.
+        //
+        // We still exclude scripts / asmdefs / dlls / metas — same reasons
+        // as ShouldSkipAsDep (they ship via the MonoScript bundle or
+        // shouldn't be bundled at all).
+        private static bool IsFoundationCandidate(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            string ext = Path.GetExtension(path).ToLowerInvariant();
+            if (ext == ".cs" || ext == ".asmdef" || ext == ".asmref") return false;
+            if (ext == ".dll" || ext == ".meta") return false;
+
+            foreach (var prefix in FoundationPathPrefixes)
+            {
+                if (path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+
+        // Walk every prefab under Assets/Content/{gameId}/ and collect any
+        // dep matching FoundationPathPrefixes. Promote each one to an
+        // explicit addressable entry in "{gameId}-Shared-Foundation".
+        //
+        // Why this fixes duplication:
+        //   Unity's Addressables bundle builder treats non-addressable
+        //   deps as implicit — when bundle A references a non-addressable
+        //   shader S, Unity inlines S's serialized bytes into A. When
+        //   bundle B also references S, S is inlined into B too. With
+        //   50+ consumer bundles all referencing the same handful of SDK
+        //   / URP shaders, we get the ~300-entry duplicate-dep report
+        //   the Analyze window flags.
+        //
+        //   Making S explicitly addressable (via CreateOrMoveEntry into
+        //   the foundation group) flips it to "explicit" — Unity now
+        //   packs S into the foundation bundle ONCE and resolves runtime
+        //   references from A and B via the dep graph. Storage cost
+        //   drops to 1x.
+        //
+        // GetDependencies(recursive: true) is the right walk depth here:
+        //   - Direct refs from content prefabs (a content prefab uses an
+        //     SDK helper prefab → foundation owns the helper prefab).
+        //   - Transitive refs via materials (a content material's shader
+        //     ref → foundation owns the shader).
+        // Recursive walking can be slow on large content folders; cache
+        // would be premature optimization since this runs at build time
+        // and the result of GetDependencies is itself cached by Unity.
+        private static void PromoteFoundationDepsToSharedGroup(
+            AddressableAssetSettings settings, string gameId, ref Result result)
+        {
+            string contentRoot = $"Assets/Content/{gameId}";
+            if (!AssetDatabase.IsValidFolder(contentRoot)) return;
+
+            // 1. Discover what foundation paths are reachable from content.
+            //    We scope by prefabs because content roots are always prefabs
+            //    in DreamPark (no scenes ship as addressables).
+            string[] prefabGuids = AssetDatabase.FindAssets("t:Prefab", new[] { contentRoot });
+            if (prefabGuids == null || prefabGuids.Length == 0) return;
+
+            var foundationDeps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var guid in prefabGuids)
+            {
+                string prefabPath = AssetDatabase.GUIDToAssetPath(guid);
+                if (string.IsNullOrEmpty(prefabPath)) continue;
+                foreach (var dep in AssetDatabase.GetDependencies(prefabPath, recursive: true))
+                {
+                    if (IsFoundationCandidate(dep))
+                        foundationDeps.Add(dep);
+                }
+            }
+
+            if (foundationDeps.Count == 0) return;
+
+            // 2. Get / create the shared foundation group.
+            string groupName = $"{gameId}-{SharedFoundationSuffix}";
+            var sharedGroup = GetOrCreateGroup(settings, groupName, out bool created);
+            ConfigureBundleSchema(settings, sharedGroup);
+            if (created) result.groupsCreated++;
+
+            // 3. Promote every foundation dep to an explicit entry in the
+            //    shared group. CreateOrMoveEntry handles both cases:
+            //      - new entry (was implicit dep) → becomes explicit
+            //      - existing entry (was in some other group) → relocated
+            //        into the foundation group. This intentionally pulls
+            //        foundation paths out of wherever a prior pass put them
+            //        (e.g. an earlier Smart pass that didn't know about the
+            //        Foundation step might have left foundation assets in
+            //        Runtime or a per-root Content bundle).
+            foreach (var depPath in foundationDeps)
+            {
+                string guid = AssetDatabase.AssetPathToGUID(depPath);
+                if (string.IsNullOrEmpty(guid)) continue;
+                var entry = settings.FindAssetEntry(guid);
+                if (entry != null && entry.parentGroup == sharedGroup) continue;
+                settings.CreateOrMoveEntry(guid, sharedGroup, false, false);
+            }
         }
 
         private static AddressableAssetGroup GetOrCreateGroup(
