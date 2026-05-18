@@ -3,6 +3,7 @@ using System;
 using DreamPark.API;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.Networking;
 
 namespace DreamPark
 {
@@ -71,7 +72,18 @@ namespace DreamPark
             GUILayout.BeginHorizontal();
             if (GUILayout.Button("Sign Up"))
             {
-                Application.OpenURL("https://dreampark.app/signup");
+                // Route SDK signups into the Developer Program flow (embedded
+                // SDK Use Agreement + survey) rather than the consumer signup.
+                // The query tags let the web infer origin: ?developer=true is
+                // the routing flag, source/sdk_version/unity_version are read
+                // by the page for tracking and to prefill the referral source.
+                string sdkVersion = SDKVersion.Current ?? "unknown";
+                string unityVersion = Application.unityVersion ?? "unknown";
+                string url = string.Format(
+                    "https://dreampark.app/signup?developer=true&source=sdk&sdk_version={0}&unity_version={1}",
+                    UnityWebRequest.EscapeURL(sdkVersion),
+                    UnityWebRequest.EscapeURL(unityVersion));
+                Application.OpenURL(url);
             }
             GUILayout.FlexibleSpace();
             if (GUILayout.Button("Cancel"))

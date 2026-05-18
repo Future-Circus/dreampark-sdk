@@ -1,4 +1,4 @@
-#if UNITY_EDITOR && !DREAMPARKCORE
+#if UNITY_EDITOR
 using System;
 using DreamPark.API;
 using UnityEditor;
@@ -6,10 +6,16 @@ using UnityEngine;
 
 namespace DreamPark
 {
-    // Caches whether the current user is allowed to publish SDK versions.
-    // Source of truth is the backend (GET /api/sdk/canPublish); this class is
-    // just an in-memory cache so the Publish menu's validate function returns
-    // synchronously.
+    // Caches whether the current user is allowed to publish SDK versions
+    // OR view internal-only editor tooling (Test Channel in Content Manager,
+    // etc.). Source of truth is the backend (GET /api/sdk/canPublish);
+    // this class is just an in-memory cache so the Publish menu's validate
+    // function returns synchronously.
+    //
+    // Originally SDK-only — the file is now compiled in dreampark-core too
+    // so the Content Manager's Test Channel dropdown can gate on the same
+    // admin signal without having to re-implement the probe / focus-retry
+    // / login-state-clear logic.
     //
     // Lifecycle:
     //   - On editor load (delayCall, after AuthAPI is restored from EditorPrefs):
