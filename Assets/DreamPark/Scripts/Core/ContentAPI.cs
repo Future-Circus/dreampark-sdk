@@ -482,6 +482,347 @@ namespace DreamPark.API
             });
         }
 
+        // ─── Test Channel ────────────────────────────────────────────
+        // Dump-and-forget uploads for internal SDK testing. Distinct from
+        // UploadContent (production versioning flow) in three ways:
+        //   1. No contentId — each upload allocates a fresh testBuildId
+        //      server-side, so test bundles can't collide with the
+        //      production content/{contentId}/versions[] array.
+        //   2. No skipFileKeys / preUploadedFiles plumbing — test runs
+        //      are full uploads every time. Incremental upload makes no
+        //      sense for one-off test bundles.
+        //   3. Admin-gated on the backend (verifyAdmin middleware) so
+        //      non-team users hitting these routes get 403.
+        // Backend auto-expires test builds after 7 days
+        // (lib/testBuildCleanup.js), so callers don't need to clean up.
+        //
+        // Two-step API:
+        //   1. CreateTestBuild   → returns testBuildId. Call this BEFORE
+        //      running the addressables build so the build can bake the
+        //      test-channel URL pattern into the catalog (RemoteLoadPath
+        //      = /api/test-content/addressables/{testBuildId}). Without
+        //      that, Unity's Caching layer would key bundles against the
+        //      production URL and the editor would re-download every
+        //      time it loaded the test build.
+        //   2. UploadTestBuildArtifacts → uploads everything in
+        //      ServerData/ to the test_build doc allocated in step 1,
+        //      then commits the catalog + manifest.
+        //
+        // Callbacks receive (success, testBuildId, response). The
+        // testBuildId is included even on failure paths where it was
+        // allocated, so the UI can surface "your test build {id} failed
+        // to upload" rather than dropping it on the floor — and the
+        // backend cleanup loop reaps the orphaned doc within 7 days.
+
+        // Step 1 — allocate a new test_build doc and return its ID.
+        // Idempotent only at the doc-creation level; calling twice gives
+        // two distinct testBuildIds (each gets its own storage prefix and
+        // its own 7-day TTL). The metadata fields written here (title,
+        // releaseNotes, contentName) can all be overwritten at commit
+        // time, so callers don't need to know the final values yet — the
+        // important thing is allocating the ID before the bundle build
+        // runs.
+        public static void CreateTestBuild(string title, string releaseNotes, string contentName, Action<bool, string, APIResponse> callback)
+        {
+            JSONObject createBody = new JSONObject();
+            createBody.AddField("title", string.IsNullOrEmpty(title) ? "Untitled test build" : title);
+            createBody.AddField("releaseNotes", releaseNotes ?? "");
+            createBody.AddField("contentName", contentName ?? "");
+
+            DreamParkAPI.POST("/api/test-content/create", AuthAPI.GetUserAuth(), createBody, (createSuccess, createResp) =>
+            {
+                if (!createSuccess || createResp?.json == null)
+                {
+                    Debug.LogError($"[TestBuild] Failed to create test build: {createResp?.error ?? "unknown"}");
+                    callback?.Invoke(false, null, createResp);
+                    return;
+                }
+                string testBuildId = createResp.json.GetField("testBuildId")?.stringValue;
+                if (string.IsNullOrEmpty(testBuildId))
+                {
+                    Debug.LogError("[TestBuild] Backend returned no testBuildId");
+                    callback?.Invoke(false, null, new DreamParkAPI.APIResponse(false, 0, "No testBuildId returned"));
+                    return;
+                }
+                Debug.Log($"[TestBuild] Created {testBuildId}");
+                callback?.Invoke(true, testBuildId, createResp);
+            });
+        }
+
+        // Step 2 — uploads every file currently in ServerData/ to the
+        // pre-allocated test_build doc, then commits with the final
+        // metadata. The caller is expected to have already done a full
+        // compile pipeline pass with RemoteLoadPath baked to the test
+        // URL pattern (see ContentUploaderPanel.RunTestBuildPipeline)
+        // before invoking this — otherwise the bundle URLs inside the
+        // catalog won't match the URLs the editor download flow uses
+        // and Unity's Caching layer will treat every load as a miss.
+        public static void UploadTestBuildArtifacts(string testBuildId, string title, string releaseNotes, string contentName, string logoAddress, JSONObject manifestSummary, Action<bool, string, APIResponse> callback)
+        {
+            if (string.IsNullOrEmpty(testBuildId))
+            {
+                callback?.Invoke(false, null, new DreamParkAPI.APIResponse(false, 0, "Missing testBuildId"));
+                return;
+            }
+
+            UploadContentRequest data = new UploadContentRequest();
+            var files = data.ToList();
+            if (files == null || files.Count == 0)
+            {
+                Debug.LogWarning("[TestBuild] No files found to upload (ServerData/ empty).");
+                callback?.Invoke(false, testBuildId, new DreamParkAPI.APIResponse(false, 0, "No files found to upload"));
+                return;
+            }
+
+            InitializeUploadProgress(files);
+            Debug.Log($"[TestBuild] Uploading {files.Count} file(s) to {testBuildId}");
+
+        #if UNITY_EDITOR
+            Unity.EditorCoroutines.Editor.EditorCoroutineUtility.StartCoroutineOwnerless(
+                TestBuildUploadFlow(testBuildId, title, releaseNotes, contentName, logoAddress, files, manifestSummary, callback));
+        #else
+            CoroutineRunner.Run(
+                TestBuildUploadFlow(testBuildId, title, releaseNotes, contentName, logoAddress, files, manifestSummary, callback));
+        #endif
+        }
+
+        // Legacy convenience wrapper — kept for any caller that still
+        // wants the all-in-one flow (no build, just push what's in
+        // ServerData). Internal callers should prefer the two-step
+        // CreateTestBuild + UploadTestBuildArtifacts so they can bake
+        // the test URL into the build between the two calls.
+        public static void UploadTestBuild(string title, string releaseNotes, string contentName, JSONObject manifestSummary, Action<bool, string, APIResponse> callback)
+        {
+            CreateTestBuild(title, releaseNotes, contentName, (createOk, testBuildId, createResp) =>
+            {
+                if (!createOk)
+                {
+                    callback?.Invoke(false, testBuildId, createResp);
+                    return;
+                }
+                // logoAddress is optional on this convenience wrapper —
+                // callers that need it use the two-step CreateTestBuild
+                // + UploadTestBuildArtifacts directly.
+                UploadTestBuildArtifacts(testBuildId, title, releaseNotes, contentName, logoAddress: null, manifestSummary, callback);
+            });
+        }
+
+        public static void GetTestBuilds(Action<bool, APIResponse> callback)
+        {
+            DreamParkAPI.GET("/api/test-content/list", AuthAPI.GetUserAuth(), (success, response) =>
+            {
+                callback?.Invoke(success, response);
+            });
+        }
+
+        public static void GetTestBuild(string testBuildId, Action<bool, APIResponse> callback)
+        {
+            DreamParkAPI.GET($"/api/test-content/{testBuildId}", AuthAPI.GetUserAuth(), (success, response) =>
+            {
+                callback?.Invoke(success, response);
+            });
+        }
+
+        private static IEnumerator TestBuildUploadFlow(string testBuildId, string title, string releaseNotes, string contentName, string logoAddress, List<KeyValuePair<string, UploadContentData>> files, JSONObject manifestSummary, Action<bool, string, DreamParkAPI.APIResponse> callback)
+        {
+            TestBuildUploadFlowAsync(testBuildId, title, releaseNotes, contentName, logoAddress, files, manifestSummary, callback).Forget();
+            yield break;
+        }
+
+        private static async UniTaskVoid TestBuildUploadFlowAsync(string testBuildId, string title, string releaseNotes, string contentName, string logoAddress, List<KeyValuePair<string, UploadContentData>> files, JSONObject manifestSummary, Action<bool, string, DreamParkAPI.APIResponse> callback)
+        {
+            var uploadTasks = new List<UniTask>();
+            var uploadedFilesDict = new Dictionary<string, List<string>>();
+            // Parallel-tracker lists for parity with the production flow;
+            // test builds don't replay failed-only retries, but we still
+            // count failures to short-circuit before commit if anything
+            // went wrong (a committed test build with missing bundles
+            // would 404 mid-download from the Test Channel UI).
+            var thisRunSucceeded = new List<UploadedFileRecord>();
+            var thisRunFailed = new List<UploadedFileRecord>();
+
+            string presignPath = $"/api/test-content/{testBuildId}/uploadUrl";
+
+            using (var uploadGate = new SemaphoreSlim(MaxConcurrentUploads, MaxConcurrentUploads))
+            {
+                foreach (var kvp in files)
+                {
+                    string platform = kvp.Key;
+                    UploadContentData file = kvp.Value;
+                    uploadTasks.Add(TestBuildGatedUpload(uploadGate, presignPath, platform, file,
+                        uploadedFilesDict, thisRunSucceeded, thisRunFailed));
+                }
+                await UniTask.WhenAll(uploadTasks);
+            }
+
+            int uploaded = thisRunSucceeded.Count;
+            int failed = thisRunFailed.Count;
+            Debug.Log($"[TestBuild] Uploaded {uploaded}/{files.Count} ({failed} failed) for {testBuildId}");
+
+            if (failed > 0)
+            {
+                string errorMsg = $"{failed} of {files.Count} file(s) failed to upload — test build not committed.";
+                Debug.LogError($"[TestBuild] {errorMsg}");
+                callback?.Invoke(false, testBuildId, new DreamParkAPI.APIResponse(false, 0, errorMsg));
+                return;
+            }
+
+            // Build commit body. Matches the production commitUpload shape
+            // for uploadedFiles (per-platform string-array of storage
+            // paths) so the backend's path-validation logic is the same
+            // primitive both ends — see api.testContent.routes.js's
+            // cleanedCatalog construction.
+            JSONObject commitBody = new JSONObject(JSONObject.Type.Object);
+            JSONObject uploadedFilesJson = new JSONObject(JSONObject.Type.Object);
+            foreach (var kvp in uploadedFilesDict)
+            {
+                JSONObject arr = new JSONObject(JSONObject.Type.Array);
+                foreach (var path in kvp.Value)
+                    arr.Add(path);
+                uploadedFilesJson.AddField(kvp.Key, arr);
+            }
+            commitBody.AddField("uploadedFiles", uploadedFilesJson);
+            commitBody.AddField("title", title ?? "");
+            commitBody.AddField("releaseNotes", releaseNotes ?? "");
+            commitBody.AddField("contentName", contentName ?? "");
+            if (!string.IsNullOrEmpty(logoAddress))
+            {
+                // Mirrors production /api/content/ contentItem.logoAddress.
+                // Stored on the test_build doc so the Content Manager's
+                // DrawContentLogo can pull the logo Texture2D from the
+                // loaded catalog using this addressable key.
+                commitBody.AddField("logoAddress", logoAddress);
+            }
+            if (manifestSummary != null)
+            {
+                commitBody.AddField("manifest", manifestSummary);
+            }
+
+            DreamParkAPI.POST($"/api/test-content/{testBuildId}/commit", AuthAPI.GetUserAuth(), commitBody, (success, response) =>
+            {
+                if (success)
+                    Debug.Log($"[TestBuild] ✅ Committed {testBuildId}");
+                else
+                    Debug.LogError($"[TestBuild] ❌ Commit failed: {response?.error}");
+                callback?.Invoke(success, testBuildId, response);
+            });
+        }
+
+        // Test-build per-file pipeline — gated on the same SemaphoreSlim
+        // production uploads use (MaxConcurrentUploads) so a test upload
+        // running alongside a separate user's production upload can't
+        // double the dev server's concurrent handler count.
+        private static async UniTask TestBuildGatedUpload(
+            SemaphoreSlim gate,
+            string presignPath,
+            string platform,
+            UploadContentData file,
+            Dictionary<string, List<string>> uploadedFilesDict,
+            List<UploadedFileRecord> thisRunSucceeded,
+            List<UploadedFileRecord> thisRunFailed)
+        {
+            await gate.WaitAsync();
+            try
+            {
+                var result = await TestBuildHandleFileUpload(presignPath, platform, file);
+                if (result.success)
+                {
+                    lock (uploadedFilesDict)
+                    {
+                        if (!uploadedFilesDict.ContainsKey(platform))
+                            uploadedFilesDict[platform] = new List<string>();
+                        uploadedFilesDict[platform].Add(result.uploadPath);
+                        thisRunSucceeded.Add(new UploadedFileRecord(platform, file.fileName, result.uploadPath));
+                    }
+                }
+                else
+                {
+                    lock (uploadedFilesDict)
+                    {
+                        thisRunFailed.Add(new UploadedFileRecord(platform, file.fileName, null));
+                    }
+                }
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }
+
+        private static async UniTask<(bool success, string uploadPath)> TestBuildHandleFileUpload(string presignPath, string platform, UploadContentData file)
+        {
+            for (int attempt = 1; attempt <= MaxFileUploadAttempts; attempt++)
+            {
+                try
+                {
+                    var (ok, path) = await TestBuildTryUploadOnce(presignPath, platform, file, attempt);
+                    if (ok)
+                    {
+                        MarkUploadComplete(platform, file.fileName, true);
+                        return (true, path);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"⚠️ {file.fileName} test upload threw on attempt {attempt}: {ex.Message}");
+                }
+                if (attempt < MaxFileUploadAttempts)
+                {
+                    int backoffMs = (int)Math.Pow(2, attempt) * 500;
+                    UpdateUploadProgress(platform, file.fileName, 0f);
+                    await UniTask.Delay(backoffMs);
+                }
+            }
+            MarkUploadComplete(platform, file.fileName, false);
+            return (false, null);
+        }
+
+        private static async UniTask<(bool success, string uploadPath)> TestBuildTryUploadOnce(string presignPath, string platform, UploadContentData file, int attempt)
+        {
+            // Presign request: identical body shape to the production
+            // /api/content/:contentId/uploadUrl endpoint so the backend
+            // can use the same field-extraction code.
+            var body = new JSONObject();
+            body.AddField("platform", platform);
+            body.AddField("filename", file.fileName);
+            body.AddField("contentType", file.mimeType);
+
+            var tcs = new UniTaskCompletionSource<(bool success, string url, string uploadPath)>();
+            DreamParkAPI.POST(presignPath, AuthAPI.GetUserAuth(), body, (success, response) =>
+            {
+                if (success && response.json != null)
+                {
+                    var uploadUrl = response.json.GetField("uploadUrl")?.stringValue;
+                    var uploadPath = response.json.GetField("uploadPath")?.stringValue;
+                    tcs.TrySetResult((true, uploadUrl, uploadPath));
+                }
+                else
+                {
+                    if (attempt == 1)
+                        Debug.LogWarning($"⚠️ Failed to get presigned URL for {file.fileName} (test build)");
+                    tcs.TrySetResult((false, null, null));
+                }
+            });
+
+            var (ok, uploadUrl, uploadPath) = await tcs.Task;
+            if (!ok || string.IsNullOrEmpty(uploadUrl))
+            {
+                return (false, null);
+            }
+
+            var uploadTcs = new UniTaskCompletionSource<bool>();
+            DreamParkAPI.PUT(uploadUrl, "", file.data, file.mimeType, (progress) =>
+            {
+                UpdateUploadProgress(platform, file.fileName, progress);
+            }, (uploadSuccess, _) =>
+            {
+                uploadTcs.TrySetResult(uploadSuccess);
+            });
+
+            bool successUpload = await uploadTcs.Task;
+            return (successUpload, successUpload ? uploadPath : null);
+        }
+
         private static IEnumerator UploadFlow(string contentId, List<KeyValuePair<string, UploadContentData>> files, string releaseNotes, int? schemaVersion, JSONObject manifestSummary, List<UploadedFileRecord> preUploadedFiles, Action<bool, APIResponse> callback)
         {
             // Convert coroutine to async UniTask for concurrency

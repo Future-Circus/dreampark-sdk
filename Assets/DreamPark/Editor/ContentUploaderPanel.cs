@@ -253,6 +253,12 @@ namespace DreamPark {
             AuthAPI.LoginStateChanged += OnLoginStateChanged;
             SDKUpdateChecker.ManifestUpdated += OnManifestUpdated;
             EditorApplication.projectChanged += OnProjectChangedForRoots;
+            // Repaint when the admin-state probe settles so the Upload
+            // Test Build button in the Troubleshooting section becomes
+            // visible the moment the backend's canPublish response lands
+            // (without this, the button only shows up the next time the
+            // user clicks the panel and forces a repaint).
+            AdminState.AdminStateChanged += Repaint;
 
             RestoreContentIdSelection();
             LoadBuildTargetSelection();
@@ -300,6 +306,7 @@ namespace DreamPark {
             AuthAPI.LoginStateChanged -= OnLoginStateChanged;
             SDKUpdateChecker.ManifestUpdated -= OnManifestUpdated;
             EditorApplication.projectChanged -= OnProjectChangedForRoots;
+            AdminState.AdminStateChanged -= Repaint;
         }
 
         private void OnManifestUpdated() => Repaint();
@@ -830,6 +837,350 @@ namespace DreamPark {
                 }
             }
             GUI.enabled = true;
+
+            // ─── Test Channel upload ─────────────────────────────
+            // Admin / dreampark.app teammates only. Pushes the bundles
+            // currently sitting in ServerData/ to the Test Channel in
+            // dreampark-core's Content Manager — a separate listing
+            // outside the Beta/Release versioning flow that auto-expires
+            // after 7 days. Useful for handing an in-progress test
+            // build to internal SDK / smartpacker development without
+            // burning a real version number.
+            //
+            // AdminState.IsAdmin is sourced from /api/sdk/canPublish on
+            // the backend, which calls getAdminAccessForEmail — the same
+            // primitive the test-content backend gates with. So if this
+            // button is rendered, the upload will succeed; if IsAdmin
+            // hasn't probed yet (null) the button stays hidden rather
+            // than disabled, to keep the section uncluttered for non-team
+            // users.
+            if (AdminState.IsAdmin == true)
+            {
+                GUILayout.Space(6);
+                bool testShippable = HasShippableContent();
+                GUI.enabled = !isUploading && !string.IsNullOrEmpty(contentId) && testShippable;
+                if (GUILayout.Button(new GUIContent(
+                    "Upload Test Build (Test Channel)",
+                    "DreamPark teammates only.\n\n" +
+                    "Runs a fresh editor-only compile (Mac and/or Windows — picked in the dialog) " +
+                    "and pushes the resulting bundles to the Test Channel in dreampark-core's " +
+                    "Content Manager. Test builds live in their own listing, separate from " +
+                    "Beta/Release, and auto-expire after 7 days. iOS and Android are skipped " +
+                    "because test builds are meant for previewing inside the dreampark-core " +
+                    "Unity editor."),
+                    GUILayout.Height(22)))
+                {
+                    BeginTestBuildUpload();
+                }
+                GUI.enabled = true;
+            }
+        }
+
+        // Entry point for the Test Channel upload button. Opens the
+        // title/release-notes/platforms dialog, then on confirm runs the
+        // full compile-and-upload pipeline:
+        //
+        //   1. Allocate a testBuildId via POST /api/test-content/create.
+        //      The ID has to exist BEFORE the addressables build runs so
+        //      the build can bake the test-channel URL pattern into the
+        //      catalog's RemoteLoadPath. Without that step, Unity's
+        //      Caching layer would key bundles against a stale production
+        //      URL and the editor would re-fetch every bundle on each
+        //      load instead of hitting the cache.
+        //   2. Run the same compile pipeline production uses — clear
+        //      ServerData, configure addressable settings, third-party
+        //      sync, group update, logo entry, namespace enforcement,
+        //      Unity package build — but ONLY for the editor targets the
+        //      user picked (Mac / Windows). iOS and Android are
+        //      intentionally skipped: test builds exist to preview in
+        //      dreampark-core's editor, which runs on Mac or Windows.
+        //   3. Upload everything in ServerData/ to the pre-allocated
+        //      test_build doc via ContentAPI.UploadTestBuildArtifacts
+        //      and commit with the final metadata + manifest.
+        //
+        // Wraps the whole sequence in the same isUploading guard the
+        // regular Compile & Upload flow uses, so the rest of the panel
+        // stays disabled while a test compile is in flight.
+        private void BeginTestBuildUpload()
+        {
+            if (string.IsNullOrEmpty(contentId))
+            {
+                EditorUtility.DisplayDialog("No content selected", "Select a content folder before uploading a test build.", "OK");
+                return;
+            }
+
+            TestBuildUploadDialog.Show(contentId, (title, releaseNotes, _, doBuildOsx, doBuildWindows) =>
+            {
+                if (!doBuildOsx && !doBuildWindows)
+                {
+                    EditorUtility.DisplayDialog("No platforms selected",
+                        "Pick at least one editor target (Mac or Windows) before uploading a test build.",
+                        "OK");
+                    return;
+                }
+                if (!SaveModifiedScenesBeforeCompile())
+                {
+                    EditorUtility.DisplayDialog("Cancelled", "Save all modified scenes before compiling a test build.", "OK");
+                    return;
+                }
+                SaveLogoSelection();
+
+                isUploading = true;
+                uploadStatusTitle = "Compiling test build...";
+                uploadStatusMessage = $"Allocating Test Channel ID for \"{title}\"";
+                uploadStatusProgress = 0.02f;
+                uploadStatusIsError = false;
+                uploadCompleted = false;
+                uploadSucceeded = false;
+                Repaint();
+
+                // Step 1: allocate testBuildId first so the build can
+                // bake the test-channel URL into the catalog.
+                DreamPark.API.ContentAPI.CreateTestBuild(title, releaseNotes, contentId, (createOk, testBuildId, createResp) =>
+                {
+                    if (!createOk || string.IsNullOrEmpty(testBuildId))
+                    {
+                        FinishTestBuildUpload(success: false, testBuildId: null, title: title,
+                            errorMessage: createResp?.error ?? "Could not allocate test build ID");
+                        return;
+                    }
+
+                    // Step 2: run the compile pipeline with the test URL
+                    // baked in. Build any platforms the user picked; iOS
+                    // and Android are intentionally never on for test
+                    // builds. Returns true iff every requested target
+                    // compiled cleanly.
+                    bool buildOk = RunTestBuildCompile(testBuildId, doBuildOsx, doBuildWindows, (stepLabel, stepProgress) =>
+                    {
+                        uploadStatusTitle = "Compiling test build...";
+                        uploadStatusMessage = stepLabel;
+                        uploadStatusProgress = stepProgress;
+                        Repaint();
+                    });
+
+                    if (!buildOk)
+                    {
+                        FinishTestBuildUpload(success: false, testBuildId: testBuildId, title: title,
+                            errorMessage: "Test build compile failed — see Console for details. The allocated test build will auto-expire in 7 days.");
+                        return;
+                    }
+
+                    // Step 3: build the manifest summary from what we
+                    // just compiled (so per-platform size shows up in
+                    // dreampark-core's Test Channel table) and upload.
+                    JSONObject testManifestSummary = null;
+                    try
+                    {
+                        // Match GetEnabledPlatformsForManifest — Unity is
+                        // always included so the Content Manager's
+                        // Supported Platforms table renders the
+                        // unitypackage size alongside the bundle
+                        // platforms. Without Unity here, that row shows
+                        // "—" even though the .unitypackage is in the
+                        // upload (because BuildUnityPackage writes to
+                        // ServerData/Unity/ and the request harvester
+                        // picks it up regardless of this list).
+                        var platformsForManifest = new List<string>();
+                        if (doBuildOsx) platformsForManifest.Add("StandaloneOSX");
+                        if (doBuildWindows) platformsForManifest.Add("StandaloneWindows");
+                        platformsForManifest.Add("Unity");
+                        if (platformsForManifest.Count > 0)
+                        {
+                            var manifest = BuildManifestStore.BuildFromServerData(contentId, 1, platformsForManifest);
+                            testManifestSummary = BuildManifestStore.BuildCommitSummary(manifest, diff: null);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogWarning($"[TestBuild] Could not build manifest summary: {ex.Message}");
+                        testManifestSummary = null;
+                    }
+
+                    uploadStatusTitle = "Uploading test build...";
+                    uploadStatusMessage = $"Pushing bundles to Test Channel ({title})";
+                    uploadStatusProgress = 0.85f;
+                    Repaint();
+
+                    // Logo address is the Addressables key used by core's
+                    // DrawContentLogo to load the logo Texture2D out of
+                    // the catalog ({contentId}/Logos/{filename}). Null
+                    // when no logo is selected — core falls back to "no
+                    // logo" rendering, which is fine for test builds.
+                    string testLogoAddress = GetLogoAddress();
+
+                    DreamPark.API.ContentAPI.UploadTestBuildArtifacts(testBuildId, title, releaseNotes, contentId, testLogoAddress, testManifestSummary,
+                        (uploadOk, uploadedTestBuildId, uploadResp) =>
+                        {
+                            FinishTestBuildUpload(uploadOk, uploadedTestBuildId, title,
+                                uploadOk ? null : (uploadResp?.error ?? "Unknown error"));
+                        });
+                });
+            });
+        }
+
+        // Common landing pad for both the create-failed and
+        // upload-finished branches — keeps the panel's progress/spinner
+        // state consistent regardless of which step bailed out, and
+        // always clears the EditorUtility progress bar (which the
+        // compile pipeline may have shown via reportStep).
+        private void FinishTestBuildUpload(bool success, string testBuildId, string title, string errorMessage)
+        {
+            EditorUtility.ClearProgressBar();
+            isUploading = false;
+            uploadCompleted = true;
+            uploadSucceeded = success;
+            uploadStatusProgress = success ? 1f : -1f;
+            uploadStatusIsError = !success;
+            if (success)
+            {
+                uploadStatusTitle = "Test build uploaded";
+                uploadStatusMessage = string.IsNullOrEmpty(testBuildId)
+                    ? $"Pushed to Test Channel as \"{title}\". Auto-expires in 7 days."
+                    : $"Pushed to Test Channel as \"{title}\" ({testBuildId}). Auto-expires in 7 days.";
+            }
+            else
+            {
+                uploadStatusTitle = "Test build failed";
+                uploadStatusMessage = errorMessage ?? "Unknown error";
+            }
+            Repaint();
+        }
+
+        // Runs the compile half of a Compile & Upload, scoped to editor
+        // targets only and with the catalog's RemoteLoadPath pointed at
+        // /api/test-content/addressables/{testBuildId} so the bundles
+        // baked into the catalog match the URLs dreampark-core's
+        // BuildEditorBundleUrl helper rewrites to. Returns true iff every
+        // selected target compiled.
+        //
+        // Deliberately a mirror of UploadContent's build steps (lines
+        // ~2710-2828 in the production path) rather than calling into
+        // that method directly:
+        //   • UploadContent is welded to the full Compile & Upload flow
+        //     (manifest diff → skipSet → commit metadata → schema sync
+        //     etc.) and reusing it would require threading a "test build"
+        //     flag through dozens of conditionals.
+        //   • Test builds don't need iOS / Android, don't need the
+        //     manifest diff or skipSet logic (every test push is a full
+        //     compile), and don't run through the version-approval
+        //     pipeline at all.
+        // Keeping this as a focused mirror means production stays
+        // untouched and test-channel behavior is easy to read in one
+        // place.
+        private bool RunTestBuildCompile(string testBuildId, bool doBuildOsx, bool doBuildWindows, Action<string, float> reportProgress)
+        {
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            string serverDataPath = Path.Combine(projectRoot, "ServerData");
+
+            // RemoteLoadPath baked into the catalog. Must match the URL
+            // dreampark-core/Assets/Editor/ContentManagerPanelWindow.cs's
+            // BuildEditorBundleUrl produces for test-addressables/ paths
+            // (see TestAddressablesStoragePrefix routing there) — when
+            // they match, Unity's Caching layer keys bundles against
+            // the same URL the editor download flow downloads them at,
+            // so test build loads hit the cache instead of redownloading.
+            string testTargetUrl = $"{DreamParkAPI.devBaseUrl}/api/test-content/addressables/{testBuildId}";
+
+            int numPlatforms = (doBuildOsx ? 1 : 0) + (doBuildWindows ? 1 : 0);
+            int currentStep = 0;
+            int totalSteps = 7 + numPlatforms;
+            Action<string> reportStep = (message) =>
+            {
+                currentStep++;
+                float stageProgress = Mathf.Clamp01((float)currentStep / Mathf.Max(1, totalSteps));
+                EditorUtility.DisplayProgressBar(
+                    "Compile Test Build",
+                    $"({currentStep}/{totalSteps}) {message}",
+                    stageProgress);
+                // Map the compile steps into the [0.05, 0.80] band of the
+                // panel-wide progress bar; upload fills the remaining
+                // [0.80, 1.00] band.
+                reportProgress?.Invoke(message, 0.05f + (stageProgress * 0.75f));
+            };
+
+            try
+            {
+                reportStep("Clearing previous build artifacts...");
+                if (Directory.Exists(serverDataPath))
+                {
+                    Directory.Delete(serverDataPath, true);
+                }
+                Caching.ClearCache();
+                Addressables.ClearResourceLocators();
+                AssetDatabase.Refresh();
+
+                reportStep("Configuring addressable settings...");
+                var settings = AddressableAssetSettingsDefaultObject.Settings;
+                settings.MonoScriptBundleNaming = MonoScriptBundleNaming.Custom;
+                settings.MonoScriptBundleCustomNaming = contentId + "_";
+                settings.OverridePlayerVersion = contentId;
+                // Pinned to Unity's default per the production comment
+                // about IL2CPP / Quest crashes when this is false.
+                settings.NonRecursiveBuilding = true;
+                EditorUtility.SetDirty(settings);
+                AssetDatabase.SaveAssets();
+
+                reportStep("Syncing third-party assets...");
+                try
+                {
+                    ThirdPartySyncTool.RunSyncForContent(contentId);
+                }
+                catch (Exception syncEx)
+                {
+                    Debug.LogWarning($"[TestBuild] Third-party sync skipped: {syncEx.Message}");
+                }
+                AssetDatabase.SaveAssets();
+                AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
+
+                reportStep("Updating addressable groups...");
+                ContentProcessor.ForceUpdateContent(contentId);
+                ContentProcessor.CleanupAddressableSettings();
+
+                reportStep("Updating logo entry...");
+                SyncLogoAddressableEntry();
+
+                reportStep("Enforcing content namespaces...");
+                ContentProcessor.EnforceContentNamespaces(contentId);
+
+                reportStep("Building scripts package...");
+                if (!ContentProcessor.BuildUnityPackage(contentId))
+                {
+                    Debug.LogError("[TestBuild] Unity package build failed");
+                    return false;
+                }
+
+                if (doBuildOsx)
+                {
+                    reportStep("Building StandaloneOSX...");
+                    if (!BuildForTarget(BuildTarget.StandaloneOSX, BuildTargetGroup.Standalone,
+                        $"{testTargetUrl}/StandaloneOSX", contentId))
+                    {
+                        Debug.LogError("[TestBuild] OSX build failed");
+                        return false;
+                    }
+                }
+                if (doBuildWindows)
+                {
+                    reportStep("Building StandaloneWindows...");
+                    if (!BuildForTarget(BuildTarget.StandaloneWindows, BuildTargetGroup.Standalone,
+                        $"{testTargetUrl}/StandaloneWindows", contentId))
+                    {
+                        Debug.LogError("[TestBuild] Windows build failed");
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[TestBuild] Compile failed: {ex}");
+                return false;
+            }
+            finally
+            {
+                EditorUtility.ClearProgressBar();
+            }
         }
 
         private static string FormatBytes(long bytes)
