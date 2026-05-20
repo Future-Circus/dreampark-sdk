@@ -27,6 +27,10 @@ namespace DreamPark
         private Vector2 progressScroll;
         private Vector2 notesScroll;
         private Vector2 mainScroll;
+        private Vector2 changedFilesScroll;
+        private Vector2 unchangedFilesScroll;
+        private bool foldChangedFiles = true;
+        private bool foldUnchangedFiles = false;
 
         public static void Show(ContentUploaderPanel owner, bool buildBeforeUpload)
         {
@@ -105,7 +109,7 @@ namespace DreamPark
 
         private void OnEditorUpdate()
         {
-            if (owner != null && owner.IsUploading)
+            if (owner != null && (owner.IsUploading || owner.HasPendingProductionEstimate))
             {
                 Repaint();
             }
@@ -657,7 +661,6 @@ namespace DreamPark
                 EditorGUILayout.LabelField(line, EditorStyles.miniLabel);
             }
             EditorGUILayout.EndScrollView();
-            GUILayout.EndVertical();
         }
 
         private void DrawStatusCard()
