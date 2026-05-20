@@ -1217,13 +1217,17 @@ namespace DreamPark
         //
         // We still exclude scripts / asmdefs / dlls / metas — same reasons
         // as ShouldSkipAsDep (they ship via the MonoScript bundle or
-        // shouldn't be bundled at all).
+        // shouldn't be bundled at all). Raw font source files (.ttf/.otf)
+        // are also excluded: Android Addressables builds can choke on a
+        // promoted TrueType entry, while the TMP font asset / atlas is the
+        // actual runtime dependency we want in bundles.
         private static bool IsFoundationCandidate(string path)
         {
             if (string.IsNullOrEmpty(path)) return false;
             string ext = Path.GetExtension(path).ToLowerInvariant();
             if (ext == ".cs" || ext == ".asmdef" || ext == ".asmref") return false;
             if (ext == ".dll" || ext == ".meta") return false;
+            if (ext == ".ttf" || ext == ".otf" || ext == ".ttc") return false;
 
             foreach (var prefix in FoundationPathPrefixes)
             {
