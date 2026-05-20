@@ -1,0 +1,35 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bbb281ee3bf0b054c82ac2347e9e782c, type: 3}
+  m_Name: YOUR_GAME_HERE-Bundle-A_TestAttraction
+  m_EditorClassIdentifier: 
+  m_GroupName: YOUR_GAME_HERE-Bundle-A_TestAttraction
+  m_GUID: 95c727f56d6c44d498bd06edb911de42
+  m_SerializeEntries:
+  - m_GUID: 6db92470638b24eb9b0d423df60f2f5d
+    m_Address: YOUR_GAME_HERE/Levels/Micro/A_TestAttraction
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - YOUR_GAME_HERE
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: f8f519b19e48a4a8ba629b732d92cc25
+    m_Address: YOUR_GAME_HERE/Previews/A_TestAttraction
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - YOUR_GAME_HERE
+    FlaggedDuringContentUpdateRestriction: 0
+  m_ReadOnly: 0
+  m_Settings: {fileID: 11400000, guid: 5e922c848874c41bc90d6a8d78c6f5a9, type: 2}
+  m_SchemaSet:
+    m_Schemas:
+    - {fileID: 11400000, guid: 911c088a49931490881fec1829b495dd, type: 2}
+    - {fileID: 11400000, guid: a5f15d48bbe954ea6839adf89ce99705, type: 2}

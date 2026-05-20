@@ -1,0 +1,35 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bbb281ee3bf0b054c82ac2347e9e782c, type: 3}
+  m_Name: YOUR_GAME_HERE-Bundle-P_TestPoint
+  m_EditorClassIdentifier: 
+  m_GroupName: YOUR_GAME_HERE-Bundle-P_TestPoint
+  m_GUID: 55f2fe21336bb4926ae7cca475651a27
+  m_SerializeEntries:
+  - m_GUID: 05d40b756093b4f018599e0679afac1b
+    m_Address: YOUR_GAME_HERE/Props/Generic/P_TestPoint
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - YOUR_GAME_HERE
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: bd4ac44033ce449918e56621f791a3b8
+    m_Address: YOUR_GAME_HERE/Previews/P_TestPoint
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - YOUR_GAME_HERE
+    FlaggedDuringContentUpdateRestriction: 0
+  m_ReadOnly: 0
+  m_Settings: {fileID: 11400000, guid: 5e922c848874c41bc90d6a8d78c6f5a9, type: 2}
+  m_SchemaSet:
+    m_Schemas:
+    - {fileID: 11400000, guid: 179349e214367463da604e74a34038d4, type: 2}
+    - {fileID: 11400000, guid: c2f578f1ecc2342cd9a72b0e7469bbb2, type: 2}
