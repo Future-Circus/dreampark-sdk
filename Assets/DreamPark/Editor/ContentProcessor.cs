@@ -28,24 +28,9 @@ namespace DreamPark {
       [InitializeOnLoadMethod]
         private static void RunOnStartup()
         {
-            // Only run once per Unity session
-            if (SessionState.GetBool("DreamPark_RanOnStartup", false))
-                return;
-
-            SessionState.SetBool("DreamPark_RanOnStartup", true);
-
-            EditorApplication.delayCall += () =>
-            {
-                if (!EditorApplication.isPlayingOrWillChangePlaymode && !EditorApplication.isCompiling)
-                {
-                    Debug.Log("🪄 Auto-running AssignAllGameIds on Editor startup (first time this session)...");
-                    ExecuteWithWatchdogPaused(() =>
-                    {
-                        ForceUpdateAllContentInternal();
-                        EnforceContentNamespaces();
-                    });
-                }
-            };
+            // Startup content processing is intentionally disabled.
+            // Content/addressable repair remains available via the manual
+            // troubleshooting tools and explicit build/update flows.
         }
 
         private static bool IsProcessing => sProcessingDepth > 0;
@@ -195,15 +180,23 @@ namespace DreamPark {
 
             int removedEntries = 0;
             int removedGroups = 0;
+            int removedBrokenRefs = 0;
+
+            removedBrokenRefs += PruneBrokenSerializedObjectReferences(
+                settings,
+                "m_GroupAssets");
 
             // Pass 1 — drop missing-reference entries from every group.
             foreach (var group in settings.groups.Where(g => g != null).ToList())
             {
+                removedBrokenRefs += PruneBrokenSerializedObjectReferences(
+                    group,
+                    "m_SchemaSet.m_Schemas");
+
                 var entriesToRemove = new List<string>();
                 foreach (var entry in group.entries.ToList())
                 {
-                    string path = AssetDatabase.GUIDToAssetPath(entry.guid);
-                    if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                    if (IsBrokenAddressableEntry(entry))
                     {
                         entriesToRemove.Add(entry.guid);
                     }
@@ -237,12 +230,74 @@ namespace DreamPark {
                 removedGroups++;
             }
 
-            if (removedEntries > 0 || removedGroups > 0)
+            if (removedEntries > 0 || removedGroups > 0 || removedBrokenRefs > 0)
             {
-                Debug.Log($"🧹 Cleanup: removed {removedEntries} missing-reference entry/entries and {removedGroups} stale empty group(s).");
+                Debug.Log($"🧹 Cleanup: removed {removedEntries} missing-reference entry/entries, {removedGroups} stale empty group(s), and {removedBrokenRefs} broken serialized reference(s).");
                 EditorUtility.SetDirty(settings);
                 AssetDatabase.SaveAssets();
             }
+            else
+            {
+                Debug.Log("ℹ️ Cleanup Addressables found no broken entries or stale empty groups.");
+            }
+        }
+
+        private static bool IsBrokenAddressableEntry(AddressableAssetEntry entry)
+        {
+            if (entry == null || string.IsNullOrEmpty(entry.guid))
+                return true;
+
+            string path = AssetDatabase.GUIDToAssetPath(entry.guid);
+            if (string.IsNullOrEmpty(path))
+                return true;
+
+            bool existsOnDisk = File.Exists(path) || Directory.Exists(path);
+            if (!existsOnDisk)
+                return true;
+
+            var mainAsset = AssetDatabase.LoadMainAssetAtPath(path);
+            return mainAsset == null;
+        }
+
+        private static int PruneBrokenSerializedObjectReferences(UnityEngine.Object target, string propertyPath)
+        {
+            if (target == null || string.IsNullOrEmpty(propertyPath))
+                return 0;
+
+            var serializedObject = new SerializedObject(target);
+            var property = serializedObject.FindProperty(propertyPath);
+            if (property == null || !property.isArray)
+                return 0;
+
+            int removed = 0;
+            for (int i = property.arraySize - 1; i >= 0; i--)
+            {
+                var element = property.GetArrayElementAtIndex(i);
+                if (element.propertyType != SerializedPropertyType.ObjectReference)
+                    continue;
+
+                if (element.objectReferenceValue != null)
+                    continue;
+
+                int beforeSize = property.arraySize;
+                property.DeleteArrayElementAtIndex(i);
+                if (property.arraySize == beforeSize)
+                {
+                    property.DeleteArrayElementAtIndex(i);
+                }
+                if (property.arraySize < beforeSize)
+                {
+                    removed++;
+                }
+            }
+
+            if (removed > 0)
+            {
+                serializedObject.ApplyModifiedPropertiesWithoutUndo();
+                EditorUtility.SetDirty(target);
+            }
+
+            return removed;
         }
 
 
@@ -272,7 +327,11 @@ namespace DreamPark {
                 foreach (string contentId in contentIds)
                 {
                     Debug.Log($"🖼️ Generating previews for content: {contentId}");
-                    GenerateAllLevelPreviews(contentId);
+                    // Manual menu invocation = explicit force-regenerate.
+                    // Devs reach for this when they've changed the preview
+                    // camera setup or just want every PNG refreshed regardless
+                    // of mtime state.
+                    GenerateAllLevelPreviews(contentId, forceRegenerate: true);
                 }
 
                 Debug.Log($"✅ Manual preview generation finished for {contentIds.Length} content folder(s).");
@@ -941,7 +1000,8 @@ namespace DreamPark {
                 var result = SmartBundleGrouper.ApplyDependencyAwareGrouping(settings, gameId);
                 Debug.Log($"📦 Smart bundling [experimental] for '{gameId}': " +
                           $"{result.rootBundles} root bundles, {result.runtimeAssets} runtime assets, " +
-                          $"+{result.groupsCreated}/-{result.groupsRemoved} groups.");
+                          $"+{result.groupsCreated}/-{result.groupsRemoved} groups, " +
+                          $"{result.orphanFilesRemoved} orphan files cleaned.");
             }
         }
 
@@ -974,7 +1034,7 @@ namespace DreamPark {
             masked.Apply();
             return masked;
         }
-        public static void GenerateAllLevelPreviews(string contentId)
+        public static void GenerateAllLevelPreviews(string contentId, bool forceRegenerate = false)
         {
             string contentRoot = $"Assets/Content/{contentId}";
             if (!AssetDatabase.IsValidFolder(contentRoot))
@@ -989,6 +1049,7 @@ namespace DreamPark {
                 .ToArray();
 
             int generated = 0;
+            int skipped = 0;
 
             foreach (string prefabPath in allPrefabs)
             {
@@ -1013,6 +1074,24 @@ namespace DreamPark {
                 if (!Directory.Exists(previewDir))
                 {
                     Directory.CreateDirectory(previewDir);
+                }
+
+                // Skip if the preview PNG is already up-to-date relative to
+                // the prefab and every asset it visually depends on. This
+                // turns Compile & Upload from "always regenerate ~150
+                // previews (~30-60s)" into "regenerate only what visibly
+                // changed" — and it stops the Previews bundle from re-
+                // uploading on every build just because the PNG bytes
+                // shifted via GPU/scheduler non-determinism.
+                //
+                // forceRegenerate=true bypasses this check; it's set by the
+                // "Regenerate Level Previews" menu item for cases where the
+                // dev wants to refresh every preview (e.g. after changing
+                // the PrefabPreviewRenderer camera setup).
+                if (!forceRegenerate && IsPreviewUpToDate(prefabPath, previewPath))
+                {
+                    skipped++;
+                    continue;
                 }
 
                 // Render high-quality preview with true transparency
@@ -1113,7 +1192,66 @@ namespace DreamPark {
             }
 
             AssetDatabase.Refresh();
-            Debug.Log($"✅ Preview generation complete. Generated {generated} preview(s).");
+            Debug.Log($"✅ Preview generation complete. Generated {generated}, skipped {skipped} (already up-to-date).");
+        }
+
+        // Returns true if the preview PNG at previewPath is already current
+        // relative to the prefab at prefabPath and every asset that
+        // contributes to the prefab's rendered appearance.
+        //
+        // "Current" means: the preview file exists, AND its on-disk mtime
+        // is greater than or equal to the mtime of:
+        //   - the prefab file itself (.prefab)
+        //   - the prefab's .meta (importer settings can affect rendering)
+        //   - every transitive dependency (materials, textures, meshes,
+        //     shaders, sub-prefabs — anything AssetDatabase.GetDependencies
+        //     reports for the prefab)
+        //   - each dependency's .meta (same reason — texture compression
+        //     change in a .meta would shift the rendered preview without
+        //     touching the .png/.mat source itself)
+        //
+        // The first newer-than-preview file short-circuits the scan.
+        // Performance: even with ~200 prefabs averaging 50 deps each, the
+        // total File.GetLastWriteTimeUtc cost is well under a second.
+        //
+        // Any IO error during the scan returns false (regenerate to be safe)
+        // — we'd rather waste a render than ship a stale preview.
+        private static bool IsPreviewUpToDate(string prefabPath, string previewPath)
+        {
+            if (!File.Exists(previewPath)) return false;
+
+            DateTime previewMtime;
+            try { previewMtime = File.GetLastWriteTimeUtc(previewPath); }
+            catch { return false; }
+
+            // Helper to test "is file X newer than the preview?" — returns
+            // true on any newer-than-preview OR any IO error.
+            bool NewerThanPreview(string p)
+            {
+                try
+                {
+                    if (!File.Exists(p)) return false;
+                    return File.GetLastWriteTimeUtc(p) > previewMtime;
+                }
+                catch { return true; }   // IO error → conservative: assume newer
+            }
+
+            // Prefab + its .meta
+            if (NewerThanPreview(prefabPath)) return false;
+            if (NewerThanPreview(prefabPath + ".meta")) return false;
+
+            // Transitive deps + their .metas. recursive: true returns the
+            // prefab itself plus everything it references; we already
+            // checked the prefab above, so skip the self-reference.
+            foreach (string dep in AssetDatabase.GetDependencies(prefabPath, recursive: true))
+            {
+                if (string.Equals(dep, prefabPath, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (NewerThanPreview(dep)) return false;
+                if (NewerThanPreview(dep + ".meta")) return false;
+            }
+
+            return true;
         }
 
         // ── GUID-line helpers for preview .meta preservation ────────────

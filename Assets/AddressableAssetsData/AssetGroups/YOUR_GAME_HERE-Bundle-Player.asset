@@ -1,0 +1,65 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bbb281ee3bf0b054c82ac2347e9e782c, type: 3}
+  m_Name: YOUR_GAME_HERE-Bundle-Player
+  m_EditorClassIdentifier: 
+  m_GroupName: YOUR_GAME_HERE-Bundle-Player
+  m_GUID: 7a6142a556ece4ea3888fd1a4fb5c96a
+  m_SerializeEntries:
+  - m_GUID: 141eeba284233415398795969dc97797
+    m_Address: YOUR_GAME_HERE/Models/DreamBand
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - YOUR_GAME_HERE
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 34144dac71db94e688bf33833c00fcf7
+    m_Address: YOUR_GAME_HERE/Textures/dreamband_nrm
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - YOUR_GAME_HERE
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 37bd2ccc608e741b1a218fd969c53815
+    m_Address: YOUR_GAME_HERE/Previews/Player
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - YOUR_GAME_HERE
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 43f3f84285667477294d9792e20ab702
+    m_Address: YOUR_GAME_HERE/Player
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - YOUR_GAME_HERE
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 8284c5807005c4049a15b51729d3c980
+    m_Address: YOUR_GAME_HERE/Textures/dreamband
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - YOUR_GAME_HERE
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: bca9d82c51d7046e497f9c77f9f930eb
+    m_Address: YOUR_GAME_HERE/Materials/DreamBand
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - YOUR_GAME_HERE
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: d96be89e33d714bb885a28c44dd396f6
+    m_Address: YOUR_GAME_HERE/DreamBand
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - YOUR_GAME_HERE
+    FlaggedDuringContentUpdateRestriction: 0
+  m_ReadOnly: 0
+  m_Settings: {fileID: 11400000, guid: 5e922c848874c41bc90d6a8d78c6f5a9, type: 2}
+  m_SchemaSet:
+    m_Schemas:
+    - {fileID: 11400000, guid: c2ab2ee7ef8a640bb8de11216af6bdc9, type: 2}
+    - {fileID: 11400000, guid: 2647e654ce1e44824b24d82c29d98954, type: 2}

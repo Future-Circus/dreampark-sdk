@@ -1,4 +1,5 @@
 #if UNITY_EDITOR && !DREAMPARKCORE
+using System;
 using System.Linq;
 using DreamPark.API;
 using UnityEditor;
@@ -26,6 +27,10 @@ namespace DreamPark
         private Vector2 progressScroll;
         private Vector2 notesScroll;
         private Vector2 mainScroll;
+        private Vector2 changedFilesScroll;
+        private Vector2 unchangedFilesScroll;
+        private bool foldChangedFiles = true;
+        private bool foldUnchangedFiles = false;
 
         public static void Show(ContentUploaderPanel owner, bool buildBeforeUpload)
         {
@@ -104,7 +109,7 @@ namespace DreamPark
 
         private void OnEditorUpdate()
         {
-            if (owner != null && owner.IsUploading)
+            if (owner != null && (owner.IsUploading || owner.HasPendingProductionEstimate))
             {
                 Repaint();
             }
@@ -147,7 +152,7 @@ namespace DreamPark
             GUILayout.Space(8);
             DrawReleaseNotesCard();
             GUILayout.Space(8);
-            DrawReleaseInsightsCard();
+            DrawPatchEstimateCard();
             GUILayout.Space(8);
             DrawStatusCard();
 
@@ -156,6 +161,42 @@ namespace DreamPark
             GUILayout.Space(8);
 
             const float actionButtonHeight = 34f;
+            bool canCheckPatchSize = owner.CanCheckProductionPatchSize(uploadMode, buildBeforeUpload, failedOnly);
+            bool checkBlocked = owner.IsUploading || !canCheckPatchSize;
+
+            if (buildBeforeUpload)
+            {
+                using (new GUILayout.HorizontalScope())
+                {
+                    using (new EditorGUI.DisabledScope(checkBlocked))
+                    {
+                        if (GUILayout.Button("Check Patch Size", GUILayout.Height(actionButtonHeight)))
+                        {
+                            bool started = owner.BeginPatchEstimateFromPopup(uploadMode);
+                            if (started)
+                            {
+                                GUI.FocusControl(null);
+                                Repaint();
+                            }
+                        }
+                    }
+
+                    GUILayout.Space(8f);
+
+                    DrawStartButton(actionButtonHeight);
+                }
+            }
+            else
+            {
+                DrawStartButton(actionButtonHeight);
+            }
+
+            GUI.enabled = true;
+            EditorGUILayout.EndScrollView();
+        }
+
+        private void DrawStartButton(float actionButtonHeight)
+        {
             // The Start button label hints at the chosen scope so the user
             // gets one more chance to spot a mis-selected mode before
             // committing. CodeOnly/PreviewsOnly modes also gate the button
@@ -174,15 +215,22 @@ namespace DreamPark
             GUI.enabled = !owner.IsUploading && !modeBlocked;
             if (GUILayout.Button(cta, GUILayout.Height(actionButtonHeight)))
             {
-                bool started = owner.BeginUploadFromPopup(buildBeforeUpload, uploadMode, failedOnly);
+                bool started;
+                if (owner.HasPendingTestBuildUpload)
+                {
+                    owner.ResumePendingTestBuildUpload();
+                    started = true;
+                }
+                else
+                {
+                    started = owner.BeginUploadFromPopup(buildBeforeUpload, uploadMode, failedOnly);
+                }
                 if (started)
                 {
                     GUI.FocusControl(null);
                     Repaint();
                 }
             }
-            GUI.enabled = true;
-            EditorGUILayout.EndScrollView();
         }
 
         // True when this contentId hasn't published a server-side version
@@ -266,12 +314,6 @@ namespace DreamPark
 
             EditorGUILayout.LabelField(UploadModePrefs.Description(uploadMode), EditorStyles.wordWrappedMiniLabel);
 
-            // Show a size estimate so the user can sanity-check the choice
-            // before committing to a build/upload. The estimate is derived
-            // from the local baseline manifest + dirty-groups set — no build
-            // is run to compute it, so it's cheap to render every OnGUI tick.
-            DrawUploadSizeEstimate();
-
             if (firstUpload)
             {
                 EditorGUILayout.HelpBox(
@@ -296,110 +338,6 @@ namespace DreamPark
             }
 
             GUILayout.EndVertical();
-        }
-
-        // Renders a one-line size estimate under the mode picker so the user
-        // can see roughly how much this upload will ship before committing.
-        // All numbers come from the locally-stored baseline manifest plus the
-        // dirty-groups set; no build is run, so this is cheap and OK to
-        // render on every OnGUI tick.
-        //
-        //   All           → total content of the last build (or "unknown" if
-        //                   no baseline yet)
-        //   Patch         → estimated bytes of dirty bundles (or zero if
-        //                   nothing has changed since last upload, or
-        //                   "everything" if no baseline)
-        //   CodeOnly      → sum of bundle sizes whose names match the Code
-        //                   group's prefix (including chunked variants)
-        //   PreviewsOnly  → same idea for Previews
-        private void DrawUploadSizeEstimate()
-        {
-            if (owner == null) return;
-            string contentId = owner.ContentId;
-            if (string.IsNullOrEmpty(contentId)) return;
-
-            var baseline = BuildManifestStore.LoadBaseline(contentId);
-
-            switch (uploadMode)
-            {
-                case UploadMode.All:
-                {
-                    if (baseline == null)
-                    {
-                        EditorGUILayout.LabelField(
-                            "Estimated size: unknown (no baseline yet — first build will determine total).",
-                            EditorStyles.wordWrappedMiniLabel);
-                    }
-                    else
-                    {
-                        EditorGUILayout.LabelField(
-                            $"Estimated upload: {BuildManifestStore.FormatBytes(baseline.TotalBytes)} (full content based on last successful upload).",
-                            EditorStyles.wordWrappedMiniLabel);
-                    }
-                    return;
-                }
-
-                case UploadMode.Patch:
-                {
-                    if (baseline == null)
-                    {
-                        EditorGUILayout.LabelField(
-                            "Estimated patch size: full upload (no baseline yet — first Patch ships everything).",
-                            EditorStyles.wordWrappedMiniLabel);
-                        return;
-                    }
-                    var dirty = DirtyGroupsStore.Load(contentId);
-                    if (dirty.Count == 0)
-                    {
-                        EditorGUILayout.LabelField(
-                            "Estimated patch size: ~few MB (catalog only — no content changes detected since last upload).",
-                            EditorStyles.wordWrappedMiniLabel);
-                        return;
-                    }
-                    var est = DirtyGroupsEstimator.Estimate(baseline, dirty);
-                    string sizeStr = BuildManifestStore.FormatBytes(est.estimatedBytes);
-                    string note = est.isIncomplete
-                        ? $"  (estimate incomplete — {est.unmatchedGroupNames.Count} dirty group(s) without a baseline match; could be smaller or larger)"
-                        : "";
-                    EditorGUILayout.LabelField(
-                        $"Estimated patch size: ~{sizeStr} across {est.matchedBundles} bundle(s) from {dirty.Count} dirty group(s).{note}",
-                        EditorStyles.wordWrappedMiniLabel);
-                    return;
-                }
-
-                case UploadMode.CodeOnly:
-                case UploadMode.PreviewsOnly:
-                {
-                    if (baseline == null)
-                    {
-                        EditorGUILayout.LabelField(
-                            "Estimated size: unknown (Code-only / Previews-only need a prior upload to estimate against).",
-                            EditorStyles.wordWrappedMiniLabel);
-                        return;
-                    }
-                    var target = uploadMode == UploadMode.CodeOnly
-                        ? UploadModeFilter.FileCategory.CodeBundle
-                        : UploadModeFilter.FileCategory.PreviewsBundle;
-                    long total = 0;
-                    int count = 0;
-                    foreach (var p in baseline.platforms)
-                    {
-                        foreach (var f in p.files)
-                        {
-                            if (UploadModeFilter.Categorize(contentId, f.fileName) == target)
-                            {
-                                total += f.sizeBytes;
-                                count++;
-                            }
-                        }
-                    }
-                    string targetName = uploadMode == UploadMode.CodeOnly ? "code" : "previews";
-                    EditorGUILayout.LabelField(
-                        $"Estimated upload: ~{BuildManifestStore.FormatBytes(total)} across {count} {targetName} bundle(s) (catalog ships too).",
-                        EditorStyles.wordWrappedMiniLabel);
-                    return;
-                }
-            }
         }
 
         private void DrawCompletionView()
@@ -652,27 +590,77 @@ namespace DreamPark
             GUILayout.EndVertical();
         }
 
-        private void DrawReleaseInsightsCard()
+        private void DrawPatchEstimateCard()
         {
             GUILayout.BeginVertical(EditorStyles.helpBox);
-            GUILayout.Label("Release Insights", EditorStyles.boldLabel);
-            EditorGUILayout.HelpBox(owner.GetPatchEstimateSummary(), MessageType.None);
+            GUILayout.Label("Patch Estimate", EditorStyles.boldLabel);
 
-            if (buildBeforeUpload)
+            bool estimateMatchesCurrentSelection =
+                buildBeforeUpload
+                && owner.HasCheckedProductionPatchEstimate
+                && owner.PendingProductionEstimateMatches(uploadMode, owner.BuildOsx, owner.BuildWindows);
+
+            if (estimateMatchesCurrentSelection)
             {
-                EditorGUILayout.LabelField(
-                    owner.CleanBeforeEachTarget
-                        ? "Addressables cache cleanup is enabled for every target in this run."
-                        : "Addressables cache cleanup is off for this run.",
-                    EditorStyles.miniLabel);
+                EditorGUILayout.HelpBox(owner.GetPatchEstimateSummary(), MessageType.None);
+                DrawPatchEstimateBreakdown(
+                    "Will Upload",
+                    owner.GetChangedFileBreakdownLines(),
+                    owner.GetCurrentChangedFileCount(),
+                    ref foldChangedFiles,
+                    ref changedFilesScroll);
+                DrawPatchEstimateBreakdown(
+                    "Will Stay The Same",
+                    owner.GetUnchangedFileBreakdownLines(),
+                    owner.GetCurrentUnchangedFileCount(),
+                    ref foldUnchangedFiles,
+                    ref unchangedFilesScroll);
+                EditorGUILayout.LabelField("This estimate came from freshly built bundles compared against the latest backend version.", EditorStyles.miniLabel);
+            }
+            else if (buildBeforeUpload && uploadMode == UploadMode.All)
+            {
+                EditorGUILayout.HelpBox(
+                    "Upload All always re-sends the whole build, so there is no patch estimate to show for this mode.",
+                    MessageType.None);
             }
             else
             {
-                EditorGUILayout.LabelField(
-                    "Reupload mode reuses the current ServerData output without rebuilding.",
-                    EditorStyles.miniLabel);
+                EditorGUILayout.HelpBox(
+                    buildBeforeUpload
+                        ? "Run Check Patch Size to compute the real patch against the latest backend version and see exactly which bundles will upload versus stay the same."
+                        : "Patch estimate breakdown is only available from the Compile & Upload flow after running Check Patch Size.",
+                    MessageType.None);
             }
             GUILayout.EndVertical();
+        }
+
+        private void DrawPatchEstimateBreakdown(
+            string label,
+            System.Collections.Generic.List<string> lines,
+            int count,
+            ref bool expanded,
+            ref Vector2 scroll)
+        {
+            bool nextExpanded = EditorGUILayout.Foldout(expanded, $"{label} ({count})", true);
+            if (nextExpanded != expanded)
+            {
+                expanded = nextExpanded;
+            }
+
+            if (!expanded) return;
+
+            if (lines == null || lines.Count == 0)
+            {
+                EditorGUILayout.LabelField("(none)", EditorStyles.miniLabel);
+                return;
+            }
+
+            scroll = EditorGUILayout.BeginScrollView(scroll, GUILayout.MinHeight(90f), GUILayout.MaxHeight(170f));
+            foreach (var line in lines)
+            {
+                EditorGUILayout.LabelField(line, EditorStyles.miniLabel);
+            }
+            EditorGUILayout.EndScrollView();
         }
 
         private void DrawStatusCard()
@@ -759,6 +747,7 @@ namespace DreamPark
             }
             return $"{value:0.##} {units[unit]}";
         }
+
     }
 }
 #endif

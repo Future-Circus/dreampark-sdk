@@ -86,7 +86,13 @@ Assets/Samples/A_\ Pathfinding\ Project*
 
 # .DS_Store
 .DS_Store
-Assets/AddressableAssetsData/AssetGroups
-Assets/AddressableAssetsData/AssetGroups.meta
+# NOTE: Assets/AddressableAssetsData/AssetGroups must be TRACKED in git.
+# Gitignoring it caused per-machine GUID divergence: each dev's local Unity
+# assigned fresh GUIDs to "the same" groups, and AddressableAssetSettings.asset
+# (which is tracked) embedded each dev's GUIDs in turn. The result was a 99%
+# bundle-hash cascade between any two devs' commits because every bundle's
+# dep manifest referenced group GUIDs that differed across machines, and LZ4
+# amplified those tiny header diffs through the entire compressed payload.
+# Track the .asset files to keep group identity stable across the team.
 ServerData
 Packages/Coplay/Editor
