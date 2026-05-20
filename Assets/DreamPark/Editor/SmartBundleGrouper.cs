@@ -125,6 +125,7 @@ namespace DreamPark
             public int runtimeAssets;
             public int groupsCreated;
             public int groupsRemoved;
+            public int orphanFilesRemoved;
         }
 
         public static Result ApplyDependencyAwareGrouping(
@@ -658,8 +659,144 @@ namespace DreamPark
                 result.groupsRemoved++;
             }
 
+            // 10. Hygiene pass — sweep orphan files left on disk by Unity's
+            //     incomplete cascade-delete. settings.RemoveGroup deletes the
+            //     group's own .asset file but doesn't reliably remove the
+            //     per-group schema .asset files in the Schemas/ subfolder
+            //     (those live as separate assets that the group only references
+            //     via property — Unity's cleanup is inconsistent about them).
+            //     Without this pass, every build leaves behind two schema
+            //     files per swept legacy group (e.g. {gameId}-Materials's
+            //     BundledAssetGroupSchema + ContentUpdateGroupSchema), and the
+            //     Schemas folder slowly accumulates cruft across builds.
+            //
+            //     Also catches orphan top-level group .asset files that exist
+            //     on disk but aren't referenced by settings (cross-park
+            //     leftovers, manually-copied files, branch-switch residue,
+            //     etc.). Dangling m_GroupAssets entries pointing at deleted
+            //     files are pruned implicitly when Unity reserializes the
+            //     settings asset after our DeleteAsset calls.
+            result.orphanFilesRemoved = CleanupOrphanAssetGroupsFiles(settings);
+
             EditorUtility.SetDirty(settings);
             return result;
+        }
+
+        // Removes orphan files left in Assets/AddressableAssetsData/AssetGroups/
+        // and its Schemas/ subfolder. Safe to call standalone (e.g. from a
+        // menu item) — only deletes files that don't correspond to any group
+        // currently registered in settings.groups.
+        //
+        // Returns the count of files deleted (counts both .asset and .meta
+        // as separate deletions — AssetDatabase.DeleteAsset removes both
+        // atomically but we surface each as one count for logging clarity).
+        public static int CleanupOrphanAssetGroupsFiles(AddressableAssetSettings settings)
+        {
+            if (settings == null) return 0;
+
+            const string assetGroupsDir = "Assets/AddressableAssetsData/AssetGroups";
+            const string schemasDir = assetGroupsDir + "/Schemas";
+            if (!AssetDatabase.IsValidFolder(assetGroupsDir)) return 0;
+
+            // Build sets of valid group .asset paths + valid group names from
+            // the in-memory settings. Anything in AssetGroups/ that doesn't
+            // match these is by definition orphan.
+            var validGroupAssetPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var validGroupNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var g in settings.groups.Where(g => g != null))
+            {
+                string p = AssetDatabase.GetAssetPath(g);
+                if (!string.IsNullOrEmpty(p))
+                    validGroupAssetPaths.Add(p);
+                if (!string.IsNullOrEmpty(g.Name))
+                    validGroupNames.Add(g.Name);
+            }
+
+            int removed = 0;
+
+            // 1. Orphan top-level group .asset files. These shouldn't normally
+            //    exist (RemoveGroup deletes the .asset reliably), but can leak
+            //    in via manual file copies, branch switches, or merges that
+            //    bring in files without their settings.asset references.
+            foreach (var path in Directory.GetFiles(assetGroupsDir, "*.asset", SearchOption.TopDirectoryOnly))
+            {
+                string assetPath = path.Replace('\\', '/');
+                // Strip leading absolute-prefix if any (defensive — Directory.GetFiles
+                // can return absolute or relative depending on platform).
+                int idx = assetPath.IndexOf("Assets/", StringComparison.Ordinal);
+                if (idx > 0) assetPath = assetPath.Substring(idx);
+                if (!validGroupAssetPaths.Contains(assetPath))
+                {
+                    if (AssetDatabase.DeleteAsset(assetPath))
+                        removed++;
+                }
+            }
+
+            // 2. Orphan schema .asset files. Each schema is named like
+            //    "{GroupName}_BundledAssetGroupSchema.asset" or
+            //    "{GroupName}_ContentUpdateGroupSchema.asset". Strip the
+            //    suffix and check if a group with that name exists.
+            if (AssetDatabase.IsValidFolder(schemasDir))
+            {
+                string[] schemaSuffixes = new[]
+                {
+                    "_BundledAssetGroupSchema",
+                    "_ContentUpdateGroupSchema",
+                };
+
+                foreach (var path in Directory.GetFiles(schemasDir, "*.asset", SearchOption.TopDirectoryOnly))
+                {
+                    string assetPath = path.Replace('\\', '/');
+                    int idx = assetPath.IndexOf("Assets/", StringComparison.Ordinal);
+                    if (idx > 0) assetPath = assetPath.Substring(idx);
+
+                    string filename = Path.GetFileNameWithoutExtension(assetPath);
+                    string groupName = filename;
+                    foreach (var suffix in schemaSuffixes)
+                    {
+                        if (filename.EndsWith(suffix, StringComparison.Ordinal))
+                        {
+                            groupName = filename.Substring(0, filename.Length - suffix.Length);
+                            break;
+                        }
+                    }
+
+                    if (!validGroupNames.Contains(groupName))
+                    {
+                        if (AssetDatabase.DeleteAsset(assetPath))
+                            removed++;
+                    }
+                }
+            }
+
+            // 3. Dangling m_GroupAssets references are auto-pruned by Unity
+            //    when AddressableAssetSettings.asset is reserialized after our
+            //    DeleteAsset calls above — the serializer drops references to
+            //    assets that no longer exist on disk. Earlier revisions called
+            //    a settings.RemoveMissingGroupReferences() API explicitly, but
+            //    that method doesn't exist on every Addressables version we
+            //    ship against, so we rely on the implicit cleanup.
+
+            return removed;
+        }
+
+        // Manual cleanup entry — useful when the project has accumulated
+        // orphans from prior builds before the auto-cleanup was added, or
+        // when you want to verify hygiene independently of running a full
+        // Smart pass. Sits under Troubleshooting because it's a recovery
+        // tool, not part of the normal authoring flow.
+        [MenuItem("DreamPark/Troubleshooting/Cleanup Orphan AssetGroups Files", false, 209)]
+        public static void CleanupOrphanAssetGroupsFilesMenu()
+        {
+            var settings = UnityEditor.AddressableAssets.AddressableAssetSettingsDefaultObject.Settings;
+            if (settings == null)
+            {
+                Debug.LogError("[SmartBundleGrouper] AddressableAssetSettings not found.");
+                return;
+            }
+            int removed = CleanupOrphanAssetGroupsFiles(settings);
+            AssetDatabase.SaveAssets();
+            Debug.Log($"🧹 Cleanup Orphan AssetGroups Files: removed {removed} file(s).");
         }
 
         // --- helpers ---------------------------------------------------------

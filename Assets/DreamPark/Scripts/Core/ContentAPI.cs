@@ -35,6 +35,17 @@ namespace DreamPark.API
         }
     }
 
+    public class InheritedBundleRecord {
+        public string platform;
+        public string fileName;
+
+        public InheritedBundleRecord() {}
+        public InheritedBundleRecord(string platform, string fileName) {
+            this.platform = platform;
+            this.fileName = fileName;
+        }
+    }
+
     public class UploadContentData {
         public string filePath = null;
         // fileName is what gets sent as the "filename" field on the presigned-URL
@@ -162,8 +173,15 @@ namespace DreamPark.API
             return list;
         }
     }
+
     public class ContentAPI
     {
+        private static bool IsBundleFileName(string fileName)
+        {
+            return !string.IsNullOrEmpty(fileName)
+                && fileName.EndsWith(".bundle", StringComparison.OrdinalIgnoreCase);
+        }
+
         public class UploadProgressEntry
         {
             public string id;
@@ -239,6 +257,12 @@ namespace DreamPark.API
                     };
                 }
             }
+            // Clear any leftover patch stats from a prior test-channel run so
+            // the popup's DrawPatchStatsBlock doesn't display stale numbers
+            // during a subsequent upload (test OR production). Test uploads
+            // re-populate stats after the parent-diff phase; production
+            // uploads leave it null and the block stays hidden.
+            CurrentPatchStats = null;
             UploadProgressChanged?.Invoke();
         }
 
@@ -417,6 +441,7 @@ namespace DreamPark.API
             // 1️⃣ Collect local files for all platforms
             UploadContentRequest data = new UploadContentRequest();
             var files = data.ToList();
+            var inheritedBundles = new List<InheritedBundleRecord>();
 
             if (files == null || files.Count == 0)
             {
@@ -428,6 +453,26 @@ namespace DreamPark.API
             int totalCollected = files.Count;
             if (skipFileKeys != null && skipFileKeys.Count > 0)
             {
+                var replayedKeys = new HashSet<string>(StringComparer.Ordinal);
+                if (preUploadedFiles != null)
+                {
+                    foreach (var rec in preUploadedFiles)
+                    {
+                        if (rec == null || string.IsNullOrEmpty(rec.platform) || string.IsNullOrEmpty(rec.fileName))
+                            continue;
+                        replayedKeys.Add($"{rec.platform}/{rec.fileName}");
+                    }
+                }
+
+                foreach (var kv in files)
+                {
+                    string key = $"{kv.Key}/{kv.Value.fileName}";
+                    if (!skipFileKeys.Contains(key) || replayedKeys.Contains(key) || !IsBundleFileName(kv.Value.fileName))
+                        continue;
+
+                    inheritedBundles.Add(new InheritedBundleRecord(kv.Key, kv.Value.fileName));
+                }
+
                 files = files
                     .Where(kv => !skipFileKeys.Contains($"{kv.Key}/{kv.Value.fileName}"))
                     .ToList();
@@ -447,9 +492,9 @@ namespace DreamPark.API
                 Debug.Log("[ContentAPI] No changed files to upload; proceeding to finalize.");
                 InitializeUploadProgress(files);
             #if UNITY_EDITOR
-                Unity.EditorCoroutines.Editor.EditorCoroutineUtility.StartCoroutineOwnerless(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, preUploadedFiles, callback));
+                Unity.EditorCoroutines.Editor.EditorCoroutineUtility.StartCoroutineOwnerless(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, inheritedBundles, preUploadedFiles, callback));
             #else
-                CoroutineRunner.Run(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, preUploadedFiles, callback));
+                CoroutineRunner.Run(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, inheritedBundles, preUploadedFiles, callback));
             #endif
                 return;
             }
@@ -467,9 +512,9 @@ namespace DreamPark.API
             }
 
         #if UNITY_EDITOR
-            Unity.EditorCoroutines.Editor.EditorCoroutineUtility.StartCoroutineOwnerless(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, preUploadedFiles, callback));
+            Unity.EditorCoroutines.Editor.EditorCoroutineUtility.StartCoroutineOwnerless(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, inheritedBundles, preUploadedFiles, callback));
         #else
-            CoroutineRunner.Run(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, preUploadedFiles, callback));
+            CoroutineRunner.Run(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, inheritedBundles, preUploadedFiles, callback));
         #endif
         }
 
@@ -522,12 +567,24 @@ namespace DreamPark.API
         // time, so callers don't need to know the final values yet — the
         // important thing is allocating the ID before the bundle build
         // runs.
-        public static void CreateTestBuild(string title, string releaseNotes, string contentName, Action<bool, string, APIResponse> callback)
+        //
+        // parentTestBuildId (optional): when non-null, marks this build as
+        // a PATCH of the named parent. The SDK will diff its local bundle
+        // set against the parent's catalog (filename match, which is a
+        // content-hash match because Smart bundling uses AppendHash), only
+        // upload bundles whose filenames don't appear in the parent, and
+        // tell the backend at commit to server-side-copy the rest from
+        // the parent's storage prefix. Net effect: a patch upload's
+        // wire-bytes match the actual content delta, not the full bundle
+        // set. Pass null / empty to do a full upload (legacy behavior).
+        public static void CreateTestBuild(string title, string releaseNotes, string contentName, string parentTestBuildId, Action<bool, string, APIResponse> callback)
         {
             JSONObject createBody = new JSONObject();
             createBody.AddField("title", string.IsNullOrEmpty(title) ? "Untitled test build" : title);
             createBody.AddField("releaseNotes", releaseNotes ?? "");
             createBody.AddField("contentName", contentName ?? "");
+            if (!string.IsNullOrEmpty(parentTestBuildId))
+                createBody.AddField("parentTestBuildId", parentTestBuildId);
 
             DreamParkAPI.POST("/api/test-content/create", AuthAPI.GetUserAuth(), createBody, (createSuccess, createResp) =>
             {
@@ -544,9 +601,17 @@ namespace DreamPark.API
                     callback?.Invoke(false, null, new DreamParkAPI.APIResponse(false, 0, "No testBuildId returned"));
                     return;
                 }
-                Debug.Log($"[TestBuild] Created {testBuildId}");
+                Debug.Log(string.IsNullOrEmpty(parentTestBuildId)
+                    ? $"[TestBuild] Created {testBuildId}"
+                    : $"[TestBuild] Created {testBuildId} as patch of {parentTestBuildId}");
                 callback?.Invoke(true, testBuildId, createResp);
             });
+        }
+
+        // Backward-compat overload — full upload, no parent.
+        public static void CreateTestBuild(string title, string releaseNotes, string contentName, Action<bool, string, APIResponse> callback)
+        {
+            CreateTestBuild(title, releaseNotes, contentName, parentTestBuildId: null, callback);
         }
 
         // Step 2 — uploads every file currently in ServerData/ to the
@@ -557,7 +622,16 @@ namespace DreamPark.API
         // before invoking this — otherwise the bundle URLs inside the
         // catalog won't match the URLs the editor download flow uses
         // and Unity's Caching layer will treat every load as a miss.
-        public static void UploadTestBuildArtifacts(string testBuildId, string title, string releaseNotes, string contentName, string logoAddress, JSONObject manifestSummary, Action<bool, string, APIResponse> callback)
+        //
+        // parentTestBuildId (optional): when non-null, this method fetches
+        // the parent's catalog from the backend, computes a filename-level
+        // diff against the local file list, and uploads ONLY the files
+        // whose filenames don't appear in the parent's catalog. The
+        // remaining files get listed in `inheritedFiles` on the commit
+        // payload — the backend then does GCS server-side copies from
+        // the parent's storage prefix into this build's prefix, keeping
+        // this build self-contained (it can survive the parent expiring).
+        public static void UploadTestBuildArtifacts(string testBuildId, string title, string releaseNotes, string contentName, string logoAddress, string parentTestBuildId, JSONObject manifestSummary, Action<bool, string, APIResponse> callback)
         {
             if (string.IsNullOrEmpty(testBuildId))
             {
@@ -575,14 +649,288 @@ namespace DreamPark.API
             }
 
             InitializeUploadProgress(files);
-            Debug.Log($"[TestBuild] Uploading {files.Count} file(s) to {testBuildId}");
 
+            // Clear any leftover patch stats from a previous run so the UI
+            // doesn't briefly flash old numbers before this run's diff
+            // completes and re-populates them.
+            CurrentPatchStats = null;
+
+            // Fast path: no parent → behave like the original full-upload
+            // flow. We don't fetch a catalog and don't construct an
+            // inheritedFiles list.
+            if (string.IsNullOrEmpty(parentTestBuildId))
+            {
+                Debug.Log($"[TestBuild] Uploading {files.Count} file(s) to {testBuildId} (full upload)");
+                StartTestBuildUploadFlow(testBuildId, title, releaseNotes, contentName, logoAddress, parentTestBuildId: null, parentInfo: null, files, manifestSummary, callback);
+                return;
+            }
+
+            // Patch path: fetch parent's catalog + manifest, then start the
+            // upload flow with the filename + size diff. If the parent fetch
+            // fails we fall back to full upload — better to ship more bytes
+            // than fail an otherwise-valid build on a transient backend hiccup.
+            GetTestBuild(parentTestBuildId, (getOk, getResp) =>
+            {
+                ParentBundleInfo parentInfo = null;
+                if (getOk && getResp?.json != null)
+                {
+                    parentInfo = ParseParentBundleInfo(
+                        getResp.json.GetField("build"), parentTestBuildId);
+                    int parentFileCount = 0;
+                    int parentSizedCount = 0;
+                    foreach (var kv in parentInfo.filenamesByPlatform) parentFileCount += kv.Value.Count;
+                    foreach (var kv in parentInfo.sizesByPlatform) parentSizedCount += kv.Value.Count;
+                    Debug.Log($"[TestBuild] Patch base: {parentTestBuildId} ({parentFileCount} files across {parentInfo.filenamesByPlatform.Count} platform(s); size cross-check available for {parentSizedCount})");
+                }
+                else
+                {
+                    Debug.LogWarning($"[TestBuild] Could not fetch parent {parentTestBuildId}: {getResp?.error ?? "unknown"} — falling back to full upload");
+                }
+                StartTestBuildUploadFlow(testBuildId, title, releaseNotes, contentName, logoAddress,
+                    parentInfo != null ? parentTestBuildId : null,
+                    parentInfo, files, manifestSummary, callback);
+            });
+        }
+
+        // Backward-compat overload — full upload, no parent.
+        public static void UploadTestBuildArtifacts(string testBuildId, string title, string releaseNotes, string contentName, string logoAddress, JSONObject manifestSummary, Action<bool, string, APIResponse> callback)
+        {
+            UploadTestBuildArtifacts(testBuildId, title, releaseNotes, contentName, logoAddress, parentTestBuildId: null, manifestSummary, callback);
+        }
+
+        // Computes a "what would the patch upload look like" plan without
+        // actually uploading anything. The caller (typically the editor's
+        // "Check Patch Size" button) uses this to show the user the
+        // expected patch size + bundle count BEFORE they commit to a full
+        // upload — so they can decide whether to proceed or rebuild
+        // differently.
+        //
+        // Side effect: populates ContentAPI.CurrentPatchStats so the
+        // popup's DrawPatchStatsBlock renders the estimate without any
+        // extra wiring. Subsequent UploadTestBuildArtifacts calls reuse
+        // the same ServerData/ files on disk — no rebuild needed — and
+        // the stats live in CurrentPatchStats until the next upload
+        // starts (which clears them in InitializeUploadProgress).
+        //
+        // Expects ServerData/ to already contain the just-built bundles
+        // for the platforms the caller cares about. Fetches the parent
+        // catalog + manifest once, runs the same filename + size diff as
+        // the upload path, and returns the plan via callback.
+        public static void ComputePatchPlan(string parentTestBuildId, Action<bool, TestBuildPatchStats, string> callback)
+        {
+            if (string.IsNullOrEmpty(parentTestBuildId))
+            {
+                callback?.Invoke(false, null, "Missing parentTestBuildId — estimate requires a patch base");
+                return;
+            }
+
+            UploadContentRequest data = new UploadContentRequest();
+            var files = data.ToList();
+            if (files == null || files.Count == 0)
+            {
+                callback?.Invoke(false, null, "No files in ServerData/ to estimate against — build first");
+                return;
+            }
+
+            GetTestBuild(parentTestBuildId, (getOk, getResp) =>
+            {
+                if (!getOk || getResp?.json == null)
+                {
+                    callback?.Invoke(false, null, $"Could not fetch parent {parentTestBuildId}: {getResp?.error ?? "unknown"}");
+                    return;
+                }
+
+                var parentInfo = ParseParentBundleInfo(getResp.json.GetField("build"), parentTestBuildId);
+                if (parentInfo == null || parentInfo.filenamesByPlatform.Count == 0)
+                {
+                    callback?.Invoke(false, null, $"Parent {parentTestBuildId} has an empty / unreadable catalog");
+                    return;
+                }
+
+                // Same partitioning rules as TestBuildUploadFlowAsync —
+                // filename + size check, with size cross-check graceful-
+                // degrading when parent manifest lacks sizes. Kept inline
+                // here (rather than refactored into a shared helper) to
+                // avoid an extra abstraction layer for a 30-line loop.
+                int newCount = 0, inheritedCount = 0;
+                long newSize = 0, inheritedSize = 0;
+                int sizeMismatchCount = 0;
+                foreach (var kvp in files)
+                {
+                    string platform = kvp.Key;
+                    UploadContentData file = kvp.Value;
+                    long localSize = file.data?.Length ?? 0;
+
+                    // Catalog JSON / hash files use stable filenames and
+                    // are tiny. Treat them as always-fresh so the patch
+                    // tool never inherits a stale catalog that points at
+                    // old bundle addresses.
+                    if (ShouldAlwaysUploadInPatch(file.fileName))
+                    {
+                        newCount++;
+                        newSize += localSize;
+                        continue;
+                    }
+
+                    bool filenameMatch = parentInfo.filenamesByPlatform.TryGetValue(platform, out var parentFilenames)
+                        && parentFilenames.Contains(file.fileName);
+
+                    bool sizeMatch = true;
+                    if (filenameMatch
+                        && parentInfo.sizesByPlatform.TryGetValue(platform, out var sizeDict)
+                        && sizeDict.TryGetValue(file.fileName, out long parentSize))
+                    {
+                        sizeMatch = (parentSize == localSize);
+                    }
+
+                    if (filenameMatch && sizeMatch)
+                    {
+                        inheritedCount++;
+                        inheritedSize += localSize;
+                    }
+                    else
+                    {
+                        if (filenameMatch && !sizeMatch) sizeMismatchCount++;
+                        newCount++;
+                        newSize += localSize;
+                    }
+                }
+
+                var stats = new TestBuildPatchStats
+                {
+                    parentTestBuildId = parentTestBuildId,
+                    newFiles = newCount,
+                    inheritedFiles = inheritedCount,
+                    patchSizeBytes = newSize,
+                    inheritedSizeBytes = inheritedSize,
+                    totalSizeBytes = newSize + inheritedSize,
+                    uploadedSoFar = 0,
+                };
+                CurrentPatchStats = stats;
+                UploadProgressChanged?.Invoke();
+
+                string note = sizeMismatchCount > 0 ? $" (incl. {sizeMismatchCount} size-mismatch override(s))" : "";
+                Debug.Log($"[TestBuild] Estimate vs {parentTestBuildId}: {newCount} new ({FormatBytes(newSize)}){note}, {inheritedCount} inherited ({FormatBytes(inheritedSize)})");
+                callback?.Invoke(true, stats, null);
+            });
+        }
+
+        // Bundles together everything we extract from a parent build for the
+        // diff phase. filenamesByPlatform is the primary index — populated
+        // from the parent's `catalog` field which is always present.
+        // sizesByPlatform is the optional belt-and-suspenders index, populated
+        // from the parent's `manifest.files[]` array (only present on parents
+        // uploaded by patch-aware SDKs — legacy parents lack this entirely,
+        // in which case the size check gracefully degrades to "skip and
+        // trust the filename" behavior).
+        private class ParentBundleInfo
+        {
+            public Dictionary<string, HashSet<string>> filenamesByPlatform;
+            // platform → (filename → byte size). When a platform appears in
+            // filenamesByPlatform but not here, no per-file size data was
+            // available from the parent's manifest — size check is skipped
+            // for that platform.
+            public Dictionary<string, Dictionary<string, long>> sizesByPlatform;
+        }
+
+        // Parses both the {catalog} and {manifest.files[]} sub-objects of a
+        // /api/test-content/{id} response. The catalog gives us the
+        // authoritative list of files in the parent (used for the primary
+        // filename-equality match), and the manifest provides per-file sizes
+        // when available (used as a defensive cross-check before we trust the
+        // filename-equality result).
+        //
+        // Path format the catalog stores: "test-addressables/{parentId}/{platform}/{filename}".
+        // The {filename} portion can contain forward slashes (e.g. nested
+        // bundle layouts under PackSeparately), so we strip the known
+        // "test-addressables/{parentId}/{platform}/" prefix rather than
+        // splitting on '/' — only the prefix is fixed.
+        private static ParentBundleInfo ParseParentBundleInfo(JSONObject buildJson, string parentTestBuildId)
+        {
+            var info = new ParentBundleInfo
+            {
+                filenamesByPlatform = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase),
+                sizesByPlatform = new Dictionary<string, Dictionary<string, long>>(StringComparer.OrdinalIgnoreCase),
+            };
+            if (buildJson == null || string.IsNullOrEmpty(parentTestBuildId)) return info;
+
+            // 1. Primary index: filenames per platform from `catalog`.
+            var catalog = buildJson.GetField("catalog");
+            if (catalog != null && catalog.type == JSONObject.Type.Object && catalog.keys != null)
+            {
+                foreach (string platform in catalog.keys)
+                {
+                    var pathsArr = catalog.GetField(platform);
+                    if (pathsArr == null || pathsArr.type != JSONObject.Type.Array) continue;
+
+                    string platformPrefix = $"test-addressables/{parentTestBuildId}/{platform}/";
+                    var set = new HashSet<string>(StringComparer.Ordinal);
+                    if (pathsArr.list != null)
+                    {
+                        foreach (var pathNode in pathsArr.list)
+                        {
+                            string p = pathNode?.stringValue;
+                            if (string.IsNullOrEmpty(p)) continue;
+                            if (p.StartsWith(platformPrefix, StringComparison.Ordinal))
+                            {
+                                string filename = p.Substring(platformPrefix.Length);
+                                if (!string.IsNullOrEmpty(filename))
+                                    set.Add(filename);
+                            }
+                        }
+                    }
+                    if (set.Count > 0)
+                        info.filenamesByPlatform[platform] = set;
+                }
+            }
+
+            // 2. Cross-check index: sizes per platform from `manifest.files[]`.
+            // The manifest's `files` array is only written by patch-aware
+            // SDKs (committed after this feature shipped). Legacy parents
+            // have manifest == null or an older shape without the files
+            // sub-array; we simply skip them and the size check becomes a
+            // no-op for those parents — defensive degradation, not failure.
+            var manifest = buildJson.GetField("manifest");
+            if (manifest != null && manifest.type == JSONObject.Type.Object)
+            {
+                var filesArr = manifest.GetField("files");
+                if (filesArr != null && filesArr.type == JSONObject.Type.Array && filesArr.list != null)
+                {
+                    foreach (var f in filesArr.list)
+                    {
+                        if (f == null || f.type != JSONObject.Type.Object) continue;
+                        string platform = f.GetField("platform")?.stringValue;
+                        string filename = f.GetField("filename")?.stringValue;
+                        if (string.IsNullOrEmpty(platform) || string.IsNullOrEmpty(filename)) continue;
+                        var sizeNode = f.GetField("size");
+                        if (sizeNode == null || sizeNode.type != JSONObject.Type.Number) continue;
+                        long size = sizeNode.longValue;
+                        if (!info.sizesByPlatform.TryGetValue(platform, out var dict))
+                        {
+                            dict = new Dictionary<string, long>(StringComparer.Ordinal);
+                            info.sizesByPlatform[platform] = dict;
+                        }
+                        dict[filename] = size;
+                    }
+                }
+            }
+
+            return info;
+        }
+
+        private static void StartTestBuildUploadFlow(
+            string testBuildId, string title, string releaseNotes, string contentName, string logoAddress,
+            string parentTestBuildId, ParentBundleInfo parentInfo,
+            List<KeyValuePair<string, UploadContentData>> files,
+            JSONObject manifestSummary,
+            Action<bool, string, APIResponse> callback)
+        {
         #if UNITY_EDITOR
             Unity.EditorCoroutines.Editor.EditorCoroutineUtility.StartCoroutineOwnerless(
-                TestBuildUploadFlow(testBuildId, title, releaseNotes, contentName, logoAddress, files, manifestSummary, callback));
+                TestBuildUploadFlow(testBuildId, title, releaseNotes, contentName, logoAddress, parentTestBuildId, parentInfo, files, manifestSummary, callback));
         #else
             CoroutineRunner.Run(
-                TestBuildUploadFlow(testBuildId, title, releaseNotes, contentName, logoAddress, files, manifestSummary, callback));
+                TestBuildUploadFlow(testBuildId, title, releaseNotes, contentName, logoAddress, parentTestBuildId, parentInfo, files, manifestSummary, callback));
         #endif
         }
 
@@ -623,14 +971,172 @@ namespace DreamPark.API
             });
         }
 
-        private static IEnumerator TestBuildUploadFlow(string testBuildId, string title, string releaseNotes, string contentName, string logoAddress, List<KeyValuePair<string, UploadContentData>> files, JSONObject manifestSummary, Action<bool, string, DreamParkAPI.APIResponse> callback)
+        private static IEnumerator TestBuildUploadFlow(string testBuildId, string title, string releaseNotes, string contentName, string logoAddress, string parentTestBuildId, ParentBundleInfo parentInfo, List<KeyValuePair<string, UploadContentData>> files, JSONObject manifestSummary, Action<bool, string, DreamParkAPI.APIResponse> callback)
         {
-            TestBuildUploadFlowAsync(testBuildId, title, releaseNotes, contentName, logoAddress, files, manifestSummary, callback).Forget();
+            TestBuildUploadFlowAsync(testBuildId, title, releaseNotes, contentName, logoAddress, parentTestBuildId, parentInfo, files, manifestSummary, callback).Forget();
             yield break;
         }
 
-        private static async UniTaskVoid TestBuildUploadFlowAsync(string testBuildId, string title, string releaseNotes, string contentName, string logoAddress, List<KeyValuePair<string, UploadContentData>> files, JSONObject manifestSummary, Action<bool, string, DreamParkAPI.APIResponse> callback)
+        // Represents one file the SDK is going to ask the backend to copy
+        // server-side from the parent test build's storage prefix instead of
+        // re-uploading. The triple {platform, filename, sourceTestBuildId}
+        // matches the backend's commit-time validator (which checks that
+        // sourceTestBuildId equals the doc's stored parentTestBuildId).
+        private struct InheritedFileEntry
         {
+            public string platform;
+            public string filename;
+            public long sizeBytes;
+        }
+
+        // Live snapshot of the current (or most recently computed) test-build
+        // patch plan. Set as soon as the SDK finishes diffing the local build
+        // against the parent's catalog, then updated as files complete during
+        // the upload phase. The editor's ContentUploaderPanel reads this
+        // during its status repaint loop so the user can see, live:
+        //   • how many bundles are actually being uploaded vs. inherited
+        //   • how big the patch is on the wire vs. the total content size
+        //   • whether the upload is a no-parent full push (CurrentPatchStats
+        //     is null) or a true patch
+        // Reset to null at the start of every new upload so a previous run's
+        // numbers don't leak into the next session's UI.
+        public class TestBuildPatchStats
+        {
+            public string parentTestBuildId;        // null = full upload (no patch base)
+            public int newFiles;                    // files this run must actually upload
+            public int inheritedFiles;              // files server-copied from parent
+            public long patchSizeBytes;             // sum of newFiles sizes (what hits the wire)
+            public long inheritedSizeBytes;         // sum of inheritedFiles sizes
+            public long totalSizeBytes;             // patchSize + inheritedSize
+            public int uploadedSoFar;               // mutable: incremented per completed newFile
+            // Convenience: percentage of the total payload the user is
+            // actually pushing over the wire. 0% = perfect cache hit, 100% = full upload.
+            public float PatchFraction => totalSizeBytes <= 0 ? 0f : (float)patchSizeBytes / (float)totalSizeBytes;
+        }
+        public static TestBuildPatchStats CurrentPatchStats { get; private set; }
+
+        // Editor-facing reset for the patch stats. The setter on
+        // CurrentPatchStats is private so callers can't accidentally
+        // poison the shared state — but the ContentUploaderPanel does
+        // legitimately need to clear it when the user discards a pending
+        // estimate, so this thin helper exposes that capability.
+        public static void ClearCurrentPatchStats()
+        {
+            CurrentPatchStats = null;
+            UploadProgressChanged?.Invoke();
+        }
+
+        private static async UniTaskVoid TestBuildUploadFlowAsync(string testBuildId, string title, string releaseNotes, string contentName, string logoAddress, string parentTestBuildId, ParentBundleInfo parentInfo, List<KeyValuePair<string, UploadContentData>> files, JSONObject manifestSummary, Action<bool, string, DreamParkAPI.APIResponse> callback)
+        {
+            // Partition the local file list into newFiles (must upload) and
+            // inheritedFiles (will be server-side-copied from parent at
+            // commit). Match criteria, in order:
+            //
+            //   1. Same filename — Smart Bundling appends a content hash to
+            //      every bundle filename, so a filename match is transitively
+            //      a content-hash match. This is the primary signal.
+            //
+            //   2. Same size — defensive belt-and-suspenders. If the parent's
+            //      manifest exposed per-file sizes (patch-aware SDK uploaded
+            //      it), we cross-check the local file's size against the
+            //      parent's recorded size. Any mismatch flips the entry to
+            //      "new" and the bundle gets re-uploaded. This catches the
+            //      pathological case where a GCS object got truncated /
+            //      replaced out-of-band, where two bundles happened to land
+            //      at identical hash-suffixed paths via filename collision,
+            //      or where the AppendHash invariant was broken. Legacy
+            //      parents without manifest sizes skip this check silently
+            //      and rely on filename match alone.
+            //
+            // We track inherited entries separately so we can mark them
+            // 100%-complete in the progress UI immediately (no spinner
+            // sitting at 0% on bundles the backend will fulfill from
+            // existing storage).
+            var newFiles = new List<KeyValuePair<string, UploadContentData>>();
+            var inheritedFiles = new List<InheritedFileEntry>();
+            long newSizeTotal = 0;
+            long inheritedSizeTotal = 0;
+            int sizeMismatchCount = 0;
+            if (parentInfo != null && parentInfo.filenamesByPlatform.Count > 0)
+            {
+                foreach (var kvp in files)
+                {
+                    string platform = kvp.Key;
+                    UploadContentData file = kvp.Value;
+                    long localSize = file.data?.Length ?? 0;
+
+                    // Catalog JSON / hash files use stable filenames and
+                    // are tiny. Always upload them fresh so the committed
+                    // test build can't inherit a catalog that references
+                    // superseded bundle filenames.
+                    if (ShouldAlwaysUploadInPatch(file.fileName))
+                    {
+                        newFiles.Add(kvp);
+                        newSizeTotal += localSize;
+                        continue;
+                    }
+
+                    bool filenameMatch = parentInfo.filenamesByPlatform.TryGetValue(platform, out var parentFilenames)
+                        && parentFilenames.Contains(file.fileName);
+
+                    // Size cross-check (only meaningful when both filename
+                    // match AND parent has size data for this entry).
+                    bool sizeMatch = true;
+                    bool sizeCheckPerformed = false;
+                    if (filenameMatch
+                        && parentInfo.sizesByPlatform.TryGetValue(platform, out var sizeDict)
+                        && sizeDict.TryGetValue(file.fileName, out long parentSize))
+                    {
+                        sizeCheckPerformed = true;
+                        sizeMatch = (parentSize == localSize);
+                    }
+
+                    if (filenameMatch && sizeMatch)
+                    {
+                        inheritedFiles.Add(new InheritedFileEntry
+                        {
+                            platform = platform,
+                            filename = file.fileName,
+                            sizeBytes = localSize,
+                        });
+                        inheritedSizeTotal += localSize;
+                        MarkUploadComplete(platform, file.fileName, true);
+                    }
+                    else
+                    {
+                        if (filenameMatch && !sizeMatch)
+                        {
+                            sizeMismatchCount++;
+                            Debug.LogWarning($"[TestBuild] Size mismatch on {platform}/{file.fileName} — local {localSize}B vs parent record — uploading fresh");
+                        }
+                        newFiles.Add(kvp);
+                        newSizeTotal += localSize;
+                    }
+                }
+                string sizeNote = sizeMismatchCount > 0 ? $" (incl. {sizeMismatchCount} size-mismatch override(s))" : "";
+                Debug.Log($"[TestBuild] Patch diff vs {parentTestBuildId}: {newFiles.Count} new ({FormatBytes(newSizeTotal)}){sizeNote}, {inheritedFiles.Count} inherited ({FormatBytes(inheritedSizeTotal)})");
+            }
+            else
+            {
+                newFiles.AddRange(files);
+                foreach (var kvp in files) newSizeTotal += kvp.Value.data?.Length ?? 0;
+            }
+
+            // Publish live patch stats. ContentUploaderPanel polls this on
+            // its repaint loop to render "X of Y bundles · Z MB patch / N MB
+            // total" in the upload status row.
+            CurrentPatchStats = new TestBuildPatchStats
+            {
+                parentTestBuildId = parentTestBuildId,
+                newFiles = newFiles.Count,
+                inheritedFiles = inheritedFiles.Count,
+                patchSizeBytes = newSizeTotal,
+                inheritedSizeBytes = inheritedSizeTotal,
+                totalSizeBytes = newSizeTotal + inheritedSizeTotal,
+                uploadedSoFar = 0,
+            };
+            UploadProgressChanged?.Invoke();
+
             var uploadTasks = new List<UniTask>();
             var uploadedFilesDict = new Dictionary<string, List<string>>();
             // Parallel-tracker lists for parity with the production flow;
@@ -643,9 +1149,11 @@ namespace DreamPark.API
 
             string presignPath = $"/api/test-content/{testBuildId}/uploadUrl";
 
+            // Iterate newFiles (not the full files list) so we don't push
+            // bytes for entries we'll inherit from the parent at commit.
             using (var uploadGate = new SemaphoreSlim(MaxConcurrentUploads, MaxConcurrentUploads))
             {
-                foreach (var kvp in files)
+                foreach (var kvp in newFiles)
                 {
                     string platform = kvp.Key;
                     UploadContentData file = kvp.Value;
@@ -657,7 +1165,7 @@ namespace DreamPark.API
 
             int uploaded = thisRunSucceeded.Count;
             int failed = thisRunFailed.Count;
-            Debug.Log($"[TestBuild] Uploaded {uploaded}/{files.Count} ({failed} failed) for {testBuildId}");
+            Debug.Log($"[TestBuild] Uploaded {uploaded}/{newFiles.Count} new ({failed} failed), {inheritedFiles.Count} inherited from {parentTestBuildId ?? "(none)"} → committing {testBuildId}");
 
             if (failed > 0)
             {
@@ -693,19 +1201,92 @@ namespace DreamPark.API
                 // loaded catalog using this addressable key.
                 commitBody.AddField("logoAddress", logoAddress);
             }
-            if (manifestSummary != null)
+
+            // inheritedFiles → backend performs GCS server-side copy from
+            // {parentTestBuildId}/{platform}/{filename} into this build's
+            // prefix, then adds those paths to the catalog so download URLs
+            // resolve as if everything had been uploaded directly.
+            if (inheritedFiles.Count > 0 && !string.IsNullOrEmpty(parentTestBuildId))
             {
-                commitBody.AddField("manifest", manifestSummary);
+                JSONObject inheritedJson = new JSONObject(JSONObject.Type.Array);
+                foreach (var inh in inheritedFiles)
+                {
+                    JSONObject entry = new JSONObject(JSONObject.Type.Object);
+                    entry.AddField("platform", inh.platform);
+                    entry.AddField("filename", inh.filename);
+                    entry.AddField("sourceTestBuildId", parentTestBuildId);
+                    inheritedJson.Add(entry);
+                }
+                commitBody.AddField("inheritedFiles", inheritedJson);
             }
+
+            // Manifest carries the patch breakdown the viewer renders.
+            // Per-file source labels let the UI show "X bundles uploaded
+            // this round, Y bundles inherited from parent" with drill-down.
+            JSONObject finalManifest = manifestSummary != null && manifestSummary.type == JSONObject.Type.Object
+                ? manifestSummary
+                : new JSONObject(JSONObject.Type.Object);
+            if (!string.IsNullOrEmpty(parentTestBuildId))
+                finalManifest.AddField("parentTestBuildId", parentTestBuildId);
+            JSONObject stats = new JSONObject(JSONObject.Type.Object);
+            stats.AddField("newFiles", newFiles.Count);
+            stats.AddField("inheritedFiles", inheritedFiles.Count);
+            stats.AddField("patchSizeBytes", newSizeTotal);
+            stats.AddField("inheritedSizeBytes", inheritedSizeTotal);
+            stats.AddField("totalSizeBytes", newSizeTotal + inheritedSizeTotal);
+            finalManifest.AddField("stats", stats);
+            // Per-file source list. "self" means uploaded directly in this
+            // build; "test_..." means server-side-copied from that parent.
+            JSONObject filesArr = new JSONObject(JSONObject.Type.Array);
+            foreach (var kvp in newFiles)
+            {
+                JSONObject entry = new JSONObject(JSONObject.Type.Object);
+                entry.AddField("platform", kvp.Key);
+                entry.AddField("filename", kvp.Value.fileName);
+                entry.AddField("size", kvp.Value.data?.Length ?? 0);
+                entry.AddField("source", "self");
+                filesArr.Add(entry);
+            }
+            foreach (var inh in inheritedFiles)
+            {
+                JSONObject entry = new JSONObject(JSONObject.Type.Object);
+                entry.AddField("platform", inh.platform);
+                entry.AddField("filename", inh.filename);
+                entry.AddField("size", inh.sizeBytes);
+                entry.AddField("source", parentTestBuildId ?? "");
+                filesArr.Add(entry);
+            }
+            finalManifest.AddField("files", filesArr);
+            commitBody.AddField("manifest", finalManifest);
 
             DreamParkAPI.POST($"/api/test-content/{testBuildId}/commit", AuthAPI.GetUserAuth(), commitBody, (success, response) =>
             {
                 if (success)
-                    Debug.Log($"[TestBuild] ✅ Committed {testBuildId}");
+                    Debug.Log($"[TestBuild] ✅ Committed {testBuildId} ({newFiles.Count} new + {inheritedFiles.Count} inherited)");
                 else
                     Debug.LogError($"[TestBuild] ❌ Commit failed: {response?.error}");
                 callback?.Invoke(success, testBuildId, response);
             });
+        }
+
+        // Helper for the patch-mode log line. Kept private + small to avoid
+        // pulling in a utility class for a one-off formatter.
+        private static string FormatBytes(long bytes)
+        {
+            if (bytes < 1024) return $"{bytes} B";
+            if (bytes < 1024L * 1024) return $"{bytes / 1024.0:0.0} KB";
+            if (bytes < 1024L * 1024 * 1024) return $"{bytes / (1024.0 * 1024):0.0} MB";
+            return $"{bytes / (1024.0 * 1024 * 1024):0.00} GB";
+        }
+
+        // Stable-name metadata files should never be inherited across patch
+        // builds. The catalog and hash are tiny, and uploading them fresh
+        // guarantees the build always points at the current bundle set.
+        private static bool ShouldAlwaysUploadInPatch(string fileName)
+        {
+            if (string.IsNullOrEmpty(fileName)) return false;
+            return fileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
+                || fileName.EndsWith(".hash", StringComparison.OrdinalIgnoreCase);
         }
 
         // Test-build per-file pipeline — gated on the same SemaphoreSlim
@@ -733,6 +1314,18 @@ namespace DreamPark.API
                             uploadedFilesDict[platform] = new List<string>();
                         uploadedFilesDict[platform].Add(result.uploadPath);
                         thisRunSucceeded.Add(new UploadedFileRecord(platform, file.fileName, result.uploadPath));
+                    }
+                    // Tick the patch-stats counter so the editor's status row
+                    // can display live "uploaded X of Y" progress. Snapshot
+                    // the reference once to avoid a NullReferenceException
+                    // if CurrentPatchStats gets reset mid-upload by an
+                    // overlapping call (shouldn't happen in normal flow but
+                    // cheaper to guard than to debug).
+                    var statsSnapshot = CurrentPatchStats;
+                    if (statsSnapshot != null)
+                    {
+                        System.Threading.Interlocked.Increment(ref statsSnapshot.uploadedSoFar);
+                        UploadProgressChanged?.Invoke();
                     }
                 }
                 else
@@ -823,14 +1416,14 @@ namespace DreamPark.API
             return (successUpload, successUpload ? uploadPath : null);
         }
 
-        private static IEnumerator UploadFlow(string contentId, List<KeyValuePair<string, UploadContentData>> files, string releaseNotes, int? schemaVersion, JSONObject manifestSummary, List<UploadedFileRecord> preUploadedFiles, Action<bool, APIResponse> callback)
+        private static IEnumerator UploadFlow(string contentId, List<KeyValuePair<string, UploadContentData>> files, string releaseNotes, int? schemaVersion, JSONObject manifestSummary, List<InheritedBundleRecord> inheritedBundles, List<UploadedFileRecord> preUploadedFiles, Action<bool, APIResponse> callback)
         {
             // Convert coroutine to async UniTask for concurrency
-            UploadFlowAsync(contentId, files, releaseNotes, schemaVersion, manifestSummary, preUploadedFiles, callback).Forget();
+            UploadFlowAsync(contentId, files, releaseNotes, schemaVersion, manifestSummary, inheritedBundles, preUploadedFiles, callback).Forget();
             yield break;
         }
 
-        private static async UniTaskVoid UploadFlowAsync(string contentId, List<KeyValuePair<string, UploadContentData>> files, string releaseNotes, int? schemaVersion, JSONObject manifestSummary, List<UploadedFileRecord> preUploadedFiles, Action<bool, DreamParkAPI.APIResponse> callback)
+        private static async UniTaskVoid UploadFlowAsync(string contentId, List<KeyValuePair<string, UploadContentData>> files, string releaseNotes, int? schemaVersion, JSONObject manifestSummary, List<InheritedBundleRecord> inheritedBundles, List<UploadedFileRecord> preUploadedFiles, Action<bool, DreamParkAPI.APIResponse> callback)
         {
             int uploaded = 0;
             int failed = 0;
@@ -1004,6 +1597,22 @@ namespace DreamPark.API
             commitBody.AddField("uploadedFiles", uploadedFilesJson);
             commitBody.AddField("versionNumber", versionNumber);
             commitBody.AddField("releaseNotes", releaseNotes ?? "");
+            if (inheritedBundles != null && inheritedBundles.Count > 0) {
+                JSONObject inheritedJson = new JSONObject(JSONObject.Type.Array);
+                foreach (var rec in inheritedBundles)
+                {
+                    if (rec == null || string.IsNullOrEmpty(rec.platform) || string.IsNullOrEmpty(rec.fileName))
+                        continue;
+                    JSONObject entry = new JSONObject(JSONObject.Type.Object);
+                    entry.AddField("platform", rec.platform);
+                    entry.AddField("filename", rec.fileName);
+                    inheritedJson.Add(entry);
+                }
+                if (inheritedJson.list != null && inheritedJson.list.Count > 0)
+                {
+                    commitBody.AddField("inheritedFiles", inheritedJson);
+                }
+            }
             if (schemaVersion.HasValue) {
                 commitBody.AddField("schemaVersion", schemaVersion.Value);
             }

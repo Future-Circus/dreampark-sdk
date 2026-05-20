@@ -1,4 +1,5 @@
 #if UNITY_EDITOR && !DREAMPARKCORE
+using System;
 using System.Linq;
 using DreamPark.API;
 using UnityEditor;
@@ -174,7 +175,16 @@ namespace DreamPark
             GUI.enabled = !owner.IsUploading && !modeBlocked;
             if (GUILayout.Button(cta, GUILayout.Height(actionButtonHeight)))
             {
-                bool started = owner.BeginUploadFromPopup(buildBeforeUpload, uploadMode, failedOnly);
+                bool started;
+                if (owner.HasPendingTestBuildUpload)
+                {
+                    owner.ResumePendingTestBuildUpload();
+                    started = true;
+                }
+                else
+                {
+                    started = owner.BeginUploadFromPopup(buildBeforeUpload, uploadMode, failedOnly);
+                }
                 if (started)
                 {
                     GUI.FocusControl(null);
@@ -266,12 +276,6 @@ namespace DreamPark
 
             EditorGUILayout.LabelField(UploadModePrefs.Description(uploadMode), EditorStyles.wordWrappedMiniLabel);
 
-            // Show a size estimate so the user can sanity-check the choice
-            // before committing to a build/upload. The estimate is derived
-            // from the local baseline manifest + dirty-groups set — no build
-            // is run to compute it, so it's cheap to render every OnGUI tick.
-            DrawUploadSizeEstimate();
-
             if (firstUpload)
             {
                 EditorGUILayout.HelpBox(
@@ -296,110 +300,6 @@ namespace DreamPark
             }
 
             GUILayout.EndVertical();
-        }
-
-        // Renders a one-line size estimate under the mode picker so the user
-        // can see roughly how much this upload will ship before committing.
-        // All numbers come from the locally-stored baseline manifest plus the
-        // dirty-groups set; no build is run, so this is cheap and OK to
-        // render on every OnGUI tick.
-        //
-        //   All           → total content of the last build (or "unknown" if
-        //                   no baseline yet)
-        //   Patch         → estimated bytes of dirty bundles (or zero if
-        //                   nothing has changed since last upload, or
-        //                   "everything" if no baseline)
-        //   CodeOnly      → sum of bundle sizes whose names match the Code
-        //                   group's prefix (including chunked variants)
-        //   PreviewsOnly  → same idea for Previews
-        private void DrawUploadSizeEstimate()
-        {
-            if (owner == null) return;
-            string contentId = owner.ContentId;
-            if (string.IsNullOrEmpty(contentId)) return;
-
-            var baseline = BuildManifestStore.LoadBaseline(contentId);
-
-            switch (uploadMode)
-            {
-                case UploadMode.All:
-                {
-                    if (baseline == null)
-                    {
-                        EditorGUILayout.LabelField(
-                            "Estimated size: unknown (no baseline yet — first build will determine total).",
-                            EditorStyles.wordWrappedMiniLabel);
-                    }
-                    else
-                    {
-                        EditorGUILayout.LabelField(
-                            $"Estimated upload: {BuildManifestStore.FormatBytes(baseline.TotalBytes)} (full content based on last successful upload).",
-                            EditorStyles.wordWrappedMiniLabel);
-                    }
-                    return;
-                }
-
-                case UploadMode.Patch:
-                {
-                    if (baseline == null)
-                    {
-                        EditorGUILayout.LabelField(
-                            "Estimated patch size: full upload (no baseline yet — first Patch ships everything).",
-                            EditorStyles.wordWrappedMiniLabel);
-                        return;
-                    }
-                    var dirty = DirtyGroupsStore.Load(contentId);
-                    if (dirty.Count == 0)
-                    {
-                        EditorGUILayout.LabelField(
-                            "Estimated patch size: ~few MB (catalog only — no content changes detected since last upload).",
-                            EditorStyles.wordWrappedMiniLabel);
-                        return;
-                    }
-                    var est = DirtyGroupsEstimator.Estimate(baseline, dirty);
-                    string sizeStr = BuildManifestStore.FormatBytes(est.estimatedBytes);
-                    string note = est.isIncomplete
-                        ? $"  (estimate incomplete — {est.unmatchedGroupNames.Count} dirty group(s) without a baseline match; could be smaller or larger)"
-                        : "";
-                    EditorGUILayout.LabelField(
-                        $"Estimated patch size: ~{sizeStr} across {est.matchedBundles} bundle(s) from {dirty.Count} dirty group(s).{note}",
-                        EditorStyles.wordWrappedMiniLabel);
-                    return;
-                }
-
-                case UploadMode.CodeOnly:
-                case UploadMode.PreviewsOnly:
-                {
-                    if (baseline == null)
-                    {
-                        EditorGUILayout.LabelField(
-                            "Estimated size: unknown (Code-only / Previews-only need a prior upload to estimate against).",
-                            EditorStyles.wordWrappedMiniLabel);
-                        return;
-                    }
-                    var target = uploadMode == UploadMode.CodeOnly
-                        ? UploadModeFilter.FileCategory.CodeBundle
-                        : UploadModeFilter.FileCategory.PreviewsBundle;
-                    long total = 0;
-                    int count = 0;
-                    foreach (var p in baseline.platforms)
-                    {
-                        foreach (var f in p.files)
-                        {
-                            if (UploadModeFilter.Categorize(contentId, f.fileName) == target)
-                            {
-                                total += f.sizeBytes;
-                                count++;
-                            }
-                        }
-                    }
-                    string targetName = uploadMode == UploadMode.CodeOnly ? "code" : "previews";
-                    EditorGUILayout.LabelField(
-                        $"Estimated upload: ~{BuildManifestStore.FormatBytes(total)} across {count} {targetName} bundle(s) (catalog ships too).",
-                        EditorStyles.wordWrappedMiniLabel);
-                    return;
-                }
-            }
         }
 
         private void DrawCompletionView()
@@ -696,6 +596,14 @@ namespace DreamPark
                 EditorGUILayout.HelpBox("Nothing is running yet. When you start, this window will carry the compile, upload, and finish states.", MessageType.None);
             }
 
+            // Patch breakdown — only visible during/after a patch-mode test
+            // upload. Reading directly from ContentAPI.CurrentPatchStats so
+            // the same flow popup serves both production and test channel
+            // uploads without duplicating state. Skipped silently when
+            // CurrentPatchStats is null (production upload, or test upload
+            // with no parent / full-upload mode).
+            DrawPatchStatsBlock();
+
             if (owner.UploadStatusProgress >= 0f && owner.IsUploading)
             {
                 Rect progressRect = GUILayoutUtility.GetRect(18f, 18f, "TextField");
@@ -758,6 +666,89 @@ namespace DreamPark
                 unit++;
             }
             return $"{value:0.##} {units[unit]}";
+        }
+
+        // Renders the live patch-mode breakdown for test channel uploads.
+        // Pulls from ContentAPI.CurrentPatchStats which the test-build flow
+        // sets immediately after the diff phase and ticks during the upload
+        // phase via Interlocked.Increment on uploadedSoFar. No-op when stats
+        // are null (production upload, or no upload has happened this
+        // session yet — InitializeUploadProgress clears them at the start
+        // of every new upload regardless of type).
+        //
+        // Robustness notes:
+        //   • CurrentPatchStats is a static; we snapshot it into a local
+        //     to avoid a NullReferenceException if it gets cleared between
+        //     the null check and a later field access (race with another
+        //     upload starting).
+        //   • uploadedSoFar is incremented on background upload tasks but
+        //     32-bit int reads are atomic on .NET, so no torn reads.
+        //   • totalBytes can be 0 in degenerate cases (empty file, missing
+        //     data); the PatchFraction property already handles that.
+        //   • uploadedSoFar is clamped to newFiles in case the increment
+        //     races ahead (defensive — shouldn't happen since each
+        //     newFile only increments once).
+        //
+        // Layout: three lines + an optional progress bar, each visually
+        // distinct so the user can read off "what's happening / how big /
+        // how much I'm saving" in three glances.
+        private void DrawPatchStatsBlock()
+        {
+            var stats = DreamPark.API.ContentAPI.CurrentPatchStats;
+            if (stats == null) return;
+            // Defensive — if both counts are zero we have nothing useful to
+            // show (probably called before the diff finished). Skip rather
+            // than render empty rows.
+            if (stats.newFiles == 0 && stats.inheritedFiles == 0) return;
+
+            // Snapshot all the volatile fields into locals up front so the
+            // rest of this method paints a coherent picture even if a new
+            // upload starts mid-render.
+            string parentId = stats.parentTestBuildId;
+            int newCount = stats.newFiles;
+            int inheritedCount = stats.inheritedFiles;
+            long patchSize = Math.Max(0L, stats.patchSizeBytes);
+            long inheritedSize = Math.Max(0L, stats.inheritedSizeBytes);
+            long totalSize = Math.Max(0L, stats.totalSizeBytes);
+            int uploaded = Math.Min(Math.Max(0, stats.uploadedSoFar), newCount);
+            int totalBundles = newCount + inheritedCount;
+            bool isPatch = !string.IsNullOrEmpty(parentId);
+            float patchFraction = totalSize <= 0L ? 0f : (float)((double)patchSize / (double)totalSize);
+            float patchPct = patchFraction * 100f;
+
+            GUILayout.Space(4f);
+            GUILayout.BeginVertical(EditorStyles.helpBox);
+
+            EditorGUILayout.LabelField(isPatch ? "Patch upload" : "Full upload", EditorStyles.miniBoldLabel);
+
+            // Line 1 — live counter. uploadedSoFar advances each time a
+            // newFile completes its presigned PUT.
+            string countLine = isPatch
+                ? $"Uploading {uploaded} of {newCount} new bundle(s)  ·  {inheritedCount} inherited from parent  ·  {totalBundles} total"
+                : $"Uploading {uploaded} of {newCount} bundle(s)";
+            EditorGUILayout.LabelField(countLine);
+
+            // Line 2 — sizes, including the explicit total that answers
+            // "how big is what I'm building" at a glance.
+            string sizeLine = isPatch
+                ? $"Bundle patch size: {FormatBytes(patchSize)} out of {FormatBytes(totalSize)} total   ·   Inherited: {FormatBytes(inheritedSize)}"
+                : $"Upload size: {FormatBytes(patchSize)}";
+            EditorGUILayout.LabelField(sizeLine, EditorStyles.miniLabel);
+
+            // Optional line 3 + progress bar — the savings callout. Only
+            // worth showing for genuine patches with a meaningful inherited
+            // portion (inheritedSize > 0). For full uploads the section
+            // would be a tautology ("100% of upload") and we hide it.
+            if (isPatch && inheritedSize > 0L)
+            {
+                string savings = $"Skipping {FormatBytes(inheritedSize)} of upload by reusing parent — pushing only {patchPct:0.0}% of total content";
+                EditorGUILayout.LabelField(savings, EditorStyles.miniLabel);
+
+                Rect r = GUILayoutUtility.GetRect(18f, 10f, "TextField");
+                EditorGUI.ProgressBar(r, Mathf.Clamp01(patchFraction), $"{patchPct:0.0}% of bundles need upload");
+            }
+
+            GUILayout.EndVertical();
         }
     }
 }

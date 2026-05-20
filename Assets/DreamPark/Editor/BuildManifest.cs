@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
+using Defective.JSON;
 
 namespace DreamPark
 {
@@ -16,12 +17,12 @@ namespace DreamPark
     // and will always show up in the changed-files set; that's correct, they're
     // tiny.
     //
-    // The manifest baseline is the snapshot of the most recent *successful*
-    // upload for a given contentId. Stored at:
+    // The manifest baseline is the snapshot we diff against when estimating
+    // or shipping a patch. We still cache the most recent successful local
+    // upload under:
     //   <ProjectRoot>/Library/DreamParkBuildManifests/{contentId}.json
-    // Library/ is git-ignored and per-machine, which is fine for solo / small
-    // teams. A future enhancement would sync baselines via the backend so a
-    // teammate's first upload after pulling matches another teammate's last.
+    // but Smart patching prefers the latest backend version metadata when it
+    // is available, so cross-machine uploads compare against the same parent.
 
     [Serializable]
     public class BuildManifestFile
@@ -42,7 +43,8 @@ namespace DreamPark
             get
             {
                 long sum = 0;
-                foreach (var f in files) sum += f.sizeBytes;
+                foreach (var f in files)
+                    if (f != null && f.sizeBytes > 0) sum += f.sizeBytes;
                 return sum;
             }
         }
@@ -135,6 +137,33 @@ namespace DreamPark
 
     public static class BuildManifestStore
     {
+        private const long UnknownFileSize = -1;
+
+        private static bool ShouldAlwaysUploadInPatch(string fileName)
+        {
+            if (string.IsNullOrEmpty(fileName)) return false;
+            string ext = Path.GetExtension(fileName);
+            return ext.Equals(".json", StringComparison.OrdinalIgnoreCase)
+                || ext.Equals(".hash", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string ExtractRelativeBackendFilename(string contentId, int versionNumber, string platform, string catalogPath)
+        {
+            if (string.IsNullOrEmpty(catalogPath) || string.IsNullOrEmpty(platform))
+                return null;
+
+            string expectedPrefix = $"addressables/{contentId}/{versionNumber}/{platform}/";
+            if (catalogPath.StartsWith(expectedPrefix, StringComparison.Ordinal))
+                return catalogPath.Substring(expectedPrefix.Length);
+
+            string platformMarker = $"/{platform}/";
+            int platformIdx = catalogPath.IndexOf(platformMarker, StringComparison.Ordinal);
+            if (platformIdx >= 0)
+                return catalogPath.Substring(platformIdx + platformMarker.Length);
+
+            return catalogPath.Replace('\\', '/');
+        }
+
         private static string ProjectRoot =>
             Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
 
@@ -203,6 +232,91 @@ namespace DreamPark
             }
         }
 
+        public static BuildManifest BuildFromBackendVersion(string contentId, JSONObject versionJson)
+        {
+            if (string.IsNullOrEmpty(contentId) || versionJson == null || versionJson.type != JSONObject.Type.Object)
+                return null;
+
+            int versionNumber = versionJson.HasField("versionNumber")
+                ? versionJson.GetField("versionNumber").intValue
+                : 0;
+
+            var manifest = new BuildManifest
+            {
+                contentId = contentId,
+                versionNumber = versionNumber,
+                buildTimestampUtc =
+                    versionJson.GetField("createdAt")?.stringValue
+                    ?? versionJson.GetField("uploadedAt")?.stringValue
+                    ?? versionJson.GetField("updatedAt")?.stringValue
+                    ?? string.Empty,
+                sdkVersion = versionJson.GetField("sdkVersion")?.stringValue ?? string.Empty,
+            };
+
+            var sizeLookup = new Dictionary<string, Dictionary<string, long>>(StringComparer.OrdinalIgnoreCase);
+            var manifestJson = versionJson.GetField("manifest");
+            var filesArr = manifestJson?.GetField("files");
+            if (filesArr != null && filesArr.type == JSONObject.Type.Array && filesArr.list != null)
+            {
+                foreach (var fileNode in filesArr.list)
+                {
+                    if (fileNode == null || fileNode.type != JSONObject.Type.Object) continue;
+                    string platform = fileNode.GetField("platform")?.stringValue;
+                    string filename = fileNode.GetField("filename")?.stringValue;
+                    if (string.IsNullOrEmpty(platform) || string.IsNullOrEmpty(filename)) continue;
+
+                    long size = UnknownFileSize;
+                    var sizeNode = fileNode.GetField("size");
+                    if (sizeNode != null && sizeNode.type == JSONObject.Type.Number)
+                        size = sizeNode.longValue;
+
+                    if (!sizeLookup.TryGetValue(platform, out var byFile))
+                    {
+                        byFile = new Dictionary<string, long>(StringComparer.Ordinal);
+                        sizeLookup[platform] = byFile;
+                    }
+                    byFile[filename] = size;
+                }
+            }
+
+            var catalog = versionJson.GetField("catalog");
+            if (catalog != null && catalog.type == JSONObject.Type.Object && catalog.keys != null)
+            {
+                foreach (string platform in catalog.keys)
+                {
+                    var platformManifest = new BuildManifestPlatform { platform = platform };
+                    var pathsArr = catalog.GetField(platform);
+                    if (pathsArr != null && pathsArr.type == JSONObject.Type.Array && pathsArr.list != null)
+                    {
+                        foreach (var pathNode in pathsArr.list)
+                        {
+                            string catalogPath = pathNode?.stringValue;
+                            string relativeFileName = ExtractRelativeBackendFilename(contentId, versionNumber, platform, catalogPath);
+                            if (string.IsNullOrEmpty(relativeFileName)) continue;
+
+                            long size = UnknownFileSize;
+                            if (sizeLookup.TryGetValue(platform, out var byFile)
+                                && byFile.TryGetValue(relativeFileName, out long knownSize))
+                            {
+                                size = knownSize;
+                            }
+
+                            platformManifest.files.Add(new BuildManifestFile
+                            {
+                                fileName = relativeFileName,
+                                sizeBytes = size,
+                            });
+                        }
+                    }
+
+                    platformManifest.files.Sort((a, b) => string.CompareOrdinal(a.fileName, b.fileName));
+                    manifest.platforms.Add(platformManifest);
+                }
+            }
+
+            return manifest.platforms.Count > 0 ? manifest : null;
+        }
+
         public static void SaveBaseline(BuildManifest manifest)
         {
             if (manifest == null || string.IsNullOrEmpty(manifest.contentId)) return;
@@ -263,7 +377,10 @@ namespace DreamPark
                 foreach (var f in currPlatform.files)
                 {
                     currFileNames.Add(f.fileName);
-                    if (baseFiles.TryGetValue(f.fileName, out var baseSize) && baseSize == f.sizeBytes)
+                    bool alwaysUpload = ShouldAlwaysUploadInPatch(f.fileName);
+                    bool filenameMatch = baseFiles.TryGetValue(f.fileName, out var baseSize);
+                    bool sizeMatch = baseSize == UnknownFileSize || baseSize == f.sizeBytes;
+                    if (!alwaysUpload && filenameMatch && sizeMatch)
                     {
                         pd.unchangedFiles.Add(f.fileName);
                         pd.unchangedBytes += f.sizeBytes;
@@ -376,6 +493,26 @@ namespace DreamPark
             deltaBlock.AddField("totalBytes", deltaTotal);
             deltaBlock.AddField("byPlatform", deltaByPlatform);
             summary.AddField("deltaUploaded", deltaBlock);
+
+            // files — compact per-file manifest for admin / content-manager
+            // drill-downs. Source version is derived later from the backend's
+            // resolvedBundles map, so the SDK only needs to persist filename
+            // + size here.
+            var filesBlock = new Defective.JSON.JSONObject(Defective.JSON.JSONObject.Type.Array);
+            foreach (var p in current.platforms)
+            {
+                if (p?.files == null) continue;
+                foreach (var f in p.files)
+                {
+                    if (f == null || string.IsNullOrEmpty(f.fileName)) continue;
+                    var fj = new Defective.JSON.JSONObject();
+                    fj.AddField("platform", p.platform ?? "");
+                    fj.AddField("filename", f.fileName);
+                    fj.AddField("size", Math.Max(0L, f.sizeBytes));
+                    filesBlock.Add(fj);
+                }
+            }
+            summary.AddField("files", filesBlock);
 
             return summary;
         }
