@@ -606,7 +606,7 @@ namespace DreamPark {
                 EndSectionBox();
             }
 
-            if (BeginSectionBox(ref foldReleaseLaunch, SectionReleaseLaunchPrefKey, "Release Launch", "d_BuildSettings.Editor.Small"))
+            if (BeginSectionBox(ref foldReleaseLaunch, SectionReleaseLaunchPrefKey, "Release Launch", null))
             {
                 DrawLaunchActions(sdkOutOfDate);
                 EndSectionBox();
@@ -618,7 +618,7 @@ namespace DreamPark {
         private bool BeginSectionBox(ref bool foldState, string prefKey, string title, string iconName)
         {
             GUILayout.BeginVertical(EditorStyles.helpBox);
-            var icon = EditorGUIUtility.IconContent(iconName);
+            GUIContent icon = string.IsNullOrEmpty(iconName) ? null : EditorGUIUtility.IconContent(iconName);
             string headerTitle = icon != null && icon.image != null ? $" {title}" : title;
             bool nextState = EditorGUILayout.BeginFoldoutHeaderGroup(foldState, new GUIContent(headerTitle, icon != null ? icon.image : null));
             if (nextState != foldState)
@@ -1546,17 +1546,7 @@ namespace DreamPark {
             }
 
             double reduction = total > 0 ? (1.0 - (double)changed / total) * 100.0 : 0.0;
-            string dirtyLine = "Source changes since last upload: none detected.";
-            if (dirtyGroupsEstimate != null && dirtyGroupsEstimate.matchedGroups + dirtyGroupsEstimate.unmatchedGroupNames.Count > 0)
-            {
-                int totalDirty = dirtyGroupsEstimate.matchedGroups + dirtyGroupsEstimate.unmatchedGroupNames.Count;
-                string sizeLabel = dirtyGroupsEstimate.isIncomplete
-                    ? $"≥ {BuildManifestStore.FormatBytes(dirtyGroupsEstimate.estimatedBytes)}"
-                    : $"~{BuildManifestStore.FormatBytes(dirtyGroupsEstimate.estimatedBytes)}";
-                dirtyLine = $"Source changes since last upload: {totalDirty} group(s) modified · {sizeLabel}";
-            }
-
-            return $"{baselineLine}\nPending changes: {changedFiles} files · {BuildManifestStore.FormatBytes(changed)} of {BuildManifestStore.FormatBytes(total)} ({reduction:0.0}% smaller)\n{dirtyLine}";
+            return $"{baselineLine}\nPending changes: {changedFiles} files · {BuildManifestStore.FormatBytes(changed)} of {BuildManifestStore.FormatBytes(total)} ({reduction:0.0}% smaller)";
         }
 
         internal List<ContentAPI.UploadProgressEntry> GetProgressEntries()
