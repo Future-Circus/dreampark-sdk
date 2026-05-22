@@ -15,6 +15,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using UnityEngine.AddressableAssets;
 using System.Collections.Generic;
+using UnityEngine.Networking;
 
 namespace DreamPark {
     public class ContentUploaderPanel : EditorWindow
@@ -1826,7 +1827,7 @@ namespace DreamPark {
             // metadata fetch or a just-completed upload, while the backend
             // snapshot/local fallback already has everything we need to run a
             // real estimate.
-            return GetPreferredPatchBaseline() != null;
+            return GetPreferredPatchBaseline(latestContentDirectorySnapshot) != null;
         }
 
         internal bool PendingProductionEstimateMatches(UploadMode mode, bool doBuildOsx, bool doBuildWindows)
@@ -2015,15 +2016,151 @@ namespace DreamPark {
 
         private BuildManifest GetPreferredPatchBaseline(JSONObject contentDirectory = null)
         {
-            if (!string.IsNullOrEmpty(contentId))
+            return FetchBackendBaselineForUpload(contentDirectory);
+        }
+
+        private static string BuildBundleManifestUrl(string contentId, int versionNumber, string platform)
+        {
+            string escapedContentId = UnityWebRequest.EscapeURL(contentId ?? "");
+            string escapedPlatform = UnityWebRequest.EscapeURL(platform ?? "");
+            return $"{DreamParkAPI.devBaseUrl.TrimEnd('/')}/app/content/{escapedContentId}/bundle-manifest/{versionNumber}/{escapedPlatform}";
+        }
+
+        private static JSONObject GetJsonSync(string url, string authorizationHeader, out string error)
+        {
+            error = null;
+            using (var req = UnityWebRequest.Get(url))
             {
-                var latestVersion = GetLatestBackendVersionRecord(contentDirectory ?? latestContentDirectorySnapshot);
-                var backendBaseline = BuildManifestStore.BuildFromBackendVersion(contentId, latestVersion);
-                if (backendBaseline != null)
-                    return backendBaseline;
+                if (!string.IsNullOrWhiteSpace(authorizationHeader))
+                    req.SetRequestHeader("Authorization", authorizationHeader);
+
+                var op = req.SendWebRequest();
+                while (!op.isDone && req.result != UnityWebRequest.Result.ConnectionError) { }
+
+                bool success = !(req.result == UnityWebRequest.Result.ConnectionError
+                    || req.result == UnityWebRequest.Result.ProtocolError);
+                if (!success)
+                {
+                    error = !string.IsNullOrWhiteSpace(req.downloadHandler?.text) ? req.downloadHandler.text : req.error;
+                    return null;
+                }
+
+                string raw = req.downloadHandler?.text;
+                if (string.IsNullOrWhiteSpace(raw))
+                {
+                    error = "Empty response body";
+                    return null;
+                }
+
+                try
+                {
+                    return new JSONObject(raw);
+                }
+                catch (Exception ex)
+                {
+                    error = $"Malformed JSON: {ex.Message}";
+                    return null;
+                }
+            }
+        }
+
+        private static long ExtractManifestPlatformBytes(JSONObject versionJson, string platform)
+        {
+            return versionJson?.GetField("manifest")
+                ?.GetField("fullContent")
+                ?.GetField("byPlatform")
+                ?.GetField(platform)
+                ?.GetField("bytes")
+                ?.longValue ?? -1L;
+        }
+
+        private BuildManifest FetchBackendBaselineForUpload(JSONObject contentDirectory = null)
+        {
+            if (string.IsNullOrEmpty(contentId))
+                return BuildManifestStore.LoadBaseline(contentId);
+
+            var latestVersion = GetLatestBackendVersionRecord(contentDirectory ?? latestContentDirectorySnapshot);
+            if (latestVersion == null)
+                return BuildManifestStore.LoadBaseline(contentId);
+
+            int versionNumber = latestVersion.HasField("versionNumber") ? latestVersion.GetField("versionNumber").intValue : 0;
+            if (versionNumber <= 0)
+                return BuildManifestStore.LoadBaseline(contentId);
+
+            var platformTargets = latestVersion.GetField("platformTargets")?.list?
+                .Select(node => node?.stringValue)
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList() ?? new List<string>();
+
+            if (platformTargets.Count == 0)
+                return BuildManifestStore.LoadBaseline(contentId);
+
+            string authHeader = AuthAPI.GetAPIKey();
+            if (string.IsNullOrWhiteSpace(authHeader))
+            {
+                Debug.LogWarning("[ContentUploader] No API key available for backend baseline fetch; falling back to local baseline.");
+                return BuildManifestStore.LoadBaseline(contentId);
             }
 
-            return BuildManifestStore.LoadBaseline(contentId);
+            var manifest = new BuildManifest
+            {
+                contentId = contentId,
+                versionNumber = versionNumber,
+                buildTimestampUtc =
+                    latestVersion.GetField("createdAt")?.stringValue
+                    ?? latestVersion.GetField("uploadedAt")?.stringValue
+                    ?? latestVersion.GetField("updatedAt")?.stringValue
+                    ?? string.Empty,
+                sdkVersion = latestVersion.GetField("sdkVersion")?.stringValue ?? string.Empty,
+            };
+
+            foreach (string platform in platformTargets)
+            {
+                if (string.Equals(platform, "Unity", StringComparison.OrdinalIgnoreCase))
+                {
+                    var unityPlatform = new BuildManifestPlatform { platform = "Unity" };
+                    long unityBytes = ExtractManifestPlatformBytes(latestVersion, "Unity");
+                    unityPlatform.files.Add(new BuildManifestFile
+                    {
+                        fileName = $"{contentId}.unitypackage",
+                        sizeBytes = unityBytes,
+                    });
+                    manifest.platforms.Add(unityPlatform);
+                    continue;
+                }
+
+                string url = BuildBundleManifestUrl(contentId, versionNumber, platform);
+                JSONObject responseJson = GetJsonSync(url, authHeader, out string error);
+                if (responseJson == null || responseJson.GetField("success")?.boolValue != true)
+                {
+                    Debug.LogWarning($"[ContentUploader] Could not fetch backend baseline for {platform}: {error ?? responseJson?.GetField(\"error\")?.stringValue ?? \"Unknown error\"}. Falling back to local baseline.");
+                    return BuildManifestStore.LoadBaseline(contentId);
+                }
+
+                var platformManifest = new BuildManifestPlatform { platform = platform };
+                var bundles = responseJson.GetField("bundles");
+                if (bundles?.type == JSONObject.Type.Array && bundles.list != null)
+                {
+                    foreach (var fileNode in bundles.list)
+                    {
+                        if (fileNode == null || fileNode.type != JSONObject.Type.Object) continue;
+                        string fileName = fileNode.GetField("name")?.stringValue;
+                        if (string.IsNullOrWhiteSpace(fileName)) continue;
+
+                        platformManifest.files.Add(new BuildManifestFile
+                        {
+                            fileName = fileName,
+                            sizeBytes = fileNode.GetField("size")?.longValue ?? -1L,
+                        });
+                    }
+                }
+
+                platformManifest.files.Sort((a, b) => string.CompareOrdinal(a.fileName, b.fileName));
+                manifest.platforms.Add(platformManifest);
+            }
+
+            return manifest.platforms.Count > 0 ? manifest : BuildManifestStore.LoadBaseline(contentId);
         }
 
         private void CompleteUploadStatus(bool success, string message)
@@ -2164,7 +2301,7 @@ namespace DreamPark {
                 patchCurrentSnapshot = BuildManifestStore.BuildFromServerData(contentId, /*versionNumber*/ 0, platforms);
                 if (IsPatchUploadEnabled())
                 {
-                    patchBaseline = GetPreferredPatchBaseline();
+                    patchBaseline = GetPreferredPatchBaseline(latestContentDirectorySnapshot);
                     patchDiff = BuildManifestStore.Diff(patchBaseline, patchCurrentSnapshot);
 
                     // Source-aware estimate: read dirty-groups (maintained
@@ -3744,7 +3881,7 @@ namespace DreamPark {
                             UploadMode effectiveMode = patchingEnabled ? pendingUploadMode : UploadMode.All;
                             bool modeWasDowngraded = effectiveMode != pendingUploadMode;
                             UploadModeFilter.Result modeResult = null;
-                            BuildManifest backendBaselineForUpload = patchingEnabled ? GetPreferredPatchBaseline(contentDirectory) : null;
+                            BuildManifest backendBaselineForUpload = patchingEnabled ? FetchBackendBaselineForUpload(contentDirectory) : null;
 
                             // Failed-Only short-circuit: the user clicked
                             // "Upload Failed Bundles" on the Try Reupload

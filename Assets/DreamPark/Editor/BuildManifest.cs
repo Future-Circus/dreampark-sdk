@@ -494,26 +494,6 @@ namespace DreamPark
             deltaBlock.AddField("byPlatform", deltaByPlatform);
             summary.AddField("deltaUploaded", deltaBlock);
 
-            // files — compact per-file manifest for admin / content-manager
-            // drill-downs. Source version is derived later from the backend's
-            // resolvedBundles map, so the SDK only needs to persist filename
-            // + size here.
-            var filesBlock = new Defective.JSON.JSONObject(Defective.JSON.JSONObject.Type.Array);
-            foreach (var p in current.platforms)
-            {
-                if (p?.files == null) continue;
-                foreach (var f in p.files)
-                {
-                    if (f == null || string.IsNullOrEmpty(f.fileName)) continue;
-                    var fj = new Defective.JSON.JSONObject();
-                    fj.AddField("platform", p.platform ?? "");
-                    fj.AddField("filename", f.fileName);
-                    fj.AddField("size", Math.Max(0L, f.sizeBytes));
-                    filesBlock.Add(fj);
-                }
-            }
-            summary.AddField("files", filesBlock);
-
             return summary;
         }
     }
