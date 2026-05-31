@@ -72,6 +72,14 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
     internal static float lastGCTime = 0;
     internal const float GCInterval = 1;
 
+    /// <summary>
+    /// Public accessor for the shared Lua environment. Used by code in
+    /// other assemblies (creator game asmdefs, ProfileAPI, etc.) that
+    /// needs to register globals or evaluate Lua. Returns the same singleton
+    /// LuaEnv that every LuaBehaviour script runs in.
+    /// </summary>
+    public static LuaEnv GetLuaEnv() => luaEnv;
+
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterAssembliesLoaded)]
     static void RegisterLuaGlobals()
     {

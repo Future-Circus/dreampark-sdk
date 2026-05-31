@@ -11,6 +11,10 @@ namespace DreamPark
     {
         public static string SessionId;
         public static string DreamboxId;
+        // LocationId is the canonical "park" identifier on the consumer-session.
+        // Persisted statically so other SDK systems (e.g. SessionReporter) can
+        // read it without re-querying the backend.
+        public static string LocationId;
         public static string RelayHost;
         public static int? RelayPort;
         public static string[] SelectedContentIds;
@@ -18,11 +22,17 @@ namespace DreamPark
         public static bool IsPaired;
 
         public static event Action<SessionConfig> OnSessionPaired;
+        // Fires when the headset's consumer-session ends (return, timeout,
+        // unpair). Subscribers should flush any per-session state — e.g.
+        // SessionReporter sends a final /session/end so the playtime log
+        // records when play actually stopped.
+        public static event Action OnSessionUnpaired;
 
         public static void SetPaired(SessionConfig config)
         {
             SessionId = config.sessionId;
             DreamboxId = config.dreamboxId;
+            LocationId = config.locationId;
             RelayHost = config.relayHost;
             RelayPort = config.relayPort;
             SelectedContentIds = config.selectedContentIds;
@@ -40,13 +50,17 @@ namespace DreamPark
 
         public static void Clear()
         {
+            var wasPaired = IsPaired;
             SessionId = null;
             DreamboxId = null;
+            LocationId = null;
             RelayHost = null;
             RelayPort = null;
             SelectedContentIds = null;
             SessionLengthMinutes = null;
             IsPaired = false;
+
+            if (wasPaired) OnSessionUnpaired?.Invoke();
         }
     }
 
