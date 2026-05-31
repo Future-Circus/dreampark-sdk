@@ -23,6 +23,7 @@ public class EasyVoice : EasyEvent
     private Vector3 lowerJawStartRot;
     private AudioSource audioSource;
     public bool delayNextEvent = false;
+    public float voiceVolume = 1f;
 
     private float shoulderWeight = 0.2f;
     private float neckWeight = 0.5f;
@@ -114,7 +115,7 @@ public class EasyVoice : EasyEvent
 
         if (voiceLine != null)
         {
-            audioSource = voiceLine.PlaySFX(voiceOrigin.position, 1f, 1f, voiceOrigin);
+            audioSource = voiceLine.PlaySFX(voiceOrigin.position, voiceVolume, 1f, voiceOrigin);
             audioSource.loop = false;
         }
 

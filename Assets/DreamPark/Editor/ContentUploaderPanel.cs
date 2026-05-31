@@ -2134,7 +2134,9 @@ namespace DreamPark {
                 JSONObject responseJson = GetJsonSync(url, authHeader, out string error);
                 if (responseJson == null || responseJson.GetField("success")?.boolValue != true)
                 {
-                    Debug.LogWarning($"[ContentUploader] Could not fetch backend baseline for {platform}: {error ?? responseJson?.GetField(\"error\")?.stringValue ?? \"Unknown error\"}. Falling back to local baseline.");
+                    string responseError = responseJson?.GetField("error")?.stringValue ?? "Unknown error";
+                    string baselineError = error ?? responseError;
+                    Debug.LogWarning($"[ContentUploader] Could not fetch backend baseline for {platform}: {baselineError}. Falling back to local baseline.");
                     return BuildManifestStore.LoadBaseline(contentId);
                 }
 
