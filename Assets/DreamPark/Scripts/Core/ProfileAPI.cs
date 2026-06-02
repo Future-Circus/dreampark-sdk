@@ -85,16 +85,29 @@ namespace DreamPark.API
     {
         // ── Identity ─────────────────────────────────────────────────────
         public static string BoundUserId      { get; private set; }
-        public static string BoundWristbandId { get; private set; }
+        public static string BoundDreamId { get; private set; }
         public static string ContentFilter    { get; private set; }
-        public static bool   IsBound          => !string.IsNullOrEmpty(BoundUserId) || !string.IsNullOrEmpty(BoundWristbandId);
+        public static bool   IsBound          => !string.IsNullOrEmpty(BoundUserId) || !string.IsNullOrEmpty(BoundDreamId);
         public static bool   IsLoaded         { get; private set; }
 
+        // Player wallet — populated from the snapshot's `dreamPoints` field
+        // when bound to a user account. Always 0 for anonymous DreamID
+        // bindings (the backend doesn't issue points to unclaimed identities).
+        public static int    DreamPoints      { get; private set; }
+
+        // Server-issued preview key returned by /api/pairing/preview-claim
+        // when BindToLoggedInUser succeeds. Sent as `Bearer <key>` on every
+        // /app/profile/* write in SDK preview mode. Scoped server-side to
+        // this developer's own uid — a leaked preview key can't touch any
+        // other user's profile. Null in production (headset) builds, which
+        // authenticate with the real Unity API key instead.
+        static string _previewKey;
+
         // Which backend route family to hit. Headset = /app/profile/* with
-        // API key + server-side headset binding (production path on the
-        // Quest at a park). LoggedInUser = /api/user/* with session bearer
-        // (SDK preview / editor testing against the developer's own account
-        // without needing to scan a QR).
+        // the Unity API key + server-side headset binding (production path
+        // on the Quest at a park). LoggedInUser = /app/profile/* with a
+        // server-issued preview key (SDK preview / editor testing against
+        // the developer's own account without needing to scan a QR).
         public enum ProfileSource { Headset, LoggedInUser }
         public static ProfileSource Source { get; private set; } = ProfileSource.Headset;
 
@@ -110,6 +123,9 @@ namespace DreamPark.API
         public static event Action OnInventoryChanged;
         public static event Action<ProfileAchievement> OnAchievementUpdated;
         public static event Action<ProfileBadge> OnBadgeAwarded;
+        // Fired whenever DreamPoints changes — including hydrate from snapshot,
+        // earn from /add, and debit from /spend. Subscribe to drive HUD updates.
+        public static event Action<int /* newBalance */, int /* delta */> OnDreamPointsChanged;
 
         // ── Pending callbacks (Lua scripts can call .onReady before data lands) ─
         static readonly List<Action> _onReadyQueue = new List<Action>();
@@ -117,11 +133,11 @@ namespace DreamPark.API
         /// <summary>Bind an identity (called by the core QR pairing handler).
         /// Sets Source = Headset — all reads/writes go through /app/profile/*
         /// which the backend authorizes by looking up the headset's binding.</summary>
-        public static void BindIdentity(string userId, string wristbandId, string contentFilter = null)
+        public static void BindIdentity(string userId, string dreamId, string contentFilter = null)
         {
             Source           = ProfileSource.Headset;
             BoundUserId      = string.IsNullOrEmpty(userId) ? null : userId;
-            BoundWristbandId = string.IsNullOrEmpty(wristbandId) ? null : wristbandId;
+            BoundDreamId = string.IsNullOrEmpty(dreamId) ? null : dreamId;
             ContentFilter    = string.IsNullOrEmpty(contentFilter) ? null : contentFilter;
             IsLoaded         = false;
             try { OnIdentityBound?.Invoke(); } catch (Exception e) { Debug.LogWarning($"[ProfileAPI] OnIdentityBound subscriber threw: {e}"); }
@@ -157,7 +173,7 @@ namespace DreamPark.API
             }
             Source           = ProfileSource.LoggedInUser;
             BoundUserId      = AuthAPI.userId;
-            BoundWristbandId = null;
+            BoundDreamId = null;
             ContentFilter    = string.IsNullOrEmpty(contentFilter) ? null : contentFilter;
             IsLoaded         = false;
             Debug.Log($"[ProfileAPI] BindToLoggedInUser — minting pairing token for uid {BoundUserId}…");
@@ -200,6 +216,18 @@ namespace DreamPark.API
                         FlushReadyQueue(failed: true);
                         return;
                     }
+                    // Extract the server-issued preview key — subsequent
+                    // writes use it as `Bearer <key>` on /app/profile/*.
+                    // Without it, AwardItem/AwardBadge/AwardAchievement
+                    // would 401 since SDK preview can no longer fall back
+                    // to plain session bearer (that surface was retired
+                    // because it let any authed user grant arbitrary items).
+                    var previewKeyObj = claimResp.json.GetField("previewKey");
+                    _previewKey = previewKeyObj?.GetField("key")?.stringValue;
+                    if (string.IsNullOrEmpty(_previewKey))
+                    {
+                        Debug.LogWarning("[ProfileAPI] BindToLoggedInUser: preview-claim returned no previewKey — writes will fail.");
+                    }
                     Debug.Log("[ProfileAPI] BindToLoggedInUser: preview-claim succeeded, applying profile snapshot.");
                     ApplyProfileSnapshot(HydrateProfileSnapshot(claimResp.json), null);
                 });
@@ -209,7 +237,9 @@ namespace DreamPark.API
         public static void ClearIdentity()
         {
             BoundUserId = null;
-            BoundWristbandId = null;
+            BoundDreamId = null;
+            _previewKey = null;
+            DreamPoints = 0;
             IsLoaded = false;
             _items.Clear();
             _achievements.Clear();
@@ -220,20 +250,26 @@ namespace DreamPark.API
         static string AuthHeader()
         {
 #if DREAMPARKCORE
+            // Production headset path — the embedded Unity API key. Server
+            // resolves identity from the headset binding on the active
+            // consumer_session, so writes go to the paired user/DreamID.
             return AuthAPI.GetAPIKey();
 #else
-            // SDK preview builds use the developer's session bearer so creators
-            // can test profile flows against their own dev account.
-            return AuthAPI.GetUserAuth();
+            // SDK preview path — the server-issued preview key minted by
+            // /api/pairing/preview-claim. Server resolves identity to the
+            // key's bound uid (the developer's own). Writes are server-side
+            // scoped to that uid only; a leaked preview key cannot mutate
+            // any other user's profile.
+            return string.IsNullOrEmpty(_previewKey) ? "" : $"Bearer {_previewKey}";
 #endif
         }
 
-        /// <summary>"user:abc" or "wb:XYZ" or null — used only for display
+        /// <summary>"user:abc" or "did:XYZ" or null — used only for display
         /// and diagnostics; the server never trusts this string.</summary>
         public static string IdentitySegment()
         {
             if (!string.IsNullOrEmpty(BoundUserId)) return "user:" + BoundUserId;
-            if (!string.IsNullOrEmpty(BoundWristbandId)) return "wb:" + BoundWristbandId;
+            if (!string.IsNullOrEmpty(BoundDreamId)) return "did:" + BoundDreamId;
             return null;
         }
 
@@ -294,8 +330,13 @@ namespace DreamPark.API
             _items.Clear();        _items.AddRange(snapshot.items);
             _achievements.Clear(); _achievements.AddRange(snapshot.achievements);
             _badges.Clear();       _badges.AddRange(snapshot.badges);
+            int prevPoints = DreamPoints;
+            DreamPoints = snapshot.dreamPoints;
             IsLoaded = true;
             try { OnProfileLoaded?.Invoke(); } catch (Exception e) { Debug.LogWarning($"[ProfileAPI] OnProfileLoaded subscriber threw: {e}"); }
+            if (prevPoints != DreamPoints) {
+                try { OnDreamPointsChanged?.Invoke(DreamPoints, DreamPoints - prevPoints); } catch (Exception e) { Debug.LogWarning(e); }
+            }
             FlushReadyQueue(failed: false);
             done?.Invoke(true, snapshot);
         }
@@ -401,14 +442,15 @@ namespace DreamPark.API
         }
 
         // ── Writes (fire-and-forget; optimistic local update) ────────────
-        // Endpoint + auth dispatcher — Headset path uses /app/profile/* with
-        // API key + headsetId in the body. LoggedInUser path uses /api/user/*
-        // with the session bearer (no headsetId needed; server reads uid
-        // from the session cookie).
+        // All writes go through /app/profile/* — the single locked-down
+        // write surface for inventory/achievements/badges. The previous
+        // /api/user/* alternative was removed because it accepted any
+        // session bearer, letting any authed user grant themselves
+        // arbitrary items. AuthHeader() picks the right credential for
+        // the build (production = Unity API key; SDK preview = server-
+        // issued preview key bound to the developer's own uid).
         static (string url, string auth) PickWrite(string suffix)
         {
-            if (Source == ProfileSource.LoggedInUser)
-                return ("/api/user/" + suffix, AuthAPI.GetUserAuth());
             return ("/app/profile/" + suffix, AuthHeader());
         }
 
@@ -464,7 +506,7 @@ namespace DreamPark.API
             if (Source == ProfileSource.Headset) body.AddField("headsetId", HeadsetIdHeader());
             body.AddField("badgeId", badgeId);
 
-            var (url, auth) = PickWrite(Source == ProfileSource.LoggedInUser ? "badges/award" : "badges/award");
+            var (url, auth) = PickWrite("badges/award");
             DreamParkAPI.POST(url, auth, body, (ok, resp) =>
             {
                 if (!ok) { done?.Invoke(false, null); return; }
@@ -474,6 +516,61 @@ namespace DreamPark.API
                     try { OnBadgeAwarded?.Invoke(b); } catch (Exception e) { Debug.LogWarning(e); }
                     done?.Invoke(true, b);
                 });
+            });
+        }
+
+        /// <summary>
+        /// Remove <paramref name="amount"/> copies of <paramref name="itemId"/>
+        /// from the user's inventory. Decrements the stack; when the stored
+        /// amount hits zero the entry is deleted.
+        ///
+        /// For unique (metadata-tagged) items, pass the full instance id
+        /// (e.g. "wand_stormheart_a3f24b81") and amount=1 to remove that
+        /// specific row. Server is idempotent — removing more than is owned
+        /// just clears the entry.
+        /// </summary>
+        public static void RemoveItem(string itemId, int amount = 1, Action<bool> done = null)
+        {
+            if (!IsBound) { Debug.LogWarning("[ProfileAPI] RemoveItem with no identity bound."); done?.Invoke(false); return; }
+            if (string.IsNullOrEmpty(itemId)) { done?.Invoke(false); return; }
+            if (amount <= 0) amount = 1;
+
+            var body = new JSONObject(JSONObject.Type.Object);
+            if (Source == ProfileSource.Headset) body.AddField("headsetId", HeadsetIdHeader());
+            body.AddField("itemId", itemId);
+            body.AddField("amount", amount);
+
+            var (url, auth) = PickWrite("inventory/remove");
+            DreamParkAPI.POST(url, auth, body, (ok, resp) =>
+            {
+                if (!ok) { done?.Invoke(false); return; }
+                FetchProfile(ContentFilter, (_, __) =>
+                {
+                    try { OnInventoryChanged?.Invoke(); } catch (Exception e) { Debug.LogWarning(e); }
+                    done?.Invoke(true);
+                });
+            });
+        }
+
+        /// <summary>
+        /// Strip a badge off the user. Idempotent — no-op if the user
+        /// didn't own the badge.
+        /// </summary>
+        public static void RemoveBadge(string badgeId, Action<bool> done = null)
+        {
+            if (!IsBound) { Debug.LogWarning("[ProfileAPI] RemoveBadge with no identity bound."); done?.Invoke(false); return; }
+            if (string.IsNullOrEmpty(badgeId)) { done?.Invoke(false); return; }
+
+            var body = new JSONObject(JSONObject.Type.Object);
+            if (Source == ProfileSource.Headset) body.AddField("headsetId", HeadsetIdHeader());
+            body.AddField("badgeId", badgeId);
+
+            var (url, auth) = PickWrite("badges/remove");
+
+            DreamParkAPI.POST(url, auth, body, (ok, resp) =>
+            {
+                if (!ok) { done?.Invoke(false); return; }
+                FetchProfile(ContentFilter, (_, __) => done?.Invoke(true));
             });
         }
 
@@ -537,11 +634,87 @@ namespace DreamPark.API
             });
         }
 
+        /// <summary>
+        /// Award DreamPoints to the bound user. PRODUCTION HEADSET ONLY —
+        /// the server rejects this call when authenticated with an SDK
+        /// preview key (403, sdkPreviewBlocked: true). SDK builds can wire
+        /// the call into their game logic, but minting only succeeds in
+        /// real Quest builds where the embedded Unity API key is present.
+        ///
+        /// Anonymous DreamID bindings are also rejected server-side —
+        /// DreamPoints live on the `users` collection only.
+        ///
+        /// `reason` is recorded on the ledger for audit (e.g. "quest_complete").
+        /// </summary>
+        public static void AddDreamPoints(int amount, string reason = null, Action<bool, int /* newBalance */> done = null)
+        {
+            if (!IsBound) { Debug.LogWarning("[ProfileAPI] AddDreamPoints with no identity bound."); done?.Invoke(false, DreamPoints); return; }
+            if (amount <= 0) { Debug.LogWarning("[ProfileAPI] AddDreamPoints requires a positive amount."); done?.Invoke(false, DreamPoints); return; }
+
+            var body = new JSONObject(JSONObject.Type.Object);
+            if (Source == ProfileSource.Headset) body.AddField("headsetId", HeadsetIdHeader());
+            body.AddField("amount", amount);
+            if (!string.IsNullOrEmpty(reason)) body.AddField("reason", reason);
+
+            var (url, auth) = PickWrite("dreampoints/add");
+            DreamParkAPI.POST(url, auth, body, (ok, resp) =>
+            {
+                if (!ok)
+                {
+                    var err = resp?.error ?? "request failed";
+                    Debug.LogWarning("[ProfileAPI] AddDreamPoints failed: " + err);
+                    done?.Invoke(false, DreamPoints);
+                    return;
+                }
+                int prev = DreamPoints;
+                int newBalance = (int)(resp?.json?.GetField("dreamPoints")?.floatValue ?? prev + amount);
+                DreamPoints = newBalance;
+                try { OnDreamPointsChanged?.Invoke(newBalance, newBalance - prev); } catch (Exception e) { Debug.LogWarning(e); }
+                done?.Invoke(true, newBalance);
+            });
+        }
+
+        /// <summary>
+        /// Spend DreamPoints from the bound user's balance. Server rejects on
+        /// insufficient balance (HTTP 402). Works with both production and
+        /// SDK preview auth — devs need to test purchase flows in editor.
+        ///
+        /// `reason` is recorded on the ledger (e.g. "shop:cosmetic_hat_red").
+        /// </summary>
+        public static void SpendDreamPoints(int amount, string reason = null, Action<bool, int /* newBalance */> done = null)
+        {
+            if (!IsBound) { Debug.LogWarning("[ProfileAPI] SpendDreamPoints with no identity bound."); done?.Invoke(false, DreamPoints); return; }
+            if (amount <= 0) { Debug.LogWarning("[ProfileAPI] SpendDreamPoints requires a positive amount."); done?.Invoke(false, DreamPoints); return; }
+
+            var body = new JSONObject(JSONObject.Type.Object);
+            if (Source == ProfileSource.Headset) body.AddField("headsetId", HeadsetIdHeader());
+            body.AddField("amount", amount);
+            if (!string.IsNullOrEmpty(reason)) body.AddField("reason", reason);
+
+            var (url, auth) = PickWrite("dreampoints/spend");
+            DreamParkAPI.POST(url, auth, body, (ok, resp) =>
+            {
+                if (!ok)
+                {
+                    var err = resp?.error ?? "request failed";
+                    Debug.LogWarning("[ProfileAPI] SpendDreamPoints failed: " + err);
+                    done?.Invoke(false, DreamPoints);
+                    return;
+                }
+                int prev = DreamPoints;
+                int newBalance = (int)(resp?.json?.GetField("dreamPoints")?.floatValue ?? Math.Max(0, prev - amount));
+                DreamPoints = newBalance;
+                try { OnDreamPointsChanged?.Invoke(newBalance, newBalance - prev); } catch (Exception e) { Debug.LogWarning(e); }
+                done?.Invoke(true, newBalance);
+            });
+        }
+
         // ── JSON hydration ───────────────────────────────────────────────
         public class ProfileSnapshot
         {
             public string identityKind;
             public string identityId;
+            public int    dreamPoints;
             public List<ProfileItem>        items        = new List<ProfileItem>();
             public List<ProfileAchievement> achievements = new List<ProfileAchievement>();
             public List<ProfileBadge>       badges       = new List<ProfileBadge>();
@@ -559,8 +732,11 @@ namespace DreamPark.API
                 b.identityId   = identity.GetField("id")?.stringValue;
             }
 
+            // DreamPoints balance — 0 for anonymous DreamID bindings.
+            b.dreamPoints = (int)(json.GetField("dreamPoints")?.floatValue ?? 0);
+
             var inv = json.GetField("inventory");
-            if (inv != null && inv.type == JSONObject.Type.Array)
+            if (inv != null && inv.type == JSONObject.Type.Array && inv.list != null)
             {
                 for (int i = 0; i < inv.list.Count; i++)
                 {
@@ -606,7 +782,7 @@ namespace DreamPark.API
             }
 
             var achievements = json.GetField("achievements");
-            if (achievements != null && achievements.type == JSONObject.Type.Array)
+            if (achievements != null && achievements.type == JSONObject.Type.Array && achievements.list != null)
             {
                 for (int i = 0; i < achievements.list.Count; i++)
                 {
@@ -625,7 +801,7 @@ namespace DreamPark.API
             }
 
             var badges = json.GetField("badges");
-            if (badges != null && badges.type == JSONObject.Type.Array)
+            if (badges != null && badges.type == JSONObject.Type.Array && badges.list != null)
             {
                 for (int i = 0; i < badges.list.Count; i++)
                 {
@@ -724,11 +900,28 @@ namespace DreamPark.API
                 env.Global.Set("dp_profile_has_achievement",   new Func<string, bool>(HasAchievement));
                 env.Global.Set("dp_profile_get_badge",         new Func<string, LuaTable>(id => BadgeToLuaTable(env, GetBadge(id))));
                 env.Global.Set("dp_profile_has_badge",         new Func<string, bool>(HasBadge));
+                env.Global.Set("dp_profile_get_dreampoints",   new Func<int>(()                       => DreamPoints));
 
                 // ── writers ─────────────────────────────────────────────
-                env.Global.Set("dp_profile_award_item",        new Action<string, int>((id, amt)  => AwardItem(id, amt)));
+                // awardItem accepts a makeUnique bool — when true, we
+                // send a stub metadata object so the backend appends a
+                // random suffix to the inventory key and forces amount=1.
+                // Any truthy `metadata` triggers the unique path server-side
+                // (see /api/user/inventory/add + /app/profile/inventory/add).
+                env.Global.Set("dp_profile_award_item",        new Action<string, int, bool>((id, amt, unique) => {
+                    JSONObject meta = null;
+                    if (unique) {
+                        meta = new JSONObject(JSONObject.Type.Object);
+                        meta.AddField("unique", true);
+                    }
+                    AwardItem(id, amt, meta);
+                }));
                 env.Global.Set("dp_profile_award_achievement", new Action<string, float>((id, p)  => AwardAchievement(id, p)));
                 env.Global.Set("dp_profile_award_badge",       new Action<string>(id              => AwardBadge(id)));
+                env.Global.Set("dp_profile_remove_item",       new Action<string, int>((id, amt) => RemoveItem(id, amt)));
+                env.Global.Set("dp_profile_remove_badge",      new Action<string>(id             => RemoveBadge(id)));
+                env.Global.Set("dp_profile_add_dreampoints",   new Action<int, string>((amt, reason) => AddDreamPoints(amt, reason)));
+                env.Global.Set("dp_profile_spend_dreampoints", new Action<int, string>((amt, reason) => SpendDreamPoints(amt, reason)));
                 // Playtime is reported automatically by SessionReporter via
                 // /app/profile/session/heartbeat. We deliberately don't expose
                 // it to Lua — creators reaching for that surface usually want
@@ -758,9 +951,17 @@ namespace DreamPark.API
                         getBadge         = function(id)   return dp_profile_get_badge(id) end,
                         hasBadge         = function(id)   return dp_profile_has_badge(id) end,
 
-                        awardItem        = function(id, amt)  dp_profile_award_item(id, amt or 1) end,
+                        getDreamPoints   = function()     return dp_profile_get_dreampoints() end,
+
+                        awardItem        = function(id, amt, unique) dp_profile_award_item(id, amt or 1, unique or false) end,
                         awardAchievement = function(id, p)    dp_profile_award_achievement(id, p or 1) end,
                         awardBadge       = function(id)       dp_profile_award_badge(id) end,
+                        removeItem       = function(id, amt)  dp_profile_remove_item(id, amt or 1) end,
+                        removeBadge      = function(id)       dp_profile_remove_badge(id) end,
+                        -- Production-only: server rejects from SDK preview builds. Wire it
+                        -- into your game logic; mints succeed once shipped through Core.
+                        addDreamPoints   = function(amt, reason) dp_profile_add_dreampoints(amt or 0, reason) end,
+                        spendDreamPoints = function(amt, reason) dp_profile_spend_dreampoints(amt or 0, reason) end,
                     }
                 ", "dp.profile.bootstrap");
             }
