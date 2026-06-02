@@ -110,7 +110,7 @@ public class EasyLua : EasyEvent, ILuaInjectable {
     // ── EasyEvent chain ────────────────────────────────────────────────
 
     public override void OnEvent(object arg0 = null) {
-        base.OnEvent(arg0);
+        isEnabled = true;
         luaStart?.Invoke();
 
         if (!delayNextEvent) {
