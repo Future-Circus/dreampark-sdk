@@ -1,4 +1,9 @@
-#if UNITY_EDITOR
+// Core-only: auto-publishes the canonical tag/layer schema. Must NOT compile
+// into the SDK distribution — its old IsCoreProject() fallback trusted the
+// project folder name, which a third party could spoof by renaming their folder
+// to "dreampark-core" to auto-publish platform schema. Gated to DREAMPARKCORE
+// so it only exists in the core app at all.
+#if UNITY_EDITOR && DREAMPARKCORE
 using System;
 using System.IO;
 using System.Linq;

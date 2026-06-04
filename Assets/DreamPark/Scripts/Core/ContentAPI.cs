@@ -518,6 +518,10 @@ namespace DreamPark.API
         #endif
         }
 
+#if DREAMPARKCORE
+        // Core/admin only: content version approval. Backend authorizes too;
+        // compiled out of the SDK so it isn't part of the third-party surface
+        // (no SDK callers).
         public static void ApproveContent(string contentId, int versionNumber, bool requiresUpdate, Action<bool, APIResponse> callback) {
             JSONObject body = new JSONObject();
             body.AddField("versionNumber", versionNumber);
@@ -526,6 +530,7 @@ namespace DreamPark.API
                 callback?.Invoke(success, response);
             });
         }
+#endif
 
         // ─── Test Channel ────────────────────────────────────────────
         // Dump-and-forget uploads for internal SDK testing. Distinct from
@@ -1820,6 +1825,12 @@ namespace DreamPark.API
             });
         }
 
+#if DREAMPARKCORE
+        // Core/admin only: publishing the canonical tag/layer schema and
+        // accepting creator proposals are platform-wide actions. Backend now
+        // enforces admin (requireAdminJson). Compiled out of the SDK so a
+        // third-party build can't call them. Creators use SyncTagLayerSchema
+        // (propose), which remains available below.
         public static void PublishTagLayerSchemaFromCore(string contentId, List<string> tags, List<string> layers, Action<bool, APIResponse> callback)
         {
             var body = new JSONObject();
@@ -1852,6 +1863,7 @@ namespace DreamPark.API
                 callback?.Invoke(success, response);
             });
         }
+#endif
 
         public static void GetTagLayerSchemaProposal(string contentId, Action<bool, APIResponse> callback)
         {

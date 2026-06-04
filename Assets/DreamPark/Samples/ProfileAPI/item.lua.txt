@@ -1,0 +1,88 @@
+-- award-item.lua
+-- Add or remove an item in the bound player's profile inventory.
+--
+-- Designed to drop onto either a LuaBehaviour OR an EasyLua node with no
+-- code changes:
+--   • LuaBehaviour — does NOT auto-fire. Call from another Lua script
+--     via a ScriptInjection:
+--         awardItem.trigger()          -- use the @var-configured amount
+--         awardItem.trigger(-1)        -- override amount per-call
+--   • EasyLua — fires automatically when the EasyEvent chain reaches
+--     this node, then passes control to the next event the same frame.
+--
+-- `amount` controls direction:
+--     amount > 0   → award N copies (or 1 unique entry if makeUnique=true)
+--     amount < 0   → remove |N| copies
+--     amount == 0  → no-op
+--
+-- `makeUnique` produces a metadata-tagged inventory entry. Every call
+-- creates a distinct row keyed by `<itemId>_<random>`, so the same
+-- catalog id can stack as multiple unique instances. The backend forces
+-- amount=1 for unique entries. Has no effect when amount is negative.
+--
+-- @var itemId string ""
+-- @var amount int 1
+-- @var makeUnique bool false
+
+local UE = CS.UnityEngine
+local Debug = UE.Debug
+
+-- ── State ────────────────────────────────────────────────────────
+local fired = false
+
+-- ── Runtime detection ────────────────────────────────────────────
+-- EasyLua exposes a public `delayNextEvent` bool field; LuaBehaviour
+-- does not. We probe via pcall AND require a boolean result, so the
+-- check stays correct whether XLua throws on the missing member
+-- (older versions) or silently returns nil (newer ones).
+local function is_easy_lua()
+    if self == nil then return false end
+    local ok, val = pcall(function() return self.delayNextEvent end)
+    return ok and type(val) == "boolean"
+end
+
+-- ── Public API ───────────────────────────────────────────────────
+function trigger(overrideAmount)
+    local id = itemId
+    if id == nil or id == "" then
+        Debug.LogWarning("[award-item] itemId not set — nothing to do")
+        fired = true
+        return false
+    end
+    local amt = overrideAmount or amount or 1
+    if amt == 0 then
+        fired = true
+        return false
+    end
+
+    if amt > 0 then
+        local unique = makeUnique or false
+        pcall(function()
+            dp.profile.awardItem(id, amt, unique)
+        end)
+        Debug.Log("[award-item] +" .. tostring(amt) .. " '" .. tostring(id) .. "'"
+            .. (unique and " (unique)" or ""))
+    else
+        local toRemove = -amt
+        pcall(function()
+            dp.profile.removeItem(id, toRemove)
+        end)
+        Debug.Log("[award-item] -" .. tostring(toRemove) .. " '" .. tostring(id) .. "'")
+    end
+
+    fired = true
+    return true
+end
+
+-- ── Lifecycle ────────────────────────────────────────────────────
+function start()
+    if is_easy_lua() then
+        trigger()
+    end
+end
+
+function update()
+    if fired and is_easy_lua() then
+        return true
+    end
+end
