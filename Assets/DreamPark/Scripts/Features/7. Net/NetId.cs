@@ -42,7 +42,10 @@ public class NetId : MonoBehaviour
 
     public void ReceiveEvent(string payload)
     {
-        OnNetEvent?.Invoke(payload);
+        // Untrusted network input flows straight into creator Lua (onnet). Isolate
+        // handler exceptions so a malformed/hostile payload can't crash the caller.
+        try { OnNetEvent?.Invoke(payload); }
+        catch (Exception e) { Debug.LogWarning($"[NetId {Id}] onnet handler threw: {e.Message}"); }
     }
 
     /// <summary>
