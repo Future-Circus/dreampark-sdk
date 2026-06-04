@@ -84,6 +84,12 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
     static void RegisterLuaGlobals()
     {
         luaEnv.Global.Set("json_parse", new Func<string, LuaTable>(JsonParseToLuaTable));
+#if DREAMPARKCORE
+        // Production-only: clamp what creator Lua can reach when it runs inside
+        // the core app. Compiled out of the SDK so developers build/test with the
+        // full CS.* surface. Source lives in core's Assets/Scripts (not the SDK).
+        DreamPark.Security.LuaSecuritySandbox.Install(luaEnv);
+#endif
     }
 
     static LuaTable JsonParseToLuaTable(string json)
