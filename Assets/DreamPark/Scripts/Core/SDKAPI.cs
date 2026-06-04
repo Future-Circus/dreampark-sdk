@@ -65,7 +65,7 @@ namespace DreamPark.API
             form.AddField("releaseNotes", releaseNotes ?? "");
             form.AddBinaryData("package", packageBytes, fileName ?? "sdk.unitypackage", "application/octet-stream");
 
-            string url = DreamParkAPI.devBaseUrl + "/api/sdk/publish";
+            string url = DreamParkAPI.baseUrl + "/api/sdk/publish";
             using (var req = UnityWebRequest.Post(url, form))
             {
                 req.SetRequestHeader("Authorization", AuthAPI.GetUserAuth());

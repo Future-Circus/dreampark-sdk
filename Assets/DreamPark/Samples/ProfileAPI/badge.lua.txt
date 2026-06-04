@@ -1,0 +1,82 @@
+-- award-badge.lua
+-- Award or remove a badge on the bound player's profile.
+--
+-- Designed to drop onto either a LuaBehaviour OR an EasyLua node with no
+-- code changes:
+--   • LuaBehaviour — does NOT auto-fire. Call from another Lua script
+--     via a ScriptInjection:
+--         awardBadge.trigger()         -- use the @var-configured remove flag
+--         awardBadge.trigger(true)     -- force-remove (override per-call)
+--         awardBadge.trigger(false)    -- force-award (override per-call)
+--   • EasyLua — fires automatically when the EasyEvent chain reaches
+--     this node, then passes control to the next event the same frame.
+--
+-- Badges are binary (you have one, or you don't). Awards are idempotent
+-- server-side — calling award() on a badge the player already owns is a
+-- silent no-op rather than an error. Removes are also idempotent.
+--
+-- @var badgeId string ""
+-- @var remove bool false      -- true = strip the badge, false = award it
+
+local UE = CS.UnityEngine
+local Debug = UE.Debug
+
+-- ── State ────────────────────────────────────────────────────────
+local fired = false
+
+-- ── Runtime detection ────────────────────────────────────────────
+-- EasyLua exposes a public `delayNextEvent` bool field; LuaBehaviour
+-- does not. We probe via pcall AND require a boolean result, so the
+-- check stays correct whether XLua throws on the missing member
+-- (older versions) or silently returns nil (newer ones).
+local function is_easy_lua()
+    if self == nil then return false end
+    local ok, val = pcall(function() return self.delayNextEvent end)
+    return ok and type(val) == "boolean"
+end
+
+-- ── Public API ───────────────────────────────────────────────────
+-- overrideRemove is tri-state: nil → use @var, true/false → force.
+function trigger(overrideRemove)
+    local id = badgeId
+    if id == nil or id == "" then
+        Debug.LogWarning("[award-badge] badgeId not set — nothing to do")
+        fired = true
+        return false
+    end
+
+    local shouldRemove
+    if overrideRemove == nil then
+        shouldRemove = remove or false
+    else
+        shouldRemove = overrideRemove
+    end
+
+    if shouldRemove then
+        pcall(function()
+            dp.profile.removeBadge(id)
+        end)
+        Debug.Log("[award-badge] removed '" .. tostring(id) .. "'")
+    else
+        pcall(function()
+            dp.profile.awardBadge(id)
+        end)
+        Debug.Log("[award-badge] awarded '" .. tostring(id) .. "'")
+    end
+
+    fired = true
+    return true
+end
+
+-- ── Lifecycle ────────────────────────────────────────────────────
+function start()
+    if is_easy_lua() then
+        trigger()
+    end
+end
+
+function update()
+    if fired and is_easy_lua() then
+        return true
+    end
+end

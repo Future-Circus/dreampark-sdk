@@ -393,13 +393,32 @@ public class DreamBoxClient : MonoBehaviour
 
         _listener.NetworkReceiveEvent += (peer, reader, channel, method) =>
         {
-            string json = reader.GetString();
-            Debug.Log($"[DreamBox] Received: {json}");
-            MessageCount++;
-            string truncated = json.Length > 80 ? json.Substring(0, 80) + "..." : json;
-            OnEventLog?.Invoke($"RECV: {truncated}");
-            HandleEvent(json);
-            reader.Recycle();
+            try
+            {
+                // Cap message size — a malicious LAN peer must not be able to push
+                // an unbounded string into memory or the log.
+                if (reader.AvailableBytes > MaxIncomingMessageBytes)
+                {
+                    Debug.LogWarning($"[DreamBox] Dropping oversized message ({reader.AvailableBytes} bytes).");
+                    return;
+                }
+                string json = reader.GetString();
+                if (string.IsNullOrEmpty(json) || json.Length > MaxIncomingMessageChars) return;
+                MessageCount++;
+                // Do NOT log the full payload (logcat exposure on shared headsets) —
+                // only a short truncated preview.
+                string truncated = json.Length > 80 ? json.Substring(0, 80) + "..." : json;
+                OnEventLog?.Invoke($"RECV: {truncated}");
+                HandleEvent(json);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[DreamBox] Failed to handle inbound message: {e.Message}");
+            }
+            finally
+            {
+                reader.Recycle();
+            }
         };
 
         _listener.NetworkErrorEvent += (endpoint, error) =>
@@ -500,6 +519,11 @@ public class DreamBoxClient : MonoBehaviour
         writer.Put(json);
         _server.Send(writer, DeliveryMethod.ReliableOrdered);
     }
+
+    // Hard caps on inbound LAN messages (untrusted peers). 16 KB is generous for
+    // the small JSON events this protocol uses.
+    const int MaxIncomingMessageBytes = 16 * 1024;
+    const int MaxIncomingMessageChars = 16 * 1024;
 
     void HandleEvent(string json)
     {

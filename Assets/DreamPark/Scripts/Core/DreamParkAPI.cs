@@ -57,9 +57,20 @@ namespace DreamPark.API
         [Tooltip("Optional: override base URLs at runtime.")]
         public static string prodBaseUrl = "https://dreampark.app";
         public static string devBaseUrl  = "https://dreampark-dev-da8108e9492c.herokuapp.com";
+
+        // Default ALL traffic to PROD. Internal/dev projects opt into the dev
+        // backend by adding the DREAMPARK_DEV_BACKEND scripting define in Player
+        // Settings; the shipped SDK template and release builds must NOT define
+        // it. (Previously every verb hard-coded devBaseUrl, so shipped builds
+        // sent auth/login/PII to the dev environment.)
+#if DREAMPARK_DEV_BACKEND
+        public static string baseUrl = devBaseUrl;
+#else
+        public static string baseUrl = prodBaseUrl;
+#endif
         public static void POST(string endpoint, string authToken, object body, Action<bool, APIResponse> callback)
         {
-            var url = devBaseUrl + endpoint;
+            var url = baseUrl + endpoint;
             byte[] bodyRaw = null;
             if (body is JSONObject) {
                 bodyRaw = System.Text.Encoding.UTF8.GetBytes((body ?? new JSONObject()).ToString());
@@ -88,7 +99,7 @@ namespace DreamPark.API
 
         public static void PUT(string endpoint, string authToken, byte[] data, string contentType, Action<float> progressCallback, Action<bool, string> callback)
         {
-            var url = endpoint.StartsWith("http") ? endpoint : devBaseUrl + endpoint;
+            var url = endpoint.StartsWith("http") ? endpoint : baseUrl + endpoint;
             #if UNITY_EDITOR
             EditorCoroutineUtility.StartCoroutineOwnerless(PutRequest(url, data, contentType, progressCallback, callback));
             #else
@@ -98,7 +109,7 @@ namespace DreamPark.API
 
         public static void GET(string endpoint, string authToken, Action<bool, APIResponse> callback)
         {
-            var url = devBaseUrl + endpoint;
+            var url = baseUrl + endpoint;
             #if UNITY_EDITOR
             EditorCoroutineUtility.StartCoroutineOwnerless(GetRequest(url, authToken, callback));
             #else

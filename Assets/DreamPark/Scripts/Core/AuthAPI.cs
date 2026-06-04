@@ -12,6 +12,21 @@ namespace DreamPark.API
         // bool argument = current isLoggedIn value.
         public static event Action<bool> LoginStateChanged;
 
+#if !UNITY_EDITOR
+        // On DEVICE, credentials are held IN MEMORY only — never written to
+        // PlayerPrefs. On Android/Quest, PlayerPrefs is an unencrypted file in app
+        // storage (readable via ADB / another app on a shared venue headset) AND is
+        // reachable from creator Lua through CS.UnityEngine.PlayerPrefs, so
+        // persisting a session bearer + email there risks cross-user session
+        // hijack and PII disclosure. Keeping them in memory means a fresh app start
+        // re-authenticates (via pairing/login), which is the correct behavior for a
+        // shared kiosk. (Editor builds still use EditorPrefs for dev convenience —
+        // a single-user dev machine, much lower risk.)
+        static string _sessionToken = "";
+        static string _userId       = "";
+        static string _userEmail    = "";
+#endif
+
         // Internal — used by AuthAPI to notify subscribers. Wrapped so callers
         // outside AuthAPI can't fire the event.
         private static void RaiseLoginStateChanged()
@@ -24,7 +39,7 @@ namespace DreamPark.API
 #if UNITY_EDITOR
             var sessionToken = UnityEditor.EditorPrefs.GetString("sessionToken", "");
 #else
-            var sessionToken = PlayerPrefs.GetString("sessionToken", "");
+            var sessionToken = _sessionToken;
 #endif
             return $"Bearer {sessionToken}";
         }
@@ -43,13 +58,13 @@ namespace DreamPark.API
             return "";
 #endif
         }
-        
+
         public static bool isLoggedIn {
             get {
 #if UNITY_EDITOR
                 var sessionToken = UnityEditor.EditorPrefs.GetString("sessionToken", "");
 #else
-                var sessionToken = PlayerPrefs.GetString("sessionToken", "");
+                var sessionToken = _sessionToken;
 #endif
                 return !string.IsNullOrEmpty(sessionToken);
             }
@@ -59,8 +74,8 @@ namespace DreamPark.API
 #if UNITY_EDITOR
                 return UnityEditor.EditorPrefs.GetString("userId", "");
 #else
-                return PlayerPrefs.GetString("userId", "");
-#endif            
+                return _userId;
+#endif
             }
         }
         public static string sessionToken {
@@ -68,7 +83,7 @@ namespace DreamPark.API
 #if UNITY_EDITOR
                 return UnityEditor.EditorPrefs.GetString("sessionToken", "");
 #else
-                return PlayerPrefs.GetString("sessionToken", "");
+                return _sessionToken;
 #endif
             }
         }
@@ -78,7 +93,7 @@ namespace DreamPark.API
 #if UNITY_EDITOR
                 return UnityEditor.EditorPrefs.GetString("userEmail", "");
 #else
-                return PlayerPrefs.GetString("userEmail", "");
+                return _userEmail;
 #endif
             }
         }
@@ -96,10 +111,9 @@ namespace DreamPark.API
                     UnityEditor.EditorPrefs.SetString("userId", response.json.GetField("uid").stringValue);
                     UnityEditor.EditorPrefs.SetString("userEmail", canonicalEmail ?? "");
 #else
-                    PlayerPrefs.SetString("sessionToken", response.json.GetField("session").stringValue);
-                    PlayerPrefs.SetString("userId", response.json.GetField("uid").stringValue);
-                    PlayerPrefs.SetString("userEmail", canonicalEmail ?? "");
-                    PlayerPrefs.Save();
+                    _sessionToken = response.json.GetField("session").stringValue;
+                    _userId       = response.json.GetField("uid").stringValue;
+                    _userEmail    = canonicalEmail ?? "";
 #endif
                     RaiseLoginStateChanged();
                     callback?.Invoke(success, response);
@@ -119,10 +133,9 @@ namespace DreamPark.API
             UnityEditor.EditorPrefs.DeleteKey("userId");
             UnityEditor.EditorPrefs.DeleteKey("userEmail");
 #else
-            PlayerPrefs.DeleteKey("sessionToken");
-            PlayerPrefs.DeleteKey("userId");
-            PlayerPrefs.DeleteKey("userEmail");
-            PlayerPrefs.Save();
+            _sessionToken = "";
+            _userId       = "";
+            _userEmail    = "";
 #endif
             RaiseLoginStateChanged();
         }
@@ -141,10 +154,9 @@ namespace DreamPark.API
                     UnityEditor.EditorPrefs.DeleteKey("userId");
                     UnityEditor.EditorPrefs.DeleteKey("userEmail");
 #else
-                    PlayerPrefs.DeleteKey("sessionToken");
-                    PlayerPrefs.DeleteKey("userId");
-                    PlayerPrefs.DeleteKey("userEmail");
-                    PlayerPrefs.Save();
+                    _sessionToken = "";
+                    _userId       = "";
+                    _userEmail    = "";
 #endif
                 RaiseLoginStateChanged();
             });

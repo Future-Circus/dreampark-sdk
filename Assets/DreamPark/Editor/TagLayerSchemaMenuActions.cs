@@ -21,12 +21,16 @@ namespace DreamPark
             try
             {
                 var local = TagLayerSchemaSyncUtility.ReadLocalTagManager();
+#if DREAMPARKCORE
                 if (IsCoreProject())
                 {
                     PublishCoreSchema(local);
                 }
                 else
+#endif
                 {
+                    // SDK builds always take the download-only path; core publish
+                    // is compiled out (see PublishCoreSchema / ContentAPI guards).
                     SyncContentSchema(local);
                 }
             }
@@ -37,6 +41,7 @@ namespace DreamPark
             }
         }
 
+#if DREAMPARKCORE
         private static void PublishCoreSchema(TagLayerSchemaSyncUtility.TagLayerSnapshot local)
         {
             string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
@@ -60,6 +65,7 @@ namespace DreamPark
                 EditorUtility.DisplayDialog("Schema Published", $"Canonical schema published (v{version}).", "OK");
             });
         }
+#endif
 
         private static string GetGameFolderName()
         {

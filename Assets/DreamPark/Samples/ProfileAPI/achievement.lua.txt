@@ -1,0 +1,69 @@
+-- award-achievement.lua
+-- Award (or progress) an achievement on the bound player's profile.
+--
+-- Designed to drop onto either a LuaBehaviour OR an EasyLua node with no
+-- code changes:
+--   • LuaBehaviour — does NOT auto-fire. Call from another Lua script
+--     via a ScriptInjection:
+--         awardAch.trigger()         -- use the @var-configured progress
+--         awardAch.trigger(2.5)      -- override progress per-call
+--   • EasyLua — fires automatically when the EasyEvent chain reaches
+--     this node, then passes control to the next event the same frame.
+--
+-- @var achievementId string ""
+-- @var progress float 1.0
+
+local UE = CS.UnityEngine
+local Debug = UE.Debug
+
+-- ── State ────────────────────────────────────────────────────────
+local fired = false
+
+-- ── Runtime detection ────────────────────────────────────────────
+-- EasyLua exposes a public `delayNextEvent` bool field; LuaBehaviour
+-- does not. We probe via pcall AND require a boolean result, so the
+-- check stays correct whether XLua throws on the missing member
+-- (older versions) or silently returns nil (newer ones).
+local function is_easy_lua()
+    if self == nil then return false end
+    local ok, val = pcall(function() return self.delayNextEvent end)
+    return ok and type(val) == "boolean"
+end
+
+-- ── Public API ───────────────────────────────────────────────────
+-- Call from another Lua script (via ScriptInjection) or from start()
+-- in the EasyLua chain path. Optional `overrideProgress` bumps by a
+-- different amount than the inspector default for this one call.
+function trigger(overrideProgress)
+    local id = achievementId
+    if id == nil or id == "" then
+        Debug.LogWarning("[award-achievement] achievementId not set — nothing to do")
+        fired = true
+        return false
+    end
+    local p = overrideProgress or progress or 1.0
+    pcall(function()
+        dp.profile.awardAchievement(id, p)
+    end)
+    Debug.Log("[award-achievement] '" .. tostring(id) .. "' +" .. tostring(p))
+    fired = true
+    return true
+end
+
+-- ── Lifecycle ────────────────────────────────────────────────────
+-- EasyLua calls start() from OnEvent (chain trigger). LuaBehaviour also
+-- calls start() once during Unity Start — we ignore that so the script
+-- only fires when explicitly triggered by another script.
+function start()
+    if is_easy_lua() then
+        trigger()
+    end
+end
+
+-- EasyLua: returning true advances the chain to the next event.
+-- LuaBehaviour: return value is ignored, so this is a harmless no-op.
+function update()
+    if fired and is_easy_lua() then
+        return true
+    end
+end
