@@ -7,9 +7,43 @@ namespace DreamPark
 #endif
     public class MusicArea : MonoBehaviour
     {
-        private static int activeMusicAreas = 0;
-        public static int? _priority;
-        public static MusicArea currentMusicArea;
+        // Music-area control state lives on a scene-scoped object (NOT DontDestroyOnLoad) instead of
+        // static fields, so it is destroyed with the scene and rebuilt with defaults the next session.
+        // The active-area count and current-area reference therefore reset automatically on a
+        // Main.scene reload, with no manual clearing. The statics below are only POINTERS to that
+        // state; the data dies with the scene (Unity reports a destroyed object as == null, which
+        // drives the rebuild). Names/visibility are unchanged, so callers and external references
+        // (e.g. MusicArea.currentMusicArea) keep working exactly as before.
+        private sealed class State
+        {
+            public int activeMusicAreas;
+            public int? priority;
+            public MusicArea currentMusicArea;
+        }
+        private sealed class StateHolder : MonoBehaviour { public readonly State state = new State(); }
+
+        private static StateHolder _holder;
+#if UNITY_EDITOR
+        // Edit-mode access (e.g. OnDestroy on scene close) must not spawn a runtime GameObject.
+        private static readonly State _editorState = new State();
+#endif
+        private static State S
+        {
+            get
+            {
+#if UNITY_EDITOR
+                if (!Application.isPlaying)
+                    return _editorState;
+#endif
+                if (_holder == null)
+                    _holder = new GameObject("[MusicAreaState]").AddComponent<StateHolder>();
+                return _holder.state;
+            }
+        }
+
+        private static int activeMusicAreas { get => S.activeMusicAreas; set => S.activeMusicAreas = value; }
+        public static int? _priority { get => S.priority; set => S.priority = value; } // NOTE: currently unused; kept for API compatibility.
+        public static MusicArea currentMusicArea { get => S.currentMusicArea; set => S.currentMusicArea = value; }
         public AudioClip musicTrack;
         public float volume = 0.6f;
         public int priority = 0;

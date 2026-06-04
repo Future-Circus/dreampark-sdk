@@ -3,7 +3,38 @@ using UnityEngine;
 
 public class EasyCounter : EasyEvent
 {
-    public static Dictionary<string, int> globalCounts = new();
+    // Global counts live on a scene-scoped GameObject (NOT DontDestroyOnLoad) instead of a static
+    // dictionary, so they are destroyed with the scene and lazily rebuilt empty the next session.
+    // This makes global counters reset automatically on a Main.scene reload -- no manual clearing,
+    // no cross-session leak (e.g. TOTAL_SUNS no longer accumulates across resets), and no ordering
+    // race (the first AddGlobalCount of a session creates the empty store, so it doesn't matter who
+    // touches it first). NOTE: the static field below is only a POINTER; the data lives on the
+    // GameObject. Unity reports a destroyed object as == null, which is what drives the rebuild.
+    private sealed class GlobalStore : MonoBehaviour
+    {
+        public readonly Dictionary<string, int> counts = new();
+    }
+
+    private static GlobalStore _store;
+
+#if UNITY_EDITOR
+    // Edit-mode inspector reads must not spawn a runtime GameObject; mirror the old "empty" behaviour.
+    private static readonly Dictionary<string, int> _editorCounts = new();
+#endif
+
+    private static Dictionary<string, int> Counts
+    {
+        get
+        {
+#if UNITY_EDITOR
+            if (!Application.isPlaying)
+                return _editorCounts;
+#endif
+            if (_store == null)
+                _store = new GameObject("[EasyCounterGlobals]").AddComponent<GlobalStore>();
+            return _store.counts;
+        }
+    }
     public enum VariableType {
         LOCAL,
         GLOBAL
@@ -38,7 +69,7 @@ public class EasyCounter : EasyEvent
         if (string.IsNullOrEmpty(name))
             return defaultValue;
 
-        if (!globalCounts.TryGetValue(name, out int value))
+        if (!Counts.TryGetValue(name, out int value))
             return defaultValue;
 
         return value;
@@ -49,7 +80,7 @@ public class EasyCounter : EasyEvent
         if (string.IsNullOrEmpty(name))
             return;
 
-        globalCounts[name] = value;
+        Counts[name] = value;
     }
 
     public static int AddGlobalCount(string name, int amount = 1)
@@ -58,7 +89,7 @@ public class EasyCounter : EasyEvent
             return 0;
 
         int nextValue = GetGlobalCount(name, 0) + amount;
-        globalCounts[name] = nextValue;
+        Counts[name] = nextValue;
         return nextValue;
     }
 
