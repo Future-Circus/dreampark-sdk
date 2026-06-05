@@ -16,6 +16,19 @@ namespace DreamPark {
         public static readonly List<GameArea> allGameAreas = new();
 
         /// <summary>
+        /// Verbose zone enter/exit logging. Off by default: these logs fire on every
+        /// transition and capture a managed stack trace, which causes frame spikes when
+        /// zones change rapidly (and they run in builds too). Flip on for debugging.
+        /// </summary>
+        public static bool VerboseLogging = false;
+
+        // Cached main-camera lookup shared by every GameArea. Camera.main does a tagged
+        // object search internally; with one GameArea per prop that was happening twice
+        // per prop, every frame. Resolve it once and reuse until the camera is replaced.
+        static Camera _mainCamera;
+        static Camera MainCamera => _mainCamera != null ? _mainCamera : (_mainCamera = Camera.main);
+
+        /// <summary>
         /// Fired when the active content zone changes.
         /// Args: (previousGameArea, newGameArea). Either may be null.
         /// </summary>
@@ -121,15 +134,17 @@ namespace DreamPark {
         }
 
         void Update () {
-            if (Camera.main) {
-                if (IsPointWithinBounds(Camera.main.transform.position)) {
-                    if (!isPlaying) {
-                        Enter();
-                    }
-                } else {
-                    if (isPlaying) {
-                        Exit();
-                    }
+            var cam = MainCamera;
+            if (!cam)
+                return;
+
+            if (IsPointWithinBounds(cam.transform.position)) {
+                if (!isPlaying) {
+                    Enter();
+                }
+            } else {
+                if (isPlaying) {
+                    Exit();
                 }
             }
         }
@@ -161,7 +176,8 @@ namespace DreamPark {
                 DreamBand.instances[gameId].Show();
             }
 
-            Debug.Log($"[GameArea] Entered zone: {gameId} (priority {priority})");
+            if (VerboseLogging)
+                Debug.Log($"[GameArea] Entered zone: {gameId} (priority {priority})");
             OnContentZoneChanged?.Invoke(previous, this);
         }
 
@@ -174,7 +190,8 @@ namespace DreamPark {
 
             if (currentGameArea == this) {
                 currentGameArea = null;
-                Debug.Log($"[GameArea] Exited zone: {gameId}");
+                if (VerboseLogging)
+                    Debug.Log($"[GameArea] Exited zone: {gameId}");
                 // Check if player is in another zone (nearest-zone fallback)
                 // ContentZoneManager handles this via the event
                 OnContentZoneChanged?.Invoke(this, null);
@@ -276,15 +293,39 @@ namespace DreamPark {
             if (halfExtents == Vector3.zero)
                 return;
 
+            // CHEAP per-frame draw only. Because every prop carries a GameArea
+            // ([RequireComponent]), OnDrawGizmos runs for EVERY prop every editor frame.
+            // Handles.* calls (DrawDottedLine, and especially the IMGUI-backed Label) are
+            // 10-100x more expensive than Gizmos primitives and were the cause of the
+            // 40ms+ editor frame spikes. Keep this path to a single batched wire cube; the
+            // rich dotted-perimeter + label visualization moves to OnDrawGizmosSelected,
+            // which only runs for the one selected object.
             Color c = GameAreaColorFromId(gameId);
             bool isActive = currentGameArea == this;
 
-            // Outer "padded" perimeter — drawn as a dotted line at floor level.
-            // This is the closest Unity's gizmo API gets to a "fuzzy / dithered"
-            // boundary without a custom mesh+shader. Uses Handles in world space
-            // (TransformPoint) so it rotates with the GameObject. The dot spacing
-            // is in screen-space pixels (4f gives a fine, soft pattern that
-            // scales naturally at any zoom level).
+            Matrix4x4 oldMatrix = Gizmos.matrix;
+            Gizmos.matrix = transform.localToWorldMatrix;
+            Gizmos.color = new Color(c.r, c.g, c.b, isActive ? 0.85f : 0.35f);
+            Gizmos.DrawWireCube(Vector3.zero, new Vector3(halfExtents.x * 2, 0.02f, halfExtents.z * 2));
+            Gizmos.matrix = oldMatrix;
+        }
+
+        // Detailed visualization (dotted activation perimeter + label) for the SELECTED
+        // zone only. Runs at most once per frame instead of once per prop, so the
+        // expensive Handles.* calls no longer scale with prop count.
+        void OnDrawGizmosSelected()
+        {
+            if (!showPaddingGizmo) return;
+
+            if (!Application.isPlaying)
+                ComputeBounds();
+            if (halfExtents == Vector3.zero)
+                return;
+
+            Color c = GameAreaColorFromId(gameId);
+            bool isActive = currentGameArea == this;
+
+            // Outer "padded" activation perimeter — dotted line at floor level.
             Vector3 hx = halfExtents;
             Vector3[] padCorners = {
                 transform.TransformPoint(new Vector3(-hx.x, 0, -hx.z)),
@@ -292,25 +333,17 @@ namespace DreamPark {
                 transform.TransformPoint(new Vector3( hx.x, 0,  hx.z)),
                 transform.TransformPoint(new Vector3(-hx.x, 0,  hx.z)),
             };
-
             UnityEditor.Handles.color = new Color(c.r, c.g, c.b, isActive ? 0.85f : 0.35f);
             for (int i = 0; i < 4; i++)
-            {
                 UnityEditor.Handles.DrawDottedLine(padCorners[i], padCorners[(i + 1) % 4], 4f);
-            }
 
-            // Inner "true footprint" — drawn as a faint flat wireframe at floor
-            // level only when padding is actually contributing area. This stays
-            // out of the way until the creator wants to see exactly where the
-            // play surface ends vs. where the activation zone begins.
+            // Inner "true footprint" when padding actually contributes area.
             if (unpaddedHalfExtents != Vector3.zero &&
                 (unpaddedHalfExtents.x < halfExtents.x || unpaddedHalfExtents.z < halfExtents.z))
             {
                 Matrix4x4 oldMatrix = Gizmos.matrix;
                 Gizmos.matrix = transform.localToWorldMatrix;
                 Gizmos.color = new Color(c.r, c.g, c.b, isActive ? 0.5f : 0.2f);
-                // Y extent is intentionally tiny (0.02) so this reads as a flat
-                // rectangle outline rather than a tall extruded box.
                 Gizmos.DrawWireCube(
                     Vector3.zero,
                     new Vector3(unpaddedHalfExtents.x * 2, 0.02f, unpaddedHalfExtents.z * 2));
