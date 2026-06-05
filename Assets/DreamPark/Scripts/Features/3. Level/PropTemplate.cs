@@ -185,10 +185,32 @@ namespace DreamPark
                 gameArea.gameId = gameId;
             }
 
-            // GameArea.Awake already ran ComputeBounds, but it may have fired before
-            // we'd finalized gameId/footprint — recompute so the padded bounds match
-            // this prop's current footprint.
+            // A prop nested inside a LevelTemplate/AttractionTemplate can never win the
+            // active zone — its priority is -1, so the containing level always takes it.
+            // That makes the prop's per-frame GameArea.Update pure overhead, and there is
+            // one GameArea per prop. Disable the redundant zone so it stops ticking (its
+            // OnDisable also removes it from GameArea.allGameAreas). The component is left
+            // attached to satisfy [RequireComponent] and keep serialized data intact.
+            if (IsNestedInContainerZone())
+            {
+                gameArea.enabled = false;
+                return;
+            }
+
+            // Standalone prop: its GameArea is a real activation zone, so keep it live.
+            // GameArea.Awake already ran ComputeBounds, but it may have fired before we'd
+            // finalized gameId/footprint — recompute so the padded bounds match this prop.
             gameArea.ComputeBounds();
+        }
+
+        /// <summary>
+        /// True when an ancestor (not this object) carries a LevelTemplate. AttractionTemplate
+        /// derives from LevelTemplate, so this single check covers props nested inside either.
+        /// </summary>
+        private bool IsNestedInContainerZone()
+        {
+            return transform.parent != null
+                && transform.parent.GetComponentInParent<LevelTemplate>(true) != null;
         }
 
         private void EnsureGameId()
@@ -368,7 +390,12 @@ namespace DreamPark
         }
 
 #if UNITY_EDITOR
-        private void OnDrawGizmos()
+        // Was OnDrawGizmos (ran for EVERY prop every editor frame). TryGetWorldFootprint
+        // calls GetComponentsInChildren<Collider> — a hierarchy walk + array allocation —
+        // so per-prop-per-frame it was a major editor-only cost and GC source. Drawing
+        // only for the selected prop keeps the footprint visualization while removing the
+        // per-frame tax across all unselected props.
+        private void OnDrawGizmosSelected()
         {
             if (!showFootprintGizmos || !TryGetWorldFootprint(out var footprint, out var surfaceHeight))
                 return;
