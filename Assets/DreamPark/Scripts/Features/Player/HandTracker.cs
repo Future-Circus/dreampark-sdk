@@ -1,7 +1,22 @@
 using UnityEngine;
 
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
+
 public class HandTracker : MonoBehaviour
 {
+    private static readonly Color DreamBandGizmoColor = new Color(0.5f, 0f, 1f, 0.85f);
+    private static readonly Vector3 DreamBandLocalOffset = new Vector3(-0.0003510714f, 0.01352847f, -0.004948974f);
+    private static readonly Vector3 DreamBandLocalEulerOffset = new Vector3(-78.802f, 0f, -180f);
+    private static readonly Vector3 DreamBandLocalScale = new Vector3(100f, 100f, 100f);
+    private static readonly Color HandGizmoColor = new Color(0.96f, 0.91f, 0.75f, 0.95f);
+    private static readonly Vector3 HandLocalOffset = new Vector3(0.00210005f, 0.01952827f, 0.006667495f);
+    private static readonly Vector3 HandLocalEulerOffset = new Vector3(-98.565f, -180.001f, 6.408005f);
+    private static readonly Vector3 HandLocalScale = new Vector3(99.99998f, 99.99998f, 99.99998f);
+    private static Mesh dreamBandGizmoMesh;
+    private static Mesh handGizmoMesh;
+
     public enum HandPreference
     {
         Left,
@@ -22,21 +37,6 @@ public class HandTracker : MonoBehaviour
     Transform rightAnchor;
     private Rigidbody rb;
     private bool isActive = false;
-    // We cache the hand/anchor references and normally do NOT re-scan the scene for them
-    // (FindObjectsByType / GameObject.Find walk the whole scene — cost that scales with
-    // scene object count, and this used to run every tick × Update/LateUpdate/FixedUpdate).
-    // But recovery must still work: if the OVRHand objects are destroyed/recreated the
-    // refs go null, so we re-scan whenever something is missing — throttled so a prolonged
-    // hands-absent stretch (e.g. controller mode) can't reintroduce a per-tick scene scan.
-    [SerializeField] private float handRescanInterval = 0.1f;
-    private float _nextHandScanTime = 0f;
-
-    // True only while every reference is present AND alive. Unity's overloaded == reports a
-    // destroyed UnityEngine.Object as null, so this flips false the instant a hand/anchor is
-    // destroyed — which is what drives re-discovery. (Tracking loss does NOT null the object,
-    // so it stays true and ChooseHand/isActiveAndTracking handle that case live.)
-    private bool HandsResolved =>
-        leftAnchor != null && rightAnchor != null && leftHand != null && rightHand != null;
 
     public float enableDelay = 0.1f;
 
@@ -84,27 +84,12 @@ public class HandTracker : MonoBehaviour
             return;
         }
 
-        // Only scan the scene while we still need the hands. This used to run on every
-        // tick even after the hands were cached — a full-scene walk per Update +
-        // LateUpdate + FixedUpdate, per HandTracker instance.
-        if (leftHand == null || rightHand == null)
+        OVRHand[] hands = FindObjectsByType<OVRHand>(FindObjectsSortMode.InstanceID);
+        if (hands.Length >= 2)
         {
-            // Bind by actual handedness (FindObjectsByType order is NOT guaranteed to be
-            // L/R), and only fill the slot that's currently empty. This way we recover
-            // whichever hand is available — even if just one of them came back — instead
-            // of requiring both to be present at once.
-            OVRHand[] hands = FindObjectsByType<OVRHand>(FindObjectsSortMode.InstanceID);
-            foreach (OVRHand hand in hands)
-            {
-                if (hand == null) continue;
-                OVRPlugin.Hand which = hand.GetHand();
-                if (which == OVRPlugin.Hand.HandLeft && leftHand == null)
-                    leftHand = hand;
-                else if (which == OVRPlugin.Hand.HandRight && rightHand == null)
-                    rightHand = hand;
-            }
+            leftHand = hands[0];
+            rightHand = hands[1];
         }
-
         ChooseHand();
     }
 
@@ -144,29 +129,14 @@ public class HandTracker : MonoBehaviour
     void UpdateStep()
     {
 #if UNITY_EDITOR
-        // Re-scan only while something is missing (first resolve, or after the OVRHand
-        // objects are destroyed), throttled. Once resolved this is a couple of cheap null
-        // checks per tick instead of a full-scene FindObjectsByType.
-        if (!HandsResolved && Time.unscaledTime >= _nextHandScanTime)
-        {
-            _nextHandScanTime = Time.unscaledTime + handRescanInterval;
-            FindHandAnchors();
-        }
+        FindHandAnchors();
         activeHand = leftHand;
         activeHandAnchor = leftAnchor;
 #else
-        // Recover anchors AND destroyed hand objects (throttled). FindHandAnchors only
-        // touches the scene while something is actually null — GameObject.Find is guarded
-        // by anchor==null and FindObjectsByType by hand==null — so once everything is
-        // resolved this costs nothing. Tracking loss alone (IsTracked false, object alive)
-        // keeps HandsResolved true and is handled live by ChooseHand below, no scan.
-        if (!HandsResolved && Time.unscaledTime >= _nextHandScanTime)
-        {
-            _nextHandScanTime = Time.unscaledTime + handRescanInterval;
+        if (!activeHandAnchor) {
             FindHandAnchors();
-        }
-        if (!activeHandAnchor)
             return;
+        }
         ChooseHand();
 #endif
 
@@ -174,11 +144,6 @@ public class HandTracker : MonoBehaviour
             DisableChildren();
             isActive = false;
         }
-
-        // No live anchor this tick (still resolving, or the hands/anchors were destroyed).
-        // We've already hidden the hand above; bail before dereferencing the null anchor.
-        if (!activeHandAnchor)
-            return;
 
         if (activeHandAnchor.transform && (float.IsNaN(activeHandAnchor.position.x) || float.IsNaN(activeHandAnchor.position.y) || float.IsNaN(activeHandAnchor.position.z))) {
             Debug.Log("BIG WARNING: Hand tracking anchor is NaN, setting to zero");
@@ -263,4 +228,59 @@ public class HandTracker : MonoBehaviour
             child.gameObject.SetActive(true);
         }
     }
+
+#if UNITY_EDITOR
+    private static Mesh ResolveGizmoMesh(ref Mesh cachedMesh, string resourceName, string dreamParkPath, string sharedPath)
+    {
+        if (cachedMesh != null) {
+            return cachedMesh;
+        }
+
+        cachedMesh = Resources.Load<Mesh>(resourceName);
+
+        if (cachedMesh == null) {
+            cachedMesh = AssetDatabase.LoadAssetAtPath<Mesh>(dreamParkPath);
+        }
+
+        if (cachedMesh == null) {
+            cachedMesh = AssetDatabase.LoadAssetAtPath<Mesh>(sharedPath);
+        }
+
+        return cachedMesh;
+    }
+
+    private void OnDrawGizmos()
+    {
+        Matrix4x4 oldMatrix = Gizmos.matrix;
+        Color oldColor = Gizmos.color;
+
+        Mesh handMesh = ResolveGizmoMesh(
+            ref handGizmoMesh,
+            "Meshes/Hand",
+            "Assets/DreamPark/Resources/Meshes/Hand.mesh",
+            "Assets/Resources/Meshes/Hand.mesh");
+        if (handMesh != null) {
+            Gizmos.matrix = transform.localToWorldMatrix *
+                            Matrix4x4.TRS(HandLocalOffset, Quaternion.Euler(HandLocalEulerOffset), HandLocalScale);
+            Gizmos.color = HandGizmoColor;
+            Gizmos.DrawMesh(handMesh, Vector3.zero);
+        }
+
+        Mesh dreamBandMesh = ResolveGizmoMesh(
+            ref dreamBandGizmoMesh,
+            "Meshes/DreamBand",
+            "Assets/DreamPark/Resources/Meshes/DreamBand.mesh",
+            "Assets/Resources/Meshes/DreamBand.mesh");
+        if (dreamBandMesh != null) {
+            Gizmos.matrix = transform.localToWorldMatrix *
+                            Matrix4x4.TRS(DreamBandLocalOffset, Quaternion.Euler(DreamBandLocalEulerOffset), DreamBandLocalScale);
+            Gizmos.color = DreamBandGizmoColor;
+            Gizmos.DrawMesh(dreamBandMesh, Vector3.zero);
+            Gizmos.DrawWireMesh(dreamBandMesh, Vector3.zero);
+        }
+
+        Gizmos.color = oldColor;
+        Gizmos.matrix = oldMatrix;
+    }
+#endif
 }

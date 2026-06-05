@@ -182,11 +182,11 @@ namespace DreamPark.ParkBuilder {
             public bool enabled = true;
             private static readonly Type[] ProtectedComponentTypes = new Type[] {
                 typeof(MusicArea), typeof(GameArea), typeof(PlayerRig), typeof(TMP_Text), typeof(HandTracker),
-                typeof(TextMeshProUGUI), typeof(TextMeshPro), typeof(DreamBand),
+                typeof(TextMeshProUGUI), typeof(TextMeshPro),
                 typeof(LevelTemplate), typeof(PropTemplate), typeof(CalibrateLevel), typeof(CalibrateProp),
                 typeof(DepthMask), typeof(FloorAnchor), typeof(FloorCutout)
             #if DREAMPARKCORE
-                , typeof(PortalAnchor), typeof(ParkAnchor), typeof(LevelAnchor)
+                , typeof(PortalAnchor), typeof(ParkAnchor), typeof(LevelAnchor), typeof(DreamBand)
             #endif
             #if SUPERADVENTURELAND
                 , typeof(ProceduralLavaPit)

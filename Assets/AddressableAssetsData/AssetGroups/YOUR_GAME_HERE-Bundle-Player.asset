@@ -15,18 +15,6 @@ MonoBehaviour:
   m_GroupName: YOUR_GAME_HERE-Bundle-Player
   m_GUID: 7a6142a556ece4ea3888fd1a4fb5c96a
   m_SerializeEntries:
-  - m_GUID: 141eeba284233415398795969dc97797
-    m_Address: YOUR_GAME_HERE/Models/DreamBand
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - YOUR_GAME_HERE
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: 34144dac71db94e688bf33833c00fcf7
-    m_Address: YOUR_GAME_HERE/Textures/dreamband_nrm
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - YOUR_GAME_HERE
-    FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: 37bd2ccc608e741b1a218fd969c53815
     m_Address: YOUR_GAME_HERE/Previews/Player
     m_ReadOnly: 0
@@ -35,24 +23,6 @@ MonoBehaviour:
     FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: 43f3f84285667477294d9792e20ab702
     m_Address: YOUR_GAME_HERE/Player
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - YOUR_GAME_HERE
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: 8284c5807005c4049a15b51729d3c980
-    m_Address: YOUR_GAME_HERE/Textures/dreamband
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - YOUR_GAME_HERE
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: bca9d82c51d7046e497f9c77f9f930eb
-    m_Address: YOUR_GAME_HERE/Materials/DreamBand
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - YOUR_GAME_HERE
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: d96be89e33d714bb885a28c44dd396f6
-    m_Address: YOUR_GAME_HERE/DreamBand
     m_ReadOnly: 0
     m_SerializedLabels:
     - YOUR_GAME_HERE
