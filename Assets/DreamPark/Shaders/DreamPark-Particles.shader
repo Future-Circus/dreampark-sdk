@@ -120,6 +120,15 @@ Shader "DreamPark/Particles"
         [Header(Channel Mode)]
         [Toggle(_SINGLECHANNEL_ON)] _SingleChannel("Use R Channel as Alpha (CFXR-style)", Float) = 0
 
+        // Multiply blend coverage source. Alpha (0) keys the multiply white-bias
+        // off the texture's alpha channel — correct when the texture carries real
+        // transparency. Brightness (1) keys it off texture luminance — correct for
+        // OPAQUE grayscale masks (white = effect, black = none), the classic CFX/
+        // Unity multiply-particle convention. The converter sets this per material
+        // by checking whether the source texture actually has transparency;
+        // defaults to Alpha so existing/hand-authored materials are unchanged.
+        [Enum(Alpha, 0, Brightness, 1)] _MultiplyBrightnessCoverage("Multiply Coverage Source", Float) = 0
+
         [Header(Emission)]
         // Emission is gated by _EMISSION_ON so a material that doesn't
         // use it pays zero variant cost — no extra texture sample, no
@@ -290,6 +299,7 @@ Shader "DreamPark/Particles"
                 float4 _EmissionMap_ST;
                 float  _EmissionStrength;
                 float  _Cutoff;
+                float  _MultiplyBrightnessCoverage;
                 float  _SoftParticlesNear;
                 float  _SoftParticlesFar;
                 float  _CameraNearFadeDistance;
@@ -493,6 +503,12 @@ Shader "DreamPark/Particles"
                     // Treat R as the alpha and use the material's tint as the RGB.
                     tex = half4(1.0h, 1.0h, 1.0h, tex.r);
                 #endif
+
+                // Capture the base texture RGB to use as the coverage mask for the
+                // Multiply blend path (see the _BLENDMODE_MULTIPLY block below).
+                // Taken here — after the single-channel remap, before overlay /
+                // vertex-color / tint fold in — so it reflects the raw shape.
+                half3 baseRGB = tex.rgb;
 
                 // ── Overlay (second texture layer) ───────────────────────
                 // Multiply OR Additive blend of a second texture over the
@@ -731,9 +747,25 @@ Shader "DreamPark/Particles"
                     // pixels contribute zero light without needing the dst term.
                     c.rgb *= c.a;
                 #elif defined(_BLENDMODE_MULTIPLY)
-                    // Multiply blend (SrcColor * DstColor): bias toward white where alpha=0
-                    // so transparent pixels don't darken what's behind them.
-                    c.rgb = lerp(half3(1, 1, 1), c.rgb, c.a);
+                    // Multiply blend (SrcColor * DstColor). The multiply identity is
+                    // WHITE (1,1,1) = "no effect", so transparent regions must resolve to
+                    // white or they darken the scene. There are TWO valid coverage
+                    // conventions and we support both, chosen per material by
+                    // _MultiplyBrightnessCoverage:
+                    //   • Alpha (0): coverage = the texture's alpha channel. Correct for
+                    //     RGBA particle textures that carry real transparency. This is the
+                    //     original behavior and the default.
+                    //   • Brightness (1): coverage = the texture's brightness (× alpha).
+                    //     Correct for OPAQUE grayscale masks (white = effect, black = none),
+                    //     the classic CFX/Unity multiply convention. Keying off alpha there
+                    //     would leave the black background fully covered and invert the look
+                    //     ("black shows, white disappears").
+                    // The converter inspects the source texture for actual transparency and
+                    // sets the flag; both paths share the white-bias lerp below.
+                    half3 alphaCov  = c.aaa;
+                    half3 brightCov = saturate(baseRGB * c.a);
+                    half3 mulCoverage = lerp(alphaCov, brightCov, _MultiplyBrightnessCoverage);
+                    c.rgb = lerp(half3(1.0h, 1.0h, 1.0h), c.rgb, mulCoverage);
                 #endif
                 // _BLENDMODE_ALPHA: standard SrcAlpha/OneMinusSrcAlpha, RGB stays as-is.
 

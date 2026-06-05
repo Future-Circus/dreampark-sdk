@@ -203,6 +203,24 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
                 scriptScopeTable.Set(inj.name, inj.value);
     }
 
+    /// <summary>
+    /// Re-push all Inspector-authored variables into the Lua scope. Injection already
+    /// happens once in Awake; call this only if you mutate an injection value from C#
+    /// at runtime and need Lua to observe the change. (In the editor this also runs
+    /// automatically when you tweak the Inspector during play — see Update/OnValidate.)
+    /// </summary>
+    public void ReinjectVariables() {
+        if (scriptScopeTable != null)
+            InjectAll();
+    }
+
+#if UNITY_EDITOR
+    // Set by OnValidate when the Inspector mutates this component. Lets designers keep
+    // live-tweak during play without re-marshaling every field into Lua every frame.
+    private bool _injectionDirty;
+    void OnValidate() => _injectionDirty = true;
+#endif
+
     void Awake() {
         if (luaScript == null) return;
 
@@ -254,8 +272,15 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
     void Update() {
         if (scriptScopeTable == null) return;
 
-        // Re-inject variables so Inspector changes take effect immediately
-        InjectAll();
+#if UNITY_EDITOR
+        // Re-inject only on the frames the Inspector actually changed, so live-tweak
+        // still works in the editor. In a build this block compiles out entirely —
+        // zero per-frame injection cost (was ~once-per-field marshaling every frame).
+        if (_injectionDirty) {
+            InjectAll();
+            _injectionDirty = false;
+        }
+#endif
 
         luaUpdate?.Invoke();
 

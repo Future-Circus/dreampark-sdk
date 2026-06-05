@@ -99,6 +99,7 @@ MonoBehaviour:
   flipVisual: 0
   flipVisualRotation: {x: 180, y: 180, z: 0}
   flipVisualPosition: {x: 0, y: 0, z: 0}
+  handRescanInterval: 0.1
   enableDelay: 0.1
 --- !u!1 &771420695763449735
 GameObject:
@@ -152,6 +153,7 @@ MonoBehaviour:
   flipVisual: 0
   flipVisualRotation: {x: 180, y: 180, z: 0}
   flipVisualPosition: {x: 0, y: 0, z: 0}
+  handRescanInterval: 0.1
   enableDelay: 0.1
 --- !u!1 &1060107786578603428
 GameObject:
@@ -10201,6 +10203,7 @@ MonoBehaviour:
   flipVisual: 0
   flipVisualRotation: {x: 180, y: 180, z: 0}
   flipVisualPosition: {x: 0, y: 0, z: 0}
+  handRescanInterval: 0.1
   enableDelay: 0.1
 --- !u!1 &4379708918807569533
 GameObject:
@@ -10557,6 +10560,7 @@ MonoBehaviour:
   flipVisual: 0
   flipVisualRotation: {x: 180, y: 180, z: 0}
   flipVisualPosition: {x: 0, y: 0, z: 0}
+  handRescanInterval: 0.1
   enableDelay: 0.1
 --- !u!1 &5160842503987856905
 GameObject:

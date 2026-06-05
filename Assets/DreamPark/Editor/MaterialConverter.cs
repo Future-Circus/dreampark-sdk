@@ -1102,9 +1102,17 @@ namespace DreamPark.EditorTools
 
             // Detect blend mode from src/dst blend factors, or fall back to keyword.
             // 5 = SrcAlpha, 10 = OneMinusSrcAlpha, 1 = One.
+            // NOTE: legacy built-in particle shaders (Particles/Additive, Mobile/
+            // Particles/*, Legacy Shaders/Particles/*, CartoonFX's own *_Additive
+            // shaders) bake the blend into the ShaderLab pass and expose NEITHER
+            // these properties NOR the _BLENDMODE_* keywords. We must NOT let the
+            // 5/10 defaults below masquerade as a real signal, so we pass through
+            // whether the properties actually exist and let ResolveBlendMode fall
+            // back to shader-name inference when they don't.
+            bool hasBlendProps = src.HasProperty("_SrcBlend") && src.HasProperty("_DstBlend");
             float src_srcBlend = src.HasProperty("_SrcBlend") ? src.GetFloat("_SrcBlend") : 5f;
             float src_dstBlend = src.HasProperty("_DstBlend") ? src.GetFloat("_DstBlend") : 10f;
-            string blendMode = ResolveBlendMode(src, src_srcBlend, src_dstBlend);
+            string blendMode = ResolveBlendMode(src, src_srcBlend, src_dstBlend, hasBlendProps);
 
             float src_cull = src.HasProperty("_Cull") ? src.GetFloat("_Cull") : 0f; // default Off (billboards)
             float src_zwrite = src.HasProperty("_ZWrite") ? src.GetFloat("_ZWrite") : 0f;
@@ -1392,24 +1400,133 @@ namespace DreamPark.EditorTools
             src.SetFloat("_DstBlend", newDst);
             src.renderQueue = src_renderQueue >= 2000 ? src_renderQueue : 3000;
 
+            // Multiply coverage source (alpha vs brightness). Only meaningful for the
+            // Multiply blend mode. Textures with REAL transparency want alpha coverage
+            // (the original behavior); OPAQUE grayscale masks want brightness coverage
+            // (white = effect) or they invert — the black background darkens the scene.
+            // Inspect the source base texture for actual transparency and pick. Scoped
+            // to Multiply so we don't read back textures we don't need.
+            if (src.HasProperty("_MultiplyBrightnessCoverage"))
+            {
+                bool useBrightness = blendMode == "Multiply" && TextureIsEffectivelyOpaque(src_baseMap);
+                src.SetFloat("_MultiplyBrightnessCoverage", useBrightness ? 1f : 0f);
+            }
+
             EditorUtility.SetDirty(src);
             return true;
         }
 
         // ─── Particle conversion helpers ─────────────────────────────────────
 
-        static string ResolveBlendMode(Material mat, float srcBlend, float dstBlend)
+        /// <summary>
+        /// True if the texture has no usable transparency — either no alpha channel
+        /// at all, or an alpha channel that is fully opaque (e.g. an RGBA PNG whose
+        /// alpha is 255 everywhere, like CFX's grayscale multiply masks). Such
+        /// textures must drive Multiply coverage from brightness, not alpha, or the
+        /// effect inverts. Uses a temporary GPU readback so it works regardless of
+        /// the texture's Read/Write-Enabled import setting and without mutating the
+        /// asset. On any uncertainty it returns false (alpha) to preserve the
+        /// original, long-standing behavior.
+        /// </summary>
+        static bool TextureIsEffectivelyOpaque(Texture tex)
         {
-            // Keyword-based fast path (most legacy shaders set these explicitly)
+            var t2d = tex as Texture2D;
+            if (t2d == null) return false; // unknown texture → keep alpha (original) behavior
+
+            string path = AssetDatabase.GetAssetPath(t2d);
+            var ti = string.IsNullOrEmpty(path) ? null : AssetImporter.GetAtPath(path) as TextureImporter;
+            if (ti != null && !ti.DoesSourceTextureHaveAlpha())
+                return true; // no alpha channel in source → definitely opaque → brightness
+
+            RenderTexture prev = RenderTexture.active;
+            RenderTexture rt = RenderTexture.GetTemporary(
+                t2d.width, t2d.height, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
+            Texture2D readable = null;
+            try
+            {
+                Graphics.Blit(t2d, rt);
+                RenderTexture.active = rt;
+                readable = new Texture2D(t2d.width, t2d.height, TextureFormat.RGBA32, false);
+                readable.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
+                readable.Apply(false);
+                var px = readable.GetPixels32();
+                // Sample up to ~4096 texels for speed on large textures.
+                int step = Mathf.Max(1, px.Length / 4096);
+                for (int i = 0; i < px.Length; i += step)
+                {
+                    if (px[i].a < 250) return false; // found real transparency → use alpha
+                }
+                return true; // alpha is (effectively) fully opaque → use brightness
+            }
+            catch
+            {
+                return false; // read failure → keep alpha (original) behavior
+            }
+            finally
+            {
+                RenderTexture.active = prev;
+                if (rt != null) RenderTexture.ReleaseTemporary(rt);
+                if (readable != null) UnityEngine.Object.DestroyImmediate(readable);
+            }
+        }
+
+        static string ResolveBlendMode(Material mat, float srcBlend, float dstBlend, bool hasBlendProps)
+        {
+            // 1a. Our own convention (already-converted materials / Inspector).
             if (mat.IsKeywordEnabled("_BLENDMODE_ADDITIVE")) return "Additive";
             if (mat.IsKeywordEnabled("_BLENDMODE_PREMULTIPLIED")) return "Premultiplied";
             if (mat.IsKeywordEnabled("_BLENDMODE_MULTIPLY")) return "Multiply";
             if (mat.IsKeywordEnabled("_BLENDMODE_ALPHA")) return "Alpha";
 
-            // Infer from blend factors. 5=SrcAlpha, 10=OneMinusSrcAlpha, 1=One, 2=DstColor.
-            if (Mathf.Approximately(srcBlend, 5f) && Mathf.Approximately(dstBlend, 1f))  return "Additive";
-            if (Mathf.Approximately(srcBlend, 1f) && Mathf.Approximately(dstBlend, 10f)) return "Premultiplied";
-            if (Mathf.Approximately(srcBlend, 2f) && Mathf.Approximately(dstBlend, 0f))  return "Multiply";
+            // 1b. CFXR / URP / Standard Particles signal blend through fragment
+            //     keywords, NOT (necessarily) through _SrcBlend/_DstBlend. CFX
+            //     Remaster's _BlendingType enum maps "Additive" → _CFXR_ADDITIVE
+            //     while frequently LEAVING _SrcBlend/_DstBlend at the 5/10 default
+            //     (additive is done premultiplied in-shader). Reading the blend
+            //     factors alone would misclassify those as Alpha and reintroduce
+            //     the black-quad bug for Remaster materials, so these keywords are
+            //     authoritative and checked before the factor heuristic.
+            if (mat.IsKeywordEnabled("_CFXR_ADDITIVE")) return "Additive";
+            if (mat.IsKeywordEnabled("_ALPHAPREMULTIPLY_ON")) return "Premultiplied";
+            if (mat.IsKeywordEnabled("_ALPHAMODULATE_ON")) return "Multiply";   // URP "Modulate" ≈ our Multiply
+            if (mat.IsKeywordEnabled("_ALPHABLEND_ON")) return "Alpha";
+
+            // 2. Explicit blend factors — ONLY trust these when the material actually
+            //    exposes _SrcBlend/_DstBlend. If it doesn't, the values handed to us are
+            //    the 5/10 defaults from the caller, which would falsely read as Alpha and
+            //    turn every legacy-additive CFX material black (B&W textures have no usable
+            //    alpha channel, so alpha-blend shows the black quad instead of adding-to-nothing).
+            //    5=SrcAlpha, 10=OneMinusSrcAlpha, 1=One, 2=DstColor, 0=Zero.
+            if (hasBlendProps)
+            {
+                if (Mathf.Approximately(srcBlend, 5f) && Mathf.Approximately(dstBlend, 1f))  return "Additive";       // SrcAlpha One
+                if (Mathf.Approximately(srcBlend, 1f) && Mathf.Approximately(dstBlend, 1f))  return "Additive";       // One One (premultiplied-additive)
+                if (Mathf.Approximately(srcBlend, 1f) && Mathf.Approximately(dstBlend, 10f)) return "Premultiplied";  // One OneMinusSrcAlpha
+                if (Mathf.Approximately(srcBlend, 2f) && Mathf.Approximately(dstBlend, 0f))  return "Multiply";       // DstColor Zero
+                if (Mathf.Approximately(srcBlend, 0f) && Mathf.Approximately(dstBlend, 2f))  return "Multiply";       // Zero SrcColor
+                return "Alpha"; // material explicitly declared some other alpha-style blend
+            }
+
+            // 3. No keyword and no exposed blend factors → infer from the source shader
+            //    NAME. This is the only signal legacy built-in / CartoonFX shaders carry,
+            //    because their blend is hardcoded in the ShaderLab pass. Verified against
+            //    the actual CFX source shipped in superadventureland, e.g.:
+            //      "Cartoon FX/Legacy/Particles Additive Alpha8"         → Blend SrcAlpha One
+            //      "Cartoon FX/Legacy/Alpha Blended + Additive"          → 2-pass (approx. Additive)
+            //      "Cartoon FX/Legacy/Particle Multiply Colored"         → Blend DstColor Zero
+            //      "Cartoon FX/Legacy/Particles Alpha Blended Alpha8"    → Blend SrcAlpha OneMinusSrcAlpha
+            //    Matching is case-insensitive substring. Order matters: "additive"
+            //    before "multiply"/alpha since the combined "Alpha Blended + Additive"
+            //    names contain both — additive is the dominant glow contribution and the
+            //    correct single-pass approximation of those 2-pass shaders.
+            string shaderName = (mat.shader != null ? mat.shader.name : string.Empty).ToLowerInvariant();
+            if (shaderName.Contains("additive") || shaderName.Contains("/add")) return "Additive";
+            if (shaderName.Contains("premultipl")) return "Premultiplied";
+            if (shaderName.Contains("multiply")) return "Multiply";
+            // "alpha blended", "alpha-blended", "transparent", "vertexlit blended" → alpha.
+            // (CFX "Particle Invert" uses OneMinusDstColor/OneMinusSrcColor — no clean
+            //  mode mapping; it correctly falls through to Alpha as a safe default.)
+
             return "Alpha"; // safe default
         }
 
