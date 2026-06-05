@@ -37,21 +37,6 @@ public class HandTracker : MonoBehaviour
     Transform rightAnchor;
     private Rigidbody rb;
     private bool isActive = false;
-    // We cache the hand/anchor references and normally do NOT re-scan the scene for them
-    // (FindObjectsByType / GameObject.Find walk the whole scene — cost that scales with
-    // scene object count, and this used to run every tick × Update/LateUpdate/FixedUpdate).
-    // But recovery must still work: if the OVRHand objects are destroyed/recreated the
-    // refs go null, so we re-scan whenever something is missing — throttled so a prolonged
-    // hands-absent stretch (e.g. controller mode) can't reintroduce a per-tick scene scan.
-    [SerializeField] private float handRescanInterval = 0.1f;
-    private float _nextHandScanTime = 0f;
-
-    // True only while every reference is present AND alive. Unity's overloaded == reports a
-    // destroyed UnityEngine.Object as null, so this flips false the instant a hand/anchor is
-    // destroyed — which is what drives re-discovery. (Tracking loss does NOT null the object,
-    // so it stays true and ChooseHand/isActiveAndTracking handle that case live.)
-    private bool HandsResolved =>
-        leftAnchor != null && rightAnchor != null && leftHand != null && rightHand != null;
 
     public float enableDelay = 0.1f;
 
@@ -99,27 +84,12 @@ public class HandTracker : MonoBehaviour
             return;
         }
 
-        // Only scan the scene while we still need the hands. This used to run on every
-        // tick even after the hands were cached — a full-scene walk per Update +
-        // LateUpdate + FixedUpdate, per HandTracker instance.
-        if (leftHand == null || rightHand == null)
+        OVRHand[] hands = FindObjectsByType<OVRHand>(FindObjectsSortMode.InstanceID);
+        if (hands.Length >= 2)
         {
-            // Bind by actual handedness (FindObjectsByType order is NOT guaranteed to be
-            // L/R), and only fill the slot that's currently empty. This way we recover
-            // whichever hand is available — even if just one of them came back — instead
-            // of requiring both to be present at once.
-            OVRHand[] hands = FindObjectsByType<OVRHand>(FindObjectsSortMode.InstanceID);
-            foreach (OVRHand hand in hands)
-            {
-                if (hand == null) continue;
-                OVRPlugin.Hand which = hand.GetHand();
-                if (which == OVRPlugin.Hand.HandLeft && leftHand == null)
-                    leftHand = hand;
-                else if (which == OVRPlugin.Hand.HandRight && rightHand == null)
-                    rightHand = hand;
-            }
+            leftHand = hands[0];
+            rightHand = hands[1];
         }
-
         ChooseHand();
     }
 
@@ -159,32 +129,14 @@ public class HandTracker : MonoBehaviour
     void UpdateStep()
     {
 #if UNITY_EDITOR
-        // Re-scan only while something is missing (first resolve, or after the OVRHand
-        // objects are destroyed), throttled. Once resolved this is a couple of cheap null
-        // checks per tick instead of a full-scene FindObjectsByType.
-        if (!HandsResolved && Time.unscaledTime >= _nextHandScanTime)
-        {
-            _nextHandScanTime = Time.unscaledTime + handRescanInterval;
-            FindHandAnchors();
-        }
+        FindHandAnchors();
         activeHand = leftHand;
         activeHandAnchor = leftAnchor;
 #else
-        // Recover anchors AND destroyed hand objects (throttled). FindHandAnchors only
-        // touches the scene while something is actually null — GameObject.Find is guarded
-        // by anchor==null and FindObjectsByType by hand==null — so once everything is
-        // resolved this costs nothing. Tracking loss alone (IsTracked false, object alive)
-        // keeps HandsResolved true and is handled live by ChooseHand below, no scan.
-        if (!HandsResolved && Time.unscaledTime >= _nextHandScanTime)
-        {
-            _nextHandScanTime = Time.unscaledTime + handRescanInterval;
+        if (!activeHandAnchor) {
             FindHandAnchors();
+            return;
         }
-        // Pick the live tracked hand every frame. ChooseHand is the ONLY thing that sets
-        // activeHandAnchor on device, so it must run unconditionally — it cannot be gated
-        // behind an activeHandAnchor null-check (that would be a deadlock: anchor stays
-        // null forever because the one thing that sets it never runs). The null-anchor
-        // bail happens AFTER this, below, before any anchor is dereferenced.
         ChooseHand();
 #endif
 
@@ -192,11 +144,6 @@ public class HandTracker : MonoBehaviour
             DisableChildren();
             isActive = false;
         }
-
-        // No live anchor this tick (still resolving, or the hands/anchors were destroyed).
-        // We've already hidden the hand above; bail before dereferencing the null anchor.
-        if (!activeHandAnchor)
-            return;
 
         if (activeHandAnchor.transform && (float.IsNaN(activeHandAnchor.position.x) || float.IsNaN(activeHandAnchor.position.y) || float.IsNaN(activeHandAnchor.position.z))) {
             Debug.Log("BIG WARNING: Hand tracking anchor is NaN, setting to zero");
