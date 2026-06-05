@@ -19,6 +19,37 @@ public class Entity<TState> : Interactable where TState : Enum
     [HideInInspector] public Transform ogPosition;
     [HideInInspector] public bool use_late_update = false;
     private bool state_changed_frame = false;
+
+    // --- Per-TState cached metadata (built once per closed generic type) ---
+    // UpdateStep used to call state.ToString(), Enum.GetValues(state.GetType()) and
+    // Array.IndexOf every frame — each boxes the enum and/or allocates. With many
+    // entities ticking each frame that was the dominant source of GC garbage (and the
+    // periodic GC stalls that spike the frame). These caches make UpdateStep alloc-free.
+    static readonly TState[] s_states = (TState[])Enum.GetValues(typeof(TState));
+    static readonly bool[] s_isTransient = BuildTransientFlags();
+    static readonly EqualityComparer<TState> s_stateComparer = EqualityComparer<TState>.Default;
+
+    static bool[] BuildTransientFlags()
+    {
+        // A state is "transient" (mid-transition) when its name ends with "ING",
+        // e.g. MOVING / ACTIONING. Precompute that per enum member, by name, once.
+        var names = Enum.GetNames(typeof(TState));
+        var flags = new bool[names.Length];
+        for (int i = 0; i < names.Length; i++)
+            flags[i] = names[i].EndsWith("ING");
+        return flags;
+    }
+
+    // Index of the current state within s_states, found without boxing.
+    // (EqualityComparer<TState>.Default uses a non-boxing enum comparer.)
+    private int CurrentStateIndex()
+    {
+        for (int i = 0; i < s_states.Length; i++)
+            if (s_stateComparer.Equals(s_states[i], state))
+                return i;
+        return -1;
+    }
+
     public virtual void OnValidate()
     {
          #if UNITY_EDITOR
@@ -47,8 +78,10 @@ public class Entity<TState> : Interactable where TState : Enum
 
     private void UpdateStep() {
         state_changed_frame = false;
+        int idx = CurrentStateIndex();
+        bool isTransient = idx >= 0 && s_isTransient[idx];
         if (queue.Count > 0) {
-            if (state.ToString().EndsWith("ING")) {
+            if (isTransient) {
                 //we finish the state so stateWillChange is called
                 PreExecuteState();
             }
@@ -57,12 +90,10 @@ public class Entity<TState> : Interactable where TState : Enum
             stateChangeTime = Time.time;
             PreExecuteState();
         } else {
-            if (!state.ToString().EndsWith("ING")) {
-                var values = Enum.GetValues(state.GetType());
-                int currentIndex = Array.IndexOf(values, state);
-                if (currentIndex < values.Length - 1)
+            if (!isTransient) {
+                if (idx >= 0 && idx < s_states.Length - 1)
                 {
-                    state = (TState)values.GetValue(currentIndex + 1);
+                    state = s_states[idx + 1];
                     stateChangeTime = Time.time;
                 }
             }
