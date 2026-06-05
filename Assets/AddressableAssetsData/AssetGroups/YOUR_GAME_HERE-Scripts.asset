@@ -10,19 +10,13 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: bbb281ee3bf0b054c82ac2347e9e782c, type: 3}
-  m_Name: YOUR_GAME_HERE-Bundle-Player
+  m_Name: YOUR_GAME_HERE-Scripts
   m_EditorClassIdentifier: 
-  m_GroupName: YOUR_GAME_HERE-Bundle-Player
-  m_GUID: 7a6142a556ece4ea3888fd1a4fb5c96a
+  m_GroupName: YOUR_GAME_HERE-Scripts
+  m_GUID: 8e718d07cd5aa4fa08dc3feff8eb3bbc
   m_SerializeEntries:
-  - m_GUID: 37bd2ccc608e741b1a218fd969c53815
-    m_Address: YOUR_GAME_HERE/Previews/Player
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - YOUR_GAME_HERE
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: 43f3f84285667477294d9792e20ab702
-    m_Address: YOUR_GAME_HERE/Player
+  - m_GUID: d7a1f9aad5bea4cc3910512920d4789c
+    m_Address: Assets/Content/YOUR_GAME_HERE/Scripts/lua_dreamband.lua.txt
     m_ReadOnly: 0
     m_SerializedLabels:
     - YOUR_GAME_HERE
@@ -31,5 +25,5 @@ MonoBehaviour:
   m_Settings: {fileID: 11400000, guid: 5e922c848874c41bc90d6a8d78c6f5a9, type: 2}
   m_SchemaSet:
     m_Schemas:
-    - {fileID: 11400000, guid: c2ab2ee7ef8a640bb8de11216af6bdc9, type: 2}
-    - {fileID: 11400000, guid: 2647e654ce1e44824b24d82c29d98954, type: 2}
+    - {fileID: 11400000, guid: acc2dd9d6715e4d979583b9e4deeb08c, type: 2}
+    - {fileID: 11400000, guid: 1dbd57b759a3248188dee5d6310a576e, type: 2}

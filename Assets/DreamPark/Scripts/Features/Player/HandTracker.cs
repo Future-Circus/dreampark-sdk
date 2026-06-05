@@ -1,7 +1,22 @@
 using UnityEngine;
 
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
+
 public class HandTracker : MonoBehaviour
 {
+    private static readonly Color DreamBandGizmoColor = new Color(0.5f, 0f, 1f, 0.85f);
+    private static readonly Vector3 DreamBandLocalOffset = new Vector3(-0.0003510714f, 0.01352847f, -0.004948974f);
+    private static readonly Vector3 DreamBandLocalEulerOffset = new Vector3(-78.802f, 0f, -180f);
+    private static readonly Vector3 DreamBandLocalScale = new Vector3(100f, 100f, 100f);
+    private static readonly Color HandGizmoColor = new Color(0.96f, 0.91f, 0.75f, 0.95f);
+    private static readonly Vector3 HandLocalOffset = new Vector3(0.00210005f, 0.01952827f, 0.006667495f);
+    private static readonly Vector3 HandLocalEulerOffset = new Vector3(-98.565f, -180.001f, 6.408005f);
+    private static readonly Vector3 HandLocalScale = new Vector3(99.99998f, 99.99998f, 99.99998f);
+    private static Mesh dreamBandGizmoMesh;
+    private static Mesh handGizmoMesh;
+
     public enum HandPreference
     {
         Left,
@@ -165,8 +180,11 @@ public class HandTracker : MonoBehaviour
             _nextHandScanTime = Time.unscaledTime + handRescanInterval;
             FindHandAnchors();
         }
-        if (!activeHandAnchor)
-            return;
+        // Pick the live tracked hand every frame. ChooseHand is the ONLY thing that sets
+        // activeHandAnchor on device, so it must run unconditionally — it cannot be gated
+        // behind an activeHandAnchor null-check (that would be a deadlock: anchor stays
+        // null forever because the one thing that sets it never runs). The null-anchor
+        // bail happens AFTER this, below, before any anchor is dereferenced.
         ChooseHand();
 #endif
 
@@ -263,4 +281,59 @@ public class HandTracker : MonoBehaviour
             child.gameObject.SetActive(true);
         }
     }
+
+#if UNITY_EDITOR
+    private static Mesh ResolveGizmoMesh(ref Mesh cachedMesh, string resourceName, string dreamParkPath, string sharedPath)
+    {
+        if (cachedMesh != null) {
+            return cachedMesh;
+        }
+
+        cachedMesh = Resources.Load<Mesh>(resourceName);
+
+        if (cachedMesh == null) {
+            cachedMesh = AssetDatabase.LoadAssetAtPath<Mesh>(dreamParkPath);
+        }
+
+        if (cachedMesh == null) {
+            cachedMesh = AssetDatabase.LoadAssetAtPath<Mesh>(sharedPath);
+        }
+
+        return cachedMesh;
+    }
+
+    private void OnDrawGizmos()
+    {
+        Matrix4x4 oldMatrix = Gizmos.matrix;
+        Color oldColor = Gizmos.color;
+
+        Mesh handMesh = ResolveGizmoMesh(
+            ref handGizmoMesh,
+            "Meshes/Hand",
+            "Assets/DreamPark/Resources/Meshes/Hand.mesh",
+            "Assets/Resources/Meshes/Hand.mesh");
+        if (handMesh != null) {
+            Gizmos.matrix = transform.localToWorldMatrix *
+                            Matrix4x4.TRS(HandLocalOffset, Quaternion.Euler(HandLocalEulerOffset), HandLocalScale);
+            Gizmos.color = HandGizmoColor;
+            Gizmos.DrawMesh(handMesh, Vector3.zero);
+        }
+
+        Mesh dreamBandMesh = ResolveGizmoMesh(
+            ref dreamBandGizmoMesh,
+            "Meshes/DreamBand",
+            "Assets/DreamPark/Resources/Meshes/DreamBand.mesh",
+            "Assets/Resources/Meshes/DreamBand.mesh");
+        if (dreamBandMesh != null) {
+            Gizmos.matrix = transform.localToWorldMatrix *
+                            Matrix4x4.TRS(DreamBandLocalOffset, Quaternion.Euler(DreamBandLocalEulerOffset), DreamBandLocalScale);
+            Gizmos.color = DreamBandGizmoColor;
+            Gizmos.DrawMesh(dreamBandMesh, Vector3.zero);
+            Gizmos.DrawWireMesh(dreamBandMesh, Vector3.zero);
+        }
+
+        Gizmos.color = oldColor;
+        Gizmos.matrix = oldMatrix;
+    }
+#endif
 }

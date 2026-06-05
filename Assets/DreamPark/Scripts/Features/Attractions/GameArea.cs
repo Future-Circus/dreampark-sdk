@@ -6,7 +6,7 @@ namespace DreamPark {
     /// <summary>
     /// Spatial zone detection for content areas. Each LevelTemplate/AttractionTemplate
     /// has a GameArea that tracks whether the player's head is inside its bounds.
-    /// When the player enters a new zone, the corresponding PlayerRig and DreamBand
+    /// When the player enters a new zone, the corresponding PlayerRig
     /// are activated via the Show()/Hide() pattern.
     /// </summary>
     public class GameArea : MonoBehaviour
@@ -169,11 +169,6 @@ namespace DreamPark {
             if (PlayerRig.instances != null && PlayerRig.instances.ContainsKey(gameId))
             {
                 PlayerRig.instances[gameId].Show();
-            }
-
-            if (DreamBand.instances != null && DreamBand.instances.ContainsKey(gameId))
-            {
-                DreamBand.instances[gameId].Show();
             }
 
             if (VerboseLogging)
