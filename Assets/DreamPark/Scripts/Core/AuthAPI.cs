@@ -44,15 +44,29 @@ namespace DreamPark.API
             return $"Bearer {sessionToken}";
         }
 
-        // Static "ApiKey <secret>" header used by core's runtime to call /app/* endpoints.
-        // The secret value lives ONLY in dreampark-core (Assets/Scripts/Internal/CoreSecrets.cs)
-        // and is excluded from the public SDK distribution via #if DREAMPARKCORE.
+        // "ApiKey <key>" header used by core's runtime to call /app/* endpoints.
         //
-        // SDK callers should use GetUserAuth() (session bearer) instead — anything in the
+        // DEVICE builds: returns the per-device hsk_* key issued by
+        // POST /app/device/enroll (see Assets/Scripts/Internal/DeviceKeyManager.cs).
+        // Public APKs ship with NO shared secret — a leaked key burns one device,
+        // not the fleet, and the backend can revoke/rate-limit per device.
+        // Boot.cs runs DeviceKeyManager.EnsureEnrolledAsync() before the first
+        // authenticated call.
+        //
+        // EDITOR: still uses the legacy shared key (Assets/Scripts/Internal/
+        // CoreSecrets.cs) for core-team tooling convenience. Editor code is never
+        // compiled into players, so the secret stays out of shipped binaries; the
+        // backend keeps accepting it for editor + existing operator builds.
+        //
+        // SDK callers use GetUserAuth() (session bearer) instead — anything in the
         // public SDK that legitimately needs to hit the backend goes through user auth.
         public static string GetAPIKey() {
 #if DREAMPARKCORE
+#if UNITY_EDITOR
             return $"ApiKey {CoreSecrets.ApiKey}";
+#else
+            return DeviceKeyManager.GetAuthHeader();
+#endif
 #else
             Debug.LogError("[AuthAPI] GetAPIKey() is core-only. SDK builds should use GetUserAuth() (session) instead.");
             return "";

@@ -155,8 +155,12 @@ public class DreamBoxClient : MonoBehaviour
 #endif
 
 #if UNITY_IOS
-        // On iOS, auto-connect to test relay for SpectateView status
-        if (!connectOnStart)
+        // DreamBox connectivity on MOBILE is an opt-in app setting (default
+        // OFF) — the discovery listener spams logs and burns battery while
+        // the feature is pre-release. The iOS app toggles it at runtime via
+        // the DREAMBOX_DISCOVERY message (NativeInterfaceManager), which
+        // also persists the PlayerPrefs flag read here.
+        if (!connectOnStart && PlayerPrefs.GetInt("dreampark.dreamboxEnabled", 0) == 1)
         {
             connectOnStart = true;
         }
