@@ -1337,7 +1337,7 @@ namespace DreamPark
             bag.LoadPath.SetVariableByName(settings, AddressableAssetSettings.kRemoteLoadPath);
             bag.UseAssetBundleCache = true;
             bag.UseAssetBundleCrc = true;
-            bag.UseAssetBundleCrcForCachedBundles = false;
+            bag.UseAssetBundleCrcForCachedBundles = true; // also CRC-check cached bundles on load → a corrupt/wrong cached bundle is rejected and re-downloaded instead of crashing
             // PackTogether *within* a group — the granularity comes from how
             // we slice the groups, not from PackSeparately. Avoids the nested-
             // directory bundle layout problem that PackSeparately causes.

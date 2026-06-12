@@ -370,6 +370,9 @@ namespace DreamPark {
                 .ToArray();
 
             UpdateSpecificPrefabs(allPrefabs.ToList(), contentId);
+            // Pin particle-system seeds so FX-bearing bundles build
+            // deterministically and borrow on patches (idempotent).
+            NormalizeParticleSeeds(contentId);
             GenerateAllLevelPreviews(contentId);
             ApplyGameIdLabelToContentEntries(AddressableAssetSettingsDefaultObject.Settings, contentId);
 
@@ -575,6 +578,108 @@ namespace DreamPark {
 
             if (modified > 0)
                 Debug.Log($"🧩 Updated {modified} prefab(s) for gameId={gameId} (safe mode).");
+        }
+
+        // Particle systems with autoRandomSeed make AssetBundle builds
+        // non-deterministic: Unity resolves the seed at build time, so the same
+        // source produces different bundle bytes across sessions and the bundle
+        // re-uploads on every patch even with zero content change. Pin each
+        // shipped particle system to a FIXED seed derived deterministically from
+        // its hierarchy path, so builds are reproducible and these bundles borrow
+        // like everything else. Idempotent: only touches systems still set to
+        // auto, so re-runs are no-ops once a content title is normalized.
+        //
+        // Trade-off: a pinned system plays the same random pattern every run.
+        // That's fine for the break/confetti FX this targets; if a specific
+        // system needs runtime variety, set useAutoRandomSeed=true on it from a
+        // script at spawn (runtime-only — doesn't affect the serialized asset).
+        private static void NormalizeParticleSeeds(string contentId)
+        {
+            string contentRoot = $"Assets/Content/{contentId}";
+            if (!AssetDatabase.IsValidFolder(contentRoot)) return;
+
+            string[] prefabPaths = AssetDatabase.FindAssets("t:Prefab", new[] { contentRoot })
+                .Select(AssetDatabase.GUIDToAssetPath)
+                .Where(p => !string.IsNullOrEmpty(p))
+                // ThirdPartyLocal never ships (gitignored, excluded from builds).
+                .Where(p => p.IndexOf("/ThirdPartyLocal/", StringComparison.OrdinalIgnoreCase) < 0)
+                .ToArray();
+
+            int pinned = 0;
+            int prefabsTouched = 0;
+            try
+            {
+                AssetDatabase.StartAssetEditing();
+                foreach (var path in prefabPaths)
+                {
+                    bool changed = false;
+                    try
+                    {
+                        using (var scope = new PrefabUtility.EditPrefabContentsScope(path))
+                        {
+                            foreach (var ps in scope.prefabContentsRoot.GetComponentsInChildren<ParticleSystem>(true))
+                            {
+                                if (ps == null || !ps.useAutoRandomSeed) continue;
+                                ps.useAutoRandomSeed = false;
+                                ps.randomSeed = StableSeedForTransform(ps.transform);
+                                EditorUtility.SetDirty(ps);
+                                changed = true;
+                                pinned++;
+                            }
+
+                            if (changed)
+                            {
+                                PrefabUtility.SaveAsPrefabAsset(scope.prefabContentsRoot, path);
+                                prefabsTouched++;
+                            }
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        // A single bad prefab (missing scripts in ThirdParty demo
+                        // content, etc.) shouldn't abort the whole pass.
+                        Debug.LogWarning($"[ParticleSeeds] Skipped {path}: {e.Message}");
+                    }
+                }
+            }
+            finally
+            {
+                AssetDatabase.StopAssetEditing();
+            }
+
+            if (pinned > 0)
+                Debug.Log($"🎲 Pinned {pinned} particle-system seed(s) across {prefabsTouched} prefab(s) for {contentId} (deterministic builds).");
+        }
+
+        // Deterministic 32-bit seed from a transform's hierarchy path. Uses
+        // FNV-1a (NOT string.GetHashCode, which is process-randomized on some
+        // runtimes) so the same prefab yields the same seed on every machine.
+        private static uint StableSeedForTransform(Transform t)
+        {
+            var sb = new System.Text.StringBuilder();
+            BuildTransformPath(t, sb);
+            unchecked
+            {
+                uint hash = 2166136261u;
+                foreach (char c in sb.ToString())
+                {
+                    hash ^= c;
+                    hash *= 16777619u;
+                }
+                return hash == 0u ? 1u : hash; // avoid 0
+            }
+        }
+
+        private static void BuildTransformPath(Transform t, System.Text.StringBuilder sb)
+        {
+            if (t.parent != null)
+            {
+                BuildTransformPath(t.parent, sb);
+                sb.Append('/');
+            }
+            sb.Append(t.name);
+            sb.Append('#');
+            sb.Append(t.GetSiblingIndex());
         }
 
         private static bool ShouldSkipAsset(string assetPath)
@@ -871,7 +976,7 @@ namespace DreamPark {
                 bag.LoadPath.SetVariableByName(settings, AddressableAssetSettings.kRemoteLoadPath);
                 bag.UseAssetBundleCache = true;
                 bag.UseAssetBundleCrc = true;
-                bag.UseAssetBundleCrcForCachedBundles = false;
+                bag.UseAssetBundleCrcForCachedBundles = true; // also CRC-check cached bundles on load → a corrupt/wrong cached bundle is rejected and re-downloaded instead of crashing
                 // TEMP: revert all groups to PackTogether to unblock uploads.
                 // PackSeparately produces nested-directory bundle layouts under
                 // ServerData/<platform>/ (e.g. <gameid>-models_assets_<gameid>/models/foo.bundle),
@@ -1076,19 +1181,18 @@ namespace DreamPark {
                     Directory.CreateDirectory(previewDir);
                 }
 
-                // Skip if the preview PNG is already up-to-date relative to
-                // the prefab and every asset it visually depends on. This
-                // turns Compile & Upload from "always regenerate ~150
-                // previews (~30-60s)" into "regenerate only what visibly
-                // changed" — and it stops the Previews bundle from re-
-                // uploading on every build just because the PNG bytes
-                // shifted via GPU/scheduler non-determinism.
-                //
-                // forceRegenerate=true bypasses this check; it's set by the
-                // "Regenerate Level Previews" menu item for cases where the
-                // dev wants to refresh every preview (e.g. after changing
-                // the PrefabPreviewRenderer camera setup).
-                if (!forceRegenerate && IsPreviewUpToDate(prefabPath, previewPath))
+                // Only generate a preview when one doesn't exist yet (i.e. the
+                // first time a prefab is seen). Previews are otherwise LEFT
+                // ALONE on upload. We used to regenerate any preview whose
+                // prefab/deps were "newer" by mtime, but the upload path
+                // re-serializes every prefab (ForceUpdateContent) just before
+                // this runs, so that check always failed → previews
+                // regenerated every build → non-deterministic PNG bytes
+                // (GPU/scheduler) → the Previews bundle re-uploaded on every
+                // patch for no real change. Existing previews are now refreshed
+                // only on explicit request: the "Rebuild Previews" button or the
+                // "Regenerate Level Previews" menu (both pass forceRegenerate=true).
+                if (!forceRegenerate && File.Exists(previewPath))
                 {
                     skipped++;
                     continue;
