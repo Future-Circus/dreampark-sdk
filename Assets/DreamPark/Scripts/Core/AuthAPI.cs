@@ -97,6 +97,39 @@ namespace DreamPark.API
 #endif
             }
         }
+
+#if DREAMPARKCORE
+        // CORE-ONLY (compiled out of the public SDK, like GetAPIKey). Injects a session
+        // that the native layer already holds securely into AuthAPI. This is the host
+        // app's DEVICE login path: the iOS app authenticates, persists the session in the
+        // iOS Keychain (encrypted at rest), and hands the bearer to Unity via the
+        // NativeInterfaceManager "LOGIN" message. SDK creators never do this — they use
+        // Login()/pairing — so it stays behind DREAMPARKCORE rather than being a public
+        // SDK surface for injecting arbitrary sessions.
+        //
+        // Stored exactly like Login(): IN MEMORY ONLY on device, never in PlayerPrefs
+        // (unencrypted + reachable from creator Lua; the only encrypted, persisted copy is
+        // the iOS Keychain). EditorPrefs in-editor for dev convenience. GetUserAuth() reads
+        // this for the "Authorization: Bearer <token>" header.
+        //
+        // Prior to this, the "LOGIN" handoff wrote to PlayerPrefs while GetUserAuth() read
+        // the in-memory field (post security-hardening), so on device the bearer was always
+        // empty → backend returned 401 on every session-authed call (e.g. park save).
+        public static void SetSessionFromNative(string token, string uid = null, string userEmail = null) {
+            token = token ?? "";
+#if UNITY_EDITOR
+            UnityEditor.EditorPrefs.SetString("sessionToken", token);
+            if (uid != null) UnityEditor.EditorPrefs.SetString("userId", uid);
+            if (userEmail != null) UnityEditor.EditorPrefs.SetString("userEmail", userEmail);
+#else
+            _sessionToken = token;
+            if (uid != null) _userId = uid;
+            if (userEmail != null) _userEmail = userEmail;
+#endif
+            RaiseLoginStateChanged();
+        }
+#endif
+
         public static void Login(string email, string password, Action<bool, APIResponse> callback) {
             var body = new JSONObject(JSONObject.Type.Object);
             body.AddField("email", email);

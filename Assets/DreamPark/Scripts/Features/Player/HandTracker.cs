@@ -254,13 +254,19 @@ public class HandTracker : MonoBehaviour
         Matrix4x4 oldMatrix = Gizmos.matrix;
         Color oldColor = Gizmos.color;
 
+        // Use the object's world position and rotation but a UNIT scale, so the gizmos are
+        // sized only by the *LocalScale constants below and stay at a fixed real-world scale
+        // regardless of this object's (or its parents') scale. The local offset is also
+        // applied without scale, so its distance stays constant in world space too.
+        Matrix4x4 worldNoScale = Matrix4x4.TRS(transform.position, transform.rotation, Vector3.one);
+
         Mesh handMesh = ResolveGizmoMesh(
             ref handGizmoMesh,
             "Meshes/Hand",
             "Assets/DreamPark/Resources/Meshes/Hand.mesh",
             "Assets/Resources/Meshes/Hand.mesh");
         if (handMesh != null) {
-            Gizmos.matrix = transform.localToWorldMatrix *
+            Gizmos.matrix = worldNoScale *
                             Matrix4x4.TRS(HandLocalOffset, Quaternion.Euler(HandLocalEulerOffset), HandLocalScale);
             Gizmos.color = HandGizmoColor;
             Gizmos.DrawMesh(handMesh, Vector3.zero);
@@ -272,7 +278,7 @@ public class HandTracker : MonoBehaviour
             "Assets/DreamPark/Resources/Meshes/DreamBand.mesh",
             "Assets/Resources/Meshes/DreamBand.mesh");
         if (dreamBandMesh != null) {
-            Gizmos.matrix = transform.localToWorldMatrix *
+            Gizmos.matrix = worldNoScale *
                             Matrix4x4.TRS(DreamBandLocalOffset, Quaternion.Euler(DreamBandLocalEulerOffset), DreamBandLocalScale);
             Gizmos.color = DreamBandGizmoColor;
             Gizmos.DrawMesh(dreamBandMesh, Vector3.zero);

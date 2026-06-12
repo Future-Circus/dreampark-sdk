@@ -2014,17 +2014,59 @@ namespace DreamPark {
             return latest;
         }
 
+        // Cache for the patch baseline. CanCheckProductionPatchSize() calls this
+        // from OnGUI (every repaint frame), and the fetch is now a blocking
+        // network round-trip — so without caching the Editor freezes. Keyed by
+        // content + published version; re-fetched only when either changes. A
+        // failed/slow attempt is cached too (with a cooldown) so an unreachable
+        // or slow endpoint can't re-trigger a blocking fetch every frame.
+        private BuildManifest cachedPatchBaseline;
+        private string cachedPatchBaselineKey;
+        private double cachedPatchBaselineAttemptTime;
+        private const double PatchBaselineRetryCooldownSeconds = 30.0;
+
         private BuildManifest GetPreferredPatchBaseline(JSONObject contentDirectory = null)
         {
-            return FetchBackendBaselineForUpload(contentDirectory);
+            string key = $"{contentId ?? ""}@{(latestPublishedVersionNumber?.ToString() ?? "?")}";
+            bool keyMatches = string.Equals(key, cachedPatchBaselineKey, StringComparison.Ordinal);
+
+            // Hit for this content+version → return cached, no network.
+            if (keyMatches && cachedPatchBaseline != null)
+                return cachedPatchBaseline;
+
+            // Same key but the last attempt produced nothing (failed/empty):
+            // only retry after the cooldown so OnGUI can't hammer the network.
+            if (keyMatches && cachedPatchBaseline == null
+                && (EditorApplication.timeSinceStartup - cachedPatchBaselineAttemptTime) < PatchBaselineRetryCooldownSeconds)
+                return null;
+
+            cachedPatchBaselineKey = key;
+            cachedPatchBaselineAttemptTime = EditorApplication.timeSinceStartup;
+            cachedPatchBaseline = FetchBackendBaselineForUpload(contentDirectory);
+            return cachedPatchBaseline;
+        }
+
+        // Force the next GetPreferredPatchBaseline() call to re-fetch (e.g. after
+        // an upload completes or the user explicitly refreshes).
+        private void InvalidatePatchBaselineCache()
+        {
+            cachedPatchBaselineKey = null;
+            cachedPatchBaseline = null;
         }
 
         private static string BuildBundleManifestUrl(string contentId, int versionNumber, string platform)
         {
             string escapedContentId = UnityWebRequest.EscapeURL(contentId ?? "");
             string escapedPlatform = UnityWebRequest.EscapeURL(platform ?? "");
-            return $"{DreamParkAPI.devBaseUrl.TrimEnd('/')}/app/content/{escapedContentId}/bundle-manifest/{versionNumber}/{escapedPlatform}";
+            // Developer surface: /api/content (session + content-owner gated),
+            // NOT /app/content (device, API-key gated). The uploader already
+            // authenticates the creator's session against /api/content for
+            // uploadUrl/commitUpload, so the baseline fetch belongs here too.
+            return $"{DreamParkAPI.devBaseUrl.TrimEnd('/')}/api/content/{escapedContentId}/bundle-manifest/{versionNumber}/{escapedPlatform}";
         }
+
+        // Hard cap so a slow or unreachable endpoint can never freeze the Editor.
+        private const int BaselineRequestTimeoutSeconds = 10;
 
         private static JSONObject GetJsonSync(string url, string authorizationHeader, out string error)
         {
@@ -2034,8 +2076,24 @@ namespace DreamPark {
                 if (!string.IsNullOrWhiteSpace(authorizationHeader))
                     req.SetRequestHeader("Authorization", authorizationHeader);
 
+                req.timeout = BaselineRequestTimeoutSeconds;
+
                 var op = req.SendWebRequest();
-                while (!op.isDone && req.result != UnityWebRequest.Result.ConnectionError) { }
+                // Backstop wall-clock deadline: the busy-wait must never spin
+                // forever on the main thread, and Sleep keeps it off the CPU.
+                double deadline = EditorApplication.timeSinceStartup + BaselineRequestTimeoutSeconds + 2;
+                while (!op.isDone
+                    && req.result != UnityWebRequest.Result.ConnectionError
+                    && EditorApplication.timeSinceStartup < deadline)
+                {
+                    System.Threading.Thread.Sleep(10);
+                }
+
+                if (!op.isDone)
+                {
+                    error = "Baseline request timed out";
+                    return null;
+                }
 
                 bool success = !(req.result == UnityWebRequest.Result.ConnectionError
                     || req.result == UnityWebRequest.Result.ProtocolError);
@@ -2096,10 +2154,17 @@ namespace DreamPark {
             if (platformTargets.Count == 0)
                 return BuildManifestStore.LoadBaseline(contentId);
 
-            string authHeader = AuthAPI.GetAPIKey();
+            // Use the session bearer, NOT GetAPIKey(): GetAPIKey() is core-only
+            // (#if DREAMPARKCORE) and returns "" in SDK/creator projects, which
+            // silently disabled the backend (md5-vs-server) baseline and fell back
+            // to the local manifest for every creator. GetUserAuth() is the
+            // SDK-correct method (session token from EditorPrefs) and also works in
+            // core. If the backend rejects it, the GetJsonSync failure path below
+            // still falls back to the local baseline — so this can't regress.
+            string authHeader = AuthAPI.GetUserAuth();
             if (string.IsNullOrWhiteSpace(authHeader))
             {
-                Debug.LogWarning("[ContentUploader] No API key available for backend baseline fetch; falling back to local baseline.");
+                Debug.LogWarning("[ContentUploader] No session available for backend baseline fetch (log in via the uploader panel); falling back to local baseline.");
                 return BuildManifestStore.LoadBaseline(contentId);
             }
 
@@ -2150,10 +2215,17 @@ namespace DreamPark {
                         string fileName = fileNode.GetField("name")?.stringValue;
                         if (string.IsNullOrWhiteSpace(fileName)) continue;
 
+                        // The bundle-manifest endpoint returns each bundle's GCS md5
+                        // (hex) in "hash" — this is the server's authoritative bytes,
+                        // so carrying it into the baseline makes Diff a true
+                        // md5-vs-server comparison (catches same-name/different-bytes).
+                        string serverMd5 = fileNode.GetField("hash")?.stringValue;
+
                         platformManifest.files.Add(new BuildManifestFile
                         {
                             fileName = fileName,
                             sizeBytes = fileNode.GetField("size")?.longValue ?? -1L,
+                            md5 = string.IsNullOrEmpty(serverMd5) ? null : serverMd5.ToLowerInvariant(),
                         });
                     }
                 }
@@ -2173,6 +2245,10 @@ namespace DreamPark {
             uploadStatusProgress = success ? 1f : uploadStatusProgress;
             uploadStatusTitle = success ? "Release complete" : "Release interrupted";
             uploadStatusMessage = message ?? (success ? "Upload complete." : "Upload failed.");
+            // A successful upload publishes a new version → the cached baseline is
+            // now stale. Drop it so the next estimate re-fetches against the new
+            // server state.
+            if (success) InvalidatePatchBaselineCache();
             Repaint();
         }
 
@@ -2496,8 +2572,10 @@ namespace DreamPark {
 
                 // The real deal: renders each Attraction/Prop prefab into a
                 // PNG file at Assets/Content/{contentId}/Previews/{name}.png.
-                // Logs progress to the console for individual prefabs.
-                ContentProcessor.GenerateAllLevelPreviews(contentId);
+                // Logs progress to the console for individual prefabs. This is
+                // the manual "Rebuild Previews" button, so force-regenerate —
+                // the upload path only fills in missing previews now.
+                ContentProcessor.GenerateAllLevelPreviews(contentId, forceRegenerate: true);
             }
             catch (Exception e)
             {
@@ -4567,6 +4645,61 @@ namespace DreamPark {
                 // (true); see the longer comment at the configure step for the
                 // production-crash context that drove this revert.
                 settings.NonRecursiveBuilding = true;
+
+                // Strip the editor version from bundle headers. If left off, the
+                // Unity version string is baked into every bundle, so a Unity
+                // upgrade re-hashes ALL bundles → every content does a full
+                // re-download instead of a patch. There's no public C# property
+                // for this in this Addressables version, so set the serialized
+                // field directly. Enforced here (not just in the .asset) so every
+                // creator project builds patch-stable bundles regardless of their
+                // local Addressables settings.
+                {
+                    var settingsSO = new SerializedObject(settings);
+                    var stripProp = settingsSO.FindProperty("m_StripUnityVersionFromBundleBuild");
+                    if (stripProp != null && !stripProp.boolValue)
+                    {
+                        stripProp.boolValue = true;
+                        settingsSO.ApplyModifiedProperties();
+                        EditorUtility.SetDirty(settings);
+                        Debug.Log("🧱 [BuildForTarget] Forced StripUnityVersionFromBundleBuild = true (serialized field) for patch-stable bundles.");
+                    }
+                }
+
+                // Bake a CRC into the catalog for every bundle and validate it BOTH
+                // on download AND when loading from cache. Download-validation stops a
+                // corrupt download from being cached; cached-validation rejects a
+                // corrupt/wrong bundle that's ALREADY cached (re-downloads instead of
+                // crashing) — which is exactly the failure we hit. Enforced on every
+                // group so a creator project can't ship one without it (settings drift
+                // was why a corrupt bundle slipped through). Cost: a CRC pass when a
+                // cached bundle loads — async (adds load latency, not frame hitches).
+                int crcFixed = 0;
+                foreach (var grp in settings.groups)
+                {
+                    if (grp == null) continue;
+                    var bundledSchema = grp.GetSchema<UnityEditor.AddressableAssets.Settings.GroupSchemas.BundledAssetGroupSchema>();
+                    if (bundledSchema == null) continue;
+
+                    bool schemaChanged = false;
+                    if (!bundledSchema.UseAssetBundleCrc)
+                    {
+                        bundledSchema.UseAssetBundleCrc = true;                 // validate on download
+                        schemaChanged = true;
+                    }
+                    if (!bundledSchema.UseAssetBundleCrcForCachedBundles)
+                    {
+                        bundledSchema.UseAssetBundleCrcForCachedBundles = true; // ALSO validate cached bundles on load
+                        schemaChanged = true;
+                    }
+                    if (schemaChanged)
+                    {
+                        EditorUtility.SetDirty(bundledSchema);
+                        crcFixed++;
+                    }
+                }
+                if (crcFixed > 0)
+                    Debug.Log($"🔒 [BuildForTarget] Normalized CRC (download + cached validation) on {crcFixed} group schema(s).");
 
                 if (EditorPrefs.GetBool(CleanBeforeEachTargetPrefKey, false))
                 {

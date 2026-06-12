@@ -90,6 +90,13 @@ public class RigidbodySnapshot {
 
     public RigidbodySnapshot(Rigidbody rb)
     {
+        // Guard: an Interactable/Block prefab may have no Rigidbody. Dereferencing a null
+        // rb here threw a NullReferenceException during Instantiate (Awake -> SaveOriginalRigidbody),
+        // which on iOS IL2CPP can take down the load. Snapshot harmless defaults instead.
+        if (rb == null)
+        {
+            return;
+        }
         mass = rb.mass;
         useGravity = rb.useGravity;
         isKinematic = rb.isKinematic;
@@ -223,6 +230,13 @@ public class Interactable : MonoBehaviour
         });
     }
     public virtual void SaveOriginalRigidbody(bool andFreeze = false) {
+        if (rb == null) {
+            rb = GetComponent<Rigidbody>();
+        }
+        if (rb == null) {
+            Debug.LogWarning($"{gameObject.name}: SaveOriginalRigidbody called with no Rigidbody; skipping snapshot.");
+            return;
+        }
         ogRigidbody = new RigidbodySnapshot(rb);
         if (andFreeze) {
             ogRigidbody.Freeze(rb);
