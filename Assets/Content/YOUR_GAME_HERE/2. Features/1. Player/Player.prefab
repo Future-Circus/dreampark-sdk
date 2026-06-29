@@ -9848,6 +9848,14 @@ MonoBehaviour:
   - name: manager
     value: {fileID: 1980061184406106280}
   audioClipInjections: []
+  vector3Injections: []
+  colorInjections: []
+  transformInjections: []
+  materialInjections: []
+  spriteInjections: []
+  textureInjections: []
+  componentInjections: []
+  gameObjectListInjections: []
 --- !u!54 &5784745654557122643
 Rigidbody:
   m_ObjectHideFlags: 0
@@ -10176,6 +10184,14 @@ MonoBehaviour:
   - name: manager
     value: {fileID: 1980061184406106280}
   audioClipInjections: []
+  vector3Injections: []
+  colorInjections: []
+  transformInjections: []
+  materialInjections: []
+  spriteInjections: []
+  textureInjections: []
+  componentInjections: []
+  gameObjectListInjections: []
 --- !u!135 &4942685867690673752
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -10799,6 +10815,14 @@ MonoBehaviour:
   audioClipInjections:
   - name: sfxGlassBreak
     value: {fileID: 8300000, guid: 8051ba55676f3419ea1fc47c97e8d325, type: 3}
+  vector3Injections: []
+  colorInjections: []
+  transformInjections: []
+  materialInjections: []
+  spriteInjections: []
+  textureInjections: []
+  componentInjections: []
+  gameObjectListInjections: []
 --- !u!114 &3423172878404501437
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -10957,6 +10981,14 @@ MonoBehaviour:
   audioClipInjections:
   - name: sfxAddPoint
     value: {fileID: 8300000, guid: cff60634209564b45be4a8a1de0aec37, type: 3}
+  vector3Injections: []
+  colorInjections: []
+  transformInjections: []
+  materialInjections: []
+  spriteInjections: []
+  textureInjections: []
+  componentInjections: []
+  gameObjectListInjections: []
 --- !u!1 &8451759769619915044
 GameObject:
   m_ObjectHideFlags: 0

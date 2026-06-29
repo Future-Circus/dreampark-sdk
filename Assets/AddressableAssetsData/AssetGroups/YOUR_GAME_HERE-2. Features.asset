@@ -15,32 +15,8 @@ MonoBehaviour:
   m_GroupName: YOUR_GAME_HERE-2. Features
   m_GUID: d019f5332e1b74fce90ef07518b440f2
   m_SerializeEntries:
-  - m_GUID: 34144dac71db94e688bf33833c00fcf7
-    m_Address: Assets/Content/YOUR_GAME_HERE/2. Features/2. DreamBand/dreamband_nrm.png
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - YOUR_GAME_HERE
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: 8284c5807005c4049a15b51729d3c980
-    m_Address: Assets/Content/YOUR_GAME_HERE/2. Features/2. DreamBand/dreamband.png
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - YOUR_GAME_HERE
-    FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: b5268f2713d3d45fcbedd7f36bbb0107
     m_Address: Assets/Content/YOUR_GAME_HERE/2. Features/2. DreamBand
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - YOUR_GAME_HERE
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: bca9d82c51d7046e497f9c77f9f930eb
-    m_Address: Assets/Content/YOUR_GAME_HERE/2. Features/2. DreamBand/DreamBand.mat
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - YOUR_GAME_HERE
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: d96be89e33d714bb885a28c44dd396f6
-    m_Address: Assets/Content/YOUR_GAME_HERE/2. Features/2. DreamBand/DreamBand.prefab
     m_ReadOnly: 0
     m_SerializedLabels:
     - YOUR_GAME_HERE

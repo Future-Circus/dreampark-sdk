@@ -14,13 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   m_GroupName: YOUR_GAME_HERE-Scripts
   m_GUID: 8e718d07cd5aa4fa08dc3feff8eb3bbc
-  m_SerializeEntries:
-  - m_GUID: d7a1f9aad5bea4cc3910512920d4789c
-    m_Address: Assets/Content/YOUR_GAME_HERE/Scripts/lua_dreamband.lua.txt
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - YOUR_GAME_HERE
-    FlaggedDuringContentUpdateRestriction: 0
+  m_SerializeEntries: []
   m_ReadOnly: 0
   m_Settings: {fileID: 11400000, guid: 5e922c848874c41bc90d6a8d78c6f5a9, type: 2}
   m_SchemaSet:
