@@ -339,7 +339,7 @@ namespace DreamPark.API
             Debug.Log("ContentAPI: Getting content catalog");
             DreamParkAPI.GET($"/api/content/", AuthAPI.GetUserAuth(), (success, response) => {
                 if (success) {
-                    Debug.Log("Content got successfully: " + response.json.Print());
+                    Debug.Log("ContentAPI: Content catalog fetched successfully.");
                     callback?.Invoke(true, response);
                 } else {
                     Debug.LogError("Failed to get content: " + response.error);

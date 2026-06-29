@@ -12,7 +12,10 @@ using System.Text.RegularExpressions;
 /// </summary>
 public static class LuaInjectionEditorGUI {
 
-    public enum VarType { GameObject, Float, String, Bool, Int, Script, AudioClip }
+    public enum VarType {
+        GameObject, Float, String, Bool, Int, Script, AudioClip,
+        Vector3, Color, Transform, Material, Sprite, Texture, Component, GameObjectList
+    }
 
     public struct Entry {
         public VarType type;
@@ -24,6 +27,14 @@ public static class LuaInjectionEditorGUI {
         public int           intValue;
         public LuaBehaviour  scriptValue;
         public AudioClip     audioClipValue;
+        public Vector3       vector3Value;
+        public Color         colorValue;
+        public Transform     transformValue;
+        public Material      materialValue;
+        public Sprite        spriteValue;
+        public Texture       textureValue;
+        public Component     componentValue;
+        public GameObject[]  goListValue;
     }
 
     // ── Type color coding ──────────────────────────────────────────────
@@ -35,6 +46,14 @@ public static class LuaInjectionEditorGUI {
         { VarType.Int,        new Color(1.00f, 0.80f, 0.30f) },
         { VarType.Script,     new Color(0.60f, 0.85f, 0.85f) },
         { VarType.AudioClip,  new Color(0.95f, 0.65f, 0.65f) },
+        { VarType.Vector3,    new Color(0.55f, 0.65f, 0.95f) },
+        { VarType.Color,      new Color(0.95f, 0.45f, 0.75f) },
+        { VarType.Transform,  new Color(0.70f, 0.80f, 0.35f) },
+        { VarType.Material,   new Color(0.80f, 0.50f, 0.95f) },
+        { VarType.Sprite,     new Color(0.45f, 0.80f, 0.70f) },
+        { VarType.Texture,    new Color(0.50f, 0.75f, 0.85f) },
+        { VarType.Component,  new Color(0.85f, 0.70f, 0.40f) },
+        { VarType.GameObjectList, new Color(0.95f, 0.60f, 0.35f) },
     };
 
     public static readonly Dictionary<VarType, string> defaultKeys = new Dictionary<VarType, string> {
@@ -45,6 +64,14 @@ public static class LuaInjectionEditorGUI {
         { VarType.Int,        "newInt" },
         { VarType.Script,     "newScript" },
         { VarType.AudioClip,  "newAudioClip" },
+        { VarType.Vector3,    "newVector3" },
+        { VarType.Color,      "newColor" },
+        { VarType.Transform,  "newTransform" },
+        { VarType.Material,   "newMaterial" },
+        { VarType.Sprite,     "newSprite" },
+        { VarType.Texture,    "newTexture" },
+        { VarType.Component,  "newComponent" },
+        { VarType.GameObjectList, "newList" },
     };
 
     static readonly Dictionary<string, VarType> typeNameMap = new Dictionary<string, VarType> {
@@ -62,6 +89,20 @@ public static class LuaInjectionEditorGUI {
         { "luabehaviour", VarType.Script },
         { "audioclip",  VarType.AudioClip },
         { "audio",      VarType.AudioClip },
+        { "vector3",    VarType.Vector3 },
+        { "vec3",       VarType.Vector3 },
+        { "color",      VarType.Color },
+        { "colour",     VarType.Color },
+        { "transform",  VarType.Transform },
+        { "material",   VarType.Material },
+        { "mat",        VarType.Material },
+        { "sprite",     VarType.Sprite },
+        { "texture",    VarType.Texture },
+        { "tex",        VarType.Texture },
+        { "component",  VarType.Component },
+        { "gameobjectlist", VarType.GameObjectList },
+        { "golist",     VarType.GameObjectList },
+        { "list",       VarType.GameObjectList },
     };
 
     static readonly Regex varRegex = new Regex(
@@ -101,6 +142,38 @@ public static class LuaInjectionEditorGUI {
             foreach (var inj in target.audioClipInjections)
                 entries.Add(new Entry { type = VarType.AudioClip, name = inj.name, audioClipValue = inj.value });
 
+        if (target.vector3Injections != null)
+            foreach (var inj in target.vector3Injections)
+                entries.Add(new Entry { type = VarType.Vector3, name = inj.name, vector3Value = inj.value });
+
+        if (target.colorInjections != null)
+            foreach (var inj in target.colorInjections)
+                entries.Add(new Entry { type = VarType.Color, name = inj.name, colorValue = inj.value });
+
+        if (target.transformInjections != null)
+            foreach (var inj in target.transformInjections)
+                entries.Add(new Entry { type = VarType.Transform, name = inj.name, transformValue = inj.value });
+
+        if (target.materialInjections != null)
+            foreach (var inj in target.materialInjections)
+                entries.Add(new Entry { type = VarType.Material, name = inj.name, materialValue = inj.value });
+
+        if (target.spriteInjections != null)
+            foreach (var inj in target.spriteInjections)
+                entries.Add(new Entry { type = VarType.Sprite, name = inj.name, spriteValue = inj.value });
+
+        if (target.textureInjections != null)
+            foreach (var inj in target.textureInjections)
+                entries.Add(new Entry { type = VarType.Texture, name = inj.name, textureValue = inj.value });
+
+        if (target.componentInjections != null)
+            foreach (var inj in target.componentInjections)
+                entries.Add(new Entry { type = VarType.Component, name = inj.name, componentValue = inj.value });
+
+        if (target.gameObjectListInjections != null)
+            foreach (var inj in target.gameObjectListInjections)
+                entries.Add(new Entry { type = VarType.GameObjectList, name = inj.name, goListValue = inj.value });
+
         return entries;
     }
 
@@ -115,6 +188,14 @@ public static class LuaInjectionEditorGUI {
         var intList       = new List<IntInjection>();
         var scriptList    = new List<ScriptInjection>();
         var audioClipList = new List<AudioClipInjection>();
+        var vector3List   = new List<Vector3Injection>();
+        var colorList     = new List<ColorInjection>();
+        var transformList = new List<TransformInjection>();
+        var materialList  = new List<MaterialInjection>();
+        var spriteList    = new List<SpriteInjection>();
+        var textureList   = new List<TextureInjection>();
+        var componentList = new List<ComponentInjection>();
+        var goListList    = new List<GameObjectListInjection>();
 
         foreach (var e in entries) {
             switch (e.type) {
@@ -139,6 +220,30 @@ public static class LuaInjectionEditorGUI {
                 case VarType.AudioClip:
                     audioClipList.Add(new AudioClipInjection { name = e.name, value = e.audioClipValue });
                     break;
+                case VarType.Vector3:
+                    vector3List.Add(new Vector3Injection { name = e.name, value = e.vector3Value });
+                    break;
+                case VarType.Color:
+                    colorList.Add(new ColorInjection { name = e.name, value = e.colorValue });
+                    break;
+                case VarType.Transform:
+                    transformList.Add(new TransformInjection { name = e.name, value = e.transformValue });
+                    break;
+                case VarType.Material:
+                    materialList.Add(new MaterialInjection { name = e.name, value = e.materialValue });
+                    break;
+                case VarType.Sprite:
+                    spriteList.Add(new SpriteInjection { name = e.name, value = e.spriteValue });
+                    break;
+                case VarType.Texture:
+                    textureList.Add(new TextureInjection { name = e.name, value = e.textureValue });
+                    break;
+                case VarType.Component:
+                    componentList.Add(new ComponentInjection { name = e.name, value = e.componentValue });
+                    break;
+                case VarType.GameObjectList:
+                    goListList.Add(new GameObjectListInjection { name = e.name, value = e.goListValue ?? new GameObject[0] });
+                    break;
             }
         }
 
@@ -149,6 +254,14 @@ public static class LuaInjectionEditorGUI {
         target.intInjections        = intList.ToArray();
         target.scriptInjections     = scriptList.ToArray();
         target.audioClipInjections  = audioClipList.ToArray();
+        target.vector3Injections        = vector3List.ToArray();
+        target.colorInjections          = colorList.ToArray();
+        target.transformInjections      = transformList.ToArray();
+        target.materialInjections       = materialList.ToArray();
+        target.spriteInjections         = spriteList.ToArray();
+        target.textureInjections        = textureList.ToArray();
+        target.componentInjections      = componentList.ToArray();
+        target.gameObjectListInjections = goListList.ToArray();
 
         EditorUtility.SetDirty(undoTarget);
     }
@@ -373,11 +486,16 @@ public static class LuaInjectionEditorGUI {
             GUI.color = prevColor;
 
             // Type dropdown
-            var newType = (VarType)EditorGUILayout.EnumPopup(e.type, GUILayout.Width(90));
+            var newType = (VarType)EditorGUILayout.EnumPopup(e.type, GUILayout.Width(110));
             if (newType != e.type) {
                 e.name = defaultKeys[newType]; e.type = newType;
                 e.goValue = null; e.floatValue = 0f; e.stringValue = "";
                 e.boolValue = false; e.intValue = 0;
+                e.scriptValue = null; e.audioClipValue = null;
+                e.vector3Value = Vector3.zero; e.colorValue = Color.white;
+                e.transformValue = null; e.materialValue = null;
+                e.spriteValue = null; e.textureValue = null;
+                e.componentValue = null; e.goListValue = null;
                 dirty = true;
             }
 
@@ -416,6 +534,58 @@ public static class LuaInjectionEditorGUI {
                 case VarType.AudioClip:
                     var newClip = (AudioClip)EditorGUILayout.ObjectField(e.audioClipValue, typeof(AudioClip), false);
                     if (newClip != e.audioClipValue) { e.audioClipValue = newClip; dirty = true; }
+                    break;
+                case VarType.Vector3:
+                    var newVec = EditorGUILayout.Vector3Field("", e.vector3Value);
+                    if (newVec != e.vector3Value) { e.vector3Value = newVec; dirty = true; }
+                    break;
+                case VarType.Color:
+                    var newCol = EditorGUILayout.ColorField(e.colorValue);
+                    if (newCol != e.colorValue) { e.colorValue = newCol; dirty = true; }
+                    break;
+                case VarType.Transform:
+                    var newTr = (Transform)EditorGUILayout.ObjectField(e.transformValue, typeof(Transform), true);
+                    if (newTr != e.transformValue) { e.transformValue = newTr; dirty = true; }
+                    break;
+                case VarType.Material:
+                    var newMat = (Material)EditorGUILayout.ObjectField(e.materialValue, typeof(Material), false);
+                    if (newMat != e.materialValue) { e.materialValue = newMat; dirty = true; }
+                    break;
+                case VarType.Sprite:
+                    var newSpr = (Sprite)EditorGUILayout.ObjectField(e.spriteValue, typeof(Sprite), false);
+                    if (newSpr != e.spriteValue) { e.spriteValue = newSpr; dirty = true; }
+                    break;
+                case VarType.Texture:
+                    var newTex = (Texture)EditorGUILayout.ObjectField(e.textureValue, typeof(Texture), false);
+                    if (newTex != e.textureValue) { e.textureValue = newTex; dirty = true; }
+                    break;
+                case VarType.Component:
+                    var newComp = (Component)EditorGUILayout.ObjectField(e.componentValue, typeof(Component), true);
+                    if (newComp != e.componentValue) { e.componentValue = newComp; dirty = true; }
+                    break;
+                case VarType.GameObjectList:
+                    EditorGUILayout.BeginVertical();
+                    var list = e.goListValue != null
+                        ? new List<GameObject>(e.goListValue)
+                        : new List<GameObject>();
+                    int newSize = EditorGUILayout.DelayedIntField("Size", list.Count);
+                    if (newSize < 0) newSize = 0;
+                    if (newSize != list.Count) {
+                        while (list.Count < newSize) list.Add(null);
+                        while (list.Count > newSize) list.RemoveAt(list.Count - 1);
+                        e.goListValue = list.ToArray();
+                        dirty = true;
+                    }
+                    for (int el = 0; el < list.Count; el++) {
+                        var newEl = (GameObject)EditorGUILayout.ObjectField(
+                            $"  [{el}]", list[el], typeof(GameObject), true);
+                        if (newEl != list[el]) {
+                            list[el] = newEl;
+                            e.goListValue = list.ToArray();
+                            dirty = true;
+                        }
+                    }
+                    EditorGUILayout.EndVertical();
                     break;
             }
 
@@ -535,6 +705,14 @@ public static class LuaInjectionEditorGUI {
                 case VarType.Int:    val = e.intValue.ToString();        break;
                 case VarType.Script:    val = e.scriptValue != null ? e.scriptValue.name : "(null)"; break;
                 case VarType.AudioClip: val = e.audioClipValue != null ? e.audioClipValue.name : "(null)"; break;
+                case VarType.Vector3:   val = e.vector3Value.ToString("F3"); break;
+                case VarType.Color:     val = e.colorValue.ToString(); break;
+                case VarType.Transform: val = e.transformValue != null ? e.transformValue.name : "(null)"; break;
+                case VarType.Material:  val = e.materialValue != null ? e.materialValue.name : "(null)"; break;
+                case VarType.Sprite:    val = e.spriteValue != null ? e.spriteValue.name : "(null)"; break;
+                case VarType.Texture:   val = e.textureValue != null ? e.textureValue.name : "(null)"; break;
+                case VarType.Component: val = e.componentValue != null ? $"{e.componentValue.GetType().Name} on {e.componentValue.name}" : "(null)"; break;
+                case VarType.GameObjectList: val = $"[{(e.goListValue != null ? e.goListValue.Length : 0)} items]"; break;
                 default:                val = "?";                          break;
             }
             Debug.Log($"  [{e.type}]  {e.name} = {val}{dupeTag}");

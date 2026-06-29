@@ -8,7 +8,7 @@
       "url": "https://packages.unity.com"
     },
     "com.boxqkrtm.ide.cursor": {
-      "version": "https://github.com/boxqkrtm/com.unity.ide.cursor.git",
+      "version": "https://github.com/boxqkrtm/com.unity.ide.cursor.git#0a98b387a92cf9f1f47012fc46d4cf33576e5916",
       "depth": 0,
       "source": "git",
       "dependencies": {
@@ -17,7 +17,7 @@
       "hash": "0a98b387a92cf9f1f47012fc46d4cf33576e5916"
     },
     "com.coplaydev.unity-mcp": {
-      "version": "https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#main",
+      "version": "https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#3dd5ac77428608ce09015c88054bc103bb80eba9",
       "depth": 0,
       "source": "git",
       "dependencies": {
@@ -27,7 +27,7 @@
       "hash": "3dd5ac77428608ce09015c88054bc103bb80eba9"
     },
     "com.cysharp.unitask": {
-      "version": "https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask",
+      "version": "https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask#f213ff497e4ff462a77319cf677cf20cc0860ca9",
       "depth": 0,
       "source": "git",
       "dependencies": {},

@@ -50,7 +50,7 @@ public sealed class MessageLog
         }
     }
 
-    private static string BuildPreview(byte[] bytes)
+    private static string BuildPreview(byte[]? bytes)
     {
         if (bytes == null || bytes.Length == 0) return "";
 

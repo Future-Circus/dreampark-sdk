@@ -126,14 +126,18 @@ namespace DreamPark {
                 regenerateTimer -= Time.deltaTime;
                 if (regenerateTimer <= 0f)
                 {
-                    if (IsBuildMode())
+                    if (IsBuildMode() || IsLeavingBuildTransition())
                     {
-                        // Keep pending so we regenerate as soon as play mode resumes.
+                        // Keep pending so we regenerate as soon as play mode
+                        // fully resumes (the leave-build coroutine triggers it
+                        // after the camera transition lands).
                         return;
                     }
 
                     regeneratePending = false;
-                    GenerateGapFillerMesh();
+                    // Off-thread: park load / post-build regeneration must not
+                    // stall the main thread.
+                    RequestRegenerateAsync();
 
                     // Mark initial generation complete so further gameplay events
                     // (prop destruction, physics movement) do not retrigger generation.
@@ -156,6 +160,20 @@ namespace DreamPark {
         {
 #if DREAMPARKCORE
             return NativeInterfaceManager.Instance != null && NativeInterfaceManager.Instance.buildMode;
+#else
+            return false;
+#endif
+        }
+
+        /// True while the core is mid Build→Play transition (camera animating,
+        /// heavy work deferred). Update()'s auto-regeneration must NOT fire in
+        /// this window — it used to ambush the tap frame the moment buildMode
+        /// flipped false, freezing big parks. The core's leave-build coroutine
+        /// calls SetGapFillerVisibilityForMode(false) when it's our turn.
+        private bool IsLeavingBuildTransition()
+        {
+#if DREAMPARKCORE
+            return NativeInterfaceManager.Instance != null && NativeInterfaceManager.Instance.leavingBuildTransition;
 #else
             return false;
 #endif
@@ -185,6 +203,12 @@ namespace DreamPark {
         {
             public GameObject runtimeFloor;
             public string sourceName;
+            /// Pure-math height sampler built from the floor mesh's world-space
+            /// vertices at gather time. Replaces MeshCollider raycasts so height
+            /// queries are exact AND thread-safe (the whole generation can run
+            /// on a background thread). Null for prop/template-fallback floors
+            /// (flat) — corner interpolation handles those, same as before.
+            public FloorHeightSampler heightSampler;
             public Vector2[] worldFootprint; // 4 corners in world XZ space
             public List<Vector2[]> holePolygons = new List<Vector2[]>();
             public float[] cornerHeights;    // Y height at each corner
@@ -301,10 +325,228 @@ namespace DreamPark {
             }
         }
 
+        /// Exact, thread-safe floor-height lookup: world-space triangles from
+        /// the (possibly calibration-warped) floor mesh, bucketed on a uniform
+        /// XZ grid for O(1) queries, sampled by barycentric interpolation —
+        /// the same math a MeshCollider raycast performs inside the physics
+        /// engine, minus the physics engine (and minus the main-thread pin).
+        private class FloorHeightSampler
+        {
+            private readonly Vector3[] verts;   // world space
+            private readonly int[] tris;
+            private readonly Dictionary<long, List<int>> buckets = new Dictionary<long, List<int>>();
+            private readonly Vector2 centerXZ;
+            private const float CellSize = 0.5f;
+
+            public FloorHeightSampler(Vector3[] worldVerts, int[] triangles, Vector2 floorCenterXZ)
+            {
+                verts = worldVerts;
+                tris = triangles;
+                centerXZ = floorCenterXZ;
+
+                // Bucket each triangle into every cell its XZ bounds touch.
+                for (int t = 0; t < tris.Length; t += 3)
+                {
+                    Vector3 a = verts[tris[t]];
+                    Vector3 b = verts[tris[t + 1]];
+                    Vector3 c = verts[tris[t + 2]];
+                    int minCx = CellOf(Mathf.Min(a.x, b.x, c.x));
+                    int maxCx = CellOf(Mathf.Max(a.x, b.x, c.x));
+                    int minCz = CellOf(Mathf.Min(a.z, b.z, c.z));
+                    int maxCz = CellOf(Mathf.Max(a.z, b.z, c.z));
+                    for (int cx = minCx; cx <= maxCx; cx++)
+                    {
+                        for (int cz = minCz; cz <= maxCz; cz++)
+                        {
+                            long key = Key(cx, cz);
+                            if (!buckets.TryGetValue(key, out var list))
+                            {
+                                list = new List<int>();
+                                buckets[key] = list;
+                            }
+                            list.Add(t);
+                        }
+                    }
+                }
+            }
+
+            private static int CellOf(float v) => Mathf.FloorToInt(v / CellSize);
+            private static long Key(int cx, int cz) => ((long)cx << 32) ^ ((long)cz & 0xffffffffL);
+
+            /// Height at (x,z), exact barycentric interpolation inside the
+            /// containing triangle. Mirrors the old raycast's edge behavior:
+            /// on a direct miss, retries nudged 0.1m toward the floor center.
+            public bool TrySample(Vector2 p, out float height)
+            {
+                if (TrySampleDirect(p, out height)) return true;
+                Vector2 toCenter = (centerXZ - p);
+                if (toCenter.sqrMagnitude > 1e-8f)
+                {
+                    Vector2 nudged = p + toCenter.normalized * 0.1f;
+                    if (TrySampleDirect(nudged, out height)) return true;
+                }
+                height = 0f;
+                return false;
+            }
+
+            private bool TrySampleDirect(Vector2 p, out float height)
+            {
+                long key = Key(CellOf(p.x), CellOf(p.y));
+                if (buckets.TryGetValue(key, out var list))
+                {
+                    for (int i = 0; i < list.Count; i++)
+                    {
+                        int t = list[i];
+                        Vector3 a = verts[tris[t]];
+                        Vector3 b = verts[tris[t + 1]];
+                        Vector3 c = verts[tris[t + 2]];
+
+                        // Barycentric coordinates in XZ.
+                        float d = (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z);
+                        if (Mathf.Abs(d) < 1e-10f) continue; // degenerate
+                        float w1 = ((b.z - c.z) * (p.x - c.x) + (c.x - b.x) * (p.y - c.z)) / d;
+                        float w2 = ((c.z - a.z) * (p.x - c.x) + (a.x - c.x) * (p.y - c.z)) / d;
+                        float w3 = 1f - w1 - w2;
+                        const float eps = -1e-4f; // tolerate edge-exact points
+                        if (w1 >= eps && w2 >= eps && w3 >= eps)
+                        {
+                            height = w1 * a.y + w2 * b.y + w3 * c.y;
+                            return true;
+                        }
+                    }
+                }
+                height = 0f;
+                return false;
+            }
+        }
+
         public void GenerateGapFillerMesh()
         {
-            ClearMesh();
-            
+            if (_isGenerating)
+            {
+                // A background generation is in flight — queue a re-run.
+                _regenQueuedWhileGenerating = true;
+                return;
+            }
+            var perfTimer = System.Diagnostics.Stopwatch.StartNew();
+            DestroyRuntimeMesh();
+            if (!GatherFloors(out Bounds combinedBounds)) return;
+            var data = ComputeGapMeshData(combinedBounds);
+            ApplyGapMesh(data, buildNavMeshSynchronously: true);
+            perfTimer.Stop();
+            Debug.Log($"[GapFiller][Perf] Full SYNC regeneration took {perfTimer.ElapsedMilliseconds}ms ({levelFloors.Count} floors)");
+        }
+
+        // ── Async generation (play mode): heavy math on a worker thread ──
+        private bool _isGenerating = false;
+        private bool _regenQueuedWhileGenerating = false;
+
+        /// Regenerate WITHOUT blocking the main thread: floors are gathered on
+        /// the main thread (Unity API + sampler capture), the heavy geometry
+        /// runs on a worker thread (pure math — FloorHeightSampler replaced
+        /// the MeshCollider raycasts that used to pin this to main), and the
+        /// mesh + navmesh apply back on main. The OLD mesh stays visible until
+        /// the replacement is ready. Falls back to the sync path outside play
+        /// mode (editor tooling).
+        public void RequestRegenerateAsync()
+        {
+            if (!Application.isPlaying)
+            {
+                GenerateGapFillerMesh();
+                return;
+            }
+            if (_isGenerating)
+            {
+                _regenQueuedWhileGenerating = true;
+                return;
+            }
+            StartCoroutine(GenerateRoutine());
+        }
+
+        private System.Collections.IEnumerator GenerateRoutine()
+        {
+            _isGenerating = true;
+            var perfTimer = System.Diagnostics.Stopwatch.StartNew();
+
+            // 1. MAIN: gather floors + build height samplers (Unity API).
+            if (!GatherFloors(out Bounds combinedBounds))
+            {
+                DestroyRuntimeMesh();
+                _isGenerating = false;
+                yield break;
+            }
+            long gatherMs = perfTimer.ElapsedMilliseconds;
+
+            // 2. WORKER: all the geometry. levelFloors is not mutated while
+            // _isGenerating (both entry points are gated), so the worker's
+            // instance reads are stable.
+            var task = System.Threading.Tasks.Task.Run(() => ComputeGapMeshData(combinedBounds));
+            while (!task.IsCompleted) yield return null;
+            if (task.IsFaulted)
+            {
+                Debug.LogError("[GapFiller] Background generation failed: " + task.Exception);
+                _isGenerating = false;
+                yield break;
+            }
+            long computeMs = perfTimer.ElapsedMilliseconds - gatherMs;
+
+            // 3. MAIN: swap meshes (the old one stayed visible until now).
+            DestroyRuntimeMesh();
+            ApplyGapMesh(task.Result, buildNavMeshSynchronously: false);
+            long applyMs = perfTimer.ElapsedMilliseconds - gatherMs - computeMs;
+
+            // 4. MAIN (incremental): navmesh, built asynchronously.
+            if (runtimeMesh != null)
+            {
+                var navSurface = runtimeMesh.GetComponent<NavMeshSurface>();
+                if (navSurface != null)
+                {
+                    var navData = new UnityEngine.AI.NavMeshData();
+                    navSurface.navMeshData = navData;
+                    navSurface.AddData();
+                    var op = navSurface.UpdateNavMesh(navData);
+                    while (!op.isDone) yield return null;
+                }
+            }
+
+            // Mode may have flipped back to build mid-generation — respect it.
+            if (runtimeMesh != null && IsBuildMode())
+            {
+                runtimeMesh.SetActive(false);
+            }
+
+            perfTimer.Stop();
+            Debug.Log($"[GapFiller][Perf] ASYNC regeneration done in {perfTimer.ElapsedMilliseconds}ms wall (gather {gatherMs}ms main, compute {computeMs}ms worker, apply {applyMs}ms main, navmesh incremental) — {levelFloors.Count} floors");
+
+            _isGenerating = false;
+            if (_regenQueuedWhileGenerating)
+            {
+                _regenQueuedWhileGenerating = false;
+                RequestRegenerateAsync();
+            }
+        }
+
+        /// Destroys ONLY the runtime mesh object (ClearMesh also clears floor
+        /// data; the async path must keep floor data intact for the worker).
+        private void DestroyRuntimeMesh()
+        {
+            if (runtimeMesh != null)
+            {
+                if (Application.isPlaying)
+                    Destroy(runtimeMesh);
+                else
+                    DestroyImmediate(runtimeMesh);
+
+                runtimeMesh = null;
+            }
+        }
+
+        /// MAIN-thread phase: find templates, extract floor data (meshes,
+        /// transforms, samplers), compute combined bounds.
+        private bool GatherFloors(out Bounds combinedBounds)
+        {
+            combinedBounds = new Bounds();
+
             // Gather all floor-influencing templates
             LevelTemplate[] levelTemplates = FindObjectsByType<LevelTemplate>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
             PropTemplate[] propTemplates = FindObjectsByType<PropTemplate>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
@@ -312,7 +554,7 @@ namespace DreamPark {
             if (levelTemplates.Length == 0 && propTemplates.Length == 0)
             {
                 Debug.LogWarning("[GapFiller] No LevelTemplates or PropTemplates found in scene");
-                return;
+                return false;
             }
             
             if (debugLog)
@@ -320,7 +562,6 @@ namespace DreamPark {
 
             // Extract floor data from each template
             levelFloors.Clear();
-            Bounds combinedBounds = new Bounds();
             bool boundsInitialized = false;
             
             foreach (var template in levelTemplates)
@@ -373,7 +614,7 @@ namespace DreamPark {
             if (levelFloors.Count == 0)
             {
                 Debug.LogWarning("[GapFiller] No valid floor data extracted");
-                return;
+                return false;
             }
             
             // Add padding
@@ -382,8 +623,7 @@ namespace DreamPark {
             if (debugLog)
                 Debug.Log($"[GapFiller] Combined bounds: center={combinedBounds.center}, size={combinedBounds.size}");
 
-            // Generate the gap filler mesh
-            GenerateMesh(combinedBounds);
+            return true;
         }
 
         private LevelFloorData ExtractFloorData(LevelTemplate template)
@@ -506,7 +746,11 @@ namespace DreamPark {
             
             data.center = centerSum / 4f;
             data.holePolygons.Add(data.worldFootprint);
-            
+
+            // Build the exact, thread-safe height sampler from the calibrated
+            // mesh (world-space verts + triangles, captured on main thread).
+            data.heightSampler = new FloorHeightSampler(worldVerts.ToArray(), mesh.triangles, data.center);
+
             if (debugLog)
                 Debug.Log($"[GapFiller] Extracted floor data from MESH for {template.name}: heights={string.Join(", ", data.cornerHeights)}");
             
@@ -578,26 +822,20 @@ namespace DreamPark {
             return data;
         }
 
-        private void GenerateMesh(Bounds bounds)
+        /// Result of the pure-math generation phase — plain arrays, safe to
+        /// produce on a worker thread and hand to ApplyGapMesh on main.
+        private class GapMeshData
         {
-            // Create runtime object
-            runtimeMesh = new GameObject("GapFillerMesh");
-            runtimeMesh.transform.SetParent(transform);
-            runtimeMesh.transform.position = Vector3.zero;
-            runtimeMesh.transform.rotation = Quaternion.identity;
-            runtimeMesh.layer = LayerMask.NameToLayer("Level");
-            runtimeMesh.tag = "Ground";
-            
-            MeshFilter mf = runtimeMesh.AddComponent<MeshFilter>();
-            MeshRenderer mr = runtimeMesh.AddComponent<MeshRenderer>();
-            MeshCollider mc = runtimeMesh.AddComponent<MeshCollider>();
-            
-            // Set material
-            if (floorMaterial != null)
-                mr.material = floorMaterial;
-            else
-                mr.material = Resources.Load<Material>("Materials/Occlusion");
+            public Vector3[] vertices;
+            public Vector2[] uv;
+            public int[] triangles;
+        }
 
+        /// WORKER-SAFE phase: the entire gap-filler geometry (grid vertices,
+        /// hole cutting, edge stitching). Touches NO Unity objects — only
+        /// captured floor data (FloorHeightSampler) and math types.
+        private GapMeshData ComputeGapMeshData(Bounds bounds)
+        {
             // Calculate grid dimensions
             float width = bounds.size.x;
             float height = bounds.size.z;
@@ -808,14 +1046,47 @@ namespace DreamPark {
                 }
             }
 
+            return new GapMeshData
+            {
+                vertices = vertices,
+                uv = uv,
+                triangles = triangles.ToArray(),
+            };
+        }
+
+        /// MAIN-thread phase: builds the runtime GameObject from computed
+        /// mesh data. NavMesh bakes synchronously only on the sync/editor
+        /// path — the async routine builds it incrementally afterwards.
+        private void ApplyGapMesh(GapMeshData data, bool buildNavMeshSynchronously)
+        {
+            // Create runtime object
+            runtimeMesh = new GameObject("GapFillerMesh");
+            runtimeMesh.transform.SetParent(transform);
+            runtimeMesh.transform.position = Vector3.zero;
+            runtimeMesh.transform.rotation = Quaternion.identity;
+            runtimeMesh.layer = LayerMask.NameToLayer("Level");
+            runtimeMesh.tag = "Ground";
+
+            MeshFilter mf = runtimeMesh.AddComponent<MeshFilter>();
+            MeshRenderer mr = runtimeMesh.AddComponent<MeshRenderer>();
+            MeshCollider mc = runtimeMesh.AddComponent<MeshCollider>();
+
+            // Set material
+            if (floorMaterial != null)
+                mr.material = floorMaterial;
+            else
+                mr.material = Resources.Load<Material>("Materials/Occlusion");
+
             // Create mesh
             Mesh mesh = new Mesh();
-            mesh.vertices = vertices;
-            mesh.triangles = triangles.ToArray();
-            mesh.uv = uv;
+            // Big parks can exceed the 16-bit vertex limit.
+            mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+            mesh.vertices = data.vertices;
+            mesh.triangles = data.triangles;
+            mesh.uv = data.uv;
             mesh.RecalculateNormals();
             mesh.RecalculateBounds();
-            
+
             mf.sharedMesh = mesh;
             mc.sharedMesh = mesh;
 
@@ -823,10 +1094,13 @@ namespace DreamPark {
             var navSurface = runtimeMesh.AddComponent<NavMeshSurface>();
             navSurface.collectObjects = CollectObjects.Children;
             navSurface.layerMask = LayerMask.GetMask("Level");
-            navSurface.BuildNavMesh();
+            if (buildNavMeshSynchronously)
+            {
+                navSurface.BuildNavMesh();
+            }
 
             if (debugLog)
-                Debug.Log($"[GapFiller] Generated mesh with {vertices.Length} vertices, {triangles.Count / 3} triangles");
+                Debug.Log($"[GapFiller] Generated mesh with {data.vertices.Length} vertices, {data.triangles.Length / 3} triangles");
         }
 
         private int FindNearestGridVertex(Vector3[] vertices, int gridVertexCount, Vector3 targetPos, LevelFloorData excludeFloor)
@@ -962,37 +1236,17 @@ namespace DreamPark {
             return closestHeight;
         }
 
+        /// Floor surface height at (x,z) — exact barycentric sampling of the
+        /// calibrated floor mesh via the per-floor FloorHeightSampler (pure
+        /// math, thread-safe, no physics). Floors without a runtime mesh
+        /// (props, template fallback) interpolate corner heights, exactly as
+        /// the old raycast's fallback did.
         private float GetFloorHeightAtPoint(LevelFloorData floor, Vector2 xzPoint)
         {
-            // Try to raycast onto the actual floor mesh for accurate height
-            if (floor.runtimeFloor != null)
+            if (floor.heightSampler != null && floor.heightSampler.TrySample(xzPoint, out float height))
             {
-                MeshCollider mc = floor.runtimeFloor.GetComponent<MeshCollider>();
-                if (mc != null)
-                {
-                    // Cast ray down from above
-                    Ray ray = new Ray(new Vector3(xzPoint.x, 100f, xzPoint.y), Vector3.down);
-                    RaycastHit hit;
-                    
-                    if (mc.Raycast(ray, out hit, 200f))
-                    {
-                        return hit.point.y;
-                    }
-                    
-                    // If direct hit fails, try casting from nearby points on the edge
-                    // The point might be exactly on the edge where raycast misses
-                    Vector2 toCenter = (floor.center - xzPoint).normalized * 0.1f;
-                    Vector3 offsetPoint = new Vector3(xzPoint.x + toCenter.x, 100f, xzPoint.y + toCenter.y);
-                    ray = new Ray(offsetPoint, Vector3.down);
-                    
-                    if (mc.Raycast(ray, out hit, 200f))
-                    {
-                        return hit.point.y;
-                    }
-                }
+                return height;
             }
-            
-            // Fallback to interpolated corner heights
             return floor.GetHeightAtEdgePoint(xzPoint);
         }
 
@@ -1074,9 +1328,25 @@ namespace DreamPark {
                 return;
             }
 
-            // Always regenerate on play to pick up any template moves done in build mode.
-            regeneratePending = false;
-            GenerateGapFillerMesh();
+            // Regenerate ONLY when something actually changed during build —
+            // template moves/adds/removes set regeneratePending through
+            // OnAnyLevelTemplateChanged/OnAnyPropTemplateChanged (build mode
+            // is exempt from the _initialGenerationComplete suppression, so
+            // edits always mark it) — or when no mesh exists yet. The old
+            // unconditional regeneration rebuilt the entire procedural mesh
+            // (scene sweeps + hole cutting) on EVERY Build → Play switch,
+            // freezing big parks for seconds even when nothing moved.
+            if (regeneratePending || runtimeMesh == null)
+            {
+                regeneratePending = false;
+                // Off-thread: the old mesh (if any) stays visible until the
+                // replacement is computed; nothing blocks the transition.
+                RequestRegenerateAsync();
+
+                // Lock further gameplay-driven regeneration, matching the
+                // Update() regeneration path.
+                _initialGenerationComplete = true;
+            }
 
             if (runtimeMesh != null && !runtimeMesh.activeSelf)
                 runtimeMesh.SetActive(true);
@@ -1084,16 +1354,7 @@ namespace DreamPark {
 
         public void ClearMesh()
         {
-            if (runtimeMesh != null)
-            {
-                if (Application.isPlaying)
-                    Destroy(runtimeMesh);
-                else
-                    DestroyImmediate(runtimeMesh);
-                    
-                runtimeMesh = null;
-            }
-            
+            DestroyRuntimeMesh();
             levelFloors.Clear();
         }
 

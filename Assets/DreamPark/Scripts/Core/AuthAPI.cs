@@ -12,6 +12,13 @@ namespace DreamPark.API
         // bool argument = current isLoggedIn value.
         public static event Action<bool> LoginStateChanged;
 
+        // Fires when the cached profile (displayName / avatarUrl) is hydrated or
+        // cleared. Separate from LoginStateChanged because the avatar/name arrive
+        // asynchronously (a /api/user fetch) slightly after login state flips, and
+        // because an avatar re-upload can change the profile without the login
+        // state changing. Subscribers should re-read displayName/avatarUrl.
+        public static event Action ProfileChanged;
+
 #if !UNITY_EDITOR
         // On DEVICE, credentials are held IN MEMORY only — never written to
         // PlayerPrefs. On Android/Quest, PlayerPrefs is an unencrypted file in app
@@ -25,6 +32,8 @@ namespace DreamPark.API
         static string _sessionToken = "";
         static string _userId       = "";
         static string _userEmail    = "";
+        static string _displayName  = "";
+        static string _avatarUrl    = "";
 #endif
 
         // Internal — used by AuthAPI to notify subscribers. Wrapped so callers
@@ -33,6 +42,65 @@ namespace DreamPark.API
         {
             try { LoginStateChanged?.Invoke(isLoggedIn); }
             catch (Exception e) { Debug.LogWarning($"[AuthAPI] LoginStateChanged subscriber threw: {e}"); }
+        }
+
+        private static void RaiseProfileChanged()
+        {
+            try { ProfileChanged?.Invoke(); }
+            catch (Exception e) { Debug.LogWarning($"[AuthAPI] ProfileChanged subscriber threw: {e}"); }
+        }
+
+        // Stores displayName + avatar from a sanitized user object (the shape
+        // /auth/login and GET /api/user return). Avatar prefers `avatarUrl`, falling
+        // back to the legacy `photoURL` the backend keeps in sync. Display-only —
+        // stored exactly like email (EditorPrefs in-editor, in-memory on device).
+        private static void ApplyProfileFields(JSONObject user)
+        {
+            if (user == null) return;
+            string dn = user.HasField("displayName") ? user.GetField("displayName").stringValue : null;
+            string av = user.HasField("avatarUrl") ? user.GetField("avatarUrl").stringValue
+                      : user.HasField("photoURL")  ? user.GetField("photoURL").stringValue
+                      : null;
+#if UNITY_EDITOR
+            if (dn != null) UnityEditor.EditorPrefs.SetString("displayName", dn);
+            if (av != null) UnityEditor.EditorPrefs.SetString("avatarUrl", av);
+#else
+            if (dn != null) _displayName = dn;
+            if (av != null) _avatarUrl   = av;
+#endif
+            RaiseProfileChanged();
+        }
+
+        private static void ClearProfileFields()
+        {
+#if UNITY_EDITOR
+            UnityEditor.EditorPrefs.DeleteKey("displayName");
+            UnityEditor.EditorPrefs.DeleteKey("avatarUrl");
+#else
+            _displayName = "";
+            _avatarUrl   = "";
+#endif
+            RaiseProfileChanged();
+        }
+
+        // Fetches the canonical identity for the current session and caches
+        // displayName + avatarUrl. Safe to call after ANY login path (email/password,
+        // native handoff, pairing) since it only needs a valid session bearer. Also
+        // useful to refresh after the user changes their name/avatar mid-session.
+        public static void HydrateProfile(Action<bool> callback = null)
+        {
+            if (!isLoggedIn) { callback?.Invoke(false); return; }
+            DreamParkAPI.GET("/api/user/", GetUserAuth(), (success, response) => {
+                if (success && response != null && response.json != null && response.json.HasField("user"))
+                {
+                    ApplyProfileFields(response.json.GetField("user"));
+                    callback?.Invoke(true);
+                }
+                else
+                {
+                    callback?.Invoke(false);
+                }
+            });
         }
 
         public static string GetUserAuth() {
@@ -44,15 +112,29 @@ namespace DreamPark.API
             return $"Bearer {sessionToken}";
         }
 
-        // Static "ApiKey <secret>" header used by core's runtime to call /app/* endpoints.
-        // The secret value lives ONLY in dreampark-core (Assets/Scripts/Internal/CoreSecrets.cs)
-        // and is excluded from the public SDK distribution via #if DREAMPARKCORE.
+        // "ApiKey <key>" header used by core's runtime to call /app/* endpoints.
         //
-        // SDK callers should use GetUserAuth() (session bearer) instead — anything in the
+        // DEVICE builds: returns the per-device hsk_* key issued by
+        // POST /app/device/enroll (see Assets/Scripts/Internal/DeviceKeyManager.cs).
+        // Public APKs ship with NO shared secret — a leaked key burns one device,
+        // not the fleet, and the backend can revoke/rate-limit per device.
+        // Boot.cs runs DeviceKeyManager.EnsureEnrolledAsync() before the first
+        // authenticated call.
+        //
+        // EDITOR: still uses the legacy shared key (Assets/Scripts/Internal/
+        // CoreSecrets.cs) for core-team tooling convenience. Editor code is never
+        // compiled into players, so the secret stays out of shipped binaries; the
+        // backend keeps accepting it for editor + existing operator builds.
+        //
+        // SDK callers use GetUserAuth() (session bearer) instead — anything in the
         // public SDK that legitimately needs to hit the backend goes through user auth.
         public static string GetAPIKey() {
 #if DREAMPARKCORE
+#if UNITY_EDITOR
             return $"ApiKey {CoreSecrets.ApiKey}";
+#else
+            return DeviceKeyManager.GetAuthHeader();
+#endif
 #else
             Debug.LogError("[AuthAPI] GetAPIKey() is core-only. SDK builds should use GetUserAuth() (session) instead.");
             return "";
@@ -97,6 +179,28 @@ namespace DreamPark.API
 #endif
             }
         }
+        // Cached display name (falls back to "" when unset — callers should use email
+        // as the visible label when this is empty). Hydrated via HydrateProfile().
+        public static string displayName {
+            get {
+#if UNITY_EDITOR
+                return UnityEditor.EditorPrefs.GetString("displayName", "");
+#else
+                return _displayName;
+#endif
+            }
+        }
+        // Cached avatar image URL (Firebase Storage public URL). "" when the user
+        // has no avatar — callers should show their placeholder in that case.
+        public static string avatarUrl {
+            get {
+#if UNITY_EDITOR
+                return UnityEditor.EditorPrefs.GetString("avatarUrl", "");
+#else
+                return _avatarUrl;
+#endif
+            }
+        }
 
 #if DREAMPARKCORE
         // CORE-ONLY (compiled out of the public SDK, like GetAPIKey). Injects a session
@@ -127,6 +231,9 @@ namespace DreamPark.API
             if (userEmail != null) _userEmail = userEmail;
 #endif
             RaiseLoginStateChanged();
+            // Native handoff only carries email — pull displayName + avatar from the
+            // backend now that the session bearer is set.
+            HydrateProfile();
         }
 #endif
 
@@ -149,6 +256,11 @@ namespace DreamPark.API
                     _userEmail    = canonicalEmail ?? "";
 #endif
                     RaiseLoginStateChanged();
+                    // /auth/login already returns a sanitized `user` (displayName +
+                    // photoURL) — apply it directly, no extra round trip needed.
+                    if (response.json != null && response.json.HasField("user")) {
+                        ApplyProfileFields(response.json.GetField("user"));
+                    }
                     callback?.Invoke(success, response);
                 } else {
                     callback?.Invoke(success, response);
@@ -171,6 +283,7 @@ namespace DreamPark.API
             _userEmail    = "";
 #endif
             RaiseLoginStateChanged();
+            ClearProfileFields();
         }
 
         public static void Logout(Action<bool, APIResponse> callback) {
@@ -192,6 +305,7 @@ namespace DreamPark.API
                     _userEmail    = "";
 #endif
                 RaiseLoginStateChanged();
+                ClearProfileFields();
             });
         }
 
