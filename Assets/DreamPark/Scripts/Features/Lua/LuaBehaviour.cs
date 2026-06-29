@@ -46,6 +46,54 @@ public class AudioClipInjection {
     public AudioClip value;
 }
 
+[System.Serializable]
+public class Vector3Injection {
+    public string name;
+    public Vector3 value;
+}
+
+[System.Serializable]
+public class ColorInjection {
+    public string name;
+    public Color value = Color.white;
+}
+
+[System.Serializable]
+public class TransformInjection {
+    public string name;
+    public Transform value;
+}
+
+[System.Serializable]
+public class MaterialInjection {
+    public string name;
+    public Material value;
+}
+
+[System.Serializable]
+public class SpriteInjection {
+    public string name;
+    public Sprite value;
+}
+
+[System.Serializable]
+public class TextureInjection {
+    public string name;
+    public Texture value;
+}
+
+[System.Serializable]
+public class ComponentInjection {
+    public string name;
+    public Component value;
+}
+
+[System.Serializable]
+public class GameObjectListInjection {
+    public string name;
+    public GameObject[] value;
+}
+
 [LuaCallCSharp]
 public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
 
@@ -57,6 +105,14 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
     public IntInjection[]     intInjections;
     public ScriptInjection[]    scriptInjections;
     public AudioClipInjection[] audioClipInjections;
+    public Vector3Injection[]        vector3Injections;
+    public ColorInjection[]          colorInjections;
+    public TransformInjection[]      transformInjections;
+    public MaterialInjection[]       materialInjections;
+    public SpriteInjection[]         spriteInjections;
+    public TextureInjection[]        textureInjections;
+    public ComponentInjection[]      componentInjections;
+    public GameObjectListInjection[] gameObjectListInjections;
 
     // ILuaInjectable — explicit implementation wrapping the public fields
     TextAsset            ILuaInjectable.luaScript            { get => luaScript;            set => luaScript = value; }
@@ -67,6 +123,14 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
     IntInjection[]       ILuaInjectable.intInjections        { get => intInjections;        set => intInjections = value; }
     ScriptInjection[]    ILuaInjectable.scriptInjections     { get => scriptInjections;     set => scriptInjections = value; }
     AudioClipInjection[] ILuaInjectable.audioClipInjections  { get => audioClipInjections;  set => audioClipInjections = value; }
+    Vector3Injection[]        ILuaInjectable.vector3Injections        { get => vector3Injections;        set => vector3Injections = value; }
+    ColorInjection[]          ILuaInjectable.colorInjections          { get => colorInjections;          set => colorInjections = value; }
+    TransformInjection[]      ILuaInjectable.transformInjections      { get => transformInjections;      set => transformInjections = value; }
+    MaterialInjection[]       ILuaInjectable.materialInjections       { get => materialInjections;       set => materialInjections = value; }
+    SpriteInjection[]         ILuaInjectable.spriteInjections         { get => spriteInjections;         set => spriteInjections = value; }
+    TextureInjection[]        ILuaInjectable.textureInjections        { get => textureInjections;        set => textureInjections = value; }
+    ComponentInjection[]      ILuaInjectable.componentInjections      { get => componentInjections;      set => componentInjections = value; }
+    GameObjectListInjection[] ILuaInjectable.gameObjectListInjections { get => gameObjectListInjections; set => gameObjectListInjections = value; }
 
     internal static LuaEnv luaEnv = new LuaEnv();
     internal static float lastGCTime = 0;
@@ -164,9 +228,13 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
     private Action luaOnDestroy;
     private Action luaOnEnable;
     private Action luaOnDisable;
-    private Action<Collision> luaOnCollisionEnter;
-    private Action<Collider> luaOnTriggerEnter;
     private Action<string> luaOnNet;
+
+    // Optional Unity messages (FixedUpdate, OnTrigger*, OnCollision*, app pause/focus)
+    // are wired via lightweight relay components added only when the Lua script defines
+    // the matching function — see LuaMessageRelays. Tracked here so OnEnable/OnDisable
+    // can toggle them in step with this component.
+    private readonly List<Behaviour> luaRelays = new List<Behaviour>();
 
     private LuaTable scriptScopeTable;
 
@@ -201,6 +269,42 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
         if (audioClipInjections != null)
             foreach (var inj in audioClipInjections)
                 scriptScopeTable.Set(inj.name, inj.value);
+        if (vector3Injections != null)
+            foreach (var inj in vector3Injections)
+                scriptScopeTable.Set(inj.name, inj.value);
+        if (colorInjections != null)
+            foreach (var inj in colorInjections)
+                scriptScopeTable.Set(inj.name, inj.value);
+        if (transformInjections != null)
+            foreach (var inj in transformInjections)
+                scriptScopeTable.Set(inj.name, inj.value);
+        if (materialInjections != null)
+            foreach (var inj in materialInjections)
+                scriptScopeTable.Set(inj.name, inj.value);
+        if (spriteInjections != null)
+            foreach (var inj in spriteInjections)
+                scriptScopeTable.Set(inj.name, inj.value);
+        if (textureInjections != null)
+            foreach (var inj in textureInjections)
+                scriptScopeTable.Set(inj.name, inj.value);
+        if (componentInjections != null)
+            foreach (var inj in componentInjections)
+                scriptScopeTable.Set(inj.name, inj.value);
+    }
+
+    // Collections are pushed once (in Awake), NOT in InjectAll — building a fresh
+    // LuaTable on every re-inject would allocate, and EasyLua re-injects per frame.
+    // Lua sees a 1-based array table (so #list and ipairs work as expected).
+    void InjectCollections() {
+        if (gameObjectListInjections == null) return;
+        foreach (var inj in gameObjectListInjections) {
+            using (LuaTable t = luaEnv.NewTable()) {
+                if (inj.value != null)
+                    for (int i = 0; i < inj.value.Length; i++)
+                        t.Set(i + 1, inj.value[i]);
+                scriptScopeTable.Set(inj.name, t);
+            }
+        }
     }
 
     /// <summary>
@@ -233,6 +337,7 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
 
         scriptScopeTable.Set("self", this);
         InjectAll();
+        InjectCollections();
 
         luaEnv.DoString(luaScript.text, luaScript.name, scriptScopeTable);
 
@@ -242,9 +347,13 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
         scriptScopeTable.Get("ondestroy",         out luaOnDestroy);
         scriptScopeTable.Get("onenable",          out luaOnEnable);
         scriptScopeTable.Get("ondisable",         out luaOnDisable);
-        scriptScopeTable.Get("oncollisionenter",  out luaOnCollisionEnter);
-        scriptScopeTable.Get("ontriggerenter",    out luaOnTriggerEnter);
         scriptScopeTable.Get("onnet",             out luaOnNet);
+
+        // Opt-in physics + frame-timing + app-lifecycle messages. Only adds a relay
+        // (and its per-object engine cost) for functions this script actually defines.
+        LuaMessageRelays.Bind(gameObject, scriptScopeTable, luaRelays);
+        // Match host state now in case this component starts disabled (OnEnable won't fire).
+        LuaMessageRelays.SetEnabled(luaRelays, isActiveAndEnabled);
 
         // auto-wire NetId if present on same GameObject
         var netId = GetComponent<NetId>();
@@ -266,8 +375,19 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
     }
 
     void Start()     => luaStart?.Invoke();
-    void OnEnable()  => luaOnEnable?.Invoke();
-    void OnDisable() => luaOnDisable?.Invoke();
+
+    void OnEnable() {
+        // Relays are created in Awake (before the first OnEnable), so by here the list
+        // is populated. Keep them in lockstep with this component's enabled state so a
+        // disabled LuaBehaviour doesn't keep firing FixedUpdate/OnTrigger* via its relays.
+        LuaMessageRelays.SetEnabled(luaRelays, true);
+        luaOnEnable?.Invoke();
+    }
+
+    void OnDisable() {
+        luaOnDisable?.Invoke();
+        LuaMessageRelays.SetEnabled(luaRelays, false);
+    }
 
     void Update() {
         if (scriptScopeTable == null) return;
@@ -290,9 +410,6 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
             LuaBehaviour.lastGCTime = Time.time;
         }
     }
-
-    void OnCollisionEnter(Collision c) => luaOnCollisionEnter?.Invoke(c);
-    void OnTriggerEnter(Collider c)    => luaOnTriggerEnter?.Invoke(c);
 
     void OnDestroy() {
         luaOnDestroy?.Invoke();

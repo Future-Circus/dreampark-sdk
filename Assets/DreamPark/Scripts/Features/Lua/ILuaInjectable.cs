@@ -13,4 +13,12 @@ public interface ILuaInjectable {
     IntInjection[]    intInjections     { get; set; }
     ScriptInjection[]    scriptInjections    { get; set; }
     AudioClipInjection[] audioClipInjections { get; set; }
+    Vector3Injection[]        vector3Injections        { get; set; }
+    ColorInjection[]          colorInjections          { get; set; }
+    TransformInjection[]      transformInjections      { get; set; }
+    MaterialInjection[]       materialInjections       { get; set; }
+    SpriteInjection[]         spriteInjections         { get; set; }
+    TextureInjection[]        textureInjections        { get; set; }
+    ComponentInjection[]      componentInjections      { get; set; }
+    GameObjectListInjection[] gameObjectListInjections { get; set; }
 }

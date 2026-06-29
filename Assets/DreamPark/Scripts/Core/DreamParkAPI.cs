@@ -195,7 +195,7 @@ namespace DreamPark.API
 
                 bool success = req.result == UnityWebRequest.Result.Success || req.responseCode == 200;
                 if (success)
-                    Debug.Log($"✅ Uploaded successfully to Firebase: {url}");
+                    Debug.Log("✅ Upload completed successfully.");
                 else
                     Debug.LogError($"❌ Upload failed: {req.responseCode} - {req.error}");
 

@@ -29,6 +29,14 @@ public class EasyLua : EasyEvent, ILuaInjectable {
     public IntInjection[]       intInjections;
     public ScriptInjection[]    scriptInjections;
     public AudioClipInjection[] audioClipInjections;
+    public Vector3Injection[]        vector3Injections;
+    public ColorInjection[]          colorInjections;
+    public TransformInjection[]      transformInjections;
+    public MaterialInjection[]       materialInjections;
+    public SpriteInjection[]         spriteInjections;
+    public TextureInjection[]        textureInjections;
+    public ComponentInjection[]      componentInjections;
+    public GameObjectListInjection[] gameObjectListInjections;
 
     // ILuaInjectable
     TextAsset            ILuaInjectable.luaScript            { get => luaScript;            set => luaScript = value; }
@@ -39,18 +47,30 @@ public class EasyLua : EasyEvent, ILuaInjectable {
     IntInjection[]       ILuaInjectable.intInjections        { get => intInjections;        set => intInjections = value; }
     ScriptInjection[]    ILuaInjectable.scriptInjections     { get => scriptInjections;     set => scriptInjections = value; }
     AudioClipInjection[] ILuaInjectable.audioClipInjections  { get => audioClipInjections;  set => audioClipInjections = value; }
+    Vector3Injection[]        ILuaInjectable.vector3Injections        { get => vector3Injections;        set => vector3Injections = value; }
+    ColorInjection[]          ILuaInjectable.colorInjections          { get => colorInjections;          set => colorInjections = value; }
+    TransformInjection[]      ILuaInjectable.transformInjections      { get => transformInjections;      set => transformInjections = value; }
+    MaterialInjection[]       ILuaInjectable.materialInjections       { get => materialInjections;       set => materialInjections = value; }
+    SpriteInjection[]         ILuaInjectable.spriteInjections         { get => spriteInjections;         set => spriteInjections = value; }
+    TextureInjection[]        ILuaInjectable.textureInjections        { get => textureInjections;        set => textureInjections = value; }
+    ComponentInjection[]      ILuaInjectable.componentInjections      { get => componentInjections;      set => componentInjections = value; }
+    GameObjectListInjection[] ILuaInjectable.gameObjectListInjections { get => gameObjectListInjections; set => gameObjectListInjections = value; }
 
     public bool delayNextEvent = true;
 
     // Lua callbacks
     private Action luaStart;
     private Action luaOnDestroy;
-    private Action<Collision> luaOnCollisionEnter;
-    private Action<Collider> luaOnTriggerEnter;
+    private Action luaOnEnable;
+    private Action luaOnDisable;
 
     // update() called via LuaFunction so we can check return value
     // without needing Func<bool> in CSharpCallLua
     private LuaFunction luaUpdate;
+
+    // Optional Unity messages (physics, frame-timing, app lifecycle) are wired via
+    // opt-in relay components — added only when the script defines the function.
+    private readonly System.Collections.Generic.List<Behaviour> luaRelays = new System.Collections.Generic.List<Behaviour>();
 
     private LuaTable scriptScopeTable;
 
@@ -79,6 +99,41 @@ public class EasyLua : EasyEvent, ILuaInjectable {
         if (audioClipInjections != null)
             foreach (var inj in audioClipInjections)
                 scriptScopeTable.Set(inj.name, inj.value);
+        if (vector3Injections != null)
+            foreach (var inj in vector3Injections)
+                scriptScopeTable.Set(inj.name, inj.value);
+        if (colorInjections != null)
+            foreach (var inj in colorInjections)
+                scriptScopeTable.Set(inj.name, inj.value);
+        if (transformInjections != null)
+            foreach (var inj in transformInjections)
+                scriptScopeTable.Set(inj.name, inj.value);
+        if (materialInjections != null)
+            foreach (var inj in materialInjections)
+                scriptScopeTable.Set(inj.name, inj.value);
+        if (spriteInjections != null)
+            foreach (var inj in spriteInjections)
+                scriptScopeTable.Set(inj.name, inj.value);
+        if (textureInjections != null)
+            foreach (var inj in textureInjections)
+                scriptScopeTable.Set(inj.name, inj.value);
+        if (componentInjections != null)
+            foreach (var inj in componentInjections)
+                scriptScopeTable.Set(inj.name, inj.value);
+    }
+
+    // Collections pushed once in Awake (not in the per-frame InjectAll) to avoid
+    // allocating a fresh LuaTable every frame. 1-based so #list / ipairs work in Lua.
+    private void InjectCollections() {
+        if (scriptScopeTable == null || gameObjectListInjections == null) return;
+        foreach (var inj in gameObjectListInjections) {
+            using (LuaTable t = LuaBehaviour.luaEnv.NewTable()) {
+                if (inj.value != null)
+                    for (int i = 0; i < inj.value.Length; i++)
+                        t.Set(i + 1, inj.value[i]);
+                scriptScopeTable.Set(inj.name, t);
+            }
+        }
     }
 
     public override void Awake() {
@@ -95,16 +150,33 @@ public class EasyLua : EasyEvent, ILuaInjectable {
 
         scriptScopeTable.Set("self", this);
         InjectAll();
+        InjectCollections();
 
         LuaBehaviour.luaEnv.DoString(luaScript.text, luaScript.name, scriptScopeTable);
 
-        scriptScopeTable.Get("start",             out luaStart);
-        scriptScopeTable.Get("ondestroy",         out luaOnDestroy);
-        scriptScopeTable.Get("oncollisionenter",  out luaOnCollisionEnter);
-        scriptScopeTable.Get("ontriggerenter",    out luaOnTriggerEnter);
+        scriptScopeTable.Get("start",     out luaStart);
+        scriptScopeTable.Get("ondestroy", out luaOnDestroy);
+        scriptScopeTable.Get("onenable",  out luaOnEnable);
+        scriptScopeTable.Get("ondisable", out luaOnDisable);
 
         // Get update as LuaFunction so we can inspect its return value
         luaUpdate = scriptScopeTable.Get<LuaFunction>("update");
+
+        // Opt-in physics + frame-timing + app-lifecycle messages (incl. ontriggerenter /
+        // oncollisionenter, now routed through the shared relay system).
+        LuaMessageRelays.Bind(gameObject, scriptScopeTable, luaRelays);
+        // Match host state now in case this component starts disabled (OnEnable won't fire).
+        LuaMessageRelays.SetEnabled(luaRelays, isActiveAndEnabled);
+    }
+
+    private void OnEnable() {
+        LuaMessageRelays.SetEnabled(luaRelays, true);
+        luaOnEnable?.Invoke();
+    }
+
+    private void OnDisable() {
+        luaOnDisable?.Invoke();
+        LuaMessageRelays.SetEnabled(luaRelays, false);
     }
 
     // ── EasyEvent chain ────────────────────────────────────────────────
@@ -143,9 +215,6 @@ public class EasyLua : EasyEvent, ILuaInjectable {
             }
         }
     }
-
-    private void OnCollisionEnter(Collision c) => luaOnCollisionEnter?.Invoke(c);
-    private void OnTriggerEnter(Collider c)    => luaOnTriggerEnter?.Invoke(c);
 
     private void OnDestroy() {
         luaOnDestroy?.Invoke();

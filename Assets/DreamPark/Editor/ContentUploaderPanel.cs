@@ -1407,7 +1407,7 @@ namespace DreamPark {
             // they match, Unity's Caching layer keys bundles against
             // the same URL the editor download flow downloads them at,
             // so test build loads hit the cache instead of redownloading.
-            string testTargetUrl = $"{DreamParkAPI.devBaseUrl}/api/test-content/addressables/{testBuildId}";
+            string testTargetUrl = $"{DreamParkAPI.baseUrl}/api/test-content/addressables/{testBuildId}";
 
             int numPlatforms = (doBuildOsx ? 1 : 0) + (doBuildWindows ? 1 : 0);
             int currentStep = 0;
@@ -2062,7 +2062,7 @@ namespace DreamPark {
             // NOT /app/content (device, API-key gated). The uploader already
             // authenticates the creator's session against /api/content for
             // uploadUrl/commitUpload, so the baseline fetch belongs here too.
-            return $"{DreamParkAPI.devBaseUrl.TrimEnd('/')}/api/content/{escapedContentId}/bundle-manifest/{versionNumber}/{escapedPlatform}";
+            return $"{DreamParkAPI.baseUrl.TrimEnd('/')}/api/content/{escapedContentId}/bundle-manifest/{versionNumber}/{escapedPlatform}";
         }
 
         // Hard cap so a slow or unreachable endpoint can never freeze the Editor.
@@ -3493,7 +3493,7 @@ namespace DreamPark {
                 // does its own clean build with the real per-platform URLs.
                 BuildTarget activeTarget = EditorUserBuildSettings.activeBuildTarget;
                 BuildTargetGroup activeGroup = BuildPipeline.GetBuildTargetGroup(activeTarget);
-                string inspectUrl = $"{DreamParkAPI.devBaseUrl}/app/content/addressables/{contentId}/inspect/{activeTarget}";
+                string inspectUrl = $"{DreamParkAPI.baseUrl}/app/content/addressables/{contentId}/inspect/{activeTarget}";
                 reportStep($"Building {activeTarget} (no upload)...");
                 bool buildOk = BuildForTarget(activeTarget, activeGroup, inspectUrl, contentId);
 
@@ -3622,7 +3622,7 @@ namespace DreamPark {
                 else
                 {
                     string err = ExtractServerErrorMessage(response);
-                    Debug.LogError($"[DreamPark] Add collaborator failed (status={response?.statusCode}, raw={response?.rawText}): {err}");
+                    Debug.LogError($"[DreamPark] Add collaborator failed (status={response?.statusCode}): {err}");
                     EditorUtility.DisplayDialog("Could not add collaborator", err, "OK");
                 }
             });
@@ -3642,7 +3642,7 @@ namespace DreamPark {
                 else
                 {
                     string err = ExtractServerErrorMessage(response);
-                    Debug.LogError($"[DreamPark] Remove collaborator failed (status={response?.statusCode}, raw={response?.rawText}): {err}");
+                    Debug.LogError($"[DreamPark] Remove collaborator failed (status={response?.statusCode}): {err}");
                     EditorUtility.DisplayDialog("Could not remove collaborator", err, "OK");
                 }
             });
@@ -3694,7 +3694,7 @@ namespace DreamPark {
             {
                 if (success)
                 {
-                    Debug.Log("Login successful: " + response.json.Print());
+                    Debug.Log("Login successful.");
                 }
                 else
                 {
@@ -3709,7 +3709,7 @@ namespace DreamPark {
             {
                 if (success)
                 {
-                    Debug.Log("Logout successful: " + response.json.Print());
+                    Debug.Log("Logout successful.");
                 }
                 else
                 {
@@ -3749,7 +3749,7 @@ namespace DreamPark {
                         var versionNumber = contentDirectory != null && contentDirectory.HasField("content") && contentDirectory.GetField("content").HasField("versions")
                             ? contentDirectory.GetField("content").GetField("versions").list.Count + 1
                             : 1;
-                        var targetUrl = $"{DreamParkAPI.devBaseUrl}/app/content/addressables-v2/{contentId}/{versionNumber}";
+                        var targetUrl = $"{DreamParkAPI.baseUrl}/app/content/addressables-v2/{contentId}/{versionNumber}";
                         bool singlePlatformEstimate = pendingProductionEstimateOnly;
                         EstimateBuildTargetInfo estimateTargetInfo = default;
                         if (singlePlatformEstimate && !TryGetSinglePlatformEstimateTarget(out estimateTargetInfo))
@@ -4384,7 +4384,7 @@ namespace DreamPark {
 
                     if (exists)
                     {
-                        Debug.Log("Content found: " + response.json.Print());
+                        Debug.Log($"Content found for {contentId}.");
                         JSONObject metadataUpdate = new JSONObject();
                         metadataUpdate.AddField("contentName", contentName);
                         metadataUpdate.AddField("contentDescription", contentDescription);

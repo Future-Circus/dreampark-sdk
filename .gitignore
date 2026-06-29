@@ -33,6 +33,7 @@
 ExportedObj/
 .consulo/
 *.csproj
+!Tools/DreamBoxServer/DreamBoxRelay.csproj
 *.unityproj
 *.sln
 *.suo

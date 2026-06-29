@@ -5,6 +5,8 @@ using DreamBoxRelay;
 using LiteNetLib;
 using LiteNetLib.Utils;
 
+const int MaxDebugMessagePreviewChars = 512;
+
 // ── Environment check mode ────────────────────────────────────────
 if (args.Contains("--check"))
 {
@@ -169,7 +171,7 @@ listener.NetworkReceiveEvent += (peer, reader, channel, method) =>
     if (config.Debug)
     {
         string message = System.Text.Encoding.UTF8.GetString(bytes);
-        Console.WriteLine($"[relay] received from {peer}: {message}");
+        Console.WriteLine($"[relay] received from {peer}: {TruncateForLog(message)}");
     }
 
     var writer = new NetDataWriter();
@@ -240,4 +242,12 @@ void PrintStartupFailed(string error, string hint)
     Console.Error.WriteLine();
     Console.Error.WriteLine($"  Hint: {hint}");
     Console.Error.WriteLine();
+}
+
+string TruncateForLog(string value)
+{
+    if (string.IsNullOrEmpty(value) || value.Length <= MaxDebugMessagePreviewChars)
+        return value;
+
+    return value[..MaxDebugMessagePreviewChars] + $"... ({value.Length - MaxDebugMessagePreviewChars} chars truncated)";
 }

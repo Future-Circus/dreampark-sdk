@@ -528,6 +528,15 @@ public class DreamBoxClient : MonoBehaviour
     // the small JSON events this protocol uses.
     const int MaxIncomingMessageBytes = 16 * 1024;
     const int MaxIncomingMessageChars = 16 * 1024;
+    const int MaxLogPreviewChars = 512;
+
+    static string TruncateForLog(string value)
+    {
+        if (string.IsNullOrEmpty(value) || value.Length <= MaxLogPreviewChars)
+            return value;
+
+        return value.Substring(0, MaxLogPreviewChars) + $"... ({value.Length - MaxLogPreviewChars} chars truncated)";
+    }
 
     void HandleEvent(string json)
     {
@@ -564,7 +573,7 @@ public class DreamBoxClient : MonoBehaviour
         }
         else
         {
-            Debug.Log("[DreamBox] Unknown event: " + json);
+            Debug.Log("[DreamBox] Unknown event: " + TruncateForLog(json));
         }
     }
 }
