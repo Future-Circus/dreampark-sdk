@@ -90,6 +90,15 @@ namespace DreamPark.API
         public static bool   IsBound          => !string.IsNullOrEmpty(BoundUserId) || !string.IsNullOrEmpty(BoundDreamId);
         public static bool   IsLoaded         { get; private set; }
 
+        // ── Display identity (from the snapshot's `profile` block) ──────────
+        // The bound account's displayName / avatarUrl / email. Null for an
+        // unclaimed anonymous DreamID (IsAnonymous = true). Hydrated on every
+        // profile load, cleared on ClearIdentity. This is what UI like the
+        // DreamBand reads — NOT AuthAPI (which is the separate session path).
+        public static string DisplayName { get; private set; }
+        public static string AvatarUrl   { get; private set; }
+        public static bool   IsAnonymous { get; private set; }
+
         // Player wallet — populated from the snapshot's `dreamPoints` field
         // when bound to a user account. Always 0 for anonymous DreamID
         // bindings (the backend doesn't issue points to unclaimed identities).
@@ -133,7 +142,7 @@ namespace DreamPark.API
         /// <summary>Bind an identity (called by the core QR pairing handler).
         /// Sets Source = Headset — all reads/writes go through /app/profile/*
         /// which the backend authorizes by looking up the headset's binding.</summary>
-        public static void BindIdentity(string userId, string dreamId, string contentFilter = null)
+        public static void BindIdentity(string userId, string dreamId, string contentFilter = null, JSONObject initialSnapshot = null)
         {
             Source           = ProfileSource.Headset;
             BoundUserId      = string.IsNullOrEmpty(userId) ? null : userId;
@@ -141,7 +150,22 @@ namespace DreamPark.API
             ContentFilter    = string.IsNullOrEmpty(contentFilter) ? null : contentFilter;
             IsLoaded         = false;
             try { OnIdentityBound?.Invoke(); } catch (Exception e) { Debug.LogWarning($"[ProfileAPI] OnIdentityBound subscriber threw: {e}"); }
-            FetchProfile(ContentFilter, null);
+
+            // If the caller already holds the authoritative snapshot (the
+            // /app/profile/claim response carries identity + profile + inventory),
+            // apply it DIRECTLY. It's bound to the userId we just paired and always
+            // includes displayName. A second GET /app/profile re-resolves the binding
+            // server-side from the headset doc, which can land on the anonymous
+            // DreamID (avatar but NO displayName) — exactly the "name shows Player"
+            // bug. Fetch only when we have no snapshot (restore/boot paths).
+            if (initialSnapshot != null)
+            {
+                ApplyProfileSnapshot(HydrateProfileSnapshot(initialSnapshot), null);
+            }
+            else
+            {
+                FetchProfile(ContentFilter, null);
+            }
         }
 
         /// <summary>
@@ -240,6 +264,9 @@ namespace DreamPark.API
             BoundDreamId = null;
             _previewKey = null;
             DreamPoints = 0;
+            DisplayName = null;
+            AvatarUrl   = null;
+            IsAnonymous = false;
             IsLoaded = false;
             _items.Clear();
             _achievements.Clear();
@@ -332,6 +359,24 @@ namespace DreamPark.API
             _badges.Clear();       _badges.AddRange(snapshot.badges);
             int prevPoints = DreamPoints;
             DreamPoints = snapshot.dreamPoints;
+
+            // Identity guard: a later fetch can resolve to the anonymous DreamID
+            // (which has an avatar but NO displayName/handle/email). Applying it
+            // unconditionally would wipe the real signed-in identity we already
+            // loaded — the "DreamBand reverts to Player" bug. So skip the identity
+            // overwrite when the incoming snapshot is anonymous AND we already hold
+            // a real display identity. (Inventory / points / badges still update.)
+            bool haveRealIdentity = !string.IsNullOrEmpty(DisplayName);
+            if (!(snapshot.isAnonymous && haveRealIdentity))
+            {
+                DisplayName = snapshot.displayName;
+                AvatarUrl   = snapshot.avatarUrl;
+                IsAnonymous = snapshot.isAnonymous;
+            }
+            else
+            {
+                Debug.Log($"[ProfileAPI] Ignored anonymous snapshot — kept identity displayName='{DisplayName}'.");
+            }
             IsLoaded = true;
             try { OnProfileLoaded?.Invoke(); } catch (Exception e) { Debug.LogWarning($"[ProfileAPI] OnProfileLoaded subscriber threw: {e}"); }
             if (prevPoints != DreamPoints) {
@@ -714,6 +759,9 @@ namespace DreamPark.API
         {
             public string identityKind;
             public string identityId;
+            public string displayName;
+            public string avatarUrl;
+            public bool   isAnonymous;
             public int    dreamPoints;
             public List<ProfileItem>        items        = new List<ProfileItem>();
             public List<ProfileAchievement> achievements = new List<ProfileAchievement>();
@@ -730,6 +778,18 @@ namespace DreamPark.API
             {
                 b.identityKind = identity.GetField("kind")?.stringValue;
                 b.identityId   = identity.GetField("id")?.stringValue;
+            }
+
+            // The bound account's display identity (displayName/avatarUrl/email).
+            // Backend buildProfileSnapshot returns this on /app/profile, /claim,
+            // and /api/pairing/profile-self. Null fields = anonymous DreamID.
+            var profile = json.GetField("profile");
+            Debug.Log($"[ProfileAPI] hydrate (baseUrl={DreamParkAPI.baseUrl}) raw profile block = {(profile != null ? profile.Print() : "NULL")}");
+            if (profile != null)
+            {
+                b.displayName = profile.GetField("displayName")?.stringValue;
+                b.avatarUrl   = profile.GetField("avatarUrl")?.stringValue;
+                b.isAnonymous = profile.GetField("isAnonymous")?.boolValue ?? (b.identityKind == "dreamid");
             }
 
             // DreamPoints balance — 0 for anonymous DreamID bindings.
