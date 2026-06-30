@@ -35,6 +35,7 @@ namespace DreamPark.Easy
         [ShowIf("moveDuration", MoveDuration.SPEED)] public float speed = 1f;
         [ShowIf("moveDuration", MoveDuration.TIME)] public float time = 1f;
         [ShowIf("moveType", MoveType.TARGET)] public Transform target;
+        [ShowIf("moveType", MoveType.TARGET)] public bool clearTargetAfterMove = false; // Reset target to null when the move finishes so the next arg0 (e.g. from EasyPicker) is picked up
         [ShowIf("moveType", MoveType.GET_TARGET)] public Func<Transform> getTarget;
         [ShowIf("moveType", MoveType.FLOOR)] public float raycastStartHeight = 1f;
         [ShowIf("moveType", MoveType.FLOOR)] public float raycastDistance = 20f;
@@ -57,6 +58,10 @@ namespace DreamPark.Easy
         private void CompleteMove(bool invokeNextEvent)
         {
             OnEventDisable();
+            if (clearTargetAfterMove && (moveType == MoveType.TARGET || moveType == MoveType.GET_TARGET))
+            {
+                target = null;
+            }
             if (invokeNextEvent)
             {
                 onEvent?.Invoke(null);
