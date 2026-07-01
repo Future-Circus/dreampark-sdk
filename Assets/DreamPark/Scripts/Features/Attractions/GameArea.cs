@@ -36,6 +36,8 @@ namespace DreamPark {
 
         // ---- Instance fields ----
         [ReadOnly] public string gameId;
+        [ReadOnly] public string resourceName;
+
         public int priority = 0;
         [ReadOnly] public bool isPlaying = false;
 

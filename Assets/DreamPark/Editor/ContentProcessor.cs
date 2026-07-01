@@ -562,6 +562,29 @@ namespace DreamPark {
                             }
                         }
 
+                        // Stamp the per-ATTRACTION resource key (the addressable
+                        // address) onto the zone + prop, mirroring how gameId is
+                        // assigned above. This is what lets the headset attribute
+                        // revenue to the individual attraction, not just the title.
+                        string attractionAddress = ResolveAttractionAddress(root, gameId, path);
+                        if (!string.IsNullOrEmpty(attractionAddress))
+                        {
+                            var zone = root.GetComponent<GameArea>();
+                            if (zone != null && !string.Equals(zone.resourceName, attractionAddress, StringComparison.Ordinal))
+                            {
+                                zone.resourceName = attractionAddress;
+                                EditorUtility.SetDirty(zone);
+                                any = true;
+                            }
+                            var prop = root.GetComponent<PropTemplate>();
+                            if (prop != null && !string.Equals(prop.resourceName, attractionAddress, StringComparison.Ordinal))
+                            {
+                                prop.resourceName = attractionAddress;
+                                EditorUtility.SetDirty(prop);
+                                any = true;
+                            }
+                        }
+
                         if (any)
                         {
                             // Save *only if* all components resolved
@@ -578,6 +601,23 @@ namespace DreamPark {
 
             if (modified > 0)
                 Debug.Log($"🧩 Updated {modified} prefab(s) for gameId={gameId} (safe mode).");
+        }
+
+        // The addressable address DreamPark assigns to an attraction/prop prefab —
+        // identical to the address computed in ApplyGameIdLabelToContentEntries, so
+        // the value stamped onto GameArea/PropTemplate matches the backend
+        // attractions catalog exactly. Returns null for prefabs that are neither a
+        // level/attraction nor a prop.
+        private static string ResolveAttractionAddress(GameObject root, string gameId, string assetPath)
+        {
+            string name = Path.GetFileNameWithoutExtension(assetPath);
+            var level = root.GetComponent<LevelTemplate>();   // AttractionTemplate : LevelTemplate
+            if (level != null)
+                return $"{gameId}/Levels/{level.size}/{name}";
+            var prop = root.GetComponent<PropTemplate>();
+            if (prop != null)
+                return $"{gameId}/Props/{prop.category}/{name}";
+            return null;
         }
 
         // Particle systems with autoRandomSeed make AssetBundle builds
@@ -1198,98 +1238,22 @@ namespace DreamPark {
                     continue;
                 }
 
-                // Render high-quality preview with true transparency
-                Texture2D preview = PrefabPreviewRenderer.RenderPreview(prefab);
+                // Render high-quality preview with true transparency,
+                // honoring any per-prefab override saved from the Preview
+                // Editor. Prefabs with no override render with the default
+                // framing (PreviewSettings.Default) — byte-identical to the
+                // historical output, so untouched previews don't churn.
+                string prefabName = Path.GetFileNameWithoutExtension(prefabPath);
+                PreviewSettings settings = PreviewMetadataStore.GetOrDefault(contentId, prefabName);
+                Texture2D preview = PrefabPreviewRenderer.RenderPreview(prefab, settings);
                 if (preview == null)
                 {
                     Debug.LogWarning($"⚠️ Could not generate preview for {prefabPath}");
                     continue;
                 }
 
-                // GUID preservation. Unity's v2 asset pipeline regenerates
-                // the .meta — and the GUID — when a file's content changes
-                // substantially between imports. That breaks every prefab,
-                // material, or addressable group that references the
-                // preview by GUID. Stashing the whole .meta and writing it
-                // back wholesale would protect the GUID but throw out the
-                // updated importer settings we configure below, so instead
-                // we extract ONLY the `guid:` line from the original .meta
-                // before the rewrite, let Unity emit a fresh .meta with the
-                // current importer settings, and then surgically restore
-                // the GUID line at the end. First-time generation finds
-                // no existing .meta and gets a fresh GUID — that's fine,
-                // every subsequent regen will preserve it.
-                string previewMetaPath = previewPath + ".meta";
-                string stashedGuidLine = File.Exists(previewMetaPath)
-                    ? ExtractGuidLine(File.ReadAllText(previewMetaPath))
-                    : null;
-
-                byte[] png = preview.EncodeToPNG();
-                File.WriteAllBytes(previewPath, png);
-
-                // Import and configure the texture
-                AssetDatabase.ImportAsset(previewPath, ImportAssetOptions.ForceSynchronousImport);
-
-                var importer = AssetImporter.GetAtPath(previewPath) as TextureImporter;
-                if (importer != null)
-                {
-                    // These are UI thumbnails for the Park Assets grid —
-                    // they're displayed at a fixed small size in the
-                    // panel and never sampled by gameplay. So:
-                    //  - No mipmaps (UI doesn't minify).
-                    //  - Not readable (no GPU readback needed; halves
-                    //    memory because Unity drops the CPU-side copy).
-                    //  - Compressed + crunched (~5-10× smaller on disk
-                    //    than the Uncompressed default this code shipped
-                    //    with originally; ASTC/BC compression for runtime).
-                    //  - Cap at 512 — that's what PrefabPreviewRenderer
-                    //    outputs, so no reason to leave maxTextureSize
-                    //    at the 1024 default.
-                    importer.alphaIsTransparency = true;
-                    importer.sRGBTexture = true;
-                    importer.isReadable = false;
-                    importer.mipmapEnabled = false;
-                    importer.maxTextureSize = 512;
-                    importer.textureCompression = TextureImporterCompression.Compressed;
-                    importer.crunchedCompression = true;
-                    importer.compressionQuality = 50;
-
-                    // Mirror the settings onto the default platform entry.
-                    // Without this, Unity's per-platform overrides can
-                    // still build the default-platform variant uncompressed
-                    // (which is exactly what the old code was producing —
-                    // textureCompression: 0 on the default platform even
-                    // though Standalone/Android/iOS were Compressed).
-                    var defaultSettings = importer.GetDefaultPlatformTextureSettings();
-                    defaultSettings.maxTextureSize = importer.maxTextureSize;
-                    defaultSettings.textureCompression = importer.textureCompression;
-                    defaultSettings.crunchedCompression = importer.crunchedCompression;
-                    defaultSettings.compressionQuality = importer.compressionQuality;
-                    importer.SetPlatformTextureSettings(defaultSettings);
-
-                    importer.SaveAndReimport();
-                }
-
-                // Surgical GUID restore. SaveAndReimport above has just
-                // rewritten the .meta with the configured importer
-                // settings — possibly with a freshly-minted GUID. We
-                // swap ONLY the `guid:` line back to the stashed value
-                // so the asset identity is preserved while the new
-                // importer settings stick. Then ForceUpdate causes
-                // Unity to re-read the .meta from disk and update its
-                // in-memory path→GUID mapping; without this, Unity's
-                // cache would still think the asset has the fresh GUID
-                // until the next domain reload.
-                if (stashedGuidLine != null && File.Exists(previewMetaPath))
-                {
-                    string currentMeta = File.ReadAllText(previewMetaPath);
-                    string currentGuidLine = ExtractGuidLine(currentMeta);
-                    if (currentGuidLine != null && currentGuidLine != stashedGuidLine)
-                    {
-                        File.WriteAllText(previewMetaPath, ReplaceGuidLine(currentMeta, stashedGuidLine));
-                        AssetDatabase.ImportAsset(previewPath, ImportAssetOptions.ForceUpdate);
-                    }
-                }
+                WritePreviewPng(previewPath, preview);
+                UnityEngine.Object.DestroyImmediate(preview);
 
                 generated++;
                 Debug.Log($"🖼️ Generated preview: {previewPath}");
@@ -1297,6 +1261,147 @@ namespace DreamPark {
 
             AssetDatabase.Refresh();
             Debug.Log($"✅ Preview generation complete. Generated {generated}, skipped {skipped} (already up-to-date).");
+        }
+
+        // Regenerates the preview PNG for a single prefab using whatever
+        // PreviewSettings are stored for it (or the default framing if none).
+        // This is what the Preview Editor calls on Save so the on-disk PNG,
+        // the Content Uploader grid, and the next batch all agree. Returns
+        // true on success. Renders and writes exactly like the batch loop —
+        // same importer settings, same GUID preservation.
+        public static bool RegeneratePreviewForPrefab(string contentId, string prefabPath)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(contentId) || string.IsNullOrEmpty(prefabPath))
+                    return false;
+
+                var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+                if (prefab == null)
+                {
+                    Debug.LogWarning($"⚠️ RegeneratePreviewForPrefab: no prefab at {prefabPath}");
+                    return false;
+                }
+
+                string prefabName = Path.GetFileNameWithoutExtension(prefabPath);
+                string previewPath = $"Assets/Content/{contentId}/Previews/{prefabName}.png";
+
+                string previewDir = Path.GetDirectoryName(previewPath);
+                if (!Directory.Exists(previewDir))
+                    Directory.CreateDirectory(previewDir);
+
+                PreviewSettings settings = PreviewMetadataStore.GetOrDefault(contentId, prefabName);
+                Texture2D preview = PrefabPreviewRenderer.RenderPreview(prefab, settings);
+                if (preview == null)
+                {
+                    Debug.LogWarning($"⚠️ Could not generate preview for {prefabPath}");
+                    return false;
+                }
+
+                WritePreviewPng(previewPath, preview);
+                UnityEngine.Object.DestroyImmediate(preview);
+
+                AssetDatabase.Refresh();
+                Debug.Log($"🖼️ Regenerated preview: {previewPath}");
+                return true;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[ContentProcessor] RegeneratePreviewForPrefab failed for {prefabPath}: {e.Message}\n{e.StackTrace}");
+                return false;
+            }
+        }
+
+        // Encodes a rendered preview to PNG at previewPath, applies the
+        // thumbnail importer settings, and preserves the asset GUID across
+        // the reimport. Extracted verbatim from the batch loop so the single-
+        // prefab and full-batch paths can never drift apart.
+        private static void WritePreviewPng(string previewPath, Texture2D preview)
+        {
+            // GUID preservation. Unity's v2 asset pipeline regenerates
+            // the .meta — and the GUID — when a file's content changes
+            // substantially between imports. That breaks every prefab,
+            // material, or addressable group that references the
+            // preview by GUID. Stashing the whole .meta and writing it
+            // back wholesale would protect the GUID but throw out the
+            // updated importer settings we configure below, so instead
+            // we extract ONLY the `guid:` line from the original .meta
+            // before the rewrite, let Unity emit a fresh .meta with the
+            // current importer settings, and then surgically restore
+            // the GUID line at the end. First-time generation finds
+            // no existing .meta and gets a fresh GUID — that's fine,
+            // every subsequent regen will preserve it.
+            string previewMetaPath = previewPath + ".meta";
+            string stashedGuidLine = File.Exists(previewMetaPath)
+                ? ExtractGuidLine(File.ReadAllText(previewMetaPath))
+                : null;
+
+            byte[] png = preview.EncodeToPNG();
+            File.WriteAllBytes(previewPath, png);
+
+            // Import and configure the texture
+            AssetDatabase.ImportAsset(previewPath, ImportAssetOptions.ForceSynchronousImport);
+
+            var importer = AssetImporter.GetAtPath(previewPath) as TextureImporter;
+            if (importer != null)
+            {
+                // These are UI thumbnails for the Park Assets grid —
+                // they're displayed at a fixed small size in the
+                // panel and never sampled by gameplay. So:
+                //  - No mipmaps (UI doesn't minify).
+                //  - Not readable (no GPU readback needed; halves
+                //    memory because Unity drops the CPU-side copy).
+                //  - Compressed + crunched (~5-10× smaller on disk
+                //    than the Uncompressed default this code shipped
+                //    with originally; ASTC/BC compression for runtime).
+                //  - Cap at 512 — that's what PrefabPreviewRenderer
+                //    outputs, so no reason to leave maxTextureSize
+                //    at the 1024 default.
+                importer.alphaIsTransparency = true;
+                importer.sRGBTexture = true;
+                importer.isReadable = false;
+                importer.mipmapEnabled = false;
+                importer.maxTextureSize = 512;
+                importer.textureCompression = TextureImporterCompression.Compressed;
+                importer.crunchedCompression = true;
+                importer.compressionQuality = 50;
+
+                // Mirror the settings onto the default platform entry.
+                // Without this, Unity's per-platform overrides can
+                // still build the default-platform variant uncompressed
+                // (which is exactly what the old code was producing —
+                // textureCompression: 0 on the default platform even
+                // though Standalone/Android/iOS were Compressed).
+                var defaultSettings = importer.GetDefaultPlatformTextureSettings();
+                defaultSettings.maxTextureSize = importer.maxTextureSize;
+                defaultSettings.textureCompression = importer.textureCompression;
+                defaultSettings.crunchedCompression = importer.crunchedCompression;
+                defaultSettings.compressionQuality = importer.compressionQuality;
+                importer.SetPlatformTextureSettings(defaultSettings);
+
+                importer.SaveAndReimport();
+            }
+
+            // Surgical GUID restore. SaveAndReimport above has just
+            // rewritten the .meta with the configured importer
+            // settings — possibly with a freshly-minted GUID. We
+            // swap ONLY the `guid:` line back to the stashed value
+            // so the asset identity is preserved while the new
+            // importer settings stick. Then ForceUpdate causes
+            // Unity to re-read the .meta from disk and update its
+            // in-memory path→GUID mapping; without this, Unity's
+            // cache would still think the asset has the fresh GUID
+            // until the next domain reload.
+            if (stashedGuidLine != null && File.Exists(previewMetaPath))
+            {
+                string currentMeta = File.ReadAllText(previewMetaPath);
+                string currentGuidLine = ExtractGuidLine(currentMeta);
+                if (currentGuidLine != null && currentGuidLine != stashedGuidLine)
+                {
+                    File.WriteAllText(previewMetaPath, ReplaceGuidLine(currentMeta, stashedGuidLine));
+                    AssetDatabase.ImportAsset(previewPath, ImportAssetOptions.ForceUpdate);
+                }
+            }
         }
 
         // Returns true if the preview PNG at previewPath is already current
