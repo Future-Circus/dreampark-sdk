@@ -37,3 +37,26 @@ The ~540 files in Assets/DreamPark/ must match dreampark-core exactly. `#if DREA
 3. Creator adds game content, Lua scripts, and prefabs to Assets/Content/{GameName}/.
 4. All gameplay logic is Lua-first via LuaBehaviour.
 5. Built Addressable prefabs are deployed to DreamPark servers.
+
+## Multiplayer (LAN peer-host + DreamBox relay)
+Full spec: dreampark-core `Docs/LAN-PeerHost-Spec.md`. Stack lives in `Assets/DreamPark/Scripts/Features/Net/` (SDK-synced).
+
+**Model**: one relay per session, two interchangeable host types — DreamBox kiosk (external) or an elected headset (`PeerRelayServer` in-process). Identical wire protocol; the host headset connects to its own relay via 127.0.0.1, so gameplay/Lua can never tell which host type it's on. The relay is a dumb pipe: rebroadcasts every message verbatim to all OTHER peers (never echoes the sender), ReliableOrdered, 16 KB cap, 60 msg/s per-peer rate cap, MaxPeers 16 (soft, tunable).
+
+**Enabling**: add `NetSessionArbiter` next to `DreamBoxClient` — presence is the on-switch (DreamBoxClient defers discovery to it). The arbiter owns the ladder: DreamBox beacon → join kiosk (always outranks, preempts peer sessions) → peer beacon → join → 3–5 s silence → self-elect host. Host loss (doff/battery) → coordinator-free re-election in ~1–3 s (sorted hostIds, staggered timers, lowest wins ties). Session state is ephemeral by design — nothing migrates on host change; design content as last-write-wins cosmetics.
+
+**Scoping**: beacons carry `parkId` (sessions never merge across parks; set automatically in core via ParkAnchor.LoadPark, or on the arbiter Inspector) and `ch` — `"sdk"` in SDK builds, `"prod"` in core builds (from the `DREAMPARKCORE` define). SDK test sessions can NEVER collide with production sessions on shared Wi-Fi; set `channelOverride` on the arbiter to cross intentionally. Kiosk/dev-relay beacons are channel-exempt.
+
+**NetId identity (critical)**: default id = hierarchy-path hash (sibling indices + names to scene root). Prefab-instantiated attraction content is safe (identical hierarchy on all clients by construction). Scene-placed/root-level objects MUST set `explicitId` on the NetId component — device builds order scene roots differently than the Editor, silently changing the hash. Symptom of a mismatch: works Editor↔Editor but not Editor↔device; receiver logs `[NetRegistry] Event for UNREGISTERED NetId`.
+
+**Writing Lua multiplayer scripts** (reference sample: `Assets/Content/YOUR_GAME_HERE/Scripts/lua_touch_color_switch.lua.txt`):
+- `onnet(payload)` at file scope is auto-wired to the sibling NetId's events; `net_send(eventType, payloadJson)` is injected — both require a `NetId` on the SAME GameObject as the LuaBehaviour, and net_send additionally requires DreamBoxClient to exist at Awake. Always nil-guard: `if net_send then net_send(...) end` (solo play must work).
+- `onnet` receives the FULL wire JSON `{"type":"...","payload":{"netId":N,...}}` — use the global `json_parse(payload)` and read `t.payload.<field>`.
+- The relay never echoes your own message back: apply changes locally when sending (optimistic apply).
+- One owner per networked visual property: never mix a MaterialPropertyBlock writer (e.g. TestNetObject) and a `renderer.material` writer (Lua) on the same object — the MPB silently masks material changes.
+
+**Debugging**: tick `Verbose Net Logs` on DreamBoxClient (or set `NetLog.Verbose = true`) → per-beacon discovery, `RECV` previews, relay fan-out, NetId registrations. Always-on warnings and their meanings: `UNREGISTERED NetId` = id mismatch between builds; `NO subscribers` = receiving script missing on that client's object; `Ignoring peer beacon` = channel/park/protocol-version filter (reason included). Healthy session signature: one side `→ Hosting`, other `→ ClientPeer`, host shows `Peer connected … (2/16)` — a host stuck at 1/16 is broadcasting to nobody.
+
+**Platform**: hosting compiles on Android (Quest) + Editor; iOS is client-only in v1. On-device discovery REQUIRES `CHANGE_WIFI_MULTICAST_STATE` (+ `WAKE_LOCK` for the host's Wi-Fi lock) — provided in `Assets/Plugins/Android/AndroidManifest.xml`; loopback bypasses the Wi-Fi broadcast filter, so localhost tests pass without it (deceptively). UDP broadcast is lossy on phone hotspots — the arbiter treats the connection, not beacons, as liveness ground truth; never re-add beacon-silence-kills-connected-session logic.
+
+**Namespace gotcha**: dreampark-core declares `class DreamPark` INSIDE `namespace DreamPark`. In SDK-synced files, `DreamPark.X` inside a `namespace DreamPark` scope resolves to that class in core and fails to compile. Use unqualified sibling references, or `global::DreamPark.X` from global-namespace files.
