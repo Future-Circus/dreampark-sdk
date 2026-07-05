@@ -86,6 +86,13 @@ namespace DreamPark.Editor
             client.connectionKey = "dreambox";
             client.connectOnStart = false;
 
+            // Peer-host arbiter (Docs/LAN-PeerHost-Spec.md): with this attached the
+            // scene auto-forms a LAN session — joins a DreamBox/dev relay if one is
+            // beaconing, otherwise elects a host (Editor and Quest both qualify).
+            // Untick allowHosting in the Inspector to force this instance to be a
+            // client (e.g. make the Quest host while the Editor observes).
+            clientGO.AddComponent<DreamPark.NetSessionArbiter>();
+
             // UI.
             BuildUI(client, testObj);
 

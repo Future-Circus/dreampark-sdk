@@ -925,6 +925,23 @@ namespace DreamPark {
             }
             GUI.enabled = true;
 
+            // ─── Re-upload Logo ──────────────────────────────────
+            // Pushes the selected Logo texture straight to the backend
+            // (POST /api/content/:id/logo), refreshing the web-renderable
+            // logoImageUrl without publishing a new version. The bundled
+            // logoAddress the VR client uses is unaffected.
+            GUILayout.Space(6);
+            GUI.enabled = !isUploading && !string.IsNullOrEmpty(contentId) && logoTexture != null;
+            if (GUILayout.Button(new GUIContent(
+                "Re-upload Logo",
+                "Uploads the selected Logo image directly to DreamPark so web, iOS, and admin " +
+                "surfaces show the latest logo — no version upload needed."),
+                GUILayout.Height(22)))
+            {
+                UploadLogoImage(contentId, interactive: true);
+            }
+            GUI.enabled = true;
+
             // ─── Test Channel upload ─────────────────────────────
             // Admin / dreampark.app teammates only. Pushes the bundles
             // currently sitting in ServerData/ to the Test Channel in
@@ -974,6 +991,110 @@ namespace DreamPark {
             public string resourceName;
             public string category;
             public byte[] previewBytes;
+        }
+
+        // ─── Logo image upload (direct to backend) ─────────────────────
+        // The logo has always shipped inside the Unity bundle (logoAddress —
+        // that's what the VR client loads and it is untouched here). This
+        // ALSO pushes the raw image file to the backend
+        // (POST /api/content/:id/logo → content.logoImageUrl) so iOS, web,
+        // and admin render the logo without touching Unity bundles — same
+        // pattern as the attraction preview uploads. Runs fire-and-forget
+        // inside the normal upload flow; manual repair lives in
+        // Troubleshooting → "Re-upload Logo".
+        private byte[] ReadLogoImageBytes(out string fileName, out string mimeType)
+        {
+            fileName = null; mimeType = null;
+            if (logoTexture == null) return null;
+
+            // Prefer the source asset file on disk — original bytes, no
+            // Read/Write import requirement.
+            string path = AssetDatabase.GetAssetPath(logoTexture);
+            if (!string.IsNullOrEmpty(path) && File.Exists(path))
+            {
+                string ext = Path.GetExtension(path).ToLowerInvariant();
+                if (ext == ".png") mimeType = "image/png";
+                else if (ext == ".jpg" || ext == ".jpeg") mimeType = "image/jpeg";
+                else if (ext == ".webp") mimeType = "image/webp";
+                if (mimeType != null)
+                {
+                    try
+                    {
+                        fileName = Path.GetFileName(path);
+                        return File.ReadAllBytes(path);
+                    }
+                    catch (Exception e) { Debug.LogWarning("[Logo] source read failed: " + e.Message); }
+                }
+            }
+
+            // Fallback (PSD/TGA sources, unreadable textures): blit to a
+            // readable copy and encode PNG.
+            try
+            {
+                RenderTexture rt = RenderTexture.GetTemporary(logoTexture.width, logoTexture.height, 0, RenderTextureFormat.ARGB32);
+                Graphics.Blit(logoTexture, rt);
+                RenderTexture prev = RenderTexture.active;
+                RenderTexture.active = rt;
+                Texture2D readable = new Texture2D(logoTexture.width, logoTexture.height, TextureFormat.RGBA32, false);
+                readable.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
+                readable.Apply();
+                RenderTexture.active = prev;
+                RenderTexture.ReleaseTemporary(rt);
+                byte[] png = readable.EncodeToPNG();
+                UnityEngine.Object.DestroyImmediate(readable);
+                fileName = logoTexture.name + ".png";
+                mimeType = "image/png";
+                return png;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[Logo] PNG encode fallback failed: " + e.Message);
+                return null;
+            }
+        }
+
+        private void UploadLogoImage(string idForUpload, bool interactive)
+        {
+            string auth = AuthAPI.GetUserAuth();
+            if (string.IsNullOrEmpty(auth))
+            {
+                if (interactive) EditorUtility.DisplayDialog("Not signed in", "Sign in to DreamPark before uploading the logo.", "OK");
+                return;
+            }
+            if (logoTexture == null)
+            {
+                if (interactive) EditorUtility.DisplayDialog("No logo selected", "Pick a Logo texture in the uploader first.", "OK");
+                return;
+            }
+            string fileName, mimeType;
+            byte[] bytes = ReadLogoImageBytes(out fileName, out mimeType);
+            if (bytes == null || bytes.Length == 0)
+            {
+                if (interactive) EditorUtility.DisplayDialog("Logo unreadable", "Couldn't read the logo image bytes from the selected texture.", "OK");
+                return;
+            }
+
+            string endpoint = "/api/content/" + Uri.EscapeDataString(idForUpload) + "/logo";
+            UploadContentData image = new UploadContentData(fileName, bytes);
+            image.mimeType = mimeType;
+            List<KeyValuePair<string, UploadContentData>> files = new List<KeyValuePair<string, UploadContentData>>
+            {
+                new KeyValuePair<string, UploadContentData>("image", image)
+            };
+            DreamParkAPI.POST(endpoint, auth, files, (s, resp) =>
+            {
+                if (s)
+                {
+                    Debug.Log("[Logo] logo image uploaded to backend for " + idForUpload);
+                    if (interactive) EditorUtility.DisplayDialog("Logo uploaded", "Logo pushed to DreamPark — web, iOS, and admin surfaces now use it.", "OK");
+                }
+                else
+                {
+                    string err = (resp != null && !string.IsNullOrEmpty(resp.error)) ? resp.error : "upload failed";
+                    Debug.LogWarning("[Logo] backend logo upload failed: " + err);
+                    if (interactive) EditorUtility.DisplayDialog("Logo upload failed", err, "OK");
+                }
+            });
         }
 
         private IEnumerator ForceUploadAllPreviewsRoutine(string idForUpload)
@@ -4594,6 +4715,11 @@ namespace DreamPark {
                                 isUploading = false;
                                 return;
                             }
+                            // Fire-and-forget: push the raw logo image to the
+                            // backend alongside the metadata (never blocks or
+                            // fails the upload — repair via Troubleshooting).
+                            try { UploadLogoImage(contentId, interactive: false); }
+                            catch (Exception e) { Debug.LogWarning("[Logo] upload skipped: " + e.Message); }
                             continueAfterSchemaSync();
                         });
                         return;
@@ -4616,6 +4742,10 @@ namespace DreamPark {
                             if (success)
                             {
                                 Debug.Log($"✅ Content '{contentName}' uploaded successfully!");
+                                // First upload is exactly when the logo should
+                                // land on the backend too (fire-and-forget).
+                                try { UploadLogoImage(contentId, interactive: false); }
+                                catch (Exception e) { Debug.LogWarning("[Logo] upload skipped: " + e.Message); }
                                 SetUploadStatus(
                                     "Creating release record",
                                     "Project created. Moving straight into the first release build.",

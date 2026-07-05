@@ -21,10 +21,26 @@ public class DiscoveryListener : IDisposable
         public int port;
         public string key;
         public string dreamboxId;
+
+        // Peer-host extension fields (absent on kiosk beacons — see
+        // Docs/LAN-PeerHost-Spec.md §3.2). Old beacons parse fine: these stay "".
+        public string hostType;   // "" / "dreambox" = kiosk, "peer" = elected headset
+        public string hostId;     // stable device id of the peer host
+        public string parkId;     // session scope — two parks on one LAN don't merge
+        public int seq;           // beacon sequence number
+        public int v;             // peer protocol version (0 = pre-versioning/kiosk)
+        public string channel;    // "prod" (core builds) / "sdk" (creator projects) — peer sessions don't cross channels
     }
 
     /// <summary>Fired on background thread when a valid beacon is received.</summary>
     public event Action<BeaconInfo> OnRelayDiscovered;
+
+    /// <summary>
+    /// Fired on background thread for EVERY valid dream-pub beacon, regardless of
+    /// dreamboxIdFilter. Used by NetSessionArbiter to rank hosts and detect
+    /// staleness. OnRelayDiscovered keeps its original filtered semantics.
+    /// </summary>
+    public event Action<BeaconInfo> OnBeacon;
 
     /// <summary>
     /// When set, only beacons whose dreamboxId matches this value will fire OnRelayDiscovered.
@@ -43,6 +59,13 @@ public class DiscoveryListener : IDisposable
         if (_running) return;
 
         _running = true;
+
+        // Android/Quest drops broadcast packets at the Wi-Fi driver unless a
+        // MulticastLock is held (loopback bypasses this, which is why localhost
+        // testing worked). No-op on other platforms. Requires
+        // CHANGE_WIFI_MULTICAST_STATE in the manifest.
+        DreamPark.NetPlatform.AcquireMulticastLock();
+
         _udp = new UdpClient();
         _udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
         _udp.Client.Bind(new IPEndPoint(IPAddress.Any, BeaconPort));
@@ -59,10 +82,12 @@ public class DiscoveryListener : IDisposable
 
     public void Stop()
     {
+        if (!_running && _udp == null) return;
         _running = false;
         try { _udp?.Close(); } catch { }
         _udp = null;
         _listenThread = null;
+        DreamPark.NetPlatform.ReleaseMulticastLock();
     }
 
     public void Dispose() => Stop();
@@ -88,6 +113,12 @@ public class DiscoveryListener : IDisposable
                 var portField = obj.GetField("port");
                 var keyField = obj.GetField("key");
                 var idField = obj.GetField("dreamboxId");
+                var hostTypeField = obj.GetField("hostType");
+                var hostIdField = obj.GetField("hostId");
+                var parkIdField = obj.GetField("parkId");
+                var seqField = obj.GetField("seq");
+                var vField = obj.GetField("v");
+                var channelField = obj.GetField("ch");
 
                 if (hostField == null || portField == null) continue;
 
@@ -96,8 +127,17 @@ public class DiscoveryListener : IDisposable
                     host = hostField.stringValue,
                     port = portField.intValue,
                     key = keyField != null ? keyField.stringValue : "",
-                    dreamboxId = idField != null ? idField.stringValue : ""
+                    dreamboxId = idField != null ? idField.stringValue : "",
+                    hostType = hostTypeField != null ? hostTypeField.stringValue : "",
+                    hostId = hostIdField != null ? hostIdField.stringValue : "",
+                    parkId = parkIdField != null ? parkIdField.stringValue : "",
+                    seq = seqField != null ? seqField.intValue : 0,
+                    v = vField != null ? vField.intValue : 0,
+                    channel = channelField != null ? channelField.stringValue : ""
                 };
+
+                // Unfiltered feed for the arbiter (every valid beacon).
+                OnBeacon?.Invoke(info);
 
                 // If a filter is set, skip beacons from other DreamBoxes
                 if (!string.IsNullOrEmpty(dreamboxIdFilter) &&
@@ -106,7 +146,8 @@ public class DiscoveryListener : IDisposable
                     continue;
                 }
 
-                Debug.Log($"[DreamBox] Discovery: found relay at {info.host}:{info.port} (dreamboxId={info.dreamboxId})");
+                // Per-beacon (1 Hz per host on the LAN) — verbose only.
+                DreamPark.NetLog.V($"[DreamBox] Discovery: found relay at {info.host}:{info.port} (dreamboxId={info.dreamboxId}, hostType={info.hostType}, hostId={info.hostId}, ch={info.channel})");
                 OnRelayDiscovered?.Invoke(info);
             }
             catch (SocketException) when (!_running)
