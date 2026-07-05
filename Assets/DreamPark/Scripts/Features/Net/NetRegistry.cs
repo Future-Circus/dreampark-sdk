@@ -12,6 +12,12 @@ public static class NetRegistry
         // Verbose: one line per networked object — makes NetId mismatches
         // between two builds diagnosable by comparing logs side by side.
         global::DreamPark.NetLog.V($"[NetRegistry] Registered NetId {netId.Id} ({netId.gameObject.name})");
+
+        // Two live objects hashing to the same id = ambiguous routing. Always
+        // warn: usually duplicate scene-root names or duplicate NetScope keys.
+        if (_objects.TryGetValue(netId.Id, out var existing) && existing != null && existing != netId)
+            Debug.LogWarning($"[NetRegistry] NetId COLLISION on {netId.Id}: '{existing.gameObject.name}' vs '{netId.gameObject.name}' — give scene props unique names (or set explicitId).");
+
         _objects[netId.Id] = netId;
 
         // flush buffered messages
