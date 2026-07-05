@@ -26,6 +26,15 @@ The ~540 files in Assets/DreamPark/ must match dreampark-core exactly. `#if DREA
 - **DreamBand.prefab**: Wrist band UI integration.
 - **Level.prefab**: Physical space definition using AttractionTemplate (extends LevelTemplate with auto-added GameArea and MusicArea).
 
+## Creating Attractions & Props (content pipeline)
+An attraction is a prefab under `Assets/Content/{GameName}/` with an `AttractionTemplate` (: `LevelTemplate`) on its root; a prop has `PropTemplate`. `ContentProcessor` (SDK-synced, `Assets/DreamPark/Editor/`) watches `Assets/Content/` and automates everything else — do NOT hand-edit Addressables addresses or labels:
+- **Naming matters**: prefix attraction prefabs `A_`, props `P_`. The backend attractions catalog discovers placeables from the shipped Addressables catalog's internal asset paths by matching `A_*`/`P_*`. Wrong prefix = the attraction never appears in the operator app's Attractions browser or Build Mode level picker, even though it uploads fine.
+- **Runtime address** (assigned automatically): `{gameId}/Levels/{size}/{name}` for attractions, `{gameId}/Props/{category}/{name}` for props, `{gameId}/{TypeFolder}/{name}` for typed assets (Models/Audio/Textures/…), `{gameId}/Previews/{name}` for preview PNGs. Label = `{gameId}`.
+- **TWO identifier namespaces — never conflate them**: the runtime Addressables ADDRESS above vs the backend catalog `resourceName`, which is the internal ASSET-PATH stem (`Content/{GameName}/Attractions/A_X` — asset path with `Assets/` + extension stripped). They only coincided for legacy folder layouts. Core's `LevelAnchor.ResolveSpawnAddress` translates stem→address at spawn; treat `resourceName` as an opaque join key, never a loadable address.
+- **Stamping pass** (`ContentProcessor`, EditPrefabContentsScope + SaveAsPrefabAsset): injects `gameId` into any component with a `gameId` field and stamps the per-attraction address onto `GameArea`/`PropTemplate.resourceName` — this is the revenue-attribution key, so it must match what the backend catalog derives. Skips `ThirdPartyLocal/`. Prefabs get edited + saved dirty by this pass; that's expected — commit the churn.
+- **Previews**: `Assets/Content/{GameName}/Previews/{prefabName}.png` (or sibling `{name}_preview.png`) — powers Attractions-browser/level-picker tiles and the consumer map. No preview = blank tile.
+- **Catalog population is automated**: uploading a build publishes the attractions catalog server-side (discovered from the catalog's `m_InternalIds`). There is no manual registration step — if an attraction is missing from the browser, check the `A_`/`P_` prefix and that the prefab root has the right template component.
+
 ## DO NOT
 - Add core-specific code (e.g., backend debug toggles, internal versioning systems).
 - Modify Assets/DreamPark/ files without syncing back to dreampark-core.
