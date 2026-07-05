@@ -4057,7 +4057,12 @@ namespace DreamPark {
                     {
                         var contentDirectory = response != null ? response.json : null;
                         latestContentDirectorySnapshot = contentDirectory;
-                        var versionNumber = contentDirectory != null && contentDirectory.HasField("content") && contentDirectory.GetField("content").HasField("versions")
+                        // Note the `.list != null` guard: a freshly-registered
+                        // content can come back with `versions: null`, where
+                        // HasField() is true but the JSON node has no list.
+                        var versionNumber = contentDirectory != null && contentDirectory.HasField("content")
+                                            && contentDirectory.GetField("content").HasField("versions")
+                                            && contentDirectory.GetField("content").GetField("versions").list != null
                             ? contentDirectory.GetField("content").GetField("versions").list.Count + 1
                             : 1;
                         var targetUrl = $"{DreamParkAPI.baseUrl}/app/content/addressables-v2/{contentId}/{versionNumber}";

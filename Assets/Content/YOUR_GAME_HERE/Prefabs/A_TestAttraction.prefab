@@ -86,6 +86,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   gameId: YOUR_GAME_HERE
+  resourceName: YOUR_GAME_HERE/Levels/Micro/A_TestAttraction
   priority: 0
   isPlaying: 0
   padding: 2
