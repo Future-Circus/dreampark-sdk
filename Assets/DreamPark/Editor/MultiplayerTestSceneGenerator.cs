@@ -91,7 +91,7 @@ namespace DreamPark.Editor
             // beaconing, otherwise elects a host (Editor and Quest both qualify).
             // Untick allowHosting in the Inspector to force this instance to be a
             // client (e.g. make the Quest host while the Editor observes).
-            clientGO.AddComponent<DreamPark.NetSessionArbiter>();
+            clientGO.AddComponent<NetSessionArbiter>();
 
             // UI.
             BuildUI(client, testObj);
