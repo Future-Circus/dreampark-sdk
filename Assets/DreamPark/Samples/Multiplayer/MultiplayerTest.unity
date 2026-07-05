@@ -3938,6 +3938,7 @@ MonoBehaviour:
   reconnectMaxDelay: 30
   maxReconnectAttempts: 10
   connectOnStart: 0
+  verboseNetLogs: 0
   _testNetId: {fileID: 0}
 --- !u!4 &1482203198
 Transform:
