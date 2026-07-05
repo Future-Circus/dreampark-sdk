@@ -14,8 +14,10 @@ using Defective.JSON;
 using System.Linq;
 using System.Text.RegularExpressions;
 using UnityEngine.AddressableAssets;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine.Networking;
+using Unity.EditorCoroutines.Editor;
 
 namespace DreamPark {
     public class ContentUploaderPanel : EditorWindow
@@ -294,6 +296,7 @@ namespace DreamPark {
             AuthAPI.LoginStateChanged += OnLoginStateChanged;
             SDKUpdateChecker.ManifestUpdated += OnManifestUpdated;
             EditorApplication.projectChanged += OnProjectChangedForRoots;
+            PreviewEditorWindow.PreviewSaved += OnPreviewSaved;
             // Repaint when the admin-state probe settles so the Upload
             // Test Build button in the Troubleshooting section becomes
             // visible the moment the backend's canPublish response lands
@@ -347,10 +350,28 @@ namespace DreamPark {
             AuthAPI.LoginStateChanged -= OnLoginStateChanged;
             SDKUpdateChecker.ManifestUpdated -= OnManifestUpdated;
             EditorApplication.projectChanged -= OnProjectChangedForRoots;
+            PreviewEditorWindow.PreviewSaved -= OnPreviewSaved;
             AdminState.AdminStateChanged -= Repaint;
         }
 
         private void OnManifestUpdated() => Repaint();
+
+        // The Preview Editor just re-baked a preview PNG. If it belongs to the
+        // content package we're showing, drop the cached thumbnails and re-walk
+        // the tree so the freshly-saved PNG appears in the grid immediately.
+        private void OnPreviewSaved(string savedContentId)
+        {
+            if (savedContentId != contentId) return;
+            for (int i = 0; i < contentRoots.Count; i++)
+            {
+                contentRoots[i].customPreview = null;
+                contentRoots[i].autoPreview = null;
+                contentRoots[i].autoPreviewResolved = false;
+                contentRoots[i].firstPollTime = 0;
+            }
+            contentRootsDirty = true;
+            Repaint();
+        }
 
         // Called by ContentIdSetupPopup after a successful rename. Refreshes the
         // dropdown options and selects the newly-named folder so the panel
@@ -879,6 +900,48 @@ namespace DreamPark {
             }
             GUI.enabled = true;
 
+            // ─── Force upload all previews ───────────────────────
+            // Regenerates every attraction/prop preview PNG and pushes each to
+            // this content's attractions catalog (POST /api/content/:id/
+            // attractions/preview), refreshing previews even for assets that
+            // didn't change — a manual repair path independent of a version
+            // upload. Uses the same session auth as the normal upload flow.
+            GUILayout.Space(6);
+            GUI.enabled = !isUploading && !string.IsNullOrEmpty(contentId);
+            if (GUILayout.Button(new GUIContent(
+                "Force Upload All Previews",
+                "Regenerates and uploads a preview image for every attraction and prop in this " +
+                "content, updating the attractions catalog even if the asset didn't change. " +
+                "Use this to repair or refresh previews without publishing a new version."),
+                GUILayout.Height(22)))
+            {
+                if (EditorUtility.DisplayDialog(
+                    "Force Upload All Previews",
+                    "Regenerate and upload preview images for every attraction and prop in \"" + contentId + "\"?",
+                    "Upload Previews", "Cancel"))
+                {
+                    EditorCoroutineUtility.StartCoroutineOwnerless(ForceUploadAllPreviewsRoutine(contentId));
+                }
+            }
+            GUI.enabled = true;
+
+            // ─── Re-upload Logo ──────────────────────────────────
+            // Pushes the selected Logo texture straight to the backend
+            // (POST /api/content/:id/logo), refreshing the web-renderable
+            // logoImageUrl without publishing a new version. The bundled
+            // logoAddress the VR client uses is unaffected.
+            GUILayout.Space(6);
+            GUI.enabled = !isUploading && !string.IsNullOrEmpty(contentId) && logoTexture != null;
+            if (GUILayout.Button(new GUIContent(
+                "Re-upload Logo",
+                "Uploads the selected Logo image directly to DreamPark so web, iOS, and admin " +
+                "surfaces show the latest logo — no version upload needed."),
+                GUILayout.Height(22)))
+            {
+                UploadLogoImage(contentId, interactive: true);
+            }
+            GUI.enabled = true;
+
             // ─── Test Channel upload ─────────────────────────────
             // Admin / dreampark.app teammates only. Pushes the bundles
             // currently sitting in ServerData/ to the Test Channel in
@@ -915,6 +978,255 @@ namespace DreamPark {
                 }
                 GUI.enabled = true;
             }
+        }
+
+        // ── Force Upload All Previews ────────────────────────────────
+        // Regenerates preview PNGs, then uploads one per attraction/prop to the
+        // content's attractions catalog (POST /api/content/:id/attractions/
+        // preview). Sequential so a big catalog doesn't fire hundreds of
+        // concurrent requests. A repair path, independent of a version upload.
+        private class PreviewUploadRoot
+        {
+            public string name;
+            public string resourceName;
+            public string category;
+            public byte[] previewBytes;
+        }
+
+        // ─── Logo image upload (direct to backend) ─────────────────────
+        // The logo has always shipped inside the Unity bundle (logoAddress —
+        // that's what the VR client loads and it is untouched here). This
+        // ALSO pushes the raw image file to the backend
+        // (POST /api/content/:id/logo → content.logoImageUrl) so iOS, web,
+        // and admin render the logo without touching Unity bundles — same
+        // pattern as the attraction preview uploads. Runs fire-and-forget
+        // inside the normal upload flow; manual repair lives in
+        // Troubleshooting → "Re-upload Logo".
+        private byte[] ReadLogoImageBytes(out string fileName, out string mimeType)
+        {
+            fileName = null; mimeType = null;
+            if (logoTexture == null) return null;
+
+            // Prefer the source asset file on disk — original bytes, no
+            // Read/Write import requirement.
+            string path = AssetDatabase.GetAssetPath(logoTexture);
+            if (!string.IsNullOrEmpty(path) && File.Exists(path))
+            {
+                string ext = Path.GetExtension(path).ToLowerInvariant();
+                if (ext == ".png") mimeType = "image/png";
+                else if (ext == ".jpg" || ext == ".jpeg") mimeType = "image/jpeg";
+                else if (ext == ".webp") mimeType = "image/webp";
+                if (mimeType != null)
+                {
+                    try
+                    {
+                        fileName = Path.GetFileName(path);
+                        return File.ReadAllBytes(path);
+                    }
+                    catch (Exception e) { Debug.LogWarning("[Logo] source read failed: " + e.Message); }
+                }
+            }
+
+            // Fallback (PSD/TGA sources, unreadable textures): blit to a
+            // readable copy and encode PNG.
+            try
+            {
+                RenderTexture rt = RenderTexture.GetTemporary(logoTexture.width, logoTexture.height, 0, RenderTextureFormat.ARGB32);
+                Graphics.Blit(logoTexture, rt);
+                RenderTexture prev = RenderTexture.active;
+                RenderTexture.active = rt;
+                Texture2D readable = new Texture2D(logoTexture.width, logoTexture.height, TextureFormat.RGBA32, false);
+                readable.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
+                readable.Apply();
+                RenderTexture.active = prev;
+                RenderTexture.ReleaseTemporary(rt);
+                byte[] png = readable.EncodeToPNG();
+                UnityEngine.Object.DestroyImmediate(readable);
+                fileName = logoTexture.name + ".png";
+                mimeType = "image/png";
+                return png;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[Logo] PNG encode fallback failed: " + e.Message);
+                return null;
+            }
+        }
+
+        private void UploadLogoImage(string idForUpload, bool interactive)
+        {
+            string auth = AuthAPI.GetUserAuth();
+            if (string.IsNullOrEmpty(auth))
+            {
+                if (interactive) EditorUtility.DisplayDialog("Not signed in", "Sign in to DreamPark before uploading the logo.", "OK");
+                return;
+            }
+            if (logoTexture == null)
+            {
+                if (interactive) EditorUtility.DisplayDialog("No logo selected", "Pick a Logo texture in the uploader first.", "OK");
+                return;
+            }
+            string fileName, mimeType;
+            byte[] bytes = ReadLogoImageBytes(out fileName, out mimeType);
+            if (bytes == null || bytes.Length == 0)
+            {
+                if (interactive) EditorUtility.DisplayDialog("Logo unreadable", "Couldn't read the logo image bytes from the selected texture.", "OK");
+                return;
+            }
+
+            string endpoint = "/api/content/" + Uri.EscapeDataString(idForUpload) + "/logo";
+            UploadContentData image = new UploadContentData(fileName, bytes);
+            image.mimeType = mimeType;
+            List<KeyValuePair<string, UploadContentData>> files = new List<KeyValuePair<string, UploadContentData>>
+            {
+                new KeyValuePair<string, UploadContentData>("image", image)
+            };
+            DreamParkAPI.POST(endpoint, auth, files, (s, resp) =>
+            {
+                if (s)
+                {
+                    Debug.Log("[Logo] logo image uploaded to backend for " + idForUpload);
+                    if (interactive) EditorUtility.DisplayDialog("Logo uploaded", "Logo pushed to DreamPark — web, iOS, and admin surfaces now use it.", "OK");
+                }
+                else
+                {
+                    string err = (resp != null && !string.IsNullOrEmpty(resp.error)) ? resp.error : "upload failed";
+                    Debug.LogWarning("[Logo] backend logo upload failed: " + err);
+                    if (interactive) EditorUtility.DisplayDialog("Logo upload failed", err, "OK");
+                }
+            });
+        }
+
+        private IEnumerator ForceUploadAllPreviewsRoutine(string idForUpload)
+        {
+            string auth = AuthAPI.GetUserAuth();
+            if (string.IsNullOrEmpty(auth))
+            {
+                EditorUtility.DisplayDialog("Not signed in", "Sign in to DreamPark before uploading previews.", "OK");
+                yield break;
+            }
+
+            // 1) Regenerate the preview PNGs (same generator the compile pipeline runs).
+            EditorUtility.DisplayProgressBar("Force Upload All Previews", "Regenerating preview images…", 0f);
+            try { ContentProcessor.GenerateAllLevelPreviews(idForUpload, forceRegenerate: true); }
+            catch (Exception e) { Debug.LogWarning("[Previews] regenerate failed: " + e.Message); }
+            AssetDatabase.Refresh();
+
+            // 2) Collect attraction/prop roots + their preview bytes.
+            List<PreviewUploadRoot> roots = CollectPreviewUploadRoots(idForUpload);
+            if (roots.Count == 0)
+            {
+                EditorUtility.ClearProgressBar();
+                EditorUtility.DisplayDialog("No attractions", "No attractions or props were found under Assets/Content/" + idForUpload + ".", "OK");
+                yield break;
+            }
+
+            // 3) Upload each preview sequentially.
+            int ok = 0, missing = 0, failed = 0;
+            for (int i = 0; i < roots.Count; i++)
+            {
+                PreviewUploadRoot r = roots[i];
+                EditorUtility.DisplayProgressBar("Force Upload All Previews", r.name + " (" + (i + 1) + "/" + roots.Count + ")", (float)i / roots.Count);
+
+                if (r.previewBytes == null || r.previewBytes.Length == 0) { missing++; continue; }
+
+                string endpoint = "/api/content/" + Uri.EscapeDataString(idForUpload) + "/attractions/preview"
+                    + "?resourceName=" + Uri.EscapeDataString(r.resourceName)
+                    + "&name=" + Uri.EscapeDataString(r.name)
+                    + "&category=" + Uri.EscapeDataString(r.category);
+
+                UploadContentData image = new UploadContentData(r.name + ".png", r.previewBytes);
+                image.mimeType = "image/png";
+                List<KeyValuePair<string, UploadContentData>> files = new List<KeyValuePair<string, UploadContentData>>
+                {
+                    new KeyValuePair<string, UploadContentData>("image", image)
+                };
+
+                bool done = false, success = false;
+                string err = null;
+                DreamParkAPI.POST(endpoint, auth, files, (s, resp) =>
+                {
+                    success = s;
+                    if (!s) err = (resp != null && !string.IsNullOrEmpty(resp.error)) ? resp.error : "upload failed";
+                    done = true;
+                });
+                while (!done) yield return null;
+
+                if (success) ok++;
+                else { failed++; Debug.LogWarning("[Previews] " + r.name + " failed: " + err); }
+            }
+
+            EditorUtility.ClearProgressBar();
+            EditorUtility.DisplayDialog(
+                "Previews uploaded",
+                ok + " uploaded" +
+                (missing > 0 ? ", " + missing + " with no preview file" : "") +
+                (failed > 0 ? ", " + failed + " failed" : "") + ".",
+                "OK");
+        }
+
+        // Walks Assets/Content/{id} for Attraction (LevelTemplate) and Prop
+        // (PropTemplate) prefabs, derives each one's addressable resourceName
+        // using the same convention ContentProcessor bakes into the catalog,
+        // and loads its preview PNG from the Previews/ folder.
+        private List<PreviewUploadRoot> CollectPreviewUploadRoots(string idForUpload)
+        {
+            List<PreviewUploadRoot> list = new List<PreviewUploadRoot>();
+            string contentRoot = "Assets/Content/" + idForUpload;
+            if (!AssetDatabase.IsValidFolder(contentRoot)) return list;
+            string previewsFolder = contentRoot + "/Previews";
+
+            string[] guids = AssetDatabase.FindAssets("t:Prefab", new[] { contentRoot });
+            foreach (string guid in guids)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                if (string.IsNullOrEmpty(path)) continue;
+                if (path.IndexOf("/ThirdPartyLocal/", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+
+                GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                if (prefab == null) continue;
+
+                string name = Path.GetFileNameWithoutExtension(path);
+
+                LevelTemplate level = prefab.GetComponent<LevelTemplate>();
+                PropTemplate prop = prefab.GetComponent<PropTemplate>();
+                if (level == null && prop == null) continue; // attractions + props only, never the player rig
+                string category = prop != null ? prop.category.ToString().ToLowerInvariant() : "attraction";
+
+                // resourceName must match the backend catalog key exactly: the asset
+                // path with the leading "Assets/" and the file extension stripped
+                // (see leafStem() in lib/addressablesCatalog.js) — e.g.
+                // "Content/SuperAdventureLand/.../A_BeachParty". This keeps the
+                // "Sync Attractions" (catalog scrape) and preview uploads on one key.
+                string resourceName = path;
+                if (resourceName.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+                    resourceName = resourceName.Substring("Assets/".Length);
+                int extDot = resourceName.LastIndexOf('.');
+                if (extDot >= 0) resourceName = resourceName.Substring(0, extDot);
+
+                list.Add(new PreviewUploadRoot
+                {
+                    name = name,
+                    resourceName = resourceName,
+                    category = category,
+                    previewBytes = ReadPreviewBytes(previewsFolder, name),
+                });
+            }
+            return list;
+        }
+
+        private byte[] ReadPreviewBytes(string previewsFolder, string name)
+        {
+            string[] exts = { ".png", ".jpg", ".jpeg" };
+            foreach (string ext in exts)
+            {
+                string p = previewsFolder + "/" + name + ext;
+                if (File.Exists(p))
+                {
+                    try { return File.ReadAllBytes(p); } catch { }
+                }
+            }
+            return null;
         }
 
         // Entry point for the Test Channel upload button. Opens the
@@ -2901,20 +3213,19 @@ namespace DreamPark {
                 wordWrap = true,
                 fontStyle = FontStyle.Bold,
             };
-            GUI.Label(labelRect, new GUIContent(entry.name, entry.assetPath), nameStyle);
+            GUI.Label(labelRect, new GUIContent(entry.name, $"Click to open the Preview Editor\n{entry.assetPath}"), nameStyle);
 
-            // Click anywhere on the card to ping + select the underlying
-            // prefab in the Project window. Standard Unity feel.
+            // Click anywhere on the card to open the Preview Editor for this
+            // prefab, where the camera angle and zoom of its generated preview
+            // can be tuned and saved. Also pings the underlying prefab in the
+            // Project window for context.
             if (Event.current.type == EventType.MouseDown
                 && Event.current.button == 0
                 && cardRect.Contains(Event.current.mousePosition))
             {
+                PreviewEditorWindow.Open(contentId, entry.assetPath, entry.name, entry.subLabel);
                 var asset = AssetDatabase.LoadMainAssetAtPath(entry.assetPath);
-                if (asset != null)
-                {
-                    EditorGUIUtility.PingObject(asset);
-                    Selection.activeObject = asset;
-                }
+                if (asset != null) EditorGUIUtility.PingObject(asset);
                 Event.current.Use();
             }
         }
@@ -3746,7 +4057,12 @@ namespace DreamPark {
                     {
                         var contentDirectory = response != null ? response.json : null;
                         latestContentDirectorySnapshot = contentDirectory;
-                        var versionNumber = contentDirectory != null && contentDirectory.HasField("content") && contentDirectory.GetField("content").HasField("versions")
+                        // Note the `.list != null` guard: a freshly-registered
+                        // content can come back with `versions: null`, where
+                        // HasField() is true but the JSON node has no list.
+                        var versionNumber = contentDirectory != null && contentDirectory.HasField("content")
+                                            && contentDirectory.GetField("content").HasField("versions")
+                                            && contentDirectory.GetField("content").GetField("versions").list != null
                             ? contentDirectory.GetField("content").GetField("versions").list.Count + 1
                             : 1;
                         var targetUrl = $"{DreamParkAPI.baseUrl}/app/content/addressables-v2/{contentId}/{versionNumber}";
@@ -4404,6 +4720,11 @@ namespace DreamPark {
                                 isUploading = false;
                                 return;
                             }
+                            // Fire-and-forget: push the raw logo image to the
+                            // backend alongside the metadata (never blocks or
+                            // fails the upload — repair via Troubleshooting).
+                            try { UploadLogoImage(contentId, interactive: false); }
+                            catch (Exception e) { Debug.LogWarning("[Logo] upload skipped: " + e.Message); }
                             continueAfterSchemaSync();
                         });
                         return;
@@ -4426,6 +4747,10 @@ namespace DreamPark {
                             if (success)
                             {
                                 Debug.Log($"✅ Content '{contentName}' uploaded successfully!");
+                                // First upload is exactly when the logo should
+                                // land on the backend too (fire-and-forget).
+                                try { UploadLogoImage(contentId, interactive: false); }
+                                catch (Exception e) { Debug.LogWarning("[Logo] upload skipped: " + e.Message); }
                                 SetUploadStatus(
                                     "Creating release record",
                                     "Project created. Moving straight into the first release build.",

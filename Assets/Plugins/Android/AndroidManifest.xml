@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!--
+  DreamPark SDK — Quest manifest for creator test builds.
+
+  This is the minimal manifest an SDK project needs to behave like the real
+  DreamPark runtime on-device. It deliberately does NOT include core-only
+  concerns from the consumer build: no SystemUXManager / MDM-lite (foreground
+  service, boot receiver, install-packages), no kiosk lockTaskMode. If you see
+  those in dreampark-core's manifest, they stay there.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools" android:installLocation="auto">
+  <uses-feature android:name="android.hardware.vr.headtracking" android:version="1" android:required="true" />
+  <uses-feature android:name="com.oculus.feature.PASSTHROUGH" android:required="true" />
+  <!-- Park-scale play beyond the guardian; keep so SDK testing matches in-park behavior. -->
+  <uses-feature android:name="com.oculus.feature.BOUNDARYLESS_APP" android:required="true" />
+
+  <!-- Backend API + content downloads. -->
+  <uses-permission android:name="android.permission.INTERNET" />
+  <!-- Network reachability (ConnectivityManager / Application.internetReachability). -->
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+  <!-- Read-only Wi-Fi state: DreamBand RSSI readout + LAN IP lookup for the
+       peer-host beacon (NetPlatform.GetLocalIPv4). No SSID/scan access. -->
+  <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+  <!-- Required to RECEIVE dream-pub UDP broadcast beacons (:7700) on real Wi-Fi.
+       Android filters non-unicast packets by default; DiscoveryListener acquires
+       a WifiManager.MulticastLock (NetPlatform), which needs this normal-tier
+       permission. Without it, LAN multiplayer discovery only works on loopback. -->
+  <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+  <!-- WIFI_MODE_FULL_LOW_LATENCY WifiLock while this headset is the elected
+       peer-host relay (NetPlatform) — prevents Wi-Fi power-save latency spikes.
+       Held only while hosting. -->
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+  <!-- PlayerRig hand trackers. -->
+  <uses-permission android:name="com.oculus.permission.HAND_TRACKING" />
+
+  <application android:label="@string/app_name" android:icon="@mipmap/app_icon" android:allowBackup="false" android:extractNativeLibs="true" android:usesCleartextTraffic="false">
+  <meta-data android:name="unityplayer.SkipPermissionsDialog" android:value="false" />
+  <meta-data android:name="com.oculus.ossplash.background" android:value="passthrough-contextual" />
+  <meta-data android:name="com.oculus.supportedDevices" android:value="quest2|questpro|eureka" />
+
+  <activity
+      android:name="com.unity3d.player.UnityPlayerGameActivity"
+      android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode|density"
+      android:exported="true"
+      android:hardwareAccelerated="true"
+      android:launchMode="singleTask"
+      android:resizeableActivity="false"
+      android:screenOrientation="landscape"
+      android:theme="@style/BaseUnityGameActivityTheme">
+
+      <intent-filter>
+          <action android:name="android.intent.action.MAIN" />
+          <category android:name="android.intent.category.LAUNCHER" />
+          <category android:name="android.intent.category.DEFAULT" />
+          <category android:name="com.oculus.intent.category.VR" />
+      </intent-filter>
+
+      <!-- Oculus VR requirements -->
+      <meta-data android:name="com.oculus.vr.mode" android:value="immersive"/>
+      <meta-data android:name="com.oculus.vr.focusaware" android:value="true"/>
+      <meta-data android:name="com.oculus.handtracking.frequency" android:value="LOW"/>
+
+  </activity>
+  </application>
+
+  <!-- Strip permissions merged in by other plugins that SDK content doesn't use.
+       Remove the relevant line if your attraction legitimately needs one (e.g.
+       RECORD_AUDIO for voice-driven content — will trigger a user prompt). -->
+  <uses-permission android:name="android.permission.RECORD_AUDIO" tools:node="remove" />
+  <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" tools:node="remove" />
+  <uses-permission android:name="android.permission.READ_PHONE_STATE" tools:node="remove" />
+
+</manifest>

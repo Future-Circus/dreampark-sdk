@@ -84,6 +84,10 @@ public class DreamBoxClient : MonoBehaviour
     [Tooltip("If true, starts LAN discovery in Start() to auto-connect to the first dream-pub relay found.")]
     public bool connectOnStart = false;
 
+    [Header("Debug")]
+    [Tooltip("Verbose multiplayer diagnostics: per-beacon discovery logs, inbound message previews, relay fan-out, NetId registrations. Warnings always log regardless. Toggleable live in Play Mode.")]
+    public bool verboseNetLogs = false;
+
     [HideInInspector] public NetId _testNetId;
 
     public State ConnectionState { get; private set; } = State.Disconnected;
@@ -101,6 +105,12 @@ public class DreamBoxClient : MonoBehaviour
 
     /// <summary>Fired for connect/disconnect/receive/error events with a log string.</summary>
     public event Action<string> OnEventLog;
+
+    /// <summary>
+    /// Fired for inbound events that carry no netId (session-level events, e.g.
+    /// "host_leaving"). Args: (type, full JSON). Used by NetSessionArbiter.
+    /// </summary>
+    public event Action<string, string> OnGlobalEvent;
 
     private NetManager _client;
     private NetPeer _server;
@@ -139,7 +149,17 @@ public class DreamBoxClient : MonoBehaviour
             Destroy(this);
             return;
         }
+        DreamPark.NetLog.Verbose = verboseNetLogs;
     }
+
+#if UNITY_EDITOR
+    // Lets the Inspector checkbox flip verbosity live during Play Mode.
+    void OnValidate()
+    {
+        if (Application.isPlaying && Instance == this)
+            DreamPark.NetLog.Verbose = verboseNetLogs;
+    }
+#endif
 
     void Start()
     {
@@ -168,7 +188,13 @@ public class DreamBoxClient : MonoBehaviour
 
         if (connectOnStart)
         {
-            StartDiscovery();
+            // When a NetSessionArbiter is active it owns discovery, host
+            // election, and connection — connecting to the first beacon here
+            // would race it.
+            if (DreamPark.NetSessionArbiter.ArbiterActive)
+                Debug.Log("[DreamBox] NetSessionArbiter active — deferring discovery to arbiter.");
+            else
+                StartDiscovery();
         }
     }
 
@@ -409,6 +435,10 @@ public class DreamBoxClient : MonoBehaviour
                 string json = reader.GetString();
                 if (string.IsNullOrEmpty(json) || json.Length > MaxIncomingMessageChars) return;
                 MessageCount++;
+                // Verbose: inbound previews make the receive hop visible without
+                // a RelayDebugHUD. First 5 in full cadence, then every 50th.
+                if (MessageCount <= 5 || MessageCount % 50 == 0)
+                    DreamPark.NetLog.V($"[DreamBox] RECV #{MessageCount}: {(json.Length > 80 ? json.Substring(0, 80) + "..." : json)}");
                 // Do NOT log the full payload (logcat exposure on shared headsets) —
                 // only a short truncated preview.
                 string truncated = json.Length > 80 ? json.Substring(0, 80) + "..." : json;
@@ -530,6 +560,21 @@ public class DreamBoxClient : MonoBehaviour
     const int MaxIncomingMessageChars = 16 * 1024;
     const int MaxLogPreviewChars = 512;
 
+    /// <summary>
+    /// Cheap extraction of the "type" field from the wire JSON
+    /// {"type":"...","payload":{...}} — same allocation-light style as the
+    /// netId scan above. Returns null if absent/malformed.
+    /// </summary>
+    static string ExtractTypeField(string json)
+    {
+        int idx = json.IndexOf("\"type\":\"", StringComparison.Ordinal);
+        if (idx < 0) return null;
+        int start = idx + 8;
+        int end = json.IndexOf('"', start);
+        if (end <= start || end - start > 64) return null;
+        return json.Substring(start, end - start);
+    }
+
     static string TruncateForLog(string value)
     {
         if (string.IsNullOrEmpty(value) || value.Length <= MaxLogPreviewChars)
@@ -560,6 +605,18 @@ public class DreamBoxClient : MonoBehaviour
         {
             NetRegistry.Dispatch(netId, json);
             return;
+        }
+
+        // Session-level events (no netId): surface the type to subscribers
+        // (NetSessionArbiter listens for "host_leaving").
+        if (OnGlobalEvent != null)
+        {
+            string type = ExtractTypeField(json);
+            if (type != null)
+            {
+                try { OnGlobalEvent.Invoke(type, json); }
+                catch (Exception e) { Debug.LogWarning($"[DreamBox] OnGlobalEvent handler threw: {e.Message}"); }
+            }
         }
 
         // fallback: global events without a target object

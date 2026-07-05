@@ -12,8 +12,7 @@ Assets/
 │       ├── 1. Scenes/Template.unity
 │       ├── 2. Features/
 │       │   ├── 1. Player/Player.prefab
-│       │   ├── 2. DreamBand/DreamBand.prefab
-│       │   └── 3. Level/Level.prefab (uses AttractionTemplate component)
+│       │   └── 2. Level/Level.prefab (uses AttractionTemplate component)
 │       ├── Scripts/            ← Game-specific C# (minimal — prefer Lua)
 │       └── ThirdParty/         ← Only used assets (git-tracked, shipped in builds)
 └── ThirdPartyLocal/            ← Imported packages land here (gitignored, not in builds)

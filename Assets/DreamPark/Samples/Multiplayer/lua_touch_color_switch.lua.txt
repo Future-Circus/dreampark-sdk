@@ -1,0 +1,121 @@
+-- ============================================================
+-- lua_touch_color_switch.lua.txt — Multiplayer touch-to-recolor
+--
+-- Put this on a networked prop. When a Player hand (tag/layer
+-- filtered) touches it, the prop flips to a random color locally
+-- AND broadcasts the color to every other headset in the LAN
+-- session via net_send. Remote copies apply it in onnet.
+--
+-- Setup (on the prop GameObject):
+--   • Renderer (any URP Lit material)
+--   • Collider with "Is Trigger" ON (sized a bit bigger than the mesh)
+--   • NetId            (same prefab hierarchy on all clients = same id)
+--   • LuaBehaviour     (luaScript = this file)
+-- No manager needed. net_send/onnet are auto-wired by LuaBehaviour
+-- because a NetId sits on the same GameObject.
+--
+-- filterTag defaults to "Player" — set filterLayer instead (and
+-- clear filterTag) if your rig's hands use a layer, not a tag.
+-- ============================================================
+
+-- @var filterTag string "Player"
+-- @var filterLayer int -1
+-- @var cooldownSeconds float 0.3
+-- @var sfxTouch audioclip
+
+local UE = CS.UnityEngine
+
+-- ── State ─────────────────────────────────────────────────
+local renderer = nil
+local lastFire = -999
+
+function start()
+    pcall(function()
+        renderer = self.gameObject:GetComponent(typeof(UE.Renderer))
+    end)
+    if renderer == nil then
+        print("[touch_color] No Renderer found — colors won't show")
+    end
+end
+
+-- ── Helpers ───────────────────────────────────────────────
+local function apply_color(r, g, b)
+    if renderer == nil then return end
+    pcall(function()
+        -- URP Lit marks _BaseColor as [MainColor], so material.color works.
+        renderer.material.color = UE.Color(r, g, b, 1)
+    end)
+end
+
+local function is_player(go)
+    if go == nil then return false end
+    if filterTag ~= "" then
+        local ok, tag = pcall(function() return go.tag end)
+        if ok and tag == filterTag then return true end
+    end
+    if filterLayer >= 0 then
+        local ok, layer = pcall(function() return go.layer end)
+        if ok and layer == filterLayer then return true end
+    end
+    return false
+end
+
+local function on_touched()
+    -- Cooldown: two hand colliders (or trigger jitter) shouldn't double-fire.
+    local now = UE.Time.time
+    if now - lastFire < cooldownSeconds then return end
+    lastFire = now
+
+    local r = math.random()
+    local g = math.random()
+    local b = math.random()
+
+    -- Optimistic local apply — the relay never echoes our own message back.
+    apply_color(r, g, b)
+
+    if sfxTouch then
+        pcall(function()
+            UE.AudioSource.PlayClipAtPoint(sfxTouch, self.transform.position, 0.8)
+        end)
+    end
+
+    -- Broadcast to everyone else in the session (peer host or DreamBox —
+    -- same call either way). No-op if no session is up: solo still works.
+    if net_send then
+        net_send("color", string.format('{"r":%.2f,"g":%.2f,"b":%.2f}', r, g, b))
+        print("[touch_color] SENT color over network")
+    else
+        print("[touch_color] net_send is nil — LuaBehaviour didn't find DreamBoxClient/NetId at Awake, nothing sent")
+    end
+end
+
+-- ── Touch input ───────────────────────────────────────────
+function ontriggerenter(other)
+    local go = nil
+    pcall(function() go = other.gameObject end)
+    if is_player(go) then on_touched() end
+end
+
+-- Fallback if the hand colliders are physical rather than triggers.
+function oncollisionenter(collision)
+    local go = nil
+    pcall(function() go = collision.gameObject end)
+    if is_player(go) then on_touched() end
+end
+
+-- ── Network receive ───────────────────────────────────────
+-- Wire format from SendToNetId: {"type":"color","payload":{"netId":N,"r":..,"g":..,"b":..}}
+function onnet(payload)
+    print("[touch_color] onnet RECEIVED: " .. tostring(payload))
+    local ok, t = pcall(function() return json_parse(payload) end)
+    if not ok or t == nil then
+        print("[touch_color] onnet: json_parse failed")
+        return
+    end
+    local p = t.payload
+    if p == nil or p.r == nil or p.g == nil or p.b == nil then
+        print("[touch_color] onnet: no r/g/b in payload")
+        return
+    end
+    apply_color(p.r, p.g, p.b)
+end

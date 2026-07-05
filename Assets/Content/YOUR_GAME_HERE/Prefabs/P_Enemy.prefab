@@ -47,6 +47,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   gameId: YOUR_GAME_HERE
+  resourceName: YOUR_GAME_HERE/Props/Generic/P_Enemy
   priority: 0
   isPlaying: 0
   padding: 2
@@ -67,6 +68,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   gameId: YOUR_GAME_HERE
+  resourceName: YOUR_GAME_HERE/Props/Generic/P_Enemy
   category: 0
   affectsGapFiller: 1
   cutGapFillerHole: 0

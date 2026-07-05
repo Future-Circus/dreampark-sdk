@@ -21,6 +21,13 @@ public class NetIdEditor : Editor
 
 public class NetId : MonoBehaviour
 {
+    [Tooltip("Optional. If nonzero, this id is used verbatim instead of the " +
+             "hierarchy-path hash. Use for scene props whose hierarchy may " +
+             "differ between Editor and device builds (runtime-spawned roots " +
+             "shift sibling indices). Must be unique per park and identical " +
+             "on every client — set it on the shared prefab/scene object.")]
+    public uint explicitId = 0;
+
     public uint Id { get; private set; }
 
     /// <summary>
@@ -31,7 +38,7 @@ public class NetId : MonoBehaviour
 
     void Awake()
     {
-        Id = ComputeId();
+        Id = explicitId != 0 ? explicitId : ComputeId();
         NetRegistry.Register(this);
     }
 
@@ -42,9 +49,17 @@ public class NetId : MonoBehaviour
 
     public void ReceiveEvent(string payload)
     {
+        // A delivered event with nobody listening must not vanish silently —
+        // it means no TestNetObject/LuaBehaviour(onnet) is wired on this object.
+        if (OnNetEvent == null)
+        {
+            Debug.LogWarning($"[NetId {Id}] Event delivered but NO subscribers on '{gameObject.name}' — is the receiving script (onnet/TestNetObject) attached on this client?");
+            return;
+        }
+
         // Untrusted network input flows straight into creator Lua (onnet). Isolate
         // handler exceptions so a malformed/hostile payload can't crash the caller.
-        try { OnNetEvent?.Invoke(payload); }
+        try { OnNetEvent.Invoke(payload); }
         catch (Exception e) { Debug.LogWarning($"[NetId {Id}] onnet handler threw: {e.Message}"); }
     }
 

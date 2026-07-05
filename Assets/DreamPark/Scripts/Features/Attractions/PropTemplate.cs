@@ -24,6 +24,7 @@ namespace DreamPark
         public static event System.Action OnAnyPropTemplateChanged;
 
         [ReadOnly] public string gameId;
+        [ReadOnly] public string resourceName;
         public PropCategory category = PropCategory.Generic;
         [Tooltip("If enabled, this prop contributes footprint + height data to GapFiller.")]
         public bool affectsGapFiller = true;
@@ -183,6 +184,11 @@ namespace DreamPark
             if (string.IsNullOrEmpty(gameArea.gameId) && !string.IsNullOrEmpty(gameId))
             {
                 gameArea.gameId = gameId;
+            }
+
+            if (string.IsNullOrEmpty(gameArea.resourceName) && !string.IsNullOrEmpty(resourceName))
+            {
+                gameArea.resourceName = resourceName;
             }
 
             // A prop nested inside a LevelTemplate/AttractionTemplate can never win the

@@ -9,6 +9,9 @@ public static class NetRegistry
 
     public static void Register(NetId netId)
     {
+        // Verbose: one line per networked object — makes NetId mismatches
+        // between two builds diagnosable by comparing logs side by side.
+        DreamPark.NetLog.V($"[NetRegistry] Registered NetId {netId.Id} ({netId.gameObject.name})");
         _objects[netId.Id] = netId;
 
         // flush buffered messages
@@ -42,7 +45,13 @@ public static class NetRegistry
             return;
         }
 
-        // object hasn't loaded yet — buffer it (bounded)
+        // object hasn't loaded yet — buffer it (bounded). Log the first buffer
+        // per id: an inbound event for an id nothing registered is the
+        // signature of a NetId mismatch between builds (different hierarchy
+        // paths → different hashes) and must not fail silently.
+        if (!_buffer.ContainsKey(id))
+            Debug.LogWarning($"[NetRegistry] Event for UNREGISTERED NetId {id} — buffering. If this id never registers, the sender and receiver hierarchies don't match.");
+
         if (!_buffer.TryGetValue(id, out var list))
         {
             if (_buffer.Count >= MaxBufferedIds) return; // drop — too many unknown ids
