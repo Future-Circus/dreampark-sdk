@@ -64,7 +64,7 @@ public class DiscoveryListener : IDisposable
         // MulticastLock is held (loopback bypasses this, which is why localhost
         // testing worked). No-op on other platforms. Requires
         // CHANGE_WIFI_MULTICAST_STATE in the manifest.
-        DreamPark.NetPlatform.AcquireMulticastLock();
+        global::DreamPark.NetPlatform.AcquireMulticastLock();
 
         _udp = new UdpClient();
         _udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
@@ -87,7 +87,7 @@ public class DiscoveryListener : IDisposable
         try { _udp?.Close(); } catch { }
         _udp = null;
         _listenThread = null;
-        DreamPark.NetPlatform.ReleaseMulticastLock();
+        global::DreamPark.NetPlatform.ReleaseMulticastLock();
     }
 
     public void Dispose() => Stop();
@@ -147,7 +147,7 @@ public class DiscoveryListener : IDisposable
                 }
 
                 // Per-beacon (1 Hz per host on the LAN) — verbose only.
-                DreamPark.NetLog.V($"[DreamBox] Discovery: found relay at {info.host}:{info.port} (dreamboxId={info.dreamboxId}, hostType={info.hostType}, hostId={info.hostId}, ch={info.channel})");
+                global::DreamPark.NetLog.V($"[DreamBox] Discovery: found relay at {info.host}:{info.port} (dreamboxId={info.dreamboxId}, hostType={info.hostType}, hostId={info.hostId}, ch={info.channel})");
                 OnRelayDiscovered?.Invoke(info);
             }
             catch (SocketException) when (!_running)

@@ -171,7 +171,7 @@ namespace DreamPark
                     // Verbose: "is the relay forwarding?" answerable from the log
                     // without a debugger. First 5 in full cadence, then every 50th.
                     if (RelayedMessageCount <= 5 || RelayedMessageCount % 50 == 0)
-                        DreamPark.NetLog.V($"[PeerRelay] Relayed msg #{RelayedMessageCount}: {raw.Length}B from {peer} → {forwarded} peer(s).");
+                        NetLog.V($"[PeerRelay] Relayed msg #{RelayedMessageCount}: {raw.Length}B from {peer} → {forwarded} peer(s).");
                 }
                 catch (Exception e)
                 {

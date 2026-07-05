@@ -1097,18 +1097,25 @@ namespace DreamPark {
             });
         }
 
-        private IEnumerator ForceUploadAllPreviewsRoutine(string idForUpload)
+        // interactive: true = Troubleshooting button (dialogs + progress bar +
+        // forced preview regeneration). false = silent post-upload push — runs
+        // automatically after a successful commit, because the backend's
+        // preview endpoint is attach-only against rows the server's commit-
+        // time catalog sync just created. Silent mode only fills in missing
+        // preview PNGs (the compile pipeline already generated them).
+        private IEnumerator ForceUploadAllPreviewsRoutine(string idForUpload, bool interactive = true)
         {
             string auth = AuthAPI.GetUserAuth();
             if (string.IsNullOrEmpty(auth))
             {
-                EditorUtility.DisplayDialog("Not signed in", "Sign in to DreamPark before uploading previews.", "OK");
+                if (interactive) EditorUtility.DisplayDialog("Not signed in", "Sign in to DreamPark before uploading previews.", "OK");
+                else Debug.LogWarning("[Previews] auto-push skipped: not signed in.");
                 yield break;
             }
 
             // 1) Regenerate the preview PNGs (same generator the compile pipeline runs).
-            EditorUtility.DisplayProgressBar("Force Upload All Previews", "Regenerating preview images…", 0f);
-            try { ContentProcessor.GenerateAllLevelPreviews(idForUpload, forceRegenerate: true); }
+            if (interactive) EditorUtility.DisplayProgressBar("Force Upload All Previews", "Regenerating preview images…", 0f);
+            try { ContentProcessor.GenerateAllLevelPreviews(idForUpload, forceRegenerate: interactive); }
             catch (Exception e) { Debug.LogWarning("[Previews] regenerate failed: " + e.Message); }
             AssetDatabase.Refresh();
 
@@ -1116,8 +1123,11 @@ namespace DreamPark {
             List<PreviewUploadRoot> roots = CollectPreviewUploadRoots(idForUpload);
             if (roots.Count == 0)
             {
-                EditorUtility.ClearProgressBar();
-                EditorUtility.DisplayDialog("No attractions", "No attractions or props were found under Assets/Content/" + idForUpload + ".", "OK");
+                if (interactive)
+                {
+                    EditorUtility.ClearProgressBar();
+                    EditorUtility.DisplayDialog("No attractions", "No attractions or props were found under Assets/Content/" + idForUpload + ".", "OK");
+                }
                 yield break;
             }
 
@@ -1126,7 +1136,7 @@ namespace DreamPark {
             for (int i = 0; i < roots.Count; i++)
             {
                 PreviewUploadRoot r = roots[i];
-                EditorUtility.DisplayProgressBar("Force Upload All Previews", r.name + " (" + (i + 1) + "/" + roots.Count + ")", (float)i / roots.Count);
+                if (interactive) EditorUtility.DisplayProgressBar("Force Upload All Previews", r.name + " (" + (i + 1) + "/" + roots.Count + ")", (float)i / roots.Count);
 
                 if (r.previewBytes == null || r.previewBytes.Length == 0) { missing++; continue; }
 
@@ -1156,13 +1166,18 @@ namespace DreamPark {
                 else { failed++; Debug.LogWarning("[Previews] " + r.name + " failed: " + err); }
             }
 
-            EditorUtility.ClearProgressBar();
-            EditorUtility.DisplayDialog(
-                "Previews uploaded",
-                ok + " uploaded" +
+            string summary = ok + " uploaded" +
                 (missing > 0 ? ", " + missing + " with no preview file" : "") +
-                (failed > 0 ? ", " + failed + " failed" : "") + ".",
-                "OK");
+                (failed > 0 ? ", " + failed + " failed" : "") + ".";
+            if (interactive)
+            {
+                EditorUtility.ClearProgressBar();
+                EditorUtility.DisplayDialog("Previews uploaded", summary, "OK");
+            }
+            else
+            {
+                Debug.Log("[Previews] auto-push: " + summary);
+            }
         }
 
         // Walks Assets/Content/{id} for Attraction (LevelTemplate) and Prop
@@ -2611,6 +2626,24 @@ namespace DreamPark {
                     }
 
                     latestPublishedVersionNumber = versionNumber;
+
+                    // Push attraction preview PNGs to the backend catalog —
+                    // identical to Troubleshooting → "Force Upload All
+                    // Previews" but silent. Must run AFTER the commit: the
+                    // preview endpoint is attach-only, and the attraction
+                    // rows it attaches to are created by the server's
+                    // commit-time catalog sync. Fire-and-forget; failures
+                    // log warnings and never affect the upload result.
+                    try
+                    {
+                        EditorCoroutineUtility.StartCoroutineOwnerless(
+                            ForceUploadAllPreviewsRoutine(uploadContentId, interactive: false));
+                    }
+                    catch (Exception pvEx)
+                    {
+                        Debug.LogWarning("[Previews] auto-push failed to start: " + pvEx.Message);
+                    }
+
                     CompleteUploadStatus(true, $"'{contentName}' uploaded successfully as {GetVersionSummaryAfterUpload(versionNumber)}.");
                 }
                 else

@@ -149,7 +149,7 @@ public class DreamBoxClient : MonoBehaviour
             Destroy(this);
             return;
         }
-        DreamPark.NetLog.Verbose = verboseNetLogs;
+        global::DreamPark.NetLog.Verbose = verboseNetLogs;
     }
 
 #if UNITY_EDITOR
@@ -157,7 +157,7 @@ public class DreamBoxClient : MonoBehaviour
     void OnValidate()
     {
         if (Application.isPlaying && Instance == this)
-            DreamPark.NetLog.Verbose = verboseNetLogs;
+            global::DreamPark.NetLog.Verbose = verboseNetLogs;
     }
 #endif
 
@@ -191,7 +191,7 @@ public class DreamBoxClient : MonoBehaviour
             // When a NetSessionArbiter is active it owns discovery, host
             // election, and connection — connecting to the first beacon here
             // would race it.
-            if (DreamPark.NetSessionArbiter.ArbiterActive)
+            if (global::DreamPark.NetSessionArbiter.ArbiterActive)
                 Debug.Log("[DreamBox] NetSessionArbiter active — deferring discovery to arbiter.");
             else
                 StartDiscovery();
@@ -438,7 +438,7 @@ public class DreamBoxClient : MonoBehaviour
                 // Verbose: inbound previews make the receive hop visible without
                 // a RelayDebugHUD. First 5 in full cadence, then every 50th.
                 if (MessageCount <= 5 || MessageCount % 50 == 0)
-                    DreamPark.NetLog.V($"[DreamBox] RECV #{MessageCount}: {(json.Length > 80 ? json.Substring(0, 80) + "..." : json)}");
+                    global::DreamPark.NetLog.V($"[DreamBox] RECV #{MessageCount}: {(json.Length > 80 ? json.Substring(0, 80) + "..." : json)}");
                 // Do NOT log the full payload (logcat exposure on shared headsets) —
                 // only a short truncated preview.
                 string truncated = json.Length > 80 ? json.Substring(0, 80) + "..." : json;

@@ -11,7 +11,7 @@ public static class NetRegistry
     {
         // Verbose: one line per networked object — makes NetId mismatches
         // between two builds diagnosable by comparing logs side by side.
-        DreamPark.NetLog.V($"[NetRegistry] Registered NetId {netId.Id} ({netId.gameObject.name})");
+        global::DreamPark.NetLog.V($"[NetRegistry] Registered NetId {netId.Id} ({netId.gameObject.name})");
         _objects[netId.Id] = netId;
 
         // flush buffered messages
