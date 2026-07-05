@@ -1,5 +1,8 @@
 #if UNITY_EDITOR
 using System;
+using System.Collections.Generic;
+using System.Text;
+using Defective.JSON;
 using DreamPark.API;
 using UnityEditor;
 using UnityEngine;
@@ -30,6 +33,18 @@ namespace DreamPark
         public static string LatestDownloadUrl { get; private set; }
         public static bool ManifestFetchSucceeded { get; private set; }
         public static bool ManifestFetchAttempted { get; private set; }
+
+        // Newest-first release-notes history from the manifest's `history`
+        // field. Lets the update popup show notes for EVERY version the dev
+        // skipped, not just the latest — devs often go several releases
+        // between updates. Older backends without `history` leave this empty
+        // and we fall back to LatestReleaseNotes.
+        public struct ReleaseEntry
+        {
+            public string version;
+            public string notes;
+        }
+        public static List<ReleaseEntry> ReleaseHistory { get; } = new List<ReleaseEntry>();
 
         // Fired after the manifest fetch settles (success or failure). Panels
         // subscribe to refresh their gating UI.
@@ -73,6 +88,7 @@ namespace DreamPark
             ManifestFetchAttempted = true;
             ManifestFetchSucceeded = success && response?.json != null && response.json.HasField("latest");
 
+            ReleaseHistory.Clear();
             if (ManifestFetchSucceeded)
             {
                 LatestVersion = response.json.GetField("latest").stringValue;
@@ -82,6 +98,23 @@ namespace DreamPark
                 LatestDownloadUrl = response.json.HasField("downloadUrl")
                     ? response.json.GetField("downloadUrl").stringValue
                     : null;
+
+                // Optional `history` array (newest-first). Absent on older
+                // backends — everything below degrades to latest-only notes.
+                var history = response.json.HasField("history") ? response.json.GetField("history") : null;
+                if (history != null && history.type == JSONObject.Type.Array && history.list != null)
+                {
+                    for (int i = 0; i < history.list.Count; i++)
+                    {
+                        var entry = history.list[i];
+                        if (entry == null || !entry.HasField("version")) continue;
+                        ReleaseHistory.Add(new ReleaseEntry
+                        {
+                            version = entry.GetField("version").stringValue,
+                            notes = entry.HasField("releaseNotes") ? entry.GetField("releaseNotes").stringValue : ""
+                        });
+                    }
+                }
             }
             else
             {
@@ -89,6 +122,74 @@ namespace DreamPark
                 LatestReleaseNotes = null;
                 LatestDownloadUrl = null;
             }
+        }
+
+        // Combined release notes for every published version NEWER than
+        // `installedVersion`, newest first — what the update popup renders in
+        // its read-only notes box so a dev who skipped several releases sees
+        // everything they're about to pick up. Falls back to the latest
+        // version's notes when the backend didn't send `history`.
+        public static string BuildReleaseNotesSince(string installedVersion)
+        {
+            if (ReleaseHistory.Count == 0) return LatestReleaseNotes ?? "";
+
+            var sb = new StringBuilder();
+            foreach (var entry in ReleaseHistory)
+            {
+                if (SDKVersion.Compare(entry.version, installedVersion) <= 0) continue;
+                if (sb.Length > 0) sb.Append("\n\n");
+                sb.Append("v").Append(entry.version).Append('\n');
+                sb.Append(string.IsNullOrEmpty(entry.notes) ? "(no release notes)" : entry.notes.Trim());
+            }
+            return sb.Length > 0 ? sb.ToString() : (LatestReleaseNotes ?? "");
+        }
+
+        // Click-time upload gate. The passive gate in ContentUploaderPanel
+        // reads the once-per-session manifest cache, which goes stale if the
+        // editor stays open across a release — so Compile & Upload runs a
+        // FRESH manifest check here before the upload popup is allowed to
+        // open. Out of date → route to UpdateAvailablePopup instead (bypassing
+        // skip/remind state: those silence the nag, they don't unlock
+        // uploads). Fetch failure fails open, matching the passive gate — a
+        // backend blip shouldn't lock everyone out, and the upload itself
+        // will surface real connectivity problems.
+        public static void EnsureUpToDateThen(Action onUpToDate)
+        {
+            if (!AuthAPI.isLoggedIn)
+            {
+                onUpToDate?.Invoke(); // Upload flow enforces login itself.
+                return;
+            }
+
+            EditorUtility.DisplayProgressBar("DreamPark", "Verifying SDK version...", 0.5f);
+            SDKAPI.GetManifest((success, response) =>
+            {
+                EditorUtility.ClearProgressBar();
+                UpdateCacheFromManifest(success, response);
+                ManifestUpdated?.Invoke();
+
+                if (!ManifestFetchSucceeded)
+                {
+                    Debug.LogWarning("[DreamPark] SDK version check failed before upload — continuing (fail-open). " +
+                                     SDKAPI.ExtractError(response, "Could not reach the update server."));
+                    onUpToDate?.Invoke();
+                    return;
+                }
+
+                string current = SDKVersion.Current;
+                if (SDKVersion.Compare(current, LatestVersion) >= 0)
+                {
+                    onUpToDate?.Invoke();
+                    return;
+                }
+
+                EditorUtility.DisplayDialog(
+                    "SDK update required",
+                    $"Your DreamPark SDK is out of date (installed v{current}, latest v{LatestVersion}).\n\n" +
+                    "Update the SDK before uploading content to avoid version drift between creators.",
+                    "OK");
+                UpdateAvailablePopup.Show(current, LatestVersion, BuildReleaseNotesSince(current), LatestDownloadUrl);
+            });
         }
 
         // User-initiated check via DreamPark menu. Differs from the silent
@@ -137,7 +238,7 @@ namespace DreamPark
                 }
 
                 // Manually triggered — bypass skip / remind-me-later state.
-                UpdateAvailablePopup.Show(current, LatestVersion, LatestReleaseNotes, LatestDownloadUrl);
+                UpdateAvailablePopup.Show(current, LatestVersion, BuildReleaseNotesSince(current), LatestDownloadUrl);
             });
         }
 
@@ -158,7 +259,7 @@ namespace DreamPark
                 if (nowMs < remindAfter) return;
             }
 
-            UpdateAvailablePopup.Show(current, LatestVersion, LatestReleaseNotes, LatestDownloadUrl);
+            UpdateAvailablePopup.Show(current, LatestVersion, BuildReleaseNotesSince(current), LatestDownloadUrl);
         }
 
         // Used by UpdateAvailablePopup callbacks.

@@ -625,7 +625,7 @@ namespace DreamPark {
                     UpdateAvailablePopup.Show(
                         SDKVersion.Current,
                         SDKUpdateChecker.LatestVersion,
-                        SDKUpdateChecker.LatestReleaseNotes,
+                        SDKUpdateChecker.BuildReleaseNotesSince(SDKVersion.Current),
                         SDKUpdateChecker.LatestDownloadUrl);
                 }
                 GUILayout.Space(6);
@@ -720,7 +720,12 @@ namespace DreamPark {
             if (GUILayout.Button(compileLabel, GUILayout.Height(34)))
             {
                 SaveLogoSelection();
-                ContentUploadFlowPopup.Show(this, true);
+                // Fresh version check at click time — the passive sdkOutOfDate
+                // gate above reads the once-per-session manifest cache, which
+                // goes stale if the editor stays open across an SDK release.
+                // Out of date → routes to UpdateAvailablePopup instead of the
+                // upload popup.
+                SDKUpdateChecker.EnsureUpToDateThen(() => ContentUploadFlowPopup.Show(this, true));
             }
             GUI.enabled = true;
 
@@ -766,7 +771,10 @@ namespace DreamPark {
                     useFailedOnly = (choice == 0);
                 }
 
-                ContentUploadFlowPopup.Show(this, false, useFailedOnly);
+                // Same click-time version gate as Compile & Upload — a reupload
+                // still publishes bundles built against the stale SDK.
+                bool failedOnlyFinal = useFailedOnly;
+                SDKUpdateChecker.EnsureUpToDateThen(() => ContentUploadFlowPopup.Show(this, false, failedOnlyFinal));
             }
             GUI.enabled = true;
 

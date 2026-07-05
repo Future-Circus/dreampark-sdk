@@ -36,15 +36,31 @@ public class NetId : MonoBehaviour
     /// </summary>
     public event Action<string> OnNetEvent;
 
-    void Awake()
+    bool _registered;
+
+    // Compute + register in Start, NOT Awake. The park spawner does
+    // Instantiate(prefab) → SetParent → rename → stamp NetScope, and Awake
+    // fires inside Instantiate — BEFORE parenting/rename/stamping — so an
+    // Awake-time hash would be computed against a temporary hierarchy.
+    // Start runs after the spawner's synchronous setup completes. Events
+    // that arrive before Start are buffered by NetRegistry and flushed on
+    // registration.
+    void Start()
     {
+        EnsureRegistered();
+    }
+
+    void EnsureRegistered()
+    {
+        if (_registered) return;
         Id = explicitId != 0 ? explicitId : ComputeId();
         NetRegistry.Register(this);
+        _registered = true;
     }
 
     void OnDestroy()
     {
-        NetRegistry.Unregister(Id);
+        if (_registered) NetRegistry.Unregister(Id);
     }
 
     public void ReceiveEvent(string payload)
@@ -64,31 +80,56 @@ public class NetId : MonoBehaviour
     }
 
     /// <summary>
-    /// Builds a deterministic ID from the sibling-index path up to the level root.
-    /// All clients loading the same prefab get the same hierarchy, so the IDs match.
+    /// Deterministic id, stable across devices and sessions. Three rules:
+    ///
+    /// 1. Walking up, STOP at the first <see cref="DreamPark.NetScope"/> and mix
+    ///    its scopeKey (park-doc-stable: levelId|objectIndex|resourceName).
+    ///    Levels and objects spawn concurrently, so sibling order ABOVE an
+    ///    attraction root reflects download completion order — different on
+    ///    every device. It must never enter the hash. Below the scope, the
+    ///    hierarchy is defined by the prefab asset — identical everywhere.
+    ///
+    /// 2. At a scene root (no parent, no scope), use the NAME ONLY — root
+    ///    sibling order differs between Editor and device builds (runtime-
+    ///    spawned roots). Keep scene-placed networked props uniquely named.
+    ///
+    /// 3. All string hashing is FNV over chars — string.GetHashCode() is not
+    ///    guaranteed stable across runtimes (Mono Editor vs IL2CPP device).
+    ///
+    /// "(Clone)" suffixes are stripped so rename timing can't shift the hash.
     /// </summary>
     uint ComputeId()
     {
-        // walk up collecting sibling indices until we hit a root
-        // (no parent, or parent is the scene root)
         uint hash = 2166136261; // FNV-1a offset basis
         Transform t = transform;
 
         while (t != null)
         {
-            uint index = (uint)t.GetSiblingIndex();
-            hash ^= index;
-            hash *= 16777619; // FNV prime
+            if (t.TryGetComponent<DreamPark.NetScope>(out var scope) && !string.IsNullOrEmpty(scope.scopeKey))
+                return MixString(hash, scope.scopeKey);   // stable boundary — stop
 
-            // also mix in the name to handle dynamically spawned siblings
-            // that might shift indices — but for prefab children this is stable
-            int nameHash = t.name.GetHashCode();
-            hash ^= (uint)nameHash;
-            hash *= 16777619;
+            if (t.parent == null)
+                return MixString(hash, CleanName(t.name)); // scene root — name only
+
+            hash ^= (uint)t.GetSiblingIndex();
+            hash *= 16777619; // FNV prime
+            hash = MixString(hash, CleanName(t.name));
 
             t = t.parent;
         }
-
         return hash;
     }
+
+    static uint MixString(uint hash, string s)
+    {
+        for (int i = 0; i < s.Length; i++)
+        {
+            hash ^= s[i];
+            hash *= 16777619;
+        }
+        return hash;
+    }
+
+    static string CleanName(string name) =>
+        name.EndsWith("(Clone)") ? name.Substring(0, name.Length - 7) : name;
 }

@@ -26,6 +26,7 @@ namespace DreamPark
         private float downloadProgress = 0f;
         private string statusMessage = null;
         private Vector2 notesScroll;
+        private GUIStyle notesStyle; // Lazy-built in OnGUI — GUI styles can't be created outside OnGUI.
 
         public static void Show(string currentVersion, string latestVersion, string releaseNotes, string downloadUrl)
         {
@@ -60,9 +61,23 @@ namespace DreamPark
             EditorGUILayout.LabelField($"Latest: v{latestVersion}", EditorStyles.boldLabel);
 
             GUILayout.Space(8);
-            EditorGUILayout.LabelField("Release notes:", EditorStyles.miniBoldLabel);
+            // releaseNotes is the COMBINED history since the installed version
+            // (built by SDKUpdateChecker.BuildReleaseNotesSince) — devs often
+            // skip several releases, so they see every update they're picking
+            // up, not just the latest. Rendered as a disabled text area:
+            // read-only, but scrolls and shows all versions verbatim.
+            EditorGUILayout.LabelField($"Release notes since v{currentVersion}:", EditorStyles.miniBoldLabel);
+            if (notesStyle == null)
+            {
+                notesStyle = new GUIStyle(EditorStyles.textArea) { wordWrap = true };
+            }
             notesScroll = EditorGUILayout.BeginScrollView(notesScroll, GUILayout.MinHeight(100), GUILayout.MaxHeight(220));
-            EditorGUILayout.LabelField(string.IsNullOrEmpty(releaseNotes) ? "(no release notes)" : releaseNotes, EditorStyles.wordWrappedLabel);
+            using (new EditorGUI.DisabledScope(true))
+            {
+                EditorGUILayout.TextArea(
+                    string.IsNullOrEmpty(releaseNotes) ? "(no release notes)" : releaseNotes,
+                    notesStyle, GUILayout.ExpandHeight(true));
+            }
             EditorGUILayout.EndScrollView();
 
             if (isDownloading)

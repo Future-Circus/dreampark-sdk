@@ -360,13 +360,16 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
         if (luaOnNet != null && netId != null)
             netId.OnNetEvent += luaOnNet;
 
-        // inject net_send(eventType, payloadJson) into this script's scope
+        // inject net_send(eventType, payloadJson) into this script's scope.
+        // Read netId.Id at SEND time, not here: NetId finalizes its id in
+        // Start (after the park spawner parents/renames/stamps NetScope),
+        // which runs after this Awake — capturing the value now would
+        // freeze a stale/zero id for park-spawned content.
         if (netId != null) {
             var client = FindObjectOfType<DreamBoxClient>();
             if (client != null) {
-                uint id = netId.Id;
                 scriptScopeTable.Set("net_send", new Action<string, string>((eventType, payload) => {
-                    client.SendToNetId(id, eventType, payload);
+                    client.SendToNetId(netId.Id, eventType, payload);
                 }));
             }
         }
