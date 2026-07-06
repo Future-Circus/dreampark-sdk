@@ -449,6 +449,22 @@ namespace DreamPark
 
             GUILayout.FlexibleSpace();
             GUILayout.Space(12f);
+
+            // Successful uploads auto-open the Developer Portal's Attractions
+            // page (see ContentUploaderPanel's commit handler); this button is
+            // the way back for anyone who closed that tab — same deep link.
+            if (owner.UploadSucceeded && !string.IsNullOrEmpty(owner.ContentId))
+            {
+                if (GUILayout.Button(new GUIContent(
+                    "View Attractions in Developer Portal",
+                    "Opens dreampark.app/developer — edit names, descriptions, and previews for the attractions you just uploaded."),
+                    GUILayout.Height(34f)))
+                {
+                    Application.OpenURL(DeveloperPortalMenuItem.AttractionsUrl(owner.ContentId));
+                }
+                GUILayout.Space(6f);
+            }
+
             if (GUILayout.Button("Close", GUILayout.Height(34f)))
             {
                 Close();
