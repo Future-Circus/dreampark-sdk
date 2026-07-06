@@ -2653,6 +2653,22 @@ namespace DreamPark {
                     }
 
                     CompleteUploadStatus(true, $"'{contentName}' uploaded successfully as {GetVersionSummaryAfterUpload(versionNumber)}.");
+
+                    // Bridge into the second half of the content creation
+                    // flow: the freshly-committed version just (re)synced this
+                    // content's attractions catalog server-side, so pop the
+                    // Developer Portal's Attractions page where every uploaded
+                    // attraction sits ready to be titled/described/priced.
+                    // Only fires on a real successful commit — never for the
+                    // zero-change short-circuit or Test Channel uploads.
+                    try
+                    {
+                        Application.OpenURL(DeveloperPortalMenuItem.AttractionsUrl(uploadContentId));
+                    }
+                    catch (Exception portalEx)
+                    {
+                        Debug.LogWarning("[ContentUploader] Could not open Developer Portal: " + portalEx.Message);
+                    }
                 }
                 else
                 {
