@@ -1,0 +1,56 @@
+-- storage_high_score.lua
+-- Minimal game-storage sample: per-user coins + a race-safe high score.
+--
+-- `storage` is injected into every LuaBehaviour automatically, pre-bound
+-- to the attraction this script lives under (GameArea / PropTemplate /
+-- LevelTemplate up the hierarchy). No gameIds to pass around:
+--
+--     storage.get(key, default)      -- attraction scope, synchronous
+--     storage.set(key, value)        -- string(≤1KB) / number / bool
+--     storage.increment(key, n)      -- returns the new value
+--     storage.max(key, value)        -- set-if-greater (high scores!)
+--     storage.min(key, value)        -- set-if-lower  (best lap time)
+--     storage.delete(key)
+--     storage.game.*                 -- same ops, game-wide scope
+--     storage.onReady(fn)            -- fires once the server snapshot loads
+--
+-- Everything works offline / before pairing too — writes queue locally and
+-- merge into the account when the player scans the QR (max/increment are
+-- applied server-side, so another headset's better score is never clobbered).
+--
+-- Wire `addCoin` / `finishRun` from other scripts via a ScriptInjection,
+-- or from EasyEvent chains.
+--
+-- @var coinValue int 1
+
+local UE = CS.UnityEngine
+local Debug = UE.Debug
+
+local score = 0
+
+function awake()
+    -- Reads are fine immediately (local cache / defaults). onReady fires
+    -- once the player's persisted values have actually arrived.
+    storage.onReady(function()
+        local best = storage.get("high_score", 0)
+        local coins = storage.game.get("coins", 0)
+        Debug.Log(string.format("[storage sample] best=%d coins=%d (synced)", best, coins))
+    end)
+end
+
+-- Call once per coin pickup.
+function addCoin()
+    score = score + (coinValue or 1)
+    -- coins are a GAME-scope currency — shared across this game's attractions
+    storage.game.increment("coins", coinValue or 1)
+end
+
+-- Call when the run ends.
+function finishRun()
+    -- set-if-greater: safe even if this profile is mid-session on another
+    -- headset with a better score.
+    local best = storage.max("high_score", score)
+    storage.increment("runs_played", 1)
+    Debug.Log(string.format("[storage sample] run=%d best=%d", score, best))
+    score = 0
+end

@@ -260,6 +260,10 @@ namespace DreamPark.API
 
         public static void ClearIdentity()
         {
+            // Best-effort final push of pending game-storage writes while
+            // the binding can still authorize them — the OnIdentityCleared
+            // handler in GameStorageAPI wipes cache + queue right after.
+            try { GameStorageAPI.FlushAll(); } catch (Exception e) { Debug.LogWarning($"[ProfileAPI] pre-clear storage flush threw: {e}"); }
             BoundUserId = null;
             BoundDreamId = null;
             _previewKey = null;
@@ -274,7 +278,9 @@ namespace DreamPark.API
             try { OnIdentityCleared?.Invoke(); } catch (Exception e) { Debug.LogWarning($"[ProfileAPI] OnIdentityCleared subscriber threw: {e}"); }
         }
 
-        static string AuthHeader()
+        // internal: GameStorageAPI reuses the same credential selection —
+        // /app/profile/storage/* sits behind the identical auth surface.
+        internal static string AuthHeader()
         {
 #if DREAMPARKCORE
             // Production headset path — the embedded Unity API key. Server
