@@ -386,8 +386,13 @@ namespace DreamPark {
                 contentId = newFolderName;
                 SaveContentIdSelection();
             }
-            // Force fresh metadata + team list for the new id.
+            // Force fresh metadata + team list for the new id. Clear the
+            // per-content name/description too, otherwise a brand-new (or
+            // not-yet-named) content keeps the previously selected content's
+            // values and uploads them as its own identity.
             releaseNotes = "";
+            contentName = "";
+            contentDescription = "";
             LoadLogoSelection();
             FetchContentMetadata();
             FetchContentUsers();
@@ -501,7 +506,12 @@ namespace DreamPark {
             GUILayout.EndHorizontal();
             if (prevIndex != contentIdIndex)
             {
+                // Clear per-content fields on switch so the new selection can't
+                // inherit the previous content's name/description. FetchContentMetadata
+                // repopulates them from the server if this content already has them.
                 releaseNotes = "";
+                contentName = "";
+                contentDescription = "";
                 SaveContentIdSelection();
                 LoadLogoSelection();
                 FetchContentMetadata();
@@ -933,6 +943,36 @@ namespace DreamPark {
             }
             GUI.enabled = true;
 
+            // ─── Update attraction dimensions ────────────────────
+            // Reads every attraction's authored footprint (LevelTemplate
+            // size/customSize, in feet) and pushes the batch to this
+            // content's attractions catalog (POST /api/content/:id/
+            // attractions/dimensions), where the backend derives each
+            // attraction's size-reference tag ("fits a Basketball Court").
+            // A manual repair/backfill path — the same push runs silently
+            // after every upload. Also available for ALL content folders at
+            // once via DreamPark → Troubleshooting → Update Attraction
+            // Dimensions.
+            GUILayout.Space(6);
+            GUI.enabled = !isUploading && !string.IsNullOrEmpty(contentId);
+            if (GUILayout.Button(new GUIContent(
+                "Update Attraction Dimensions",
+                "Uploads every attraction's authored dimensions (feet) to the attractions " +
+                "catalog, refreshing size info even if the asset didn't change. Operators use " +
+                "these to plan around their real-world space — run this to backfill content " +
+                "published before dimensions existed."),
+                GUILayout.Height(22)))
+            {
+                if (EditorUtility.DisplayDialog(
+                    "Update Attraction Dimensions",
+                    "Upload authored dimensions for every attraction in \"" + contentId + "\"?",
+                    "Upload Dimensions", "Cancel"))
+                {
+                    EditorCoroutineUtility.StartCoroutineOwnerless(UploadAttractionDimensionsRoutine(contentId));
+                }
+            }
+            GUI.enabled = true;
+
             // ─── Re-upload Logo ──────────────────────────────────
             // Pushes the selected Logo texture straight to the backend
             // (POST /api/content/:id/logo), refreshing the web-renderable
@@ -1236,6 +1276,190 @@ namespace DreamPark {
                 });
             }
             return list;
+        }
+
+        // ── Update Attraction Dimensions ─────────────────────────────
+        // Collects every attraction's authored footprint (LevelTemplate
+        // size/customSize — FEET, custom-aware) and pushes the batch to the
+        // backend catalog in ONE request (POST /api/content/:id/attractions/
+        // dimensions). Attach-only server-side, exactly like previews: rows
+        // are created by the commit-time catalog sync; this only fills them
+        // in. The size-reference tag ("fits a Basketball Court") is derived
+        // server-side from the same ladder as AttractionSizeReference — the
+        // SDK copy exists for inspector display and log summaries.
+        //
+        // Runs: silently after every successful upload (auto-push), from the
+        // panel's Troubleshooting section, and from DreamPark →
+        // Troubleshooting → Update Attraction Dimensions (all content folders).
+        private class DimensionUploadRoot
+        {
+            public string name;
+            public string resourceName;
+            public float widthFt;
+            public float lengthFt;
+        }
+
+        // Backend catalog key derivation, shared with the preview walk: the
+        // asset path minus the leading "Assets/" and the extension (see
+        // leafStem() in lib/addressablesCatalog.js).
+        private static string ResourceNameForAssetPath(string path)
+        {
+            string resourceName = path;
+            if (resourceName.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+                resourceName = resourceName.Substring("Assets/".Length);
+            int extDot = resourceName.LastIndexOf('.');
+            if (extDot >= 0) resourceName = resourceName.Substring(0, extDot);
+            return resourceName;
+        }
+
+        // Attractions only (LevelTemplate/AttractionTemplate roots) — props
+        // have no authored footprint, and bounds-derived numbers would
+        // mislead operators (product call, July 2026).
+        private static List<DimensionUploadRoot> CollectAttractionDimensionRoots(string idForUpload)
+        {
+            List<DimensionUploadRoot> list = new List<DimensionUploadRoot>();
+            string contentRoot = "Assets/Content/" + idForUpload;
+            if (!AssetDatabase.IsValidFolder(contentRoot)) return list;
+
+            string[] guids = AssetDatabase.FindAssets("t:Prefab", new[] { contentRoot });
+            foreach (string guid in guids)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                if (string.IsNullOrEmpty(path)) continue;
+                if (path.IndexOf("/ThirdPartyLocal/", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+
+                GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                if (prefab == null) continue;
+
+                LevelTemplate level = prefab.GetComponent<LevelTemplate>();
+                if (level == null) continue;
+
+                Vector2 feet = level.DimensionsInFeet;
+                if (!(feet.x > 0f) || !(feet.y > 0f)) continue; // unset custom size etc.
+
+                list.Add(new DimensionUploadRoot
+                {
+                    name = Path.GetFileNameWithoutExtension(path),
+                    resourceName = ResourceNameForAssetPath(path),
+                    widthFt = feet.x,
+                    lengthFt = feet.y,
+                });
+            }
+            return list;
+        }
+
+        // interactive: true = Troubleshooting buttons (dialogs + summary).
+        // false = silent post-upload push, mirroring the previews auto-push —
+        // must run AFTER the commit because the endpoint is attach-only
+        // against rows the server's commit-time catalog sync creates.
+        private static IEnumerator UploadAttractionDimensionsRoutine(string idForUpload, bool interactive = true)
+        {
+            string auth = AuthAPI.GetUserAuth();
+            if (string.IsNullOrEmpty(auth))
+            {
+                if (interactive) EditorUtility.DisplayDialog("Not signed in", "Sign in to DreamPark before uploading dimensions.", "OK");
+                else Debug.LogWarning("[Dimensions] auto-push skipped: not signed in.");
+                yield break;
+            }
+
+            List<DimensionUploadRoot> roots = CollectAttractionDimensionRoots(idForUpload);
+            if (roots.Count == 0)
+            {
+                if (interactive)
+                    EditorUtility.DisplayDialog("No attractions", "No attractions with dimensions were found under Assets/Content/" + idForUpload + ".", "OK");
+                else
+                    Debug.Log("[Dimensions] auto-push: nothing to send for " + idForUpload + ".");
+                yield break;
+            }
+
+            // ONE batched request — dims are tiny, unlike preview PNGs.
+            JSONObject payload = new JSONObject(JSONObject.Type.Object);
+            JSONObject arr = new JSONObject(JSONObject.Type.Array);
+            foreach (DimensionUploadRoot r in roots)
+            {
+                JSONObject row = new JSONObject(JSONObject.Type.Object);
+                row.AddField("resourceName", r.resourceName);
+                row.AddField("widthFt", r.widthFt);
+                row.AddField("lengthFt", r.lengthFt);
+                arr.Add(row);
+                var reference = AttractionSizeReference.Compute(r.widthFt, r.lengthFt);
+                Debug.Log("[Dimensions] " + r.name + ": " + r.widthFt.ToString("0.#") + " × " + r.lengthFt.ToString("0.#")
+                    + " ft" + (reference != null ? " (fits a " + reference.Value.label + ")" : ""));
+            }
+            payload.AddField("attractions", arr);
+
+            bool done = false, success = false;
+            string err = null;
+            JSONObject result = null;
+            DreamParkAPI.POST("/api/content/" + Uri.EscapeDataString(idForUpload) + "/attractions/dimensions", auth, payload, (s, resp) =>
+            {
+                success = s && resp != null && resp.statusCode == 200;
+                result = resp != null ? resp.json : null;
+                if (!success) err = (resp != null && !string.IsNullOrEmpty(resp.error)) ? resp.error : "upload failed";
+                done = true;
+            });
+            while (!done) yield return null;
+
+            if (success)
+            {
+                int updated = result != null && result.GetField("updated") != null ? result.GetField("updated").intValue : roots.Count;
+                int skipped = result != null && result.GetField("skipped") != null ? result.GetField("skipped").intValue : 0;
+                string summary = updated + " attraction dimension" + (updated == 1 ? "" : "s") + " updated" +
+                    (skipped > 0 ? ", " + skipped + " not in the catalog yet (upload a build first)" : "") + ".";
+                if (interactive) EditorUtility.DisplayDialog("Dimensions uploaded", summary, "OK");
+                else Debug.Log("[Dimensions] auto-push: " + summary);
+            }
+            else
+            {
+                Debug.LogWarning("[Dimensions] upload failed for " + idForUpload + ": " + err);
+                if (interactive) EditorUtility.DisplayDialog("Dimensions upload failed", err, "OK");
+            }
+        }
+
+        // DreamPark → Troubleshooting: push dimensions for EVERY content
+        // folder under Assets/Content — the quick backfill path for parks
+        // published before dimensions existed. (The panel's Troubleshooting
+        // section has the same action scoped to the selected content.)
+        [MenuItem("DreamPark/Troubleshooting/Update Attraction Dimensions", false, 208)]
+        private static void UpdateAttractionDimensionsMenu()
+        {
+            string contentRoot = "Assets/Content";
+            if (!AssetDatabase.IsValidFolder(contentRoot))
+            {
+                EditorUtility.DisplayDialog("No content", "No Assets/Content folder found.", "OK");
+                return;
+            }
+
+            List<string> contentIds = new List<string>();
+            foreach (string dir in Directory.GetDirectories(contentRoot))
+            {
+                string id = Path.GetFileName(dir);
+                if (!string.IsNullOrEmpty(id)) contentIds.Add(id);
+            }
+            if (contentIds.Count == 0)
+            {
+                EditorUtility.DisplayDialog("No content", "No content folders found under Assets/Content.", "OK");
+                return;
+            }
+
+            if (!EditorUtility.DisplayDialog(
+                "Update Attraction Dimensions",
+                "Upload authored attraction dimensions for: " + string.Join(", ", contentIds) + "?",
+                "Upload Dimensions", "Cancel"))
+                return;
+
+            EditorCoroutineUtility.StartCoroutineOwnerless(UploadDimensionsForContentsRoutine(contentIds));
+        }
+
+        private static IEnumerator UploadDimensionsForContentsRoutine(List<string> contentIds)
+        {
+            foreach (string id in contentIds)
+            {
+                yield return UploadAttractionDimensionsRoutine(id, interactive: contentIds.Count == 1);
+                if (contentIds.Count > 1) Debug.Log("[Dimensions] finished " + id);
+            }
+            if (contentIds.Count > 1)
+                EditorUtility.DisplayDialog("Dimensions uploaded", "Pushed attraction dimensions for " + contentIds.Count + " content folders. See Console for per-content results.", "OK");
         }
 
         private byte[] ReadPreviewBytes(string previewsFolder, string name)
@@ -2650,6 +2874,21 @@ namespace DreamPark {
                     catch (Exception pvEx)
                     {
                         Debug.LogWarning("[Previews] auto-push failed to start: " + pvEx.Message);
+                    }
+
+                    // Push authored attraction dimensions (feet) the same way —
+                    // silent, attach-only, after the commit-time catalog sync
+                    // has created the rows. Every upload keeps dimensions in
+                    // lockstep with the build; the backend derives each
+                    // attraction's size-reference tag from them.
+                    try
+                    {
+                        EditorCoroutineUtility.StartCoroutineOwnerless(
+                            UploadAttractionDimensionsRoutine(uploadContentId, interactive: false));
+                    }
+                    catch (Exception dimEx)
+                    {
+                        Debug.LogWarning("[Dimensions] auto-push failed to start: " + dimEx.Message);
                     }
 
                     CompleteUploadStatus(true, $"'{contentName}' uploaded successfully as {GetVersionSummaryAfterUpload(versionNumber)}.");

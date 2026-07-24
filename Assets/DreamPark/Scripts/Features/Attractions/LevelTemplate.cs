@@ -12,6 +12,13 @@ using UnityEditor;
 public class LevelTemplateEditor : Editor {
     public override void OnInspectorGUI() {
         base.OnInspectorGUI();
+        // Human-readable footprint + size-reference tag (the same ladder the
+        // uploader publishes to the platform — see AttractionSizeReference).
+        var template = target as LevelTemplate;
+        if (template != null) {
+            Vector2 feet = template.DimensionsInFeet;
+            EditorGUILayout.HelpBox(AttractionSizeReference.Describe(feet.x, feet.y), MessageType.None);
+        }
         if (GUILayout.Button("Test Real World Calibration")) {
             var levelTemplate = target as LevelTemplate;
             levelTemplate.TestRealWorldCalibration();
@@ -534,8 +541,10 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
             lr.loop = false;
             lr.useWorldSpace = false;
 
-            // get dimensions (in meters)
-            Vector2 dimensions = GameLevelDimensions.GetDimensionsInMeters(size);
+            // get dimensions (in meters) — must be custom-aware: the enum
+            // overload returns Vector2.zero for GameLevelSize.Custom, which
+            // drew a degenerate (invisible) selection outline on custom levels.
+            Vector2 dimensions = new Vector2(Size.x, Size.z);
 
             // rectangle points starting from bottom-left corner (counterclockwise)
             Vector3[] rectangle = new Vector3[5];
@@ -551,6 +560,19 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
             get {
                 Vector2 dims = (size == GameLevelSize.Custom) ? GameLevelDimensions.GetDimensionsInMeters(customSize) : GameLevelDimensions.GetDimensionsInMeters(size);
                 return new Vector3(dims.x, 0, dims.y);
+            }
+        }
+
+        /// <summary>
+        /// The authored footprint in FEET (x = width, y = length) — custom-aware.
+        /// This is the value the Content Uploader publishes to the platform's
+        /// attractions catalog (POST /api/content/{id}/attractions/dimensions),
+        /// where it drives the operator app's dimensions display, size-reference
+        /// tags, and size-grouped placement picker.
+        /// </summary>
+        public Vector2 DimensionsInFeet {
+            get {
+                return (size == GameLevelSize.Custom) ? customSize : GameLevelDimensions.GetDimensions(size);
             }
         }
         public void HideSelect()
@@ -580,8 +602,8 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
             lr.loop = false;
             lr.useWorldSpace = false;
 
-            // get dimensions (in meters)
-            Vector2 dimensions = GameLevelDimensions.GetDimensionsInMeters(size);
+            // get dimensions (in meters) — custom-aware, same fix as ShowSelect
+            Vector2 dimensions = new Vector2(Size.x, Size.z);
 
             // rectangle points starting from bottom-left corner (counterclockwise)
             Vector3[] rectangle = new Vector3[5];
