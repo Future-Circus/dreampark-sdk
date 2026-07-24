@@ -132,6 +132,10 @@ namespace DreamPark.API
         public static event Action OnInventoryChanged;
         public static event Action<ProfileAchievement> OnAchievementUpdated;
         public static event Action<ProfileBadge> OnBadgeAwarded;
+        /// <summary>Fired when AwardItem succeeds, with the freshly-fetched
+        /// inventory row (name/iconUri/contentId hydrated). The Adventure
+        /// Ledger logs it as an item_collected timeline event.</summary>
+        public static event Action<ProfileItem> OnItemAwarded;
         // Fired whenever DreamPoints changes — including hydrate from snapshot,
         // earn from /add, and debit from /spend. Subscribe to drive HUD updates.
         public static event Action<int /* newBalance */, int /* delta */> OnDreamPointsChanged;
@@ -522,7 +526,9 @@ namespace DreamPark.API
                 FetchProfile(ContentFilter, (_, __) =>
                 {
                     try { OnInventoryChanged?.Invoke(); } catch (Exception e) { Debug.LogWarning(e); }
-                    done?.Invoke(true, GetItem(itemId));
+                    var awarded = GetItem(itemId);
+                    try { OnItemAwarded?.Invoke(awarded); } catch (Exception e) { Debug.LogWarning(e); }
+                    done?.Invoke(true, awarded);
                 });
             });
         }

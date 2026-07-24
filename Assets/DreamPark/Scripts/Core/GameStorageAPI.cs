@@ -124,6 +124,22 @@ namespace DreamPark.API
         /// re-loaded after an identity bind). Arg = contentId.</summary>
         public static event Action<string> OnStorageSynced;
 
+        /// <summary>Fired after every LOCAL numeric write op with the post-op
+        /// value: (contentId, attractionSlug ("" = game scope), key, op
+        /// (increment|max|min), amount, newLocalValue). Observers (e.g. the
+        /// AdventureLedger, which folds "max" ops into score_set timeline
+        /// events) can watch score writes without wrapping the API. Fires
+        /// per CALL (pre-coalesce) — subscribers must do their own folding
+        /// if a game spams writes per frame.</summary>
+        public static event Action<string, string, string, string, double, double> OnNumericOp;
+
+        /// <summary>Fired after every LOCAL Set(): (contentId, attractionSlug
+        /// ("" = game scope), key, value (string|bool|double)). Together with
+        /// OnNumericOp this gives observers the full write stream — the
+        /// AdventureLedger folds it into per-visit "game data saved" rows.
+        /// Same pre-coalesce caveat as OnNumericOp.</summary>
+        public static event Action<string, string, string, object> OnSetOp;
+
         // ── Scope key helpers ────────────────────────────────────────────
 
         /// <summary>Slug an attraction identifier the SAME way the backend
@@ -217,6 +233,8 @@ namespace DreamPark.API
 
             bucket[key] = norm;
             Enqueue(store, slug, key, "set", norm);
+            try { OnSetOp?.Invoke(contentId, slug, key, norm); }
+            catch (Exception e) { Debug.LogWarning($"[GameStorageAPI] OnSetOp subscriber threw: {e}"); }
             return true;
         }
 
@@ -285,6 +303,8 @@ namespace DreamPark.API
             }
             bucket[key] = next;
             Enqueue(store, slug, key, opName, amount);
+            try { OnNumericOp?.Invoke(contentId, slug, key, opName, amount, next); }
+            catch (Exception e) { Debug.LogWarning($"[GameStorageAPI] OnNumericOp subscriber threw: {e}"); }
             return next;
         }
 
