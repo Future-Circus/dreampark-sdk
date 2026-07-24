@@ -116,12 +116,22 @@ namespace DreamPark.API
             CoroutineRunner.Run(GetRequest(url, authToken, callback));
             #endif
         }
+        // UnityWebRequest's default timeout is 0 — WAIT FOREVER. A server
+        // that accepts the connection but never responds (e.g. a crashed
+        // route handler) used to hang the request eternally, and with it any
+        // UI waiting on the callback (the stuck park-save overlay). Every
+        // request gets a hard ceiling; the callback then fires with a
+        // timeout error like any other failure.
+        private const int RequestTimeoutSeconds = 30;
+        private const int UploadTimeoutSeconds = 180; // large multipart/PUT payloads
+
         private static IEnumerator PostRequest(string url, string authToken, byte[] bodyRaw, Action<bool, APIResponse> callback)
         {
             using (UnityWebRequest req = new UnityWebRequest(url, UnityWebRequest.kHttpVerbPOST))
             {
                 req.uploadHandler = new UploadHandlerRaw(bodyRaw);
                 req.downloadHandler = new DownloadHandlerBuffer();
+                req.timeout = RequestTimeoutSeconds;
 
                 req.SetRequestHeader("Content-Type", "application/json");
                 if (!string.IsNullOrEmpty(authToken))
@@ -139,6 +149,7 @@ namespace DreamPark.API
             using (UnityWebRequest req = new UnityWebRequest(url, UnityWebRequest.kHttpVerbGET))
             {
                 req.downloadHandler = new DownloadHandlerBuffer();
+                req.timeout = RequestTimeoutSeconds;
                 if (!string.IsNullOrEmpty(authToken))
                     req.SetRequestHeader("Authorization", authToken);
 
@@ -161,6 +172,7 @@ namespace DreamPark.API
 
             using (UnityWebRequest req = UnityWebRequest.Post(url, form))
             {
+                req.timeout = UploadTimeoutSeconds;
                 if (!string.IsNullOrEmpty(authToken))
                     req.SetRequestHeader("Authorization", authToken);
 
@@ -183,6 +195,7 @@ namespace DreamPark.API
             {
                 req.uploadHandler = new UploadHandlerRaw(data);
                 req.downloadHandler = new DownloadHandlerBuffer();
+                req.timeout = UploadTimeoutSeconds;
                 req.SetRequestHeader("Content-Type", contentType);
 
                 var op = req.SendWebRequest();

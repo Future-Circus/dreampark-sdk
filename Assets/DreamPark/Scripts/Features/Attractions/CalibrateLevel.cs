@@ -117,13 +117,31 @@ namespace DreamPark {
             }
         }
 
-        private void ConformGridToSurface()
+        /// <summary>
+        /// Auto-calibration Phase 1 (Docs/Auto-Calibration-Spec.md §4): one-shot
+        /// conform against whatever raycastable environment exists right now
+        /// (AR mesh chunks persist across mode switches within a session, so a
+        /// Scan sweep keeps paying off after the user leaves Scan mode).
+        /// Applies ONLY when at least minCoverage of the floor grid vertices get
+        /// a floor-like hit — a partially-covered footprint stays flat rather
+        /// than baking a tented edge. Returns true when a bake was applied.
+        /// Callers: spawn commit (LevelAnchor.NewLevel) and move commit
+        /// (BuildModeObjectController). Scan mode keeps its continuous conform
+        /// and never routes through here.
+        /// </summary>
+        public bool ConformOnce(float minCoverage = 0.6f)
+        {
+            if (dynamicMesh == null) return false;
+            return ConformGridToSurface(minCoverage);
+        }
+
+        private bool ConformGridToSurface(float minCoverage = 0f)
         {
             Debug.Log("ConformGridToSurface called");
             if (dynamicMesh == null)
             {
                 Debug.LogWarning("CalibrateLevel: Missing dynamic mesh.");
-                return;
+                return false;
             }
 
             // If we have original vertices stored, use those as the base for calibration
@@ -152,10 +170,23 @@ namespace DreamPark {
                 }
             }
 
+            // Coverage gate (Auto-Calibration-Spec §4): one-shot bakes pass a
+            // minCoverage and must NOT apply a partial conform — a footprint
+            // half-off the scanned area stays flat, never a tented edge.
+            // Scan mode passes 0 = legacy behavior (apply on any hits, and the
+            // calibrated flag / change notification fire regardless).
+            float coverage = verts.Length > 0 ? (float)hitCount / verts.Length : 0f;
+            bool gated = minCoverage > 0f;
+            if (gated && coverage < minCoverage)
+            {
+                Debug.Log($"CalibrateLevel: coverage {coverage:P0} below gate {minCoverage:P0} — leaving {gameObject.name} unbaked");
+                return false;
+            }
+
             if (hitCount > 0)
             {
                 Debug.Log("CalibrateLevel: " + hitCount + " hits found, updating mesh");
-                
+
                 // Re-cut holes with calibrated vertices
                 if (holeDefinitions != null && holeDefinitions.Count > 0)
                 {
@@ -168,13 +199,14 @@ namespace DreamPark {
                     dynamicMesh.RecalculateNormals();
                     meshCollider.sharedMesh = dynamicMesh;
                 }
-            } 
+            }
             else
             {
                 Debug.LogWarning("CalibrateLevel: No hits found");
             }
             calibrated = true;
             LevelTemplate.NotifyLevelTemplateChanged();
+            return hitCount > 0;
         }
 
         private void RecutHolesAndUpdateMesh(Vector3[] calibratedVertices)
@@ -433,6 +465,12 @@ namespace DreamPark {
 
         private void OnMeshesChanged(ARMeshesChangedEventArgs args)
         {
+            // Auto-calibration Phase 1 (Docs/Auto-Calibration-Spec.md §4/§6):
+            // conform ONLY while Scan mode is active. Meshing also runs in AR
+            // build mode (placement raycasts), and mesh updates there used to
+            // silently re-conform every placed floor. Floors may change only
+            // at sanctioned moments: Scan mode, spawn commit, move commit.
+            if (!isCalibrating) return;
             if (args.added.Count > 0 || args.updated.Count > 0)
                 ConformGridToSurface();
         }

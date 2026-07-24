@@ -339,6 +339,17 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
         InjectAll();
         InjectCollections();
 
+        // inject `storage` — per-user game/attraction key-value storage
+        // (GameStorageAPI) bound to this script's owning attraction via a
+        // lazy proxy. Injected BEFORE the script body runs so file-scope
+        // reads work; lazy because the park spawner parents spawned content
+        // AFTER Awake (same reason net_send reads netId.Id at send time) —
+        // the GameArea/PropTemplate/LevelTemplate walk happens on first use.
+        // Pure Lua-side wiring: no C#→Lua delegate bridging, IL2CPP-safe.
+        // (nil-guarded so an Inspector injection named `storage` wins.)
+        luaEnv.DoString("if storage == nil then storage = __dp_storage_lazy and __dp_storage_lazy(self.gameObject) or nil end",
+            "gamestorage.inject", scriptScopeTable);
+
         luaEnv.DoString(luaScript.text, luaScript.name, scriptScopeTable);
 
         luaAwake = scriptScopeTable.Get<Action>("awake");
