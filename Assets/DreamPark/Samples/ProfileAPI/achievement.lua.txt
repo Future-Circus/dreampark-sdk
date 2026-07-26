@@ -7,11 +7,22 @@
 --     via a ScriptInjection:
 --         awardAch.trigger()         -- use the @var-configured progress
 --         awardAch.trigger(2.5)      -- override progress per-call
+--
+-- Set `progress` to 0 (or leave `oneShot` ticked) for a one-shot
+-- achievement — the kind the player either did or didn't do. That marks
+-- it complete in a single call instead of nudging a progress bar, and is
+-- safe to fire more than once.
 --   • EasyLua — fires automatically when the EasyEvent chain reaches
 --     this node, then passes control to the next event the same frame.
 --
+--
+-- Requires the player to have ENTERED one of your attractions. Awards made
+-- before they walk into a GameArea of this game are held and sent the moment
+-- they do — so wiring this to a park-wide script that fires on start() will
+-- look like nothing happened until the player actually arrives.
 -- @var achievementId string ""
 -- @var progress float 1.0
+-- @var oneShot bool false
 
 local UE = CS.UnityEngine
 local Debug = UE.Debug
@@ -42,6 +53,17 @@ function trigger(overrideProgress)
         return false
     end
     local p = overrideProgress or progress or 1.0
+
+    -- One-shot: mark it done outright rather than adding progress.
+    if oneShot or p <= 0 then
+        pcall(function()
+            dp.profile.awardAchievement(id)   -- no progress arg = complete
+        end)
+        Debug.Log("[award-achievement] '" .. tostring(id) .. "' completed")
+        fired = true
+        return true
+    end
+
     pcall(function()
         dp.profile.awardAchievement(id, p)
     end)

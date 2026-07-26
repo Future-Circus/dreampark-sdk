@@ -36,7 +36,7 @@ End-to-end sanity check for the networking stack. Talks to the bundled local dev
 
 - **Discovery & connection:** the connect button calls `DreamBoxClient.Connect("127.0.0.1", 7777, "dreambox")` directly (skipping UDP discovery). Confirms LiteNetLib can reach the relay and handshake with the correct key.
 - **Dispatch plumbing:** "Send Random Color" calls `DreamBoxClient.SendToNetId(netId, "color", "{...}")`. The relay broadcasts to all other peers; on each client, `DreamBoxClient.HandleEvent` parses the inbound JSON and calls `NetRegistry.Dispatch(netId, payload)`, which invokes `NetId.OnNetEvent` on the matching object.
-- **Single-client convenience:** the relay excludes the sender from `SendToAll`, so a lone client wouldn't receive its own message back. `TestNetObject.SendRandomColor` applies the colour locally as well as sending, so you get a visible result with just one client. Spin up a second Unity Editor (or a standalone build of this scene) and you'll see live colour sync between them.
+- **Single-client convenience:** the relay excludes the sender when it fans a message out, so a lone client wouldn't receive its own message back. `TestNetObject.SendRandomColor` applies the colour locally as well as sending, so you get a visible result with just one client. Spin up a second Unity Editor (or a standalone build of this scene) and you'll see live colour sync between them.
 
 ### Regenerating the scene
 

@@ -8,11 +8,11 @@ SDK template for third-party game developers. A complete Unity 6 project cloned 
 Assets/
 ├── DreamPark/         ← SDK source (~540 C# files, must match dreampark-core exactly)
 ├── Content/
-│   └── YOUR_GAME_HERE/        ← Renamed to PascalCase park name by new-park.sh
+│   └── YOUR_GAME_HERE/        ← Renamed via the in-editor setup popup (ContentIdSetupPopup, auto-opened by PlaceholderContentDetector; letters+digits, starts with a letter). Folder name = content ID. Multiple content folders may coexist — each is an independent package; the Content Uploader's dropdown picks which to publish.
 │       ├── 1. Scenes/Template.unity
-│       ├── 2. Features/
-│       │   ├── 1. Player/Player.prefab
-│       │   └── 2. Level/Level.prefab (uses AttractionTemplate component)
+│       ├── 2. Features/1. Player/Player.prefab
+│       ├── Prefabs/            ← A_*.prefab attractions (AttractionTemplate root), P_*.prefab props (PropTemplate root)
+│       ├── Previews/           ← {prefabName}.png tile art
 │       ├── Scripts/            ← Game-specific C# (minimal — prefer Lua)
 │       └── ThirdParty/         ← Only used assets (git-tracked, shipped in builds)
 └── ThirdPartyLocal/            ← Imported packages land here (gitignored, not in builds)
@@ -21,10 +21,12 @@ Assets/
 ## SDK Sync
 The ~540 files in Assets/DreamPark/ must match dreampark-core exactly. `#if DREAMPARKCORE` blocks (core-only code) are conditionally compiled out of this SDK distribution — the source remains visible but doesn't compile in SDK builds. Use conditional compilation to mark what's core-specific. Anything entirely core-only (no SDK reason to exist at all, e.g. consumer-app pairing flows, internal admin tooling) should live in dreampark-core's own `Assets/Scripts/` outside `Assets/DreamPark/` rather than as an empty SDK file.
 
-## Key Prefabs
-- **Player.prefab**: Root player object (persists across attractions). Global systems (audio, score, park state) live here as LuaBehaviours.
-- **DreamBand.prefab**: Wrist band UI integration.
-- **Level.prefab**: Physical space definition using AttractionTemplate (extends LevelTemplate with auto-added GameArea and MusicArea).
+## The Three Primitives
+- **Player.prefab** (`2. Features/1. Player/`): Root player object (persists across attractions). Global systems (audio, score, park state) live here as LuaBehaviours.
+- **AttractionTemplate** (: LevelTemplate): root component of an attraction prefab — a self-contained experience (arcade game, boss battle, challenge course). LevelTemplate's `[RequireComponent]`s auto-add GameArea (presence detection — drives PlayerRig show/hide AND playtime-based revenue attribution) and MusicArea. Defines the physical space (size/customSize, floor generation, calibration).
+- **PropTemplate**: root component of a prop prefab — the individual interactive elements that make up an attraction (coin, hammer, enemy). Auto-adds its own GameArea at priority -1 (self-suppressed when nested inside an attraction). Props are also placeable standalone in parks.
+
+There is no creator-facing DreamBand or Level prefab — the DreamBand wrist UI ships with the SDK's hand tracking, and attractions are authored as `Prefabs/A_*.prefab`, not a canonical Level.prefab.
 
 ## Creating Attractions & Props (content pipeline)
 An attraction is a prefab under `Assets/Content/{GameName}/` with an `AttractionTemplate` (: `LevelTemplate`) on its root; a prop has `PropTemplate`. `ContentProcessor` (SDK-synced, `Assets/DreamPark/Editor/`) watches `Assets/Content/` and automates everything else — do NOT hand-edit Addressables addresses or labels:
@@ -32,8 +34,29 @@ An attraction is a prefab under `Assets/Content/{GameName}/` with an `Attraction
 - **Runtime address** (assigned automatically): `{gameId}/Levels/{size}/{name}` for attractions, `{gameId}/Props/{category}/{name}` for props, `{gameId}/{TypeFolder}/{name}` for typed assets (Models/Audio/Textures/…), `{gameId}/Previews/{name}` for preview PNGs. Label = `{gameId}`.
 - **TWO identifier namespaces — never conflate them**: the runtime Addressables ADDRESS above vs the backend catalog `resourceName`, which is the internal ASSET-PATH stem (`Content/{GameName}/Attractions/A_X` — asset path with `Assets/` + extension stripped). They only coincided for legacy folder layouts. Core's `LevelAnchor.ResolveSpawnAddress` translates stem→address at spawn; treat `resourceName` as an opaque join key, never a loadable address.
 - **Stamping pass** (`ContentProcessor`, EditPrefabContentsScope + SaveAsPrefabAsset): injects `gameId` into any component with a `gameId` field and stamps the per-attraction address onto `GameArea`/`PropTemplate.resourceName` — this is the revenue-attribution key, so it must match what the backend catalog derives. Skips `ThirdPartyLocal/`. Prefabs get edited + saved dirty by this pass; that's expected — commit the churn.
-- **Previews**: `Assets/Content/{GameName}/Previews/{prefabName}.png` (or sibling `{name}_preview.png`) — powers Attractions-browser/level-picker tiles and the consumer map. No preview = blank tile.
+- **Previews**: `Assets/Content/{GameName}/Previews/{prefabName}.png` (or sibling `{name}_preview.png`) — powers Attractions-browser/level-picker tiles and the consumer map. Auto-generated for every attraction/prop; regenerate via `DreamPark → Troubleshooting → Regenerate Level Previews` after visual changes.
 - **Catalog population is automated**: uploading a build publishes the attractions catalog server-side (discovered from the catalog's `m_InternalIds`). There is no manual registration step — if an attraction is missing from the browser, check the `A_`/`P_` prefix and that the prefab root has the right template component.
+
+## Game Storage (per-user save data: high scores, progress, coins)
+Spec: dreampark-core `Docs/Game-Storage-Spec.md`. Sample: `Assets/DreamPark/Samples/GameStorage/storage_high_score.lua.txt`. Every LuaBehaviour gets a `storage` variable auto-bound to its attraction (lazy walk up to GameArea/PropTemplate/LevelTemplate — no ids to pass):
+
+```lua
+storage.increment("coins", 5)          -- returns new value
+storage.max("high_score", score)       -- set-if-greater: race-safe across devices
+storage.min("best_time", lapTime)      -- set-if-lower
+storage.set("checkpoint", 3)           -- string(≤1KB)/number/bool ONLY
+storage.get("checkpoint", 0)           -- synchronous, with default
+storage.game.set("progress", 3)        -- game scope (shared across your attractions)
+storage.onReady(function() ... end)    -- server snapshot loaded (reads work before it)
+```
+
+Rules & gotchas:
+- **Backed by `GameStorageAPI`** (SDK-synced, `Scripts/Core/`) → `/app/profile/storage/{contentId}`. Editor testing uses the SDK preview key (same `ProfileAPI.BindToLoggedInUser` pairing flow as inventory); production auth is the headset binding.
+- **Hard caps** — this is progress/score storage, NOT a blob store: keys `[A-Za-z0-9_-]` ≤64 chars, 64 keys & 8 KB per scope, 64 KB per game. Oversized writes fail locally with a warning (`set` returns false).
+- **Prefer `max`/`min`/`increment` over read-compare-`set`** — ops apply server-side, so the same profile playing on another headset can't be clobbered. Writes are debounced/coalesced automatically; per-frame `increment` is fine.
+- **Works unbound**: guest play reads/writes locally and merges into the account if the player pairs mid-session. Nothing persists for a session that never pairs.
+- Scripts outside any attraction (e.g. Player.prefab park systems) use `dp.storage.game(gameId)`; the injected `storage` there would warn-once and no-op.
+- **Writes are gated on attraction entry** (`ContentGate`, `Scripts/Core/`). A guest in the park hasn't opted into every installed game, so storage flushes and all `ProfileAPI` writes (items/achievements/badges/DreamPoints) are held until the player enters a `GameArea` of that content, then flush in order and stay open for the rest of the identity. Reads and session heartbeats are never gated. Editor sessions auto-open (`ContentGate.AutoOpenInEditor`) since there's often no GameArea to walk into. It's a correctness guard against honest mistakes, NOT a security boundary — the server-side per-guest rate limits are that.
 
 ## DO NOT
 - Add core-specific code (e.g., backend debug toggles, internal versioning systems).
@@ -42,10 +65,10 @@ An attraction is a prefab under `Assets/Content/{GameName}/` with an `Attraction
 
 ## Workflow
 1. Creator clones dreampark-sdk as a new project.
-2. new-park.sh renames YOUR_GAME_HERE to the park name (e.g., CoinCollector).
+2. On first editor open, the setup popup renames YOUR_GAME_HERE to the game name (e.g., CoinCollector). (There is no new-park.sh — the popup is the rename mechanism.)
 3. Creator adds game content, Lua scripts, and prefabs to Assets/Content/{GameName}/.
 4. All gameplay logic is Lua-first via LuaBehaviour.
-5. Built Addressable prefabs are deployed to DreamPark servers.
+5. Built Addressable prefabs are deployed to DreamPark servers via DreamPark → Content Uploader — one attraction at a time or a whole park's worth; each upload publishes the attractions catalog automatically and is immediately playable in the iOS app with Experimental Mode on.
 
 ## Multiplayer (LAN peer-host + DreamBox relay)
 Full spec: dreampark-core `Docs/LAN-PeerHost-Spec.md`. Stack lives in `Assets/DreamPark/Scripts/Features/Net/` (SDK-synced).

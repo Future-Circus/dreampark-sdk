@@ -9,6 +9,23 @@
 //  on the backend (same identity/auth model as ProfileAPI — headset
 //  binding in production, preview key in SDK editor testing).
 //
+//
+//  ── WRITES REQUIRE THE PLAYER TO ENTER YOUR ATTRACTION FIRST ──
+//  A guest walking around a venue has not opted into every game installed
+//  there. Writes are therefore held by ContentGate until the player
+//  physically steps into a GameArea belonging to this content; the moment
+//  they do, everything queued is sent in order and every later write goes
+//  straight through for the rest of that identity. Walking back out does
+//  not close it again — it is a one-time entry, not a presence check.
+//
+//  Reads are never gated. Neither is session playtime reporting.
+//
+//  In practice this is invisible: the natural place to write is inside the
+//  attraction the guest is standing in. It matters for park-wide systems on
+//  Player.prefab that write on start(), and in the editor where there may
+//  be no GameArea to walk into (editor sessions auto-open the gate — see
+//  ContentGate.AutoOpenInEditor).
+//
 //  Spec: dreampark-core Docs/Game-Storage-Spec.md.
 //
 //  Model:
@@ -605,6 +622,15 @@ namespace DreamPark.API
             if (store.flushInFlight || store.queue.Count == 0) return;
             if (!ProfileAPI.IsBound) return; // stays queued; replays after bind + fetch
 
+            // Consent latch: no save data leaves the device until the player
+            // has physically walked into one of this content's attractions.
+            // Ops keep accumulating locally (and reads keep working off the
+            // cache), so gameplay is unaffected — they flush on entry.
+            // Held, not dropped: ops stay queued locally and drain via the
+            // ContentGate.OnOpened subscription below the moment the player
+            // walks in. Reads keep working off the cache throughout.
+            if (!ContentGate.IsOpen(store.contentId)) return;
+
             int n = Math.Min(store.queue.Count, MaxOpsPerRequest);
             var chunk = store.queue.GetRange(0, n);
             store.queue.RemoveRange(0, n);
@@ -720,6 +746,19 @@ namespace DreamPark.API
                     store.loaded = false;
                     store.fetchRetries = 0;
                     if (!store.fetchInFlight && !store.fetchRetryScheduled) Fetch(store);
+                }
+            };
+
+            // A content id just latched open (the player entered one of its
+            // attractions) — drain anything that was held for it. Subscribing
+            // here rather than queueing a callback per store means a store can
+            // never be stranded waiting on a callback that got discarded.
+            ContentGate.OnOpened += _ =>
+            {
+                foreach (var kv in _stores)
+                {
+                    var st = kv.Value;
+                    if (st.epoch == _epoch && st.queue.Count > 0) ScheduleFlush(st, 0f);
                 }
             };
 

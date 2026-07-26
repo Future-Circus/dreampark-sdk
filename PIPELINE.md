@@ -1,8 +1,8 @@
 # DreamPark SDK — Unity Mixed Reality Game Pipeline
 
-End-to-end ordered checklist for shipping a mixed-reality experience on Meta Quest 3S using the **dreampark-sdk** (Unity 6000.0.39f1, URP, OpenXR, Meta XR SDK 81, Addressables, XLua).
+End-to-end ordered checklist for shipping a mixed-reality experience on Meta Quest 3S using the **dreampark-sdk** (Unity 6000.0.58f2, URP, OpenXR, Meta XR SDK 81, Addressables, XLua).
 
-The paradigm in one paragraph: a creator clones `dreampark-sdk`, runs `new-park.sh` to rename `Assets/Content/YOUR_GAME_HERE/` to a `PascalCase` park name (e.g. `CoinCollector`), authors the experience as one or more **Attractions** (rooms / activities) populated with **Props** (interactive objects). The headset's `Camera.main` position drives a `GameArea` enter/exit check on every Attraction; the matching `PlayerRig` and `DreamBand` (wrist UI) `Show()` while inside, `Hide()` outside. **All gameplay logic lives in Lua scripts** attached to GameObjects via the `LuaBehaviour` component (XLua) — never write C# for gameplay. Final output is automatically bundled via Addressables and deployed to DreamPark servers via `DreamPark → Content Uploader`.
+The paradigm in one paragraph: a creator clones `dreampark-sdk`, opens it in Unity, and names their game in the setup popup that appears (renaming `Assets/Content/YOUR_GAME_HERE/` to a `PascalCase` game name, e.g. `CoinCollector` — the folder name IS the content ID), then authors the experience as one or more **Attractions** (rooms / activities) populated with **Props** (interactive objects). The headset's `Camera.main` position drives a `GameArea` enter/exit check on every Attraction; the matching `PlayerRig` and `DreamBand` (wrist UI) `Show()` while inside, `Hide()` outside. **All gameplay logic lives in Lua scripts** attached to GameObjects via the `LuaBehaviour` component (XLua) — never write C# for gameplay. Final output is automatically bundled via Addressables and deployed to DreamPark servers via `DreamPark → Content Uploader`.
 
 ### Interaction model — read this first
 
@@ -33,10 +33,10 @@ Anything more elaborate must be expressed by combining these three.
 
 ## Phase 1 — Project Bootstrap
 
-1. Verify Unity Hub has **Unity 6000.0.39f1** with the **Android Build Support** module (includes OpenJDK + Android SDK + NDK).
-2. Clone the SDK: `git clone <dreampark-sdk-url> MyPark` then `cd MyPark`.
-3. Run `Tools/new-park.sh MyParkName` — renames `Assets/Content/YOUR_GAME_HERE/` to `Assets/Content/MyParkName/` and rewrites every `gameId: YOUR_GAME_HERE` reference inside prefabs and scenes to `MyParkName`.
-4. Open the project in Unity. Wait for the package resolver to finish (`com.meta.xr.sdk.core 81.0.0`, `com.unity.xr.oculus 4.5.0`, `com.unity.addressables 2.3.16`, etc., listed in `Packages/manifest.json`).
+1. Verify Unity Hub has **Unity 6000.0.58f2** with the **Android Build Support** module (includes OpenJDK + Android SDK + NDK).
+2. Clone the SDK: `git clone https://github.com/Future-Circus/dreampark-sdk.git MyPark` then `cd MyPark`.
+3. Open the project in Unity. On first load a **setup popup** appears — enter your game ID (letters and digits only, starting with a letter, e.g. `MyParkName`). It renames `Assets/Content/YOUR_GAME_HERE/` to `Assets/Content/MyParkName/` and rewrites every `gameId: YOUR_GAME_HERE` reference inside prefabs and scenes. (Dismissed it? The Content Uploader's **Set Content ID** button reopens it.)
+4. Wait for the package resolver to finish (`com.meta.xr.sdk.core 81.0.0`, `com.unity.xr.oculus 4.5.0`, `com.unity.addressables 2.3.16`, etc., listed in `Packages/manifest.json`).
 5. **Edit → Project Settings → Player → Android → Other Settings**: confirm `Minimum API Level = 32`, `Target API Level = 34`, `Scripting Backend = IL2CPP`, `Target Architectures = ARM64`.
 6. **Edit → Project Settings → XR Plug-in Management → Android tab**: enable **OpenXR** and **Oculus**. Under **OpenXR → Feature Groups**, enable **Meta Quest Support**, **Hand Tracking Subsystem**, **Meta XR Foundation**.
 7. **File → Build Profiles**: set **Android** as the active platform, click **Switch Platform**. **Texture Compression = ASTC**.
@@ -211,7 +211,7 @@ Every gameplay behaviour goes here. **Do not write C#.** The SDK's 108 C# files 
 
 There are **no buttons, no menus, no rays, no pokes, no sliders**. UI in DreamPark is either text/imagery glued to physical props, or it lives on the `DreamBand` wrist surface.
 
-1. The **DreamBand prefab** is the primary UI surface — a wrist band that reflects gameplay state via its state machine (`START`, `STANDBY`, `PLAY`, `PAUSE`, `END`, `COLLECT`, `INJURE`, `RESTART`, `ACHIEVEMENT`, `WIN`, `DESTROY`). Put a `LuaBehaviour` on it and drive its visuals (text, color, particle bursts) from Lua reacting to game events.
+1. The **DreamBand** — the wrist-band UI on the player's hand — is provided by the SDK's player rig and reflects platform state automatically (you'll see its purple gizmo on the `HandTracker`). It is not authorable content; for game-specific readouts use the diegetic surfaces below.
 2. For **diegetic in-world readouts** (a scoreboard on a wall, a number floating over a peg): **GameObject → UI → Canvas** → set **Render Mode = World Space**, **Event Camera = the OVR Camera Rig's CenterEyeAnchor**, and scale to `0.001` so 1 px ≈ 1 mm. Place it as a child of the prop or attraction.
 3. Use **TextMeshPro** (`com.unity.ugui`) for any text. Drop a `TMP_Text`. Drive `text` from Lua: `scoreText.text = tostring(score)`.
 4. **No interactive UI elements**. If the player needs to "press" something, it must be a physical prop they touch / hit / step on — i.e. a space trigger or a broad collision, never a UI Button component.
@@ -239,16 +239,20 @@ There are **no buttons, no menus, no rays, no pokes, no sliders**. UI in DreamPa
 
 1. Confirm a `DreamBoxClient` GameObject exists in the scene (drop `Assets/DreamPark/Samples/MultiplayerTest.unity` into your scene as a reference, or copy the `DreamBoxClient` GameObject into yours).
 2. Run a local relay during dev: **DreamPark → Multiplayer → Start Local Server**. Confirm the console shows `:7777` and the web panel at `http://127.0.0.1:7780`.
-3. **Add Component → NetId** on every prop that should be synchronized. The `Id` is auto-derived from the hierarchy sibling-index path — so the prop's path must be identical on every client (don't reorder siblings between builds).
+3. **Add Component → NetId** on every prop that should be synchronized. The `Id` is a deterministic hash of the object's hierarchy path, stopping at the nearest `NetScope` (stamped by the park spawner with park-doc-stable data). Below that boundary the hierarchy comes from the prefab asset, so it is identical on every client — just don't reorder siblings inside the prefab between builds. Scene-root objects hash on name alone, so keep scene-placed networked props uniquely named. Set `explicitId` to override.
 4. In Lua, define `function onnet(payload) end` — auto-wired when both `NetId` and `LuaBehaviour` are on the same GameObject.
 5. Send via the auto-injected `net_send(eventType, payloadJson)` global in your Lua scope:
 
    ```lua
    net_send("color", '{"r":1,"g":0,"b":0}')
 
+   -- onnet receives the FULL envelope: {"type":"color","payload":{"netId":N,"r":..,"g":..,"b":..}}
+   -- so read t.payload.<field>, never t.<field>.
    function onnet(payload)
        local t = json_parse(payload)
-       self:GetComponent(typeof(CS.UnityEngine.Renderer)).material.color = CS.UnityEngine.Color(t.r, t.g, t.b, 1)
+       local p = t.payload
+       if p == nil or p.r == nil then return end
+       self:GetComponent(typeof(CS.UnityEngine.Renderer)).material.color = CS.UnityEngine.Color(p.r, p.g, p.b, 1)
    end
    ```
 6. Test with two Unity Editor instances on the same machine pointing at `127.0.0.1:7777`; the relay fans messages to all peers except the sender.
@@ -262,14 +266,14 @@ By this point every prop is a finished prefab in `Assets/Content/MyParkName/Pref
 3. **GameObject → Create Empty** named `MyAttraction` at world origin.
 4. **Add Component → AttractionTemplate**. The `[RequireComponent]` will auto-add `GameArea` and `MusicArea`. Set: `gameId = MyParkName`, `size = Medium` (or whatever Phase 0 defined), `defaultAnchorPosition = (0, -3.2)` (where the player portal-spawns relative to the floor center, in meters), `generateFloor = true`, `floorMaterial = Assets/DreamPark/Materials/Occlusion.mat`.
 5. Drag `Assets/Content/MyParkName/2. Features/1. Player/Player.prefab` into the Hierarchy as a child of the scene root (NOT a child of the Attraction). Set its `PlayerRig.gameId = MyParkName` to match.
-6. Drag `Assets/Content/MyParkName/2. Features/2. DreamBand/DreamBand.prefab` into the Hierarchy. Set `DreamBand.gameId = MyParkName`.
+6. The **DreamBand** wrist UI ships with the SDK's hand tracking — there is nothing to drag in for it.
 7. On the `MyAttraction` GameObject's `MusicArea` component, assign `musicTrack` to the AudioClip from Phase 2 step 10. Set `volume = 0.6`, `priority = 0`.
 8. **Drag prop prefabs** from `Assets/Content/MyParkName/Prefabs/` into the Hierarchy as children of the Attraction. They inherit calibration from the Attraction.
 9. For each prop instance, confirm its **PropTemplate** component (auto-added when you authored it) is configured: `category` is correct, `affectsGapFiller = true` for floor-occupying props, `useColliderBounds = true` if your collider snugly matches the visual.
 10. **Cut floor holes** for pits / passages: child Empty → **Add Component → FloorCutout** → in the Inspector add Vector2 `points` describing the polygon (in level-local space). Gizmos preview the cut.
 11. Add a **GapFiller** if you have non-axis-aligned floor geometry: `MyAttraction` → child Empty → **Add Component → GapFiller**. It auto-subscribes to `LevelTemplate.OnAnyLevelTemplateChanged`.
 12. Verify the purple Gizmo wireframe of the AttractionTemplate matches your physical room. The orange "human reference" gizmo at `defaultAnchorPosition` shows where the player will spawn.
-13. Save the scene. The attraction prefab in `Assets/Content/MyParkName/2. Features/3. Level/Level.prefab` is the canonical authoring artifact — when ready, drag your Attraction GameObject onto it to update.
+13. Save the scene, then drag the `MyAttraction` GameObject into `Assets/Content/MyParkName/Prefabs/` to create the attraction prefab — name it with the `A_` prefix (`A_MyAttraction.prefab`), the attraction naming convention. The prefab, not the scene, is what ships: the SDK bundles every `AttractionTemplate` / `PropTemplate` prefab in your content folder. HD preview tile art is auto-generated into `Previews/` (refresh via `DreamPark → Troubleshooting → Regenerate Level Previews` after visual changes).
 
 ## Phase 10 — NavMesh & AI (For Attractions With Enemies)
 
@@ -338,15 +342,18 @@ By this point every prop is a finished prefab in `Assets/Content/MyParkName/Pref
 
 You do not manage Addressables by hand. The SDK auto-bundles anything that is a `PropTemplate` or `AttractionTemplate` prefab living under `Assets/Content/MyParkName/`. Your only job is keeping things in the right folder with the right component.
 
+You also don't need a full park to publish: an upload ships whatever attractions and props exist in the folder at that moment, and the attractions catalog updates automatically. Release one attraction now, add more in later versions — or publish a whole park's worth at once.
+
 1. Confirm every prefab you want shipped is under `Assets/Content/MyParkName/` and has a `PropTemplate` (for props) or `AttractionTemplate` (for levels) on its root. Anything else is build-only or scratch.
 2. Confirm every prefab has a non-empty `gameId` matching your park name. The SDK's auto-inclusion logic uses `gameId` to group bundles.
 3. **DreamPark → Content Uploader** — opens the publish window:
 
+   - If your project holds multiple content folders under `Assets/Content/` (each subfolder is its own independent content package), pick which one to publish from the content dropdown at the top. Each package uploads, versions, and earns separately.
    - Pick build targets: **Android** (required for Quest), and optionally **iOS / StandaloneOSX / StandaloneWindows** for cross-platform companion apps.
    - **Clean Before Each Target** = on for the first publish.
    - Click **Upload Content (Build & Push)** — the SDK builds Addressables for every selected target and pushes to DreamPark servers.
    - Click **Upload Content (Push Only)** if bundles are already built.
-4. Verify on a real Quest 3S that the published park is reachable through the DreamPark client app and the entire flow plays end-to-end.
+4. Verify on a real Quest 3S that the published content is reachable through the DreamPark client app and the entire flow plays end-to-end. Fresh uploads are gated behind **Experimental Mode** in the DreamPark iOS app's park settings — toggle it on to see them immediately.
 5. **Tag a release**: `git tag v0.1.0 && git push --tags`.
 
 ## Phase 15 — Iteration & Maintenance
