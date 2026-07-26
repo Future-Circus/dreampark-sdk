@@ -6,13 +6,16 @@
 
 ---
 
-DreamPark is a chain of physical mixed-reality venues. Guests arrive, put on a Quest 3 and a DreamBand wristband, and walk into your attraction in a real room — hands tracked, passthrough on, no controllers.
+DreamPark is a mixed-reality theme park platform. It lets real venues run fully virtual attractions — hours of entertainment for visitors carrying nothing but a Quest 3 headset. No wearables, no controllers, no per-attraction hardware to install.
+
+The part no one else does: **attractions from different developers run side by side in the same venue.** An operator sets up and manages an entire lineup in minutes from a simple mobile app, mixing your attraction in with everyone else's. Your build downloads to the venue, runs on the headset, and earns you a share of every play.
 
 This repo is the SDK: a complete, ready-to-open **Unity 6** project. Clone it, name your game, build an attraction, and push it live from the editor. There's no store submission and no review queue — uploads are playable on real hardware the same day.
 
 ## Why build here
 
 - **You get 50% of every play.** Operators pay an entry fee for each session at their park. Half of that goes to developers, and the split follows the guests: the more of a session they spend inside your attraction, the more of the pool you take. If they only play yours, the whole developer share is yours. [Full terms in plain English →](https://dreampark.app/developer-terms)
+- **You're not competing for a venue, you're joining one.** Attractions from different developers coexist in the same space, so an operator adding your work doesn't have to drop anyone else's.
 - **One-click publishing.** The in-editor Content Uploader bundles your build and pushes it to DreamPark. No submission process, no waiting room.
 - **Live immediately.** New uploads appear in the DreamPark mobile app right away under **Experimental Mode**, so you can playtest on a headset minutes after building.
 - **Bring the Unity content you already have.** A prefab library, an old jam project, a half-finished game — drop it under an `AttractionTemplate` and convert the gameplay scripts to Lua. Most C# translates line for line.
