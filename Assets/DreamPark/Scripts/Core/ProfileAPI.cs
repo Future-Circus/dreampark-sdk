@@ -526,6 +526,39 @@ namespace DreamPark.API
             return ("/app/profile/" + suffix, AuthHeader());
         }
 
+        static bool _warnedUnapprovedPoints;
+
+        /// <summary>The content id of the attraction the guest is standing in.
+        /// DreamPoints are only real on approved content, so the server needs
+        /// to know who is asking; the GameArea the player is inside is the
+        /// same signal ContentGate latches on. Falls back to the profile's
+        /// content filter, then empty (which the server treats as
+        /// unapproved — it fails closed).</summary>
+        static string CallingContentId()
+        {
+            var here = GameArea.currentGameArea;
+            if (here != null && !string.IsNullOrEmpty(here.gameId)) return here.gameId;
+            return ContentFilter ?? "";
+        }
+
+        /// <summary>The server returns success with credited/debited=false when
+        /// the calling content isn't an approved release. Gameplay carries on
+        /// unchanged — but say so once, or a developer ships an economy that
+        /// only becomes real at approval and never got tested.</summary>
+        static void WarnIfPointsNotApplied(JSONObject json, string verb)
+        {
+            if (json == null) return;
+            var flag = json.GetField(verb == "spend" ? "debited" : "credited");
+            if (flag == null || flag.boolValue) return;
+            if (_warnedUnapprovedPoints) return;
+            _warnedUnapprovedPoints = true;
+            var reason = json.GetField("reason")?.stringValue ?? "unapproved";
+            Debug.LogWarning(
+                $"[ProfileAPI] DreamPoints {verb} succeeded but changed nothing (reason: {reason}). " +
+                "Points are only real on APPROVED attractions — experimental builds no-op so your " +
+                "game logic runs the same either way. This warns once per session.");
+        }
+
         /// <summary>POST a profile WRITE through the consent latch.
         ///
         /// A guest wandering a park has not opted into every game installed
@@ -794,6 +827,9 @@ namespace DreamPark.API
             var body = new JSONObject(JSONObject.Type.Object);
             if (Source == ProfileSource.Headset) body.AddField("headsetId", HeadsetIdHeader());
             body.AddField("amount", amount);
+            // Tells the server which attraction is asking. Only approved
+            // content can move real points; anything else no-ops server-side.
+            body.AddField("contentId", CallingContentId());
             if (!string.IsNullOrEmpty(reason)) body.AddField("reason", reason);
 
             var (url, auth) = PickWrite("dreampoints/add");
@@ -806,6 +842,7 @@ namespace DreamPark.API
                     done?.Invoke(false, DreamPoints);
                     return;
                 }
+                WarnIfPointsNotApplied(resp?.json, "add");
                 int prev = DreamPoints;
                 int newBalance = (int)(resp?.json?.GetField("dreamPoints")?.floatValue ?? prev + amount);
                 DreamPoints = newBalance;
@@ -829,6 +866,9 @@ namespace DreamPark.API
             var body = new JSONObject(JSONObject.Type.Object);
             if (Source == ProfileSource.Headset) body.AddField("headsetId", HeadsetIdHeader());
             body.AddField("amount", amount);
+            // Tells the server which attraction is asking. Only approved
+            // content can move real points; anything else no-ops server-side.
+            body.AddField("contentId", CallingContentId());
             if (!string.IsNullOrEmpty(reason)) body.AddField("reason", reason);
 
             var (url, auth) = PickWrite("dreampoints/spend");
@@ -842,6 +882,7 @@ namespace DreamPark.API
                     return;
                 }
                 int prev = DreamPoints;
+                WarnIfPointsNotApplied(resp?.json, "spend");
                 int newBalance = (int)(resp?.json?.GetField("dreamPoints")?.floatValue ?? Math.Max(0, prev - amount));
                 DreamPoints = newBalance;
                 try { OnDreamPointsChanged?.Invoke(newBalance, newBalance - prev); } catch (Exception e) { Debug.LogWarning(e); }
