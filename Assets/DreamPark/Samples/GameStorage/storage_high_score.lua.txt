@@ -16,7 +16,15 @@
 --
 -- Everything works offline / before pairing too — writes queue locally and
 -- merge into the account when the player scans the QR (max/increment are
+-- applied server-side, so another headset's better score is never clobbered).-- Everything works offline / before pairing too — writes queue locally and
+-- merge into the account when the player scans the QR (max/increment are
 -- applied server-side, so another headset's better score is never clobbered).
+--
+-- Saving requires the player to have ENTERED this attraction. A guest in the
+-- park hasn't opted into every game installed there, so writes are held until
+-- they physically step into one of your GameAreas — then everything queued is
+-- sent, and it stays open for the rest of their visit. Reads always work, so
+-- gameplay is unaffected either way.
 --
 -- Wire `addCoin` / `finishRun` from other scripts via a ScriptInjection,
 -- or from EasyEvent chains.

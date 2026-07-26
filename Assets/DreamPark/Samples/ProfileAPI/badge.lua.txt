@@ -15,6 +15,11 @@
 -- server-side — calling award() on a badge the player already owns is a
 -- silent no-op rather than an error. Removes are also idempotent.
 --
+--
+-- Requires the player to have ENTERED one of your attractions. Awards made
+-- before they walk into a GameArea of this game are held and sent the moment
+-- they do — so wiring this to a park-wide script that fires on start() will
+-- look like nothing happened until the player actually arrives.
 -- @var badgeId string ""
 -- @var remove bool false      -- true = strip the badge, false = award it
 

@@ -20,6 +20,18 @@
 -- catalog id can stack as multiple unique instances. The backend forces
 -- amount=1 for unique entries. Has no effect when amount is negative.
 --
+-- NOTE: makeUnique is for loot where each copy is meant to be
+-- DISTINGUISHABLE (procedurally rolled gear, numbered collectibles). It is
+-- NOT how you make an item non-stacking — every call mints another row, and
+-- each row is worth profile XP. For a one-of-a-kind item (a wand, a key, a
+-- costume), untick "Stacks" on the catalog entry in the developer portal
+-- instead; awardItem then becomes a no-op once the player has it.
+--
+--
+-- Requires the player to have ENTERED one of your attractions. Awards made
+-- before they walk into a GameArea of this game are held and sent the moment
+-- they do — so wiring this to a park-wide script that fires on start() will
+-- look like nothing happened until the player actually arrives.
 -- @var itemId string ""
 -- @var amount int 1
 -- @var makeUnique bool false
@@ -56,9 +68,12 @@ function trigger(overrideAmount)
     end
 
     if amt > 0 then
-        local unique = makeUnique or false
         pcall(function()
-            dp.profile.awardItem(id, amt, unique)
+            if makeUnique then
+                dp.profile.awardUniqueItem(id)
+            else
+                dp.profile.awardItem(id, amt)
+            end
         end)
         Debug.Log("[award-item] +" .. tostring(amt) .. " '" .. tostring(id) .. "'"
             .. (unique and " (unique)" or ""))

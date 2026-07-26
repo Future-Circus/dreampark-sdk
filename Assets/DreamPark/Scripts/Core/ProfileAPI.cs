@@ -13,6 +13,23 @@
 //  and behavior degrades gracefully when no user is bound (SDK preview /
 //  guest play).
 //
+//
+//  ── WRITES REQUIRE THE PLAYER TO ENTER YOUR ATTRACTION FIRST ──
+//  A guest walking around a venue has not opted into every game installed
+//  there. Writes are therefore held by ContentGate until the player
+//  physically steps into a GameArea belonging to this content; the moment
+//  they do, everything queued is sent in order and every later write goes
+//  straight through for the rest of that identity. Walking back out does
+//  not close it again — it is a one-time entry, not a presence check.
+//
+//  Reads are never gated. Neither is session playtime reporting.
+//
+//  In practice this is invisible: the natural place to write is inside the
+//  attraction the guest is standing in. It matters for park-wide systems on
+//  Player.prefab that write on start(), and in the editor where there may
+//  be no GameArea to walk into (editor sessions auto-open the gate — see
+//  ContentGate.AutoOpenInEditor).
+//
 //  Calling pattern (C#):
 //      ProfileAPI.FetchProfile("dragon-raid", (ok, profile) => { ... });
 //      var wand = ProfileAPI.GetItemByType("wand");          // sync cache read
@@ -509,6 +526,46 @@ namespace DreamPark.API
             return ("/app/profile/" + suffix, AuthHeader());
         }
 
+        /// <summary>POST a profile WRITE through the consent latch.
+        ///
+        /// A guest wandering a park has not opted into every game installed
+        /// there. Writes made before the player walks into one of this
+        /// content's attractions are held by <see cref="ContentGate"/> and
+        /// sent the moment they do — so a script that awards on Start, or a
+        /// park-wide system firing for someone who never reached the room,
+        /// can't reach the profile.
+        ///
+        /// Reads are NOT gated (harmless), and neither is session playtime
+        /// reporting (it's what tells the platform the guest is playing).
+        /// </summary>
+        static void GatedPost(string url, string auth, JSONObject body, Action<bool, APIResponse> done)
+        {
+            ContentGate.Run(null, () => DreamParkAPI.POST(url, auth, body, done));
+        }
+
+        /// <summary>Grant one UNIQUE instance of an item — a distinct
+        /// inventory entry with its own instance id, created fresh on every
+        /// call. For loot where each copy is meant to differ (procedurally
+        /// rolled gear, numbered collectibles).
+        ///
+        /// This is NOT how you make an item non-stacking: every call creates
+        /// another item, and each one is worth profile XP. For a one-of-a-kind
+        /// item (a wand, a key, a costume), untick "Stacks" on the catalog
+        /// entry and use <see cref="AwardItem"/>.</summary>
+
+        public static void AwardUniqueItem(string itemId, JSONObject metadata = null, Action<bool, ProfileItem> done = null)
+        {
+            var meta = metadata;
+            if (meta == null)
+            {
+                // A stub metadata object is what tells the backend to mint a
+                // distinct instance — any truthy metadata takes that path.
+                meta = new JSONObject(JSONObject.Type.Object);
+                meta.AddField("unique", true);
+            }
+            AwardItem(itemId, 1, meta, done);
+        }
+
         public static void AwardItem(string itemId, int amount = 1, JSONObject metadata = null, Action<bool, ProfileItem> done = null)
         {
             if (!IsBound) { Debug.LogWarning("[ProfileAPI] AwardItem with no identity bound."); done?.Invoke(false, null); return; }
@@ -520,7 +577,7 @@ namespace DreamPark.API
             if (metadata != null) body.AddField("metadata", metadata);
 
             var (url, auth) = PickWrite("inventory/add");
-            DreamParkAPI.POST(url, auth, body, (ok, resp) =>
+            GatedPost(url, auth, body, (ok, resp) =>
             {
                 if (!ok) { done?.Invoke(false, null); return; }
                 FetchProfile(ContentFilter, (_, __) =>
@@ -533,7 +590,30 @@ namespace DreamPark.API
             });
         }
 
+        /// <summary>Add <paramref name="progress"/> toward an achievement.
+        /// Progress ACCUMULATES across calls, so pass the delta, not the
+        /// running total. The achievement completes on its own once the
+        /// catalog's maxValue is reached (a catalog entry with no maxValue is
+        /// binary — threshold 1 — so a single call finishes it).
+        ///
+        /// For a one-shot "the player did the thing" achievement, prefer
+        /// <see cref="CompleteAchievement"/>: it states the intent instead of
+        /// relying on the threshold, and is safe to call repeatedly.</summary>
         public static void AwardAchievement(string achievementId, float progress = 1, Action<bool, ProfileAchievement> done = null)
+        {
+            AwardAchievement(achievementId, progress, false, done);
+        }
+
+        /// <summary>Mark an achievement complete outright, whatever its
+        /// progress threshold. Idempotent — completion is sticky server-side
+        /// and the "earned on" timestamp is stamped once, so calling this from
+        /// a trigger the guest can re-enter is safe.</summary>
+        public static void CompleteAchievement(string achievementId, Action<bool, ProfileAchievement> done = null)
+        {
+            AwardAchievement(achievementId, 1, true, done);
+        }
+
+        public static void AwardAchievement(string achievementId, float progress, bool complete, Action<bool, ProfileAchievement> done = null)
         {
             if (!IsBound) { Debug.LogWarning("[ProfileAPI] AwardAchievement with no identity bound."); done?.Invoke(false, null); return; }
 
@@ -541,9 +621,12 @@ namespace DreamPark.API
             if (Source == ProfileSource.Headset) body.AddField("headsetId", HeadsetIdHeader());
             body.AddField("achievementId", achievementId);
             body.AddField("progress", progress);
+            // Only sent when the caller means "done" — the server treats a
+            // bare progress write as an increment.
+            if (complete) body.AddField("completed", true);
 
             var (url, auth) = PickWrite("achievements/add");
-            DreamParkAPI.POST(url, auth, body, (ok, resp) =>
+            GatedPost(url, auth, body, (ok, resp) =>
             {
                 if (!ok) { done?.Invoke(false, null); return; }
                 FetchProfile(ContentFilter, (_, __) =>
@@ -564,7 +647,7 @@ namespace DreamPark.API
             body.AddField("badgeId", badgeId);
 
             var (url, auth) = PickWrite("badges/award");
-            DreamParkAPI.POST(url, auth, body, (ok, resp) =>
+            GatedPost(url, auth, body, (ok, resp) =>
             {
                 if (!ok) { done?.Invoke(false, null); return; }
                 FetchProfile(ContentFilter, (_, __) =>
@@ -598,7 +681,7 @@ namespace DreamPark.API
             body.AddField("amount", amount);
 
             var (url, auth) = PickWrite("inventory/remove");
-            DreamParkAPI.POST(url, auth, body, (ok, resp) =>
+            GatedPost(url, auth, body, (ok, resp) =>
             {
                 if (!ok) { done?.Invoke(false); return; }
                 FetchProfile(ContentFilter, (_, __) =>
@@ -624,7 +707,7 @@ namespace DreamPark.API
 
             var (url, auth) = PickWrite("badges/remove");
 
-            DreamParkAPI.POST(url, auth, body, (ok, resp) =>
+            GatedPost(url, auth, body, (ok, resp) =>
             {
                 if (!ok) { done?.Invoke(false); return; }
                 FetchProfile(ContentFilter, (_, __) => done?.Invoke(true));
@@ -714,7 +797,7 @@ namespace DreamPark.API
             if (!string.IsNullOrEmpty(reason)) body.AddField("reason", reason);
 
             var (url, auth) = PickWrite("dreampoints/add");
-            DreamParkAPI.POST(url, auth, body, (ok, resp) =>
+            GatedPost(url, auth, body, (ok, resp) =>
             {
                 if (!ok)
                 {
@@ -749,7 +832,7 @@ namespace DreamPark.API
             if (!string.IsNullOrEmpty(reason)) body.AddField("reason", reason);
 
             var (url, auth) = PickWrite("dreampoints/spend");
-            DreamParkAPI.POST(url, auth, body, (ok, resp) =>
+            GatedPost(url, auth, body, (ok, resp) =>
             {
                 if (!ok)
                 {
@@ -980,6 +1063,7 @@ namespace DreamPark.API
                 // random suffix to the inventory key and forces amount=1.
                 // Any truthy `metadata` triggers the unique path server-side
                 // (see /api/user/inventory/add + /app/profile/inventory/add).
+                env.Global.Set("dp_profile_award_unique_item", new Action<string>(id => AwardUniqueItem(id)));
                 env.Global.Set("dp_profile_award_item",        new Action<string, int, bool>((id, amt, unique) => {
                     JSONObject meta = null;
                     if (unique) {
@@ -989,6 +1073,7 @@ namespace DreamPark.API
                     AwardItem(id, amt, meta);
                 }));
                 env.Global.Set("dp_profile_award_achievement", new Action<string, float>((id, p)  => AwardAchievement(id, p)));
+                env.Global.Set("dp_profile_complete_achievement", new Action<string>(id            => CompleteAchievement(id)));
                 env.Global.Set("dp_profile_award_badge",       new Action<string>(id              => AwardBadge(id)));
                 env.Global.Set("dp_profile_remove_item",       new Action<string, int>((id, amt) => RemoveItem(id, amt)));
                 env.Global.Set("dp_profile_remove_badge",      new Action<string>(id             => RemoveBadge(id)));
@@ -1026,7 +1111,22 @@ namespace DreamPark.API
                         getDreamPoints   = function()     return dp_profile_get_dreampoints() end,
 
                         awardItem        = function(id, amt, unique) dp_profile_award_item(id, amt or 1, unique or false) end,
-                        awardAchievement = function(id, p)    dp_profile_award_achievement(id, p or 1) end,
+                        -- One distinct instance per call. For a one-of-a-kind
+                        -- item, untick Stacks on the catalog entry and use
+                        -- awardItem instead. (No double quotes in this block:
+                        -- it is a C# verbatim string, where a bare quote ends
+                        -- the literal. Escape as '' if you ever need one.)
+                        awardUniqueItem  = function(id) return dp_profile_award_unique_item(id) end,
+                        -- Alias: reward* reads naturally to some callers, and
+                        -- both names are cheap to keep pointing at one impl.
+                        rewardUniqueItem = function(id) return dp_profile_award_unique_item(id) end,
+                        -- awardAchievement(id)     → mark it complete (one-shot task)
+                        -- awardAchievement(id, n)  → add n progress toward it
+                        awardAchievement = function(id, p)
+                            if p == nil then return dp_profile_complete_achievement(id) end
+                            return dp_profile_award_achievement(id, p)
+                        end,
+                        completeAchievement = function(id) return dp_profile_complete_achievement(id) end,
                         awardBadge       = function(id)       dp_profile_award_badge(id) end,
                         removeItem       = function(id, amt)  dp_profile_remove_item(id, amt or 1) end,
                         removeBadge      = function(id)       dp_profile_remove_badge(id) end,
