@@ -26,6 +26,11 @@ namespace DreamPark
     //   soft. Two passes give every preview a full 512×512 of actual
     //   rendered pixels (1024×1024 supersampled), regardless of how
     //   eccentric the prefab's bounds are.
+    //
+    // Animation: when the supplied PreviewSettings carry frozen poses, the
+    // hidden instance is sampled onto the chosen clips/frames before pass 1
+    // (see PreviewAnimationSampler), so both passes and the shipped PNG all
+    // photograph the same pose the creator picked in the Preview Editor.
     public static class PrefabPreviewRenderer
     {
         private static readonly Vector3 kIsolatedPosition = new Vector3(10000, 10000, 10000);
@@ -39,6 +44,16 @@ namespace DreamPark
         // silhouette. Pass 2's framing is computed from the scout's actual
         // alpha rect, so this only needs to "include everything".
         private const float kScoutFramingPadding = 1.5f;
+
+        // Extra scout headroom when the prefab has been frozen on an
+        // animation frame. Bounds are measured from the bind pose (Unity
+        // only recomputes skinned bounds at render time), so a pose that
+        // throws an arm or a lid well outside the rest shape can overflow
+        // the scout frame and get cropped. Pass 2 reframes off the alpha
+        // rect either way, so the only cost of a roomier scout is a slightly
+        // smaller silhouette to measure — cheap insurance against a clipped
+        // preview. Unposed renders keep the historical 1.5 exactly.
+        private const float kPosedScoutFramingPadding = 2.25f;
 
         // Final breathing room around the silhouette, as a fraction of the
         // longer side. 3% = nearly edge-to-edge with just enough margin
@@ -61,11 +76,12 @@ namespace DreamPark
             return RenderPreview(prefab, PreviewSettings.Default, resolution);
         }
 
-        // Settings-aware render. Camera azimuth/elevation and the final zoom
-        // (framing fill) are taken from `settings`; everything else — the
-        // two-pass silhouette centering, lighting, supersampling — is
-        // unchanged. With PreviewSettings.Default this is byte-identical to
-        // the original renderer, so untouched prefabs never churn their PNG.
+        // Settings-aware render. Camera azimuth/elevation, the final zoom
+        // (framing fill) and any frozen animation poses are taken from
+        // `settings`; everything else — the two-pass silhouette centering,
+        // lighting, supersampling — is unchanged. With PreviewSettings.Default
+        // this is byte-identical to the original renderer, so untouched
+        // prefabs never churn their PNG.
         public static Texture2D RenderPreview(GameObject prefab, PreviewSettings settings, int resolution = 512)
         {
             if (prefab == null) return null;
@@ -82,9 +98,20 @@ namespace DreamPark
             RenderTexture scoutRt = null;
             RenderTexture finalRt = null;
             Camera cam = null;
+            PreviewAnimationSampler.PoseScope poseScope = default;
 
             try
             {
+                // Freeze any animated entities on their chosen clip + frame
+                // BEFORE bounds are measured, so the scout pass sees the pose
+                // the creator picked rather than the authored bind pose. The
+                // sampling batch stays live until poseScope is disposed in
+                // the finally block — the renders below must happen inside
+                // it. A settings value with no poses doesn't touch the
+                // instance at all — this is a no-op for every prefab that
+                // predates the animation controls.
+                poseScope = PreviewAnimationSampler.ApplyPoses(instance, settings);
+
                 Bounds bounds = CalculateBounds(instance);
                 if (bounds.size == Vector3.zero)
                 {
@@ -133,7 +160,8 @@ namespace DreamPark
                 // ── Pass 1: scout at low res with generous framing ───────
                 scoutRt = NewRenderTexture(kScoutRes);
                 cam.targetTexture = scoutRt;
-                FrameInfo scoutFrame = ApplyBoundsFraming(cam, bounds, kScoutFramingPadding, settings);
+                float scoutPadding = settings.HasAnyPose ? kPosedScoutFramingPadding : kScoutFramingPadding;
+                FrameInfo scoutFrame = ApplyBoundsFraming(cam, bounds, scoutPadding, settings);
                 cam.Render();
 
                 RectInt silhouette;
@@ -178,6 +206,12 @@ namespace DreamPark
             }
             finally
             {
+                // Leave animation mode after rendering but before anything
+                // gets destroyed — StopAnimationMode reverts the property
+                // modifications it recorded, and reverting onto a destroyed
+                // instance is how you get phantom errors in the Console.
+                poseScope.Dispose();
+
                 if (cam != null) cam.targetTexture = null;
                 if (camObj != null) Object.DestroyImmediate(camObj);
                 if (lightObj != null) Object.DestroyImmediate(lightObj);
