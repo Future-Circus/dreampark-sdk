@@ -135,3 +135,121 @@ changes what is true when each hook runs.
   raise `OnTriggerEnter` for something already inside a collider at the moment it is
   enabled — so the SDK sweeps once on the first real frame. A pickup the player spawns
   standing on top of still fires.
+
+## The `dp` Creator API — what Core does so you don't have to
+
+The rule for anything added here: **does it let a developer delete code that isn't
+about their game?** If a creator is writing plumbing to survive our loader, that is
+a gap in Core, not a skill issue.
+
+```lua
+dp.is_player(other)          -- is this collider the player? (rig-aware)
+dp.player()                  -- the player rig GameObject, or nil
+dp.head()                    -- the head/camera Transform, or nil
+dp.scope(go)                 -- that object's script scope (any of its scripts)
+dp.attraction(self.gameObject)       -- the containing attraction's ScriptScope
+dp.attraction_root(self.gameObject)  -- its root GameObject
+dp.game_id(self.gameObject)          -- the containing gameId
+dp.on_global(name, fn)       -- fn(value) now if bound, else the moment it appears
+dp.storage.game(gameId)      -- game-scope storage outside an attraction
+dp.profile.*                 -- profile reads
+```
+
+### Lifecycle hooks
+
+```lua
+function onready()      end   -- the world is real: spawned, placed, floors built, enabled
+function onzoneenter()  end   -- the player entered THIS script's attraction
+function onzoneexit()   end   -- ...and left
+```
+
+All three are **sticky**. If the thing already happened before your script existed,
+you are told on arrival. Late is normal here — content loads over the air, the park
+spawner parents after Awake, and the optimizer parks components mid-load. Missing an
+event must be impossible; arriving late must be fine.
+
+`onready()` fires immediately in a hand-authored scene, because the world is already
+real there. That is the contract: **your script behaves the same whether it was
+placed in a scene or spawned by the park loader.**
+
+### What these replace
+
+| Instead of | Write |
+|---|---|
+| `other.tag == 'Player' or other.gameObject.layer == LayerMask.NameToLayer('Player')` | `dp.is_player(other)` |
+| walking parents calling `GetComponents(typeof(CS.LuaBehaviour))` looking for a marker field | `dp.attraction(self.gameObject)` |
+| `pcall(function() local lb = go:GetComponent(typeof(CS.LuaBehaviour)); sc = lb.ScriptScope end)` | `dp.scope(go)` |
+| `FindObjectsOfType(typeof(CS.LuaBehaviour))` scanning for a manager by script name | `dp.on_global('mygame', fn)` |
+| `if not registered then try_register() end` every frame, giving up after 300 tries | `function onready()` |
+| caching `GameArea.isPlaying` and diffing it each frame | `function onzoneenter()` |
+| `if manager then pcall(...) end` on every call | `dp.on_global` once, then just call it |
+
+### What the optimizer guarantees (July 2026)
+
+The park loader registers every spawned object with `LevelObjectManager`, which parks
+and restores its components as the player moves. A hand-authored scene registers
+nothing, so this machinery only ever ran in a park — and until July 2026 it silently
+reverted anything the game changed at runtime:
+
+```lua
+function ontriggerenter(other)
+    if dp.is_player(other) then
+        col.enabled  = false     -- hide the collected pickup
+        rend.enabled = false
+    end
+end
+-- walk 10 m away and back: the pickup was solid and visible again
+```
+
+**The rule now: live state is re-read on the way out.** Whatever the game has set at
+the moment an object is parked is what gets restored. Covers `Collider.enabled`,
+`Renderer.enabled`, runtime material assignment, any `MonoBehaviour`/`Behaviour`
+`.enabled`, `Animator.enabled` and particle play state. Rigidbodies already worked this
+way.
+
+Consequences a creator can rely on:
+
+- **A change you make while your object is live survives being culled.**
+- **A component you shipped disabled stays disabled.** `Light`, `AudioSource`, `Camera`
+  and `AudioListener` used to switch themselves ON at the first restore, because the
+  snapshot only read `MonoBehaviour.enabled`.
+- **Physics props keep their momentum** across a cull. The velocity restore tested the
+  live `isKinematic`, which parking had already forced true, so it could never run.
+- **An object that moves is culled against where it IS**, not where it spawned.
+- **A child that is inactive at spawn is still managed** once you activate it.
+
+Known limit, deliberate: a change made to an object **while it is parked** is not seen.
+Scripts on a parked object are themselves disabled, so this only bites if you write to a
+culled object from somewhere else.
+### The Lua surface gate
+
+Content ships over the air; the XLua wrappers it needs are AOT code compiled into the
+app. A Unity type nobody registered therefore **cannot be fixed by re-uploading
+content** — it needs an app rebuild and a store release. The same call works perfectly
+in the Editor, because Mono reflects where IL2CPP cannot.
+
+`LuaSurfaceScanner` catches this, and as of July 2026 something actually runs it:
+
+| Trigger | Sandbox-denied type | Unregistered type |
+|---|---|---|
+| Content upload (`BeginUploadFromPopup`) | hard stop | warn + "Upload anyway" / "Cancel and fix" |
+| Player build (`LuaSurfaceGate.BuildCheck`) | `BuildFailedException` | console warning |
+| `DreamPark ▸ Troubleshooting ▸ Scan Lua API Surface` | error | warning |
+
+The scanner also now indexes **DreamPark's own types**, not just `UnityEngine*` — it
+previously could not have reported `CS.DreamPark.FloorAnchor`, which shipped content
+depends on. And the SDK defines `NOT_GEN_WARNING`, so a creator's own headset build
+names every type falling back to reflection at runtime. Core does not define it;
+production logs stay quiet.
+
+### Rules that still apply
+
+- **`awake()` runs before the object is parented or posed.** Publish globals there;
+  do anything positional, hierarchical or cross-object in `start()` or `onready()`.
+- **`onenable()` / `ondisable()` are not gameplay events.** The optimizer parks and
+  unparks components during load and culling. Core suppresses its own toggles from
+  reaching your script, but do not treat them as "the player can see me now".
+- **Reads never need `onReady`.** `storage.get` is synchronous against the local
+  cache and works for unpaired guests. `storage.onReady` is for refreshing a
+  display once the server snapshot lands — it fires immediately when there is
+  nothing to wait for.

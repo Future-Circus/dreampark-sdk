@@ -12,7 +12,11 @@ namespace DreamPark.ParkBuilder {
         public ColliderSettings[] colliders;
         public RigidbodySettings[] rigidbodies;
         public ComponentSettings[] components;
-        public Animator[] animators;
+        // ComponentSettings, not raw Animator[]: `animator.enabled = enabled` wrote
+        // the LevelObject's flag straight onto the component with nothing snapshotted,
+        // so an Animator authored disabled started playing after the first restore.
+        // Animators are excluded from `components` below so nothing toggles twice.
+        public ComponentSettings[] animators;
         public RendererSettings[] renderers;
         public ParticleSystemSettings[] particleSystems;
         public bool isRendererDisabled = false;
@@ -24,9 +28,33 @@ namespace DreamPark.ParkBuilder {
         public bool ignoreOptimization = false;
         public Bounds? _bounds = null;
         public bool? forceDisabled = null;
+
+        // The AABB used for distance culling. It used to be computed once, on first
+        // read, and cached forever — so anything the game MOVED after registration
+        // went on being culled against the box it occupied when it spawned. Recompute
+        // when the root has actually moved: walking every renderer is the expensive
+        // part, a Vector3 compare is not, so static content (the common case) still
+        // pays the walk exactly once.
+        //
+        // Known limit: a root that stays put while its CHILDREN animate far away
+        // (a long swinging arm) still reads its original box.
+        // 10 cm. The threshold can be this tight because the RE-WALK RATE is already
+        // capped by the cull sweep itself: OptimizedAF runs every `frameInterval`
+        // FixedUpdates (30 in the Release settings, so ~1.7 sweeps/second), and
+        // renderBounds is read exactly once per object per sweep. A continuously
+        // moving object therefore re-walks its renderers at most ~1.7x/second no
+        // matter how fast it travels, and a static one — nearly all park content —
+        // never re-walks at all after the first read.
+        private Vector3 _boundsOrigin;
+        private bool _boundsValid = false;
+        private const float BoundsRecomputeThresholdSqr = 0.01f;   // 10 cm
+
         public Bounds renderBounds {
             get {
-                if (_bounds != null) return (Bounds)_bounds;
+                var root = transform;
+                if (_boundsValid && _bounds != null && root != null &&
+                    (root.position - _boundsOrigin).sqrMagnitude <= BoundsRecomputeThresholdSqr)
+                    return (Bounds)_bounds;
 
                 if (renderers == null || renderers.Length == 0)
                     return new Bounds();
@@ -62,6 +90,8 @@ namespace DreamPark.ParkBuilder {
                 if (!init) combined = new Bounds();
 
                 _bounds = combined;
+                _boundsOrigin = root != null ? root.position : Vector3.zero;
+                _boundsValid = true;
                 return combined;
             }
         }
@@ -89,13 +119,20 @@ namespace DreamPark.ParkBuilder {
                     return false;
                 }
                 if (enabled) {
-                    if (!rigidbody.isKinematic) {
-                        rigidbody.linearVelocity = linearVelocity;
-                        rigidbody.angularVelocity = angularVelocity;
-                    }
                     rigidbody.isKinematic = isKinematic;
                     rigidbody.detectCollisions = detectCollisions;
                     rigidbody.useGravity = useGravity;
+
+                    // Momentum is restored AFTER isKinematic is back to its real
+                    // value, and the test is on the SAVED field, not the live one.
+                    // Parking forces isKinematic = true, so the old `if
+                    // (!rigidbody.isKinematic)` here could never be true on the only
+                    // path that reaches it — every physics prop silently lost all
+                    // momentum the first time the player walked away and back.
+                    if (!isKinematic) {
+                        rigidbody.linearVelocity = linearVelocity;
+                        rigidbody.angularVelocity = angularVelocity;
+                    }
                 } else {
                     if (joint != null && joint is CharacterJoint characterJoint) {
                         characterJoint.enableProjection = true;
@@ -136,9 +173,45 @@ namespace DreamPark.ParkBuilder {
             return null;
         }
 
+        // ─────────────────────────────────────────────────────────────
+        //  THE RE-READ RULE (July 2026)
+        //
+        //  Every Settings class below snapshots one component so the optimizer can
+        //  park it and put it back. The snapshot used to be taken once, in the
+        //  constructor, and never refreshed — so anything the GAME changed at
+        //  runtime was reverted the next time the player walked out of range and
+        //  back. `col.enabled = false` to hide a collected pickup came back solid.
+        //  A material assigned in Lua reverted to the prefab's. A script that
+        //  disabled itself was switched back on.
+        //
+        //  None of it happened in a hand-authored scene, because nothing registers
+        //  a scene prefab with LevelObjectManager — so this was the last place
+        //  where "works in my scene" and "works in a park" genuinely disagreed.
+        //
+        //  The rule: re-read live state on the way OUT (the parking transition),
+        //  restore it on the way back IN, and touch nothing while the object is
+        //  live. RigidbodySettings already did exactly this; the rest now match.
+        //
+        //  Each Settings object tracks its own `parked` flag rather than trusting
+        //  the caller, so a repeated Toggle in the same direction cannot overwrite
+        //  a good snapshot with the parked values it just wrote.
+        //
+        //  KNOWN LIMIT, and it is deliberate: a change made to an object WHILE it
+        //  is parked is not observed. Gameplay scripts on a parked object are
+        //  themselves disabled, so the only way to hit this is to write to a
+        //  culled object from somewhere else — and polling every component every
+        //  frame to catch that would cost more than it saves.
+        //
+        //  INVARIANT this depends on: a component appears in exactly ONE of the
+        //  arrays below (see the LevelObject constructor). Two arrays toggling the
+        //  same component would make the second read see what the first just
+        //  wrote. Same reason RegisterLevelObject now refuses to build a second
+        //  LevelObject over a GameObject it already tracks.
+        // ─────────────────────────────────────────────────────────────
         public class ColliderSettings {
             public Collider collider;
             public bool enabled;
+            private bool parked = false;
 
             public ColliderSettings(Collider collider) {
                 this.collider = collider;
@@ -149,7 +222,18 @@ namespace DreamPark.ParkBuilder {
                 if (collider == null || collider.IsDestroyed()) {
                     return false;
                 }
-                collider.enabled = enabled ? this.enabled : false;
+                if (enabled) {
+                    if (parked) {
+                        collider.enabled = this.enabled;
+                        parked = false;
+                    }
+                } else {
+                    if (!parked) {
+                        this.enabled = collider.enabled;
+                        parked = true;
+                    }
+                    collider.enabled = false;
+                }
                 return true;
             }
         }
@@ -157,19 +241,36 @@ namespace DreamPark.ParkBuilder {
         public class ParticleSystemSettings {
             public ParticleSystem particleSystem;
             public bool enabled;
+            private bool parked = false;
+            private bool firstPark = true;
 
             public ParticleSystemSettings(ParticleSystem particleSystem) {
                 this.particleSystem = particleSystem;
                 enabled = particleSystem.isPlaying || particleSystem.main.playOnAwake;
             }
-            
+
             public bool Toggle(bool enabled) {
                 if (particleSystem == null || particleSystem.IsDestroyed()) {
                     return false;
                 }
-                if (enabled ? this.enabled : false) {
-                    particleSystem.Play();
+                if (enabled) {
+                    if (parked) {
+                        if (this.enabled) particleSystem.Play();
+                        parked = false;
+                    }
                 } else {
+                    if (!parked) {
+                        // First park can land in the same frame as the spawn, before
+                        // Unity has actually started a playOnAwake system — so trust
+                        // playOnAwake that once. After that isPlaying is the truth,
+                        // which is what lets a system the game STARTED survive a cull
+                        // and a one-shot burst that already finished stay finished.
+                        this.enabled = firstPark
+                            ? (particleSystem.isPlaying || particleSystem.main.playOnAwake)
+                            : particleSystem.isPlaying;
+                        firstPark = false;
+                        parked = true;
+                    }
                     particleSystem.Stop();
                     particleSystem.Clear();
                 }
@@ -193,10 +294,31 @@ namespace DreamPark.ParkBuilder {
             #endif
             };
 
+            private bool parked = false;
+
+            // Whether this component type is exempt from parking. Computed ONCE.
+            //
+            // This test used to run inside Toggle: a LINQ Any() over 19 entries doing
+            // reflection IsAssignableFrom on every component, on every transition,
+            // forever — and a component's type cannot change at runtime, so every one
+            // of those calls after the first was recomputing a constant. Reflection
+            // type tests are among the slowest things you can put in a per-object loop
+            // on a Quest.
+            private readonly bool isProtected;
+
             public ComponentSettings(Component component) {
                 this.component = component;
-                if (component is MonoBehaviour mb) {
-                    enabled = mb.enabled;
+                var componentType = component != null ? component.GetType() : null;
+                isProtected = componentType != null &&
+                              ProtectedComponentTypes.Any(type => type.IsAssignableFrom(componentType));
+                // Behaviour, not MonoBehaviour. Toggle always WROTE plain Behaviours
+                // (Light, AudioSource, Camera, AudioListener, Animator) but the
+                // constructor only READ MonoBehaviours, so anything else kept the
+                // `true` field default — and a component the creator shipped disabled
+                // in their prefab switched itself ON the first time the optimizer
+                // restored the object. Park-only, and invisible in the Inspector.
+                if (component is Behaviour bh) {
+                    enabled = bh.enabled;
                 }
             }
 
@@ -204,14 +326,24 @@ namespace DreamPark.ParkBuilder {
                 if (component == null || component.IsDestroyed()) {
                     return false;
                 }
-                var componentType = component.GetType();
-                if (ProtectedComponentTypes.Any(type => type.IsAssignableFrom(componentType))) {
+                if (isProtected) {
                     return false;
                 }
-                if (component is MonoBehaviour mb) {
-                    mb.enabled = enabled ? this.enabled : false;
-                } else if (component is Behaviour b) {
-                    b.enabled = enabled ? this.enabled : false;
+                var behaviour = component as Behaviour;
+                if (behaviour == null) {
+                    return true;   // Collider/Rigidbody/Renderer: managed elsewhere
+                }
+                if (enabled) {
+                    if (parked) {
+                        behaviour.enabled = this.enabled;
+                        parked = false;
+                    }
+                } else {
+                    if (!parked) {
+                        this.enabled = behaviour.enabled;
+                        parked = true;
+                    }
+                    behaviour.enabled = false;
                 }
                 return true;
             }
@@ -222,6 +354,8 @@ namespace DreamPark.ParkBuilder {
             private readonly Material[] originalSharedMats;
             private Material optimizedMaterial;
             private Material[] optimizedSharedMats; // same length as originalSharedMats
+            private Material[] liveSharedMats;       // what the GAME had before parking
+            private bool parked = false;
             public bool enabled;
             public bool enableOptimizedMaterial = false;
             public RendererSettings(Renderer renderer) {
@@ -285,18 +419,45 @@ namespace DreamPark.ParkBuilder {
                 if (renderer == null || renderer.IsDestroyed()) {
                     return false;
                 }
-                if (optimizationLevel > 0) {
-                    if (optimizedSharedMats != null && optimizedSharedMats.Length > 0) {
+                bool park = optimizationLevel > 0;
+
+                bool willSwap = optimizedSharedMats != null && optimizedSharedMats.Length > 0;
+
+                if (park) {
+                    if (!parked) {
+                        // Capture what the GAME has right now, not what the prefab
+                        // shipped with: a material assigned in Lua, or the
+                        // renderer.enabled = false that hid a collected pickup.
+                        //
+                        // The sharedMaterials GETTER allocates a fresh Material[] on
+                        // every call, so it is paid only when we are actually about to
+                        // overwrite the slots. A renderer with no optimized variant is
+                        // never touched and never allocates.
+                        if (willSwap) liveSharedMats = renderer.sharedMaterials;
+                        enabled = renderer.enabled;
+                        parked = true;
+                    }
+                    if (willSwap) {
                         renderer.sharedMaterials = optimizedSharedMats;
                         enableOptimizedMaterial = true;
                     }
-                } else {
-                    if (originalSharedMats != null && originalSharedMats.Length > 0) {
-                        renderer.sharedMaterials = originalSharedMats;
+                    renderer.enabled = optimizationLevel != 2 && this.enabled;
+                } else if (parked) {
+                    // Only write the slots back if we actually changed them.
+                    if (enableOptimizedMaterial) {
+                        var restore = liveSharedMats ?? originalSharedMats;
+                        if (restore != null && restore.Length > 0) {
+                            renderer.sharedMaterials = restore;
+                        }
                         enableOptimizedMaterial = false;
                     }
+                    renderer.enabled = this.enabled;
+                    parked = false;
                 }
-                renderer.enabled = optimizationLevel != 2 ? this.enabled : false;
+                // Live and staying live: leave the renderer exactly as the game left
+                // it. The old code reassigned originalSharedMats and rewrote
+                // renderer.enabled on EVERY in-range frame, which clobbered any
+                // runtime change the instant it was made.
                 return true;
             }
         }
@@ -321,14 +482,30 @@ namespace DreamPark.ParkBuilder {
             name = gameObject.name;
             tag = gameObject.tag;
             layer = gameObject.layer;
-            colliders = gameObject.GetComponentsInChildren<Collider>().Select(c => new ColliderSettings(c)).ToArray();
-            rigidbodies = gameObject.GetComponentsInChildren<Rigidbody>().Select(r => new RigidbodySettings(r)).ToArray();
-            components = gameObject.GetComponentsInChildren<Component>()
-                .Where(c => !(c is ParticleSystem))
+            // includeInactive: a child that is inactive at registration used to be
+            // invisible to the optimizer forever, so a script the game activated
+            // later kept running through Build Mode and every park teardown.
+            //
+            // The Where() clause is load-bearing, not tidiness: each of these types
+            // has its own Settings array with its own live-state re-read, and a
+            // component sitting in two arrays would have the second toggle read back
+            // whatever the first one just wrote. Renderer/Collider/Rigidbody were
+            // never actually written by ComponentSettings (they are not Behaviours),
+            // but excluding them keeps the invariant true by construction instead of
+            // by coincidence.
+            colliders = gameObject.GetComponentsInChildren<Collider>(true).Select(c => new ColliderSettings(c)).ToArray();
+            rigidbodies = gameObject.GetComponentsInChildren<Rigidbody>(true).Select(r => new RigidbodySettings(r)).ToArray();
+            components = gameObject.GetComponentsInChildren<Component>(true)
+                .Where(c => !(c is ParticleSystem) && !(c is Animator)
+                         && !(c is Renderer) && !(c is Collider) && !(c is Rigidbody))
                 .Select(c => new ComponentSettings(c))
                 .ToArray();
-            particleSystems = gameObject.GetComponentsInChildren<ParticleSystem>().Select(ps => new ParticleSystemSettings(ps)).ToArray();
-            animators = gameObject.GetComponentsInChildren<Animator>();
+            particleSystems = gameObject.GetComponentsInChildren<ParticleSystem>(true).Select(ps => new ParticleSystemSettings(ps)).ToArray();
+            animators = gameObject.GetComponentsInChildren<Animator>(true).Select(a => new ComponentSettings(a)).ToArray();
+            // Renderers stay active-only: renderBounds walks this array, and an
+            // inactive renderer reports a stale world AABB that would corrupt culling
+            // for the whole object. A renderer the game activates later is simply left
+            // alone by the optimizer, which is the safe direction to fail.
             renderers = gameObject.GetComponentsInChildren<Renderer>().Select(r => new RendererSettings(r)).ToArray(); 
         }
 
@@ -401,7 +578,7 @@ namespace DreamPark.ParkBuilder {
             var componentsRemove = new List<ComponentSettings>();
             var rigidbodiesRemove = new List<RigidbodySettings>();
             var collidersRemove = new List<ColliderSettings>();
-            var animatorsRemove = new List<Animator>();
+            var animatorsRemove = new List<ComponentSettings>();
             var renderersRemove = new List<RendererSettings>();
             var particleSystemsRemove = new List<ParticleSystemSettings>();
             if (settings == null || settings.controlColliders) {
@@ -430,11 +607,10 @@ namespace DreamPark.ParkBuilder {
             }
             if (settings == null || settings.controlAnimators) {
                 foreach (var animator in animators) {
-                    if (animator == null || animator.IsDestroyed()) {
+                    bool success = animator.Toggle(enabled);
+                    if (!success) {
                         animatorsRemove.Add(animator);
-                        continue;
                     }
-                    animator.enabled = enabled;
                 }
             }
             if (settings != null && settings.controlRenderers) {
@@ -507,7 +683,38 @@ namespace DreamPark.ParkBuilder {
     }
 
     public class LevelObjectManager : MonoBehaviour {
-        public static bool objectsEnabled = true;
+        private static bool _objectsEnabled = true;
+
+        /// <summary>
+        /// Raised whenever park content becomes live (true) or is parked (false).
+        ///
+        /// This flag is the single most load-bearing state in the load pipeline —
+        /// it gates whether creator Lua is even allowed to boot
+        /// (LuaBehaviour.ParkContentIsParked). It was a bare mutable static written
+        /// from five sites with no notification of any kind, which meant content had
+        /// no way to learn "the park is ready" and had to approximate it by retrying
+        /// on a timer. Real shipped content retries for 300 frames and then gives up
+        /// guessing.
+        ///
+        /// Making it a property catches every existing write site at once, so the
+        /// signal cannot drift out of sync with the state it reports.
+        ///
+        /// Consumers must still treat this as STATE, not just an edge: a listener
+        /// that wires up late has to read <see cref="objectsEnabled"/> itself rather
+        /// than wait for a transition that already happened. That is the rule every
+        /// correct event in this codebase follows, and every broken one didn't.
+        /// </summary>
+        public static event Action<bool> OnObjectsEnabledChanged;
+
+        public static bool objectsEnabled {
+            get => _objectsEnabled;
+            set {
+                if (_objectsEnabled == value) return;
+                _objectsEnabled = value;
+                try { OnObjectsEnabledChanged?.Invoke(value); }
+                catch (Exception e) { Debug.LogError("[LevelObjectManager] OnObjectsEnabledChanged subscriber threw: " + e); }
+            }
+        }
         public static LevelObjectManager Instance;
         public bool gatherChildren = false;
         [HideInInspector] public List<LevelObject> levelObjects = new();
@@ -557,6 +764,25 @@ namespace DreamPark.ParkBuilder {
                 foreach (Transform child in obj.transform) {
                     RegisterLevelObject(child.gameObject, startDisabled);
                 }
+                return true;
+            }
+
+            // Two spawn paths reach the same object: CoreExtensions.SpawnPrefab
+            // registers it, then LevelAnchor.SetupNewObject registers it again (and
+            // likewise for the player rig via LevelAnchor / PortalAnchor). A second
+            // LevelObject takes its OWN snapshot — AFTER the first one has already
+            // parked the object, so it records the parked values as if they were the
+            // authored ones — and the two then fight over the same components with
+            // independent enabled flags, while UnregisterLevelObject only ever removes
+            // the first. Harmless when nothing was re-read; corrupting now that
+            // everything is.
+            //
+            // Fold the second registration into the first so intent still lands.
+            LevelObject existing = levelObjects.Find(lo => lo.gameObject == obj);
+            if (existing != null) {
+                if (isPriority) existing.isPriority = true;
+                if (ignoreOptimization) existing.ignoreOptimization = true;
+                if (startDisabled) existing.Disable();
                 return true;
             }
 

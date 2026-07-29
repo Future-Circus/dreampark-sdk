@@ -135,6 +135,11 @@ public static class DreamParkLuaConfig {
         typeof(FixedJoint),
         typeof(HingeJoint),
         typeof(SpringJoint),
+        // CharacterJoint was the one joint type missing, and it is the one
+        // ragdolls need: creature_juice.lua.txt does
+        // `part.go:AddComponent(typeof(UE.CharacterJoint))` and silently got
+        // nothing back on device.
+        typeof(CharacterJoint),
 
         // ── Navigation (the Zombiez gap) ─────────────────────────────
         typeof(UnityEngine.AI.NavMesh),
@@ -163,6 +168,7 @@ public static class DreamParkLuaConfig {
 
         // ── Animation ────────────────────────────────────────────────
         typeof(Animator),
+        typeof(AnimatorCullingMode),   // zombie_ai sets animator.cullingMode
         typeof(AnimatorStateInfo),
         typeof(RuntimeAnimatorController),
         typeof(AnimationCurve),
@@ -216,6 +222,10 @@ public static class DreamParkLuaConfig {
         typeof(FilterMode),
         typeof(RenderMode),
         typeof(SendMessageOptions),
+        // FindObjectsByType's second argument. Without the enum the argument
+        // resolves to nil and the WHOLE call fails, not just the sort order.
+        typeof(FindObjectsSortMode),
+        typeof(FindObjectsInactive),
         typeof(HideFlags),
         typeof(RuntimePlatform),
         typeof(NetworkReachability),
@@ -235,6 +245,13 @@ public static class DreamParkLuaConfig {
         typeof(global::DreamPark.AttractionTemplate),
         typeof(global::DreamPark.PropTemplate),
         typeof(global::DreamPark.MusicArea),
+        // FloorAnchor rewrites localPosition every frame, so content that moves
+        // an object vertically has to find and disable it — zombie_ai.lua.txt:296
+        // does exactly that. It was the one DreamPark type referenced by shipped
+        // content and missing here, and the surface scanner could not have caught
+        // it either: BuildUnityTypeIndex only indexed UnityEngine assemblies until
+        // July 2026.
+        typeof(global::DreamPark.FloorAnchor),
         typeof(HandTracker),               // global namespace
     };
 

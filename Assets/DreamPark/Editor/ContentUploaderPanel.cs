@@ -2416,6 +2416,22 @@ namespace DreamPark {
                 return false;
             }
 
+            // Lua surface gate. Content ships OVER THE AIR, but the XLua wrappers it
+            // needs are AOT code compiled into the app — so a Unity type nobody
+            // registered cannot be fixed by publishing content again, it needs an app
+            // rebuild and a store release. The same call works fine here in the Editor,
+            // because Mono reflects where IL2CPP cannot.
+            //
+            // LuaSurfaceScanner has caught exactly this since it was written and was
+            // wired to nothing: not this upload, not the player build, not the docs. A
+            // creator who never opened DreamPark > Troubleshooting shipped blind. This
+            // is the trigger it was missing. Sandbox-denied types hard-stop; merely
+            // unregistered ones warn and let the human decide.
+            if (!LuaSurfaceGate.PassesPreUploadCheck())
+            {
+                return false;
+            }
+
             // Gate at the entry point so a stale popup (e.g. user toggled
             // Smart off in the main panel while the popup was open) can't
             // sneak through with a strategy-incompatible mode. Failed-Only

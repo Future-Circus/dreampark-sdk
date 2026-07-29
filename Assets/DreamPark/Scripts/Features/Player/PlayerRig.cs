@@ -39,6 +39,27 @@ namespace DreamPark {
         }
 
         void Start() {
+            // A rig whose bundle finished AFTER the zone it belongs to was entered has
+            // to claim itself.
+            //
+            // GameArea.Enter() is the only thing that ever calls Show(), it looks the
+            // rig up exactly once, and it cannot run again until the player physically
+            // walks out of the zone and back in (Enter's first line is
+            // `if (currentGameArea == this) return`). The attraction and the rig are
+            // different addressables, so "attraction lands first, player is already
+            // standing in the footprint" is an ordinary outcome — and when it happened
+            // the lookup missed, then this method saw Instance != null and switched the
+            // real rig OFF. The player finished the session inside the attraction
+            // wearing the PREVIOUS attraction's rig, and dp.player() handed every Lua
+            // script the wrong GameObject.
+            //
+            // Same law as the sticky relays: Enter() is the edge, currentGameArea is
+            // the state, and anything arriving late reads the state instead of waiting
+            // for an edge that already passed.
+            if (ClaimsCurrentZone()) {
+                Show();
+                return;
+            }
             if (Instance == null) {
                 Instance = this;
             } else {
@@ -46,8 +67,23 @@ namespace DreamPark {
             }
         }
 
+        /// <summary>
+        /// True when the zone the player is standing in RIGHT NOW is one this rig
+        /// serves. Checked against `instances`, so contentId aliases registered in
+        /// Awake count too.
+        /// </summary>
+        bool ClaimsCurrentZone() {
+            var zone = GameArea.currentGameArea;
+            if (zone == null || !zone.isPlaying || string.IsNullOrEmpty(zone.gameId)) return false;
+            if (instances == null) return false;
+            return instances.TryGetValue(zone.gameId, out var rig) && rig == this;
+        }
+
         public void Show() {
-            if (Instance != this) {
+            // Instance is a plain static that OnDestroy nulls out, so a GameArea.Enter()
+            // landing after an attraction unload used to NullReference here — from
+            // inside Update, which takes the whole zone loop down with it.
+            if (Instance != null && Instance != this) {
                 Instance.Hide();
             }
             Instance = this;

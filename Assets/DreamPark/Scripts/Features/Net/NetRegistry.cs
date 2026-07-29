@@ -20,14 +20,48 @@ public static class NetRegistry
 
         _objects[netId.Id] = netId;
 
-        // flush buffered messages
-        if (_buffer.TryGetValue(netId.Id, out var pending))
+        // Flush buffered messages — but ONLY if something is actually listening.
+        //
+        // This buffer exists precisely to cover the window where a NetId is
+        // registered and addressable but its receiver has not wired up yet. It
+        // used to drain unconditionally and then Remove(), while NetId.ReceiveEvent
+        // DECLINES delivery when OnNetEvent is null — so the payload was discarded
+        // at the exact moment it was most likely to be undeliverable.
+        //
+        // That window is not rare, it is guaranteed: NetId registers in Start(),
+        // while LuaBehaviour refuses to boot (and therefore refuses to subscribe
+        // onnet) for the entire park-load span and every Build→Play transition
+        // (LuaBehaviour.ParkContentIsParked). The message most likely to land in it
+        // is the host's join-time state-sync burst — the one that seeds a late
+        // joiner's world. Losing it silently de-syncs the attraction.
+        //
+        // Keeping the buffer until someone takes it means a receiver that boots
+        // late still gets its backlog. The existing size/age caps below already
+        // bound how long that can persist.
+        if (netId.HasSubscribers && _buffer.TryGetValue(netId.Id, out var pending))
         {
             foreach (var payload in pending)
                 netId.ReceiveEvent(payload);
 
             _buffer.Remove(netId.Id);
         }
+    }
+
+    /// <summary>
+    /// Deliver any buffered backlog for this object, if it now has a listener.
+    /// Called automatically when something subscribes to NetId.OnNetEvent, so a
+    /// receiver that wired up after registration still gets what it missed.
+    /// No-op when nothing is listening — the backlog stays buffered.
+    /// </summary>
+    public static void TryFlushBuffered(NetId netId)
+    {
+        if (netId == null || !netId.HasSubscribers) return;
+        if (!_buffer.TryGetValue(netId.Id, out var pending)) return;
+
+        foreach (var payload in pending)
+            netId.ReceiveEvent(payload);
+
+        _buffer.Remove(netId.Id);
     }
 
     public static void Unregister(uint id)
