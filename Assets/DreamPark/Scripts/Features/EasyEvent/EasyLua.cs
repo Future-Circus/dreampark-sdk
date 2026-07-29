@@ -74,6 +74,10 @@ public class EasyLua : EasyEvent, ILuaInjectable {
 
     private LuaTable scriptScopeTable;
 
+    // Set the instant the scope table exists, before the script body runs, so a
+    // re-entrant EnsureBooted returns the partially built scope instead of recursing.
+    private bool booted;
+
     private void InjectAll() {
         if (scriptScopeTable == null) return;
 
@@ -136,10 +140,28 @@ public class EasyLua : EasyEvent, ILuaInjectable {
         }
     }
 
+    // Chain registration always happens in Awake; the Lua bootstrap does not.
+    // Unity runs Awake and OnEnable synchronously inside Instantiate, before the park
+    // spawner can park freshly spawned content for Build Mode, so bootstrapping there
+    // ran the script's file scope and its start() in an editing session. Deferring the
+    // boot is what lets content authors write plain game code with no SDK state to
+    // consult. See the long note in LuaBehaviour.Awake.
     public override void Awake() {
         base.Awake();
 
+        if (!LuaBehaviour.ParkContentIsParked)
+            EnsureBooted();
+    }
+
+    /// <summary>
+    /// Run this script's file scope exactly once, unless the park still has content
+    /// parked. Safe to call from anywhere; every call after the first is a no-op.
+    /// </summary>
+    public void EnsureBooted() {
+        if (booted) return;
         if (luaScript == null) return;
+        if (LuaBehaviour.ParkContentIsParked) return;
+        booted = true;
 
         scriptScopeTable = LuaBehaviour.luaEnv.NewTable();
 
@@ -170,6 +192,7 @@ public class EasyLua : EasyEvent, ILuaInjectable {
     }
 
     private void OnEnable() {
+        EnsureBooted();
         LuaMessageRelays.SetEnabled(luaRelays, true);
         luaOnEnable?.Invoke();
     }
@@ -182,6 +205,9 @@ public class EasyLua : EasyEvent, ILuaInjectable {
     // ── EasyEvent chain ────────────────────────────────────────────────
 
     public override void OnEvent(object arg0 = null) {
+        // The chain can fire the frame Build Mode ends, before this component has seen
+        // an OnEnable. Boot first so start() is never dropped.
+        EnsureBooted();
         isEnabled = true;
         luaStart?.Invoke();
 
@@ -198,6 +224,10 @@ public class EasyLua : EasyEvent, ILuaInjectable {
     // ── Update — runs while active, auto-detects done ──────────────────
 
     private void Update() {
+        if (!booted) {
+            EnsureBooted();
+            if (!booted) return;
+        }
         if (scriptScopeTable == null) return;
         if (!isEnabled) return;
 

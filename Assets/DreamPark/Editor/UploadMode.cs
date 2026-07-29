@@ -20,19 +20,22 @@ namespace DreamPark
     //              also changed locally, since the catalog would then
     //              reference local-only bundle hashes the backend fallback
     //              can't resolve.
-    // PreviewsOnly — Smart-strategy only. Same shape as CodeOnly but for the
-    //              {gameId}-Previews bundle.
     //
-    // Code/Previews-only modes are valid for Lua / preview iteration loops
-    // and require the Smart bundling strategy (the carve-out groups only
-    // exist there). C# code changes can't ship through CodeOnly: compiled
-    // scripts live in the Unity player binary and require a full app build.
+    // CodeOnly is valid for the Lua iteration loop and requires the Smart
+    // bundling strategy (the Code carve-out group only exists there). C#
+    // code changes can't ship through CodeOnly: compiled scripts live in
+    // the Unity player binary and require a full app build.
+    //
+    // July 2026: PreviewsOnly was removed along with preview bundling
+    // itself. Preview PNGs are pushed straight to the backend
+    // (POST /api/content/:id/attractions/preview) and are no longer built
+    // into Addressables, so there is no Previews bundle to ship — and no
+    // preview churn to abort a CodeOnly upload.
     public enum UploadMode
     {
         All = 0,
         Patch = 1,
         CodeOnly = 2,
-        PreviewsOnly = 3,
     }
 
     public static class UploadModePrefs
@@ -45,7 +48,7 @@ namespace DreamPark
             {
                 // Default is All. It's always safe (full re-upload always works),
                 // and it's the only valid mode for a first-upload anyway —
-                // Patch needs a baseline, Code/Previews-only need a prior
+                // Patch needs a baseline, Code-only needs a prior
                 // version's bundles to fall back to. Users who want patch
                 // semantics by default can flip the picker once and it sticks.
                 int v = EditorPrefs.GetInt(PrefKey, (int)UploadMode.All);
@@ -67,7 +70,6 @@ namespace DreamPark
                 case UploadMode.All:          return "Upload All (full re-upload)";
                 case UploadMode.Patch:        return "Upload Patch (changed files only)";
                 case UploadMode.CodeOnly:     return "Upload Code Only (Lua bundle)";
-                case UploadMode.PreviewsOnly: return "Upload Previews Only (thumbnails bundle)";
                 default:                      return m.ToString();
             }
         }
@@ -79,7 +81,6 @@ namespace DreamPark
                 case UploadMode.All:          return "All";
                 case UploadMode.Patch:        return "Patch";
                 case UploadMode.CodeOnly:     return "Code only";
-                case UploadMode.PreviewsOnly: return "Previews only";
                 default:                      return m.ToString();
             }
         }
@@ -100,19 +101,16 @@ namespace DreamPark
                            "bundling. Aborts if non-Code bundles also changed — those need a " +
                            "full Patch upload. C# scripts are bundled into the player binary " +
                            "and cannot ship through this mode.";
-                case UploadMode.PreviewsOnly:
-                    return "Upload just the preview-images bundle and catalog. Requires " +
-                           "Smart bundling. Aborts if non-Previews bundles also changed.";
                 default:
                     return "";
             }
         }
 
-        // CodeOnly and PreviewsOnly carve specific Smart-managed groups out
-        // of the upload set. Those groups only exist when Smart is active.
+        // CodeOnly carves the Smart-managed {gameId}-Code group out of the
+        // upload set. That group only exists when Smart is active.
         public static bool RequiresSmart(UploadMode m)
         {
-            return m == UploadMode.CodeOnly || m == UploadMode.PreviewsOnly;
+            return m == UploadMode.CodeOnly;
         }
     }
 
@@ -122,7 +120,7 @@ namespace DreamPark
     // The categorization is filename-based. Bundle filenames embed their group
     // name via Addressables' AppendHash naming style (e.g. a group named
     // "Park-Code" produces files matching "park-code_assets_…_<hash>.bundle"),
-    // which lets us tell Code/Previews bundles apart from gameplay bundles
+    // which lets us tell the Code bundle apart from gameplay bundles
     // without parsing the catalog JSON.
     public static class UploadModeFilter
     {
@@ -133,16 +131,14 @@ namespace DreamPark
             Catalog = 0,
             // Bundle whose filename matches the {gameId}-Code group prefix.
             CodeBundle = 1,
-            // Bundle whose filename matches the {gameId}-Previews group prefix.
-            PreviewsBundle = 2,
             // Unity package containing C# MonoScripts. Lives at
             // Unity/{contentId}.unitypackage and drives backend
             // codeChangeDetected. Treated separately because C# changes are
             // a "needs full app build" signal, not a hot-patchable bundle.
-            UnityPackage = 3,
+            UnityPackage = 2,
             // Any other bundle (root prefab bundles, Runtime, MonoScript bundle,
             // Shared bundle if it ever comes back, etc.).
-            OtherBundle = 4,
+            OtherBundle = 3,
         }
 
         public static FileCategory Categorize(string contentId, string platformRelativePath)
@@ -179,24 +175,18 @@ namespace DreamPark
             // CodeSuffix from "Code" to something else, both ends move
             // together instead of silently drifting.
             string codePrefix = SmartBundleGrouper.CodeGroupName(contentId).ToLowerInvariant();
-            string previewsPrefix = SmartBundleGrouper.PreviewsGroupName(contentId).ToLowerInvariant();
 
             // AppendHash naming: "<groupname-lowercased>_assets_…_<hash>.bundle".
             // Match either form:
             //   "<prefix>_assets_…"   → unchunked, the original single bundle
             //   "<prefix>-N_assets_…" → chunked variant (N = 2, 3, ...) from
             //                            SmartBundleGrouper's hash-bucketing pass
-            // Both belong to the same logical Code/Previews group, so CodeOnly /
-            // PreviewsOnly upload modes need to ship all chunks together.
+            // Both belong to the same logical Code group, so a CodeOnly
+            // upload ships all of its chunks together.
             if (fileName.StartsWith(codePrefix + "_", StringComparison.Ordinal)
                 || fileName.StartsWith(codePrefix + "-", StringComparison.Ordinal))
             {
                 return FileCategory.CodeBundle;
-            }
-            if (fileName.StartsWith(previewsPrefix + "_", StringComparison.Ordinal)
-                || fileName.StartsWith(previewsPrefix + "-", StringComparison.Ordinal))
-            {
-                return FileCategory.PreviewsBundle;
             }
 
             return FileCategory.OtherBundle;
@@ -272,7 +262,6 @@ namespace DreamPark
                     return result;
 
                 case UploadMode.CodeOnly:
-                case UploadMode.PreviewsOnly:
                 {
                     // Carve out: only catalog files + the target group's
                     // bundle ship. Every other built file gets added to
@@ -282,10 +271,8 @@ namespace DreamPark
                     // can't resolve via fallback (the new hash exists nowhere
                     // on disk), so we abort instead of shipping a broken
                     // catalog.
-                    FileCategory targetCategory = mode == UploadMode.CodeOnly
-                        ? FileCategory.CodeBundle
-                        : FileCategory.PreviewsBundle;
-                    string targetName = mode == UploadMode.CodeOnly ? "Code" : "Previews";
+                    const FileCategory targetCategory = FileCategory.CodeBundle;
+                    const string targetName = "Code";
 
                     // Pass 1 — safety check against the diff. Catalog files
                     // are exempt (they always change). UnityPackage flagging

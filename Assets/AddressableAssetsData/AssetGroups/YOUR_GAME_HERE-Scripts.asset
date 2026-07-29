@@ -21,6 +21,12 @@ MonoBehaviour:
     m_SerializedLabels:
     - YOUR_GAME_HERE
     FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: c61599e8ca00c4c32b21a5b4236bf110
+    m_Address: YOUR_GAME_HERE/Data/lua_example_manager.lua
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - YOUR_GAME_HERE
+    FlaggedDuringContentUpdateRestriction: 0
   m_ReadOnly: 0
   m_Settings: {fileID: 11400000, guid: 5e922c848874c41bc90d6a8d78c6f5a9, type: 2}
   m_SchemaSet:

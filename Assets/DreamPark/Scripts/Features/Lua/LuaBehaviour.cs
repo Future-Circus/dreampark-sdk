@@ -238,11 +238,29 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
 
     private LuaTable scriptScopeTable;
 
+    // Set the instant the scope table exists, before the script body runs, so a
+    // re-entrant EnsureBooted (script A injecting script B injecting script A)
+    // returns the partially built scope instead of recursing forever.
+    private bool booted;
+
     /// <summary>
     /// The Lua scope table for this script. Other LuaBehaviours can read/write
     /// variables and call functions through this table.
+    ///
+    /// Reading this boots the script if it hasn't run yet, so a cross-script
+    /// reference no longer depends on Unity's undefined Awake ordering.
     /// </summary>
-    public LuaTable ScriptScope => scriptScopeTable;
+    public LuaTable ScriptScope {
+        get {
+            // Never boot from edit mode. Editor tooling reads this property, and
+            // booting means running the script's file scope and awake() - which can
+            // touch the scene - outside Play. Editors get whatever already exists,
+            // which is the pre-change behaviour (null until Play).
+            if (Application.isPlaying)
+                EnsureBooted();
+            return scriptScopeTable;
+        }
+    }
 
     // Re-pushes all Inspector variables into the Lua scope table
     void InjectAll() {
@@ -325,8 +343,46 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
     void OnValidate() => _injectionDirty = true;
 #endif
 
+    /// <summary>
+    /// True while the park has content parked - Build Mode, where levels and props are
+    /// spawned only so the player can position them. Nothing gameplay-side should be
+    /// running yet.
+    ///
+    /// objectsEnabled is the park's own build/play switch and defaults to true, so a
+    /// plain Unity scene with no park in it is never parked and every script boots in
+    /// Awake exactly as it always did.
+    /// </summary>
+    internal static bool ParkContentIsParked => !DreamPark.ParkBuilder.LevelObjectManager.objectsEnabled;
+
+    // Why booting is conditional rather than unconditional in Awake.
+    //
+    // Unity runs Awake AND OnEnable synchronously inside Instantiate, before the
+    // spawner gets its instance back and before anything can switch the content off.
+    // So a script bootstrapped in Awake had already run its file scope and its awake()
+    // by the time Build Mode could park it - which is why zombies walked around, items
+    // spun, and agents snapped to the navmesh in an editing session. The only place
+    // that can be fixed is here, at the moment the SDK decides to start a script.
+    //
+    // Parked content therefore boots later: on the OnEnable that Build Mode -> Play
+    // delivers, or on the first Update for objects the park never disables (the player
+    // rig). The contract a content author sees is the one they already know from their
+    // own Unity build - awake() runs when the game starts, update() runs while it is
+    // running - with no SDK state to consult from Lua.
     void Awake() {
+        if (!ParkContentIsParked)
+            EnsureBooted();
+    }
+
+    /// <summary>
+    /// Run this script's file scope and awake() exactly once, unless the park still has
+    /// content parked. Safe to call from anywhere; every entry point after the first is
+    /// a no-op.
+    /// </summary>
+    public void EnsureBooted() {
+        if (booted) return;
         if (luaScript == null) return;
+        if (ParkContentIsParked) return;
+        booted = true;
 
         scriptScopeTable = luaEnv.NewTable();
 
@@ -388,22 +444,69 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
         luaAwake?.Invoke();
     }
 
-    void Start()     => luaStart?.Invoke();
+    // Unity fires Start exactly once and never again, so a script that was still
+    // parked when Start came round would silently lose its start() forever. Dispatch is
+    // tracked separately and also driven from Update, which guarantees start() lands on
+    // the first frame the script actually runs, whichever path booted it.
+    private bool startDispatched;
+
+    void Start() => DispatchStart();
+
+    void DispatchStart() {
+        if (startDispatched || !booted) return;
+        startDispatched = true;
+        luaStart?.Invoke();
+    }
+
+    /// <summary>
+    /// Non-zero while OptimizedAF is parking/unparking components. Lua
+    /// onenable/ondisable are SUPPRESSED for the duration.
+    ///
+    /// LuaBehaviour is not in LevelObject's ProtectedComponentTypes, so the
+    /// optimizer switches it off at spawn and back on when the level finishes
+    /// loading, and again on every cull cycle. Routed straight through, that
+    /// meant creator scripts received onenable()/ondisable() as LOAD ARTIFACTS —
+    /// and, depending on which order the toggles landed, a script could see
+    /// ondisable() before it had ever seen onenable(). Content that reads those
+    /// as "the player can see me now" / "tear my state down" was being lied to
+    /// by the loader.
+    ///
+    /// These hooks now mean what a creator expects: gameplay or authored
+    /// enabling. Engine-level parking is invisible. Nothing else is suppressed —
+    /// EnsureBooted still runs (the first enable is what boots the script) and
+    /// the relays still track the real component state, so physics callbacks stay
+    /// correctly gated.
+    ///
+    /// A depth counter rather than a bool: Enable() can run re-entrantly across
+    /// nested LevelObjects, and a bool would be cleared by the inner scope while
+    /// the outer one was still toggling.
+    /// </summary>
+    public static int OptimizerToggleDepth;
 
     void OnEnable() {
-        // Relays are created in Awake (before the first OnEnable), so by here the list
-        // is populated. Keep them in lockstep with this component's enabled state so a
-        // disabled LuaBehaviour doesn't keep firing FixedUpdate/OnTrigger* via its relays.
+        // First enable is what boots the script (see Awake). After that this is just
+        // keeping the relays in lockstep with this component's enabled state, so a
+        // disabled LuaBehaviour doesn't keep firing FixedUpdate/OnTrigger* via them.
+        EnsureBooted();
         LuaMessageRelays.SetEnabled(luaRelays, true);
-        luaOnEnable?.Invoke();
+        if (OptimizerToggleDepth == 0) luaOnEnable?.Invoke();
     }
 
     void OnDisable() {
-        luaOnDisable?.Invoke();
+        if (OptimizerToggleDepth == 0) luaOnDisable?.Invoke();
         LuaMessageRelays.SetEnabled(luaRelays, false);
     }
 
     void Update() {
+        // Content that was parked at spawn boots the first frame it genuinely runs.
+        // This is the path for objects the park never disables - the player rig - which
+        // get no OnEnable when Build Mode ends.
+        if (!booted) {
+            EnsureBooted();
+            if (!booted) return;
+        }
+        DispatchStart();
+
         if (scriptScopeTable == null) return;
 
 #if UNITY_EDITOR

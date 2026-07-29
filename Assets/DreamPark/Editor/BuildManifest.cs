@@ -205,6 +205,16 @@ namespace DreamPark
                 sdkVersion = SDKVersion.Current,
             };
 
+            // Preview + logo bundles were retired (July 2026) and their groups
+            // are excluded from the Addressables build — but an older build's
+            // output can still be sitting in ServerData/, and Addressables only
+            // clears that folder on a Clean build. A stale bundle here would
+            // enter the manifest, the baseline diff, and the upload: exactly the
+            // "4 non-Code bundle(s) also changed" abort this change exists to
+            // kill. Sweep them before walking. Safe to delete unconditionally —
+            // ServerData is build output, nothing authors into it.
+            PurgeRetiredArtifactFiles(contentId, platformsToInclude);
+
             foreach (string platform in platformsToInclude)
             {
                 var pm = new BuildManifestPlatform { platform = platform };
@@ -229,6 +239,45 @@ namespace DreamPark
             }
 
             return manifest;
+        }
+
+        // Deletes any {contentId}-previews / {contentId}-logos bundle left in
+        // ServerData by a build made before those groups were excluded.
+        // Filename shape is Addressables' AppendHash naming, lowercased:
+        //   "<groupname>_assets_…_<hash>.bundle"  (and "<groupname>-2_…" chunks)
+        internal static void PurgeRetiredArtifactFiles(string contentId, IEnumerable<string> platformsToInclude)
+        {
+            if (string.IsNullOrEmpty(contentId) || platformsToInclude == null) return;
+
+            string previews = (contentId + "-previews").ToLowerInvariant();
+            string logos = (contentId + "-logos").ToLowerInvariant();
+
+            foreach (string platform in platformsToInclude)
+            {
+                string platformDir = Path.Combine(ServerDataRoot, platform);
+                if (!Directory.Exists(platformDir)) continue;
+
+                foreach (string filePath in Directory.GetFiles(platformDir, "*.bundle", SearchOption.AllDirectories))
+                {
+                    string name = Path.GetFileName(filePath).ToLowerInvariant();
+                    bool retired =
+                        name.StartsWith(previews + "_", StringComparison.Ordinal) ||
+                        name.StartsWith(previews + "-", StringComparison.Ordinal) ||
+                        name.StartsWith(logos + "_", StringComparison.Ordinal) ||
+                        name.StartsWith(logos + "-", StringComparison.Ordinal);
+                    if (!retired) continue;
+
+                    try
+                    {
+                        File.Delete(filePath);
+                        Debug.Log($"[BuildManifest] Removed retired art bundle from ServerData: {platform}/{name}");
+                    }
+                    catch (Exception e)
+                    {
+                        Debug.LogWarning($"[BuildManifest] Couldn't delete stale art bundle {platform}/{name}: {e.Message}");
+                    }
+                }
+            }
         }
 
         public static BuildManifest LoadBaseline(string contentId)

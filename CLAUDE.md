@@ -31,10 +31,10 @@ There is no creator-facing DreamBand or Level prefab — the DreamBand wrist UI 
 ## Creating Attractions & Props (content pipeline)
 An attraction is a prefab under `Assets/Content/{GameName}/` with an `AttractionTemplate` (: `LevelTemplate`) on its root; a prop has `PropTemplate`. `ContentProcessor` (SDK-synced, `Assets/DreamPark/Editor/`) watches `Assets/Content/` and automates everything else — do NOT hand-edit Addressables addresses or labels:
 - **Naming**: prefixing attraction prefabs `A_` and props `P_` is still the convention, but no longer required for backend discovery (July 2026): the attractions catalog classifies by the stamped ADDRESS NAMESPACE — anything with a `{gameId}/Levels/…` address (i.e. any prefab whose root has AttractionTemplate/LevelTemplate) is an attraction, `{gameId}/Props/…` is a prop. **Exception: an `L_` prefix marks a pre-attraction Legacy Level** (hidden from the Attractions browser, entry-fee-priced only) — never name a new attraction `L_*`. If an attraction is missing from the browser, check that the prefab root has the right template component (that's what produces the address).
-- **Runtime address** (assigned automatically): `{gameId}/Levels/{size}/{name}` for attractions, `{gameId}/Props/{category}/{name}` for props, `{gameId}/{TypeFolder}/{name}` for typed assets (Models/Audio/Textures/…), `{gameId}/Previews/{name}` for preview PNGs. Label = `{gameId}`.
+- **Runtime address** (assigned automatically): `{gameId}/Levels/{size}/{name}` for attractions, `{gameId}/Props/{category}/{name}` for props, `{gameId}/{TypeFolder}/{name}` for typed assets (Models/Audio/Textures/…). Label = `{gameId}`. Preview PNGs and the content logo still get addresses (`{gameId}/Previews/{name}`, `{gameId}/Logos/{name}`) but their groups are EXCLUDED FROM THE BUILD since July 2026 — those addresses resolve in the editor and nowhere else.
 - **TWO identifier namespaces — never conflate them**: the runtime Addressables ADDRESS above vs the backend catalog `resourceName`, which is the internal ASSET-PATH stem (`Content/{GameName}/Attractions/A_X` — asset path with `Assets/` + extension stripped). They only coincided for legacy folder layouts. Core's `LevelAnchor.ResolveSpawnAddress` translates stem→address at spawn; treat `resourceName` as an opaque join key, never a loadable address.
 - **Stamping pass** (`ContentProcessor`, EditPrefabContentsScope + SaveAsPrefabAsset): injects `gameId` into any component with a `gameId` field and stamps the per-attraction address onto `GameArea`/`PropTemplate.resourceName` — this is the revenue-attribution key, so it must match what the backend catalog derives. Skips `ThirdPartyLocal/`. Prefabs get edited + saved dirty by this pass; that's expected — commit the churn.
-- **Previews**: `Assets/Content/{GameName}/Previews/{prefabName}.png` (or sibling `{name}_preview.png`) — powers Attractions-browser/level-picker tiles and the consumer map. Auto-generated for every attraction/prop; regenerate via `DreamPark → Troubleshooting → Regenerate Level Previews` after visual changes.
+- **Previews**: `Assets/Content/{GameName}/Previews/{prefabName}.png` (or sibling `{name}_preview.png`) — powers Attractions-browser/level-picker tiles and the consumer map. Auto-generated for every attraction/prop; regenerate via `DreamPark → Troubleshooting → Regenerate Level Previews` after visual changes. **They do NOT ship in a bundle (July 2026)**: the uploader pushes each PNG to the backend (`POST /api/content/:id/attractions/preview`) after a successful commit, and every client reads the backend image. Same story for the content logo (`POST /api/content/:id/logo` → `content.logoImageUrl`). The `{gameId}-Previews` / `{gameId}-Logos` Addressables groups still exist but are build-excluded (`SmartBundleGrouper.ExcludeRetiredArtGroupsFromBuild`), so preview churn can no longer abort a Code-only upload — which is why `UploadMode.PreviewsOnly` is gone.
 - **Catalog population is automated**: uploading a build publishes the attractions catalog server-side (discovered from the catalog's `m_InternalIds`). There is no manual registration step — if an attraction is missing from the browser, check the `A_`/`P_` prefix and that the prefab root has the right template component.
 
 ## Game Storage (per-user save data: high scores, progress, coins)
@@ -85,7 +85,7 @@ Full spec: dreampark-core `Docs/LAN-PeerHost-Spec.md`. Stack lives in `Assets/Dr
 3. **Deterministic string hashing** (FNV over chars, `(Clone)` stripped) — never `string.GetHashCode()`, which is not stable across Mono (Editor) and IL2CPP (device).
 `explicitId` still exists as a manual override, but generated ids are stable without it. Mismatch symptom: `[NetRegistry] Event for UNREGISTERED NetId` on the receiver; with Verbose Net Logs, compare `Registered NetId` lines between devices. Note for anyone touching LuaBehaviour: `net_send` must read `netId.Id` at send time, never capture it at Awake (id isn't final until Start).
 
-**Writing Lua multiplayer scripts** (reference sample: `Assets/Content/YOUR_GAME_HERE/Scripts/lua_touch_color_switch.lua.txt`):
+**Writing Lua multiplayer scripts** (reference sample: `Assets/DreamPark/Samples/Multiplayer/lua_touch_color_switch.lua.txt`):
 - `onnet(payload)` at file scope is auto-wired to the sibling NetId's events; `net_send(eventType, payloadJson)` is injected — both require a `NetId` on the SAME GameObject as the LuaBehaviour, and net_send additionally requires DreamBoxClient to exist at Awake. Always nil-guard: `if net_send then net_send(...) end` (solo play must work).
 - `onnet` receives the FULL wire JSON `{"type":"...","payload":{"netId":N,...}}` — use the global `json_parse(payload)` and read `t.payload.<field>`.
 - The relay never echoes your own message back: apply changes locally when sending (optimistic apply).
@@ -96,3 +96,42 @@ Full spec: dreampark-core `Docs/LAN-PeerHost-Spec.md`. Stack lives in `Assets/Dr
 **Platform**: hosting compiles on Android (Quest) + Editor; iOS is client-only in v1. On-device discovery REQUIRES `CHANGE_WIFI_MULTICAST_STATE` (+ `WAKE_LOCK` for the host's Wi-Fi lock) — provided in `Assets/Plugins/Android/AndroidManifest.xml`; loopback bypasses the Wi-Fi broadcast filter, so localhost tests pass without it (deceptively). UDP broadcast is lossy on phone hotspots — the arbiter treats the connection, not beacons, as liveness ground truth; never re-add beacon-silence-kills-connected-session logic.
 
 **Namespace gotcha**: dreampark-core declares `class DreamPark` INSIDE `namespace DreamPark`. In SDK-synced files, `DreamPark.X` inside a `namespace DreamPark` scope resolves to that class in core and fails to compile. Use unqualified sibling references, or `global::DreamPark.X` from global-namespace files.
+
+## Lua Lifecycle Under Park Loading (read before writing awake())
+
+Park content is spawned by the loader, not authored into a live scene, and that
+changes what is true when each hook runs.
+
+- **`awake()` runs BEFORE the object is parented, posed or stamped.** `LevelAnchor.Spawn`
+  instantiates the prefab, then writes `localPosition`/`localRotation`/`localScale` and
+  parents it to the LevelAnchor *afterwards*. So in `awake()` the object is still at its
+  prefab pose at the scene root. Anything that reads `self.transform.position`, walks
+  `transform.parent`, or calls `GetComponentInParent` gets an answer that is about to
+  become wrong. This is the same reason `storage` is a lazy proxy and `net_send` reads
+  `netId.Id` at send time rather than caching it.
+  **Use `awake()` only to publish globals and wire your own tables. Do anything
+  positional, hierarchical, or cross-object in `start()`.**
+
+- **`start()` is safe and is guaranteed to arrive.** Park objects spawn with their
+  LuaBehaviour disabled (OptimizedAF parks everything until the level finishes loading),
+  so Unity's real `Start` may never fire. `LuaBehaviour` tracks dispatch separately and
+  also drives it from `Update`, so `start()` lands on the first frame the script actually
+  runs — whichever path booted it.
+
+- **`onenable()` / `ondisable()` are NOT gameplay events.** OptimizedAF enables and
+  disables LuaBehaviours during load and culling, so these fire as load artifacts, and
+  depending on ordering a script can see `ondisable()` before it ever sees `onenable()`.
+  Do not treat them as "the player can see me now" or tear down state in them.
+
+- **Never hand-roll edge detection on polled SDK state.** Reading `GameArea.isPlaying`
+  each frame and comparing it to a cached copy puts the edge in *your* script, and if you
+  latch before checking that your receiver exists, the edge is consumed and never fires
+  again. Use `onzoneenter()` / `onzoneexit()` instead — the SDK owns the state and
+  delivers the *current* value when your script activates, so loading in after the player
+  already walked in still works.
+
+- **`ontriggerenter(other)` also fires for overlaps that already existed** when the
+  object first came up. Colliders are disabled during load, and Unity does not reliably
+  raise `OnTriggerEnter` for something already inside a collider at the moment it is
+  enabled — so the SDK sweeps once on the first real frame. A pickup the player spawns
+  standing on top of still fires.

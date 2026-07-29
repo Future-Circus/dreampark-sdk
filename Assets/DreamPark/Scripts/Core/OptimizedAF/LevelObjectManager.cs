@@ -333,12 +333,6 @@ namespace DreamPark.ParkBuilder {
         }
 
         public void Enable(bool enabled = true, OptimizationSettings settings = null, int optimizationLevel = 0) {
-            if (isPriority) {
-                enabled = true;
-            }
-            if (forceDisabled != null) {
-                enabled = !forceDisabled.Value;
-            }
             if (!LevelObjectManager.objectsEnabled) {
                 enabled = false;
             }
@@ -348,13 +342,62 @@ namespace DreamPark.ParkBuilder {
                 enabled = false;
                 optimizationLevel = 2;
             }
-            
+
+            // Precedence, most-specific last:
+            //     global clamps  <  isPriority  <  forceDisabled
+            //
+            // isPriority is asserted AFTER the global clamps, on purpose.
+            //
+            // RegisterLevelObject marks the player rig priority (its name contains
+            // "Player" and it carries a PlayerRig) precisely so it is never culled.
+            // But this used to be the FIRST clause, so the global objectsEnabled
+            // clamp below it silently overruled it — and LoadLevel holds
+            // objectsEnabled false for the entire spawn window. Any Disable() that
+            // reached the rig in that window ran the real teardown, which sets
+            //
+            //     rigidbody.isKinematic     = true
+            //     rigidbody.detectCollisions = false
+            //
+            // on every Rigidbody in the rig. detectCollisions is a runtime-only
+            // property, so nothing in the prefab or the Inspector shows it: the
+            // hand colliders keep looking perfectly correct while generating ZERO
+            // contacts. Attraction pickups carry no Rigidbody of their own, so the
+            // rig is the only detecting body in the pair — the whole interaction
+            // layer dies silently. That is the July 2026 Zombiez bug: supplies
+            // uncollectable and the sledgehammer unpickable, with no error anywhere,
+            // reproducible ONLY through the park loader (a Content Manager spawn is
+            // never registered with LevelObjectManager, so nothing ever touched it).
+            //
+            // Priority now outranks the GLOBAL clamps, which is what "priority" was
+            // always supposed to mean. forceDisabled still outranks priority: that is
+            // an explicit, deliberate, per-object call (ForceDisable), not a side
+            // effect of a load-window flag — so it stays the final word.
+            if (isPriority) {
+                enabled = true;
+            }
+            if (forceDisabled != null) {
+                enabled = !forceDisabled.Value;
+            }
+
+
             if (this.enabled == enabled) {
                 return;
             }
             
             this.enabled = enabled;
-            
+
+            // Everything below is ENGINE PARKING, not gameplay. Toggling a
+            // LuaBehaviour raises Unity's OnEnable/OnDisable, which used to be
+            // forwarded straight into creator scripts as onenable()/ondisable() —
+            // so a script saw load and cull artifacts as if they were gameplay
+            // events, sometimes receiving ondisable() before its first onenable().
+            // Mark the window so LuaBehaviour can suppress those callbacks; the
+            // relays and boot path are untouched. try/finally because a throwing
+            // Toggle must not strand the depth counter above zero and silence
+            // every script in the park for the rest of the session.
+            LuaBehaviour.OptimizerToggleDepth++;
+            try {
+
             var componentsRemove = new List<ComponentSettings>();
             var rigidbodiesRemove = new List<RigidbodySettings>();
             var collidersRemove = new List<ColliderSettings>();
@@ -428,6 +471,10 @@ namespace DreamPark.ParkBuilder {
             if (particleSystemsRemove.Count > 0) {
                 particleSystems = particleSystems.Except(particleSystemsRemove).ToArray();
             }
+
+            } finally {
+                LuaBehaviour.OptimizerToggleDepth--;
+            }
         }
 
         public void Enable(OptimizationSettings settings) {
@@ -489,8 +536,24 @@ namespace DreamPark.ParkBuilder {
                     obj.GetComponent<PlayerRig>() != null;
             bool ignoreOptimization = obj.GetComponentInParent<OptimizedAFIgnore>() != null;
 
-            //level template is a special case, it will register all its children as level objects
-            if (obj.GetComponent<LevelTemplate>() != null || obj.GetComponent<PropTemplate>() != null) {
+            // A LevelTemplate is a special case: it registers each of its children
+            // individually so they stay separately cullable, and so the template root
+            // itself (PropTemplate, GameArea, BuildModeObjectController) keeps working
+            // while its contents are switched off. A prop the player placed on its own
+            // is the same case - it has to stay grabbable in Build Mode.
+            //
+            // It is NOT the same case for a prop baked inside a level or attraction.
+            // Recursing past that prop's root leaves the root unregistered, so anything
+            // sitting on it - gameplay scripts, colliders, rigidbodies - is invisible to
+            // Enable/DisableAllLevelObjects and keeps running in Build Mode. A nested
+            // prop is authored content the template owns (PropTemplate suppresses its own
+            // PropTemplate and GameArea in that case), so register it as one ordinary
+            // LevelObject. Nothing is lost by not recursing: LevelObject already gathers
+            // the whole subtree via GetComponentsInChildren.
+            var propTemplate = obj.GetComponent<PropTemplate>();
+            bool isNestedProp = propTemplate != null && propTemplate.IsNestedUnderTemplate;
+
+            if (!isNestedProp && (obj.GetComponent<LevelTemplate>() != null || propTemplate != null)) {
                 foreach (Transform child in obj.transform) {
                     RegisterLevelObject(child.gameObject, startDisabled);
                 }

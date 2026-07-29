@@ -199,8 +199,8 @@ namespace DreamPark
         {
             // The Start button label hints at the chosen scope so the user
             // gets one more chance to spot a mis-selected mode before
-            // committing. CodeOnly/PreviewsOnly modes also gate the button
-            // when the active bundling strategy doesn't support them.
+            // committing. CodeOnly also gates the button when the active
+            // bundling strategy doesn't support it.
             // Failed-Only overrides the mode label since UploadMode doesn't
             // apply when the file set is "whichever bundles failed last run."
             string cta = failedOnly
@@ -247,15 +247,14 @@ namespace DreamPark
         }
 
         // ── Upload mode picker ───────────────────────────────────────────
-        // Surfaces the four shipping shapes (All / Patch / Code only /
-        // Previews only) as a Popup. CodeOnly and PreviewsOnly are listed
-        // even when Smart isn't active so users can discover them, but the
-        // Start button gates on the strategy and a helpbox calls out the
-        // mismatch.
+        // Surfaces the three shipping shapes (All / Patch / Code only) as a
+        // Popup. CodeOnly is listed even when Smart isn't active so users can
+        // discover it, but the Start button gates on the strategy and a
+        // helpbox calls out the mismatch.
         //
         // Two contexts hide or lock the picker entirely:
-        //   - Legacy bundling: the carve-out groups Code/Previews depend on
-        //     don't exist, and Legacy always sends a full upload anyway.
+        //   - Legacy bundling: the Code carve-out group CodeOnly depends on
+        //     doesn't exist, and Legacy always sends a full upload anyway.
         //     Showing the picker would just be misleading clutter.
         //   - First upload (no prior server version): only All works on a
         //     cold start. The picker stays visible (so the user sees the
@@ -289,7 +288,7 @@ namespace DreamPark
             GUILayout.BeginVertical(EditorStyles.helpBox);
             GUILayout.Label("Upload Scope", EditorStyles.boldLabel);
             EditorGUILayout.LabelField(
-                "Pick what this run pushes to the server. Code-only and Previews-only require a prior published version to patch against.",
+                "Pick what this run pushes to the server. Code-only requires a prior published version to patch against.",
                 EditorStyles.wordWrappedMiniLabel);
 
             var values = (UploadMode[])System.Enum.GetValues(typeof(UploadMode));

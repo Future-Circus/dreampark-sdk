@@ -284,14 +284,16 @@ namespace DreamPark
             //    - Previews: lightweight PNG/JPG screenshots for browser UI
             //    - Code:     game Lua scripts (.lua.txt under Assets/Content/{gameId}/)
             //    - Runtime:     addressables that aren't roots or walked deps
-            //  Previews intentionally live outside the root bundles so the
-            //  admin/content-manager UI can fetch thumbnails without pulling
-            //  the heavy gameplay prefab bundles over the wire.
-            //  Code lives outside the root bundles for the same reason —
-            //  iterating on Lua should ship a few KB, not the parent prefab
-            //  bundle the LuaBehaviour reference happens to point at.
+            //  Code lives outside the root bundles so iterating on Lua ships a
+            //  few KB, not the parent prefab bundle the LuaBehaviour reference
+            //  happens to point at.
+            //  Previews are grouped but NOT BUILT (July 2026) — see
+            //  ExcludeRetiredArtGroupsFromBuild. The group survives so the
+            //  entries/addresses stay put and the decision is one flag away
+            //  from reversible.
             var previewGroup = GetOrCreateGroup(settings, $"{gameId}-{PreviewsSuffix}", out bool previewCreated);
             ConfigureBundleSchema(settings, previewGroup);
+            SetIncludeInBuild(previewGroup, false);
             if (previewCreated) result.groupsCreated++;
 
             var codeGroup = GetOrCreateGroup(settings, $"{gameId}-{CodeSuffix}", out bool codeCreated);
@@ -423,9 +425,10 @@ namespace DreamPark
             // 7. Move all preview images into the dedicated preview bundle.
             //    Convention:
             //      Assets/Content/{gameId}/Previews/{rootName}.{png|jpg|jpeg}
-            //    Mirrors the preview-generator output and keeps the browser
-            //    UX cheap: loading a preview no longer drags in the root
-            //    prefab's gameplay bundle.
+            //    Mirrors the preview-generator output. The group is excluded
+            //    from the build (July 2026), so this keeps the PNGs corralled
+            //    in one place rather than letting them scatter into gameplay
+            //    bundles as folder-group stragglers.
             string previewFolderPrefix = $"Assets/Content/{gameId}/Previews/";
             foreach (string previewPath in allEntryPaths
                 .Where(path => path.StartsWith(previewFolderPrefix, StringComparison.OrdinalIgnoreCase)
@@ -1343,6 +1346,50 @@ namespace DreamPark
             // directory bundle layout problem that PackSeparately causes.
             bag.BundleMode = BundledAssetGroupSchema.BundlePackingMode.PackTogether;
             bag.Compression = BundledAssetGroupSchema.BundleCompressionMode.LZ4;
+        }
+
+        // The dedicated group the Content Uploader parks the content logo in.
+        public static string LogosGroupName(string gameId) => $"{gameId}-Logos";
+
+        // July 2026 — preview thumbnails and the content logo are delivered by
+        // the backend now (POST /api/content/:id/attractions/preview and
+        // POST /api/content/:id/logo), so their bundles are dead weight: no
+        // runtime path loads them, yet preview churn kept aborting CodeOnly
+        // uploads over a change no client reads.
+        //
+        // The groups and their entries stay exactly where they are — only
+        // IncludeInBuild flips off, so no bundle is produced, nothing lands in
+        // ServerData, and nothing uploads. Keeping the entries (rather than
+        // ripping them out of Addressables) means the logo texture doesn't get
+        // re-harvested into a gameplay bundle, addresses/GUID bookkeeping is
+        // untouched, and re-enabling is a one-line change.
+        //
+        // Safe to call on any project: groups that don't exist are skipped.
+        public static void ExcludeRetiredArtGroupsFromBuild(
+            AddressableAssetSettings settings, string gameId)
+        {
+            if (settings == null || string.IsNullOrEmpty(gameId)) return;
+
+            string previews = PreviewsGroupName(gameId);
+            string previewsChunkPrefix = previews + "-";   // Previews-2, Previews-3, ...
+            string logos = LogosGroupName(gameId);
+
+            foreach (var group in settings.groups.Where(g => g != null).ToList())
+            {
+                bool retired = group.Name == previews
+                    || group.Name.StartsWith(previewsChunkPrefix, StringComparison.Ordinal)
+                    || group.Name == logos;
+                if (retired) SetIncludeInBuild(group, false);
+            }
+        }
+
+        private static void SetIncludeInBuild(AddressableAssetGroup group, bool include)
+        {
+            var bag = group?.GetSchema<BundledAssetGroupSchema>();
+            if (bag == null || bag.IncludeInBuild == include) return;
+            bag.IncludeInBuild = include;
+            EditorUtility.SetDirty(bag);
+            Debug.Log($"[SmartBundleGrouper] {group.Name}: IncludeInBuild = {include}");
         }
 
         private static void MoveEntryToGroup(

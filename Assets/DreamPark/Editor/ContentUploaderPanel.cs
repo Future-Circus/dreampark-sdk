@@ -1670,12 +1670,11 @@ namespace DreamPark {
                     uploadStatusProgress = 0.85f;
                     Repaint();
 
-                    // Logo address is the Addressables key used by core's
-                    // DrawContentLogo to load the logo Texture2D out of
-                    // the catalog ({contentId}/Logos/{filename}). Null
-                    // when no logo is selected — core falls back to "no
-                    // logo" rendering, which is fine for test builds.
-                    string testLogoAddress = GetLogoAddress();
+                    // Test builds no longer carry a logo Addressables key:
+                    // the logo isn't bundled (July 2026), so core reads
+                    // content.logoImageUrl from the backend instead. Null
+                    // here means "no bundled logo", which is now always true.
+                    string testLogoAddress = null;
 
                     if (estimateOnly)
                     {
@@ -3026,8 +3025,8 @@ namespace DreamPark {
             var bundlingStrategy = BundlingStrategyPrefs.Current;
 
             // patching reflects what THIS upload actually did — anything other
-            // than Upload All shipped a partial payload (Patch, CodeOnly,
-            // PreviewsOnly). Previously we derived this from bundling strategy
+            // than Upload All shipped a partial payload (Patch, CodeOnly).
+            // Previously we derived this from bundling strategy
             // alone, which marked Upload-All-on-Smart-strategy releases as
             // "patch" in the admin dashboard even though every bundle re-
             // shipped. The bundling strategy is still recorded separately via
@@ -4555,10 +4554,9 @@ namespace DreamPark {
                             // - CodeOnly:   skipSet = everything except catalog + {gameId}-Code bundle.
                             //               Aborts here if non-Code bundles also changed (would
                             //               produce a catalog referencing local-only hashes).
-                            // - PreviewsOnly: same shape as CodeOnly for the Previews bundle.
                             //
                             // Legacy bundling forces UploadMode.All regardless of UI selection
-                            // because the carve-out groups for Code/Previews don't exist and
+                            // because the Code carve-out group doesn't exist there and
                             // baseline-driven patching wasn't validated on Legacy output.
                             BuildManifest currentManifest = null;
                             HashSet<string> skipSet = null;
@@ -4694,18 +4692,17 @@ namespace DreamPark {
 
                                 modeResult = UploadModeFilter.Build(effectiveMode, contentId, currentManifest, patchingEnabled ? diff : null);
 
-                                // Sanity check for Code/Previews-only: an empty target group
-                                // (no Lua scripts, no preview PNGs) leaves no bundle to ship.
-                                // SmartBundleGrouper's empty-group sweep removes the group,
-                                // Addressables skips producing a bundle, and we'd end up
-                                // uploading just a catalog — technically successful but a
-                                // no-op for the runtime. Flag it instead.
+                                // Sanity check for Code-only: an empty Code group (no Lua
+                                // scripts) leaves no bundle to ship. SmartBundleGrouper's
+                                // empty-group sweep removes the group, Addressables skips
+                                // producing a bundle, and we'd end up uploading just a
+                                // catalog — technically successful but a no-op for the
+                                // runtime. Flag it instead.
                                 if (string.IsNullOrEmpty(modeResult.blockingError)
-                                    && (effectiveMode == UploadMode.CodeOnly || effectiveMode == UploadMode.PreviewsOnly))
+                                    && effectiveMode == UploadMode.CodeOnly)
                                 {
-                                    var targetCat = effectiveMode == UploadMode.CodeOnly
-                                        ? UploadModeFilter.FileCategory.CodeBundle
-                                        : UploadModeFilter.FileCategory.PreviewsBundle;
+                                    const UploadModeFilter.FileCategory targetCat =
+                                        UploadModeFilter.FileCategory.CodeBundle;
                                     bool hasTargetBundle = false;
                                     foreach (var p in currentManifest.platforms)
                                     {
@@ -4721,9 +4718,7 @@ namespace DreamPark {
                                     }
                                     if (!hasTargetBundle)
                                     {
-                                        string what = effectiveMode == UploadMode.CodeOnly
-                                            ? "Lua scripts (*.lua.txt under Assets/Content/" + contentId + "/)"
-                                            : "preview images (PNG/JPG under Assets/Content/" + contentId + "/Previews/)";
+                                        string what = "Lua scripts (*.lua.txt under Assets/Content/" + contentId + "/)";
                                         modeResult.blockingError =
                                             $"{UploadModePrefs.ShortLabel(effectiveMode)} upload aborted: " +
                                             $"no {UploadModePrefs.ShortLabel(effectiveMode)} bundle was produced by this build. " +
@@ -4731,7 +4726,7 @@ namespace DreamPark {
                                     }
                                 }
 
-                                // Hard-block path: a Code/Previews-only mode that would ship a
+                                // Hard-block path: a Code-only upload that would ship a
                                 // broken catalog. Surface the same message to the EditorLog and
                                 // a modal, then bail cleanly without touching the version
                                 // counter on the backend.
@@ -5000,11 +4995,13 @@ namespace DreamPark {
                         JSONObject metadataUpdate = new JSONObject();
                         metadataUpdate.AddField("contentName", contentName);
                         metadataUpdate.AddField("contentDescription", contentDescription);
-                        string logoAddress = GetLogoAddress();
-                        if (!string.IsNullOrEmpty(logoAddress))
-                        {
-                            metadataUpdate.AddField("logoAddress", logoAddress);
-                        }
+                        // logoAddress (the Addressables key) is deliberately NOT
+                        // sent any more — July 2026 the logo stopped shipping in
+                        // a bundle. content.logoImageUrl, pushed by
+                        // UploadLogoImage below, is the one source of truth and
+                        // every surface (iOS, web, admin, the VR client) reads
+                        // it. Sending a key that no longer resolves would just
+                        // hand clients a dead address.
 
                         ContentAPI.UpdateContent(contentId, metadataUpdate, (updateSuccess, updateResponse) =>
                         {
@@ -5038,7 +5035,11 @@ namespace DreamPark {
                     else if (response.statusCode == 404)
                     {
                         // Content doesn't exist yet — create it
-                        ContentAPI.AddContent(contentId, contentName, contentDescription, GetLogoAddress(), (success, response) =>
+                        // logoAddress: null — the logo isn't in a bundle any
+                        // more (July 2026), so a key would be a dead pointer.
+                        // UploadLogoImage pushes the image itself and the
+                        // backend serves it as content.logoImageUrl.
+                        ContentAPI.AddContent(contentId, contentName, contentDescription, null, (success, response) =>
                         {
                             if (success)
                             {
@@ -5167,6 +5168,14 @@ namespace DreamPark {
             }
         }
 
+        // Keeps the logo's addressable ENTRY (address + label + GUID
+        // bookkeeping) while making sure the group never builds. July 2026:
+        // the logo ships to the backend as an image
+        // (POST /api/content/:id/logo → content.logoImageUrl) and no runtime
+        // path loads it out of a bundle any more, so building a per-content
+        // logo bundle was pure upload weight. The entry stays put so the
+        // texture isn't re-harvested into a gameplay bundle by the next
+        // grouping pass — and so re-enabling is one flag.
         private void SyncLogoAddressableEntry()
         {
             if (logoTexture == null)
@@ -5210,6 +5219,8 @@ namespace DreamPark {
             bag.UseAssetBundleCrc = true;
             bag.BundleMode = BundledAssetGroupSchema.BundlePackingMode.PackTogether;
             bag.Compression = BundledAssetGroupSchema.BundleCompressionMode.LZ4;
+            // The one behavioural line: no logo bundle is produced or uploaded.
+            bag.IncludeInBuild = false;
 
             var entry = settings.CreateOrMoveEntry(guid, group, false, false);
             entry.address = GetLogoAddress();
@@ -5217,7 +5228,7 @@ namespace DreamPark {
 
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
-            Debug.Log($"✅ Synced logo addressable: {entry.address}");
+            Debug.Log($"✅ Synced logo addressable (build-excluded): {entry.address}");
         }
         public static bool BuildForTarget(BuildTarget target, BuildTargetGroup group, string targetUrl, string contentId = null)
         {

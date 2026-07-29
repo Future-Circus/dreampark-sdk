@@ -17,6 +17,138 @@ namespace XLua
     {
         
 		
+		public static void UnPack(ObjectTranslator translator, RealStatePtr L, int idx, out UnityEngine.Color32 val)
+		{
+		    val = new UnityEngine.Color32();
+            int top = LuaAPI.lua_gettop(L);
+			
+			if (Utils.LoadField(L, idx, "r"))
+            {
+			    
+                translator.Get(L, top + 1, out val.r);
+				
+            }
+            LuaAPI.lua_pop(L, 1);
+			
+			if (Utils.LoadField(L, idx, "g"))
+            {
+			    
+                translator.Get(L, top + 1, out val.g);
+				
+            }
+            LuaAPI.lua_pop(L, 1);
+			
+			if (Utils.LoadField(L, idx, "b"))
+            {
+			    
+                translator.Get(L, top + 1, out val.b);
+				
+            }
+            LuaAPI.lua_pop(L, 1);
+			
+			if (Utils.LoadField(L, idx, "a"))
+            {
+			    
+                translator.Get(L, top + 1, out val.a);
+				
+            }
+            LuaAPI.lua_pop(L, 1);
+			
+		}
+		
+        public static bool Pack(IntPtr buff, int offset, UnityEngine.Color32 field)
+        {
+            
+            if(!Pack(buff, offset, field.r))
+            {
+                return false;
+            }
+            
+            if(!Pack(buff, offset + 1, field.g))
+            {
+                return false;
+            }
+            
+            if(!Pack(buff, offset + 2, field.b))
+            {
+                return false;
+            }
+            
+            if(!Pack(buff, offset + 3, field.a))
+            {
+                return false;
+            }
+            
+            return true;
+        }
+        public static bool UnPack(IntPtr buff, int offset, out UnityEngine.Color32 field)
+        {
+            field = default(UnityEngine.Color32);
+            
+            if(!UnPack(buff, offset, out field.r))
+            {
+                return false;
+            }
+            
+            if(!UnPack(buff, offset + 1, out field.g))
+            {
+                return false;
+            }
+            
+            if(!UnPack(buff, offset + 2, out field.b))
+            {
+                return false;
+            }
+            
+            if(!UnPack(buff, offset + 3, out field.a))
+            {
+                return false;
+            }
+            
+            return true;
+        }
+        
+		
+		public static void UnPack(ObjectTranslator translator, RealStatePtr L, int idx, out UnityEngine.Rect val)
+		{
+		    val = new UnityEngine.Rect();
+            int top = LuaAPI.lua_gettop(L);
+			
+		}
+		
+        public static bool Pack(IntPtr buff, int offset, UnityEngine.Rect field)
+        {
+            
+            return true;
+        }
+        public static bool UnPack(IntPtr buff, int offset, out UnityEngine.Rect field)
+        {
+            field = default(UnityEngine.Rect);
+            
+            return true;
+        }
+        
+		
+		public static void UnPack(ObjectTranslator translator, RealStatePtr L, int idx, out UnityEngine.Keyframe val)
+		{
+		    val = new UnityEngine.Keyframe();
+            int top = LuaAPI.lua_gettop(L);
+			
+		}
+		
+        public static bool Pack(IntPtr buff, int offset, UnityEngine.Keyframe field)
+        {
+            
+            return true;
+        }
+        public static bool UnPack(IntPtr buff, int offset, out UnityEngine.Keyframe field)
+        {
+            field = default(UnityEngine.Keyframe);
+            
+            return true;
+        }
+        
+		
 		public static void UnPack(ObjectTranslator translator, RealStatePtr L, int idx, out UnityEngine.Vector2 val)
 		{
 		    val = new UnityEngine.Vector2();
