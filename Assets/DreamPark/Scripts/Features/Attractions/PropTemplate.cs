@@ -42,7 +42,7 @@ namespace DreamPark
         private Vector3 _lastPosition;
         private Quaternion _lastRotation;
         private Vector3 _lastScale;
-        private bool _isSuppressedByAttractionParent;
+        private bool _isSuppressedByTemplateParent;
 
         public float SurfaceHeight => transform.position.y + _calibratedYOffset;
 
@@ -83,7 +83,7 @@ namespace DreamPark
 
         private void Awake()
         {
-            if (TrySuppressUnderAttraction())
+            if (TrySuppressUnderTemplate())
                 return;
 
             EnsureGameId();
@@ -93,32 +93,32 @@ namespace DreamPark
 
         private void Start()
         {
-            if (_isSuppressedByAttractionParent) return;
+            if (_isSuppressedByTemplateParent) return;
             EnsureCalibrator();
             NotifyChanged();
         }
 
         private void OnEnable()
         {
-            if (_isSuppressedByAttractionParent) return;
+            if (_isSuppressedByTemplateParent) return;
             NotifyChanged();
         }
 
         private void OnDisable()
         {
-            if (_isSuppressedByAttractionParent) return;
+            if (_isSuppressedByTemplateParent) return;
             NotifyChanged();
         }
 
         private void OnTransformChildrenChanged()
         {
-            if (_isSuppressedByAttractionParent) return;
+            if (_isSuppressedByTemplateParent) return;
             NotifyChanged();
         }
 
         private void LateUpdate()
         {
-            if (_isSuppressedByAttractionParent) return;
+            if (_isSuppressedByTemplateParent) return;
             if (_lastPosition != transform.position || _lastRotation != transform.rotation || _lastScale != transform.localScale)
             {
                 CacheTransform();
@@ -135,25 +135,46 @@ namespace DreamPark
 #endif
 
         /// <summary>
-        /// PropTemplate and AttractionTemplate both auto-add a GameArea and broadcast
-        /// change events to GapFiller. When a Prop sits inside an Attraction the parent
-        /// already owns the player-rig zone and the floor regeneration cycle, so the
-        /// nested prop's GameArea + change events are redundant — and noisy, since
+        /// True when this prop is baked inside a LevelTemplate rather than placed on its
+        /// own. A nested prop is authored content that the level owns, so the SDK treats
+        /// it as an ordinary child object: its PropTemplate and GameArea are suppressed
+        /// in Awake, and OptimizedAF registers its root as a LevelObject instead of
+        /// recursing past it.
+        ///
+        /// The test is LevelTemplate, not AttractionTemplate. AttractionTemplate is an
+        /// empty subclass - a naming convention - and LevelTemplate carries the
+        /// RequireComponent(GameArea) and the GapFiller broadcast that make a nested
+        /// prop redundant in the first place, so both cases are the same case. The walk
+        /// starts at transform.parent so an object carrying both components does not
+        /// match itself.
+        ///
+        /// Computed from the hierarchy rather than from _isSuppressedByTemplateParent,
+        /// so callers can ask before this component's Awake has run - registration during
+        /// a spawn can beat Awake.
+        /// </summary>
+        public bool IsNestedUnderTemplate =>
+            transform.parent != null
+            && transform.parent.GetComponentInParent<LevelTemplate>(true) != null;
+
+        /// <summary>
+        /// PropTemplate and LevelTemplate both auto-add a GameArea and broadcast
+        /// change events to GapFiller. When a Prop sits inside a Level or Attraction the
+        /// parent already owns the player-rig zone and the floor regeneration cycle, so
+        /// the nested prop's GameArea + change events are redundant — and noisy, since
         /// LateUpdate would fire NotifyChanged every time a moving prop's transform
         /// updates.
         ///
         /// If we detect that situation in Awake, suppress this component: disable the
         /// attached GameArea, disable this PropTemplate, and skip all NotifyChanged
-        /// broadcasts. Authors can still place props inside attractions for visual or
-        /// gameplay purposes — they just don't double-register with GapFiller.
+        /// broadcasts. Authors can still place props inside levels and attractions for
+        /// visual or gameplay purposes — they just don't double-register with GapFiller.
         /// </summary>
-        private bool TrySuppressUnderAttraction()
+        private bool TrySuppressUnderTemplate()
         {
-            var parentAttraction = GetComponentInParent<AttractionTemplate>(true);
-            if (parentAttraction == null || parentAttraction.gameObject == gameObject)
+            if (!IsNestedUnderTemplate)
                 return false;
 
-            _isSuppressedByAttractionParent = true;
+            _isSuppressedByTemplateParent = true;
 
             var gameArea = GetComponent<GameArea>();
             if (gameArea != null)
@@ -210,14 +231,10 @@ namespace DreamPark
         }
 
         /// <summary>
-        /// True when an ancestor (not this object) carries a LevelTemplate. AttractionTemplate
-        /// derives from LevelTemplate, so this single check covers props nested inside either.
+        /// Kept as a named call site for readability inside EnsureGameArea. The test now
+        /// lives in one place: IsNestedUnderTemplate.
         /// </summary>
-        private bool IsNestedInContainerZone()
-        {
-            return transform.parent != null
-                && transform.parent.GetComponentInParent<LevelTemplate>(true) != null;
-        }
+        private bool IsNestedInContainerZone() => IsNestedUnderTemplate;
 
         private void EnsureGameId()
         {

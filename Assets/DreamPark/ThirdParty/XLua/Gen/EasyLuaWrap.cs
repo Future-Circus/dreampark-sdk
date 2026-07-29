@@ -21,9 +21,10 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(EasyLua);
-			Utils.BeginObjectRegister(type, L, translator, 0, 3, 9, 9);
+			Utils.BeginObjectRegister(type, L, translator, 0, 4, 17, 17);
 			
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "Awake", _m_Awake);
+			Utils.RegisterFunc(L, Utils.METHOD_IDX, "EnsureBooted", _m_EnsureBooted);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "OnEvent", _m_OnEvent);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "OnEventDisable", _m_OnEventDisable);
 			
@@ -36,6 +37,14 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "intInjections", _g_get_intInjections);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "scriptInjections", _g_get_scriptInjections);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "audioClipInjections", _g_get_audioClipInjections);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "vector3Injections", _g_get_vector3Injections);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "colorInjections", _g_get_colorInjections);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "transformInjections", _g_get_transformInjections);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "materialInjections", _g_get_materialInjections);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "spriteInjections", _g_get_spriteInjections);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "textureInjections", _g_get_textureInjections);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "componentInjections", _g_get_componentInjections);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "gameObjectListInjections", _g_get_gameObjectListInjections);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "delayNextEvent", _g_get_delayNextEvent);
             
 			Utils.RegisterFunc(L, Utils.SETTER_IDX, "luaScript", _s_set_luaScript);
@@ -46,6 +55,14 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "intInjections", _s_set_intInjections);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "scriptInjections", _s_set_scriptInjections);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "audioClipInjections", _s_set_audioClipInjections);
+            Utils.RegisterFunc(L, Utils.SETTER_IDX, "vector3Injections", _s_set_vector3Injections);
+            Utils.RegisterFunc(L, Utils.SETTER_IDX, "colorInjections", _s_set_colorInjections);
+            Utils.RegisterFunc(L, Utils.SETTER_IDX, "transformInjections", _s_set_transformInjections);
+            Utils.RegisterFunc(L, Utils.SETTER_IDX, "materialInjections", _s_set_materialInjections);
+            Utils.RegisterFunc(L, Utils.SETTER_IDX, "spriteInjections", _s_set_spriteInjections);
+            Utils.RegisterFunc(L, Utils.SETTER_IDX, "textureInjections", _s_set_textureInjections);
+            Utils.RegisterFunc(L, Utils.SETTER_IDX, "componentInjections", _s_set_componentInjections);
+            Utils.RegisterFunc(L, Utils.SETTER_IDX, "gameObjectListInjections", _s_set_gameObjectListInjections);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "delayNextEvent", _s_set_delayNextEvent);
             
 			
@@ -107,6 +124,33 @@ namespace XLua.CSObjectWrap
                 {
                     
                     gen_to_be_invoked.Awake(  );
+                    
+                    
+                    
+                    return 0;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_EnsureBooted(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+                EasyLua gen_to_be_invoked = (EasyLua)translator.FastGetCSObj(L, 1);
+            
+            
+                
+                {
+                    
+                    gen_to_be_invoked.EnsureBooted(  );
                     
                     
                     
@@ -303,6 +347,118 @@ namespace XLua.CSObjectWrap
         }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_vector3Injections(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                EasyLua gen_to_be_invoked = (EasyLua)translator.FastGetCSObj(L, 1);
+                translator.Push(L, gen_to_be_invoked.vector3Injections);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_colorInjections(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                EasyLua gen_to_be_invoked = (EasyLua)translator.FastGetCSObj(L, 1);
+                translator.Push(L, gen_to_be_invoked.colorInjections);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_transformInjections(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                EasyLua gen_to_be_invoked = (EasyLua)translator.FastGetCSObj(L, 1);
+                translator.Push(L, gen_to_be_invoked.transformInjections);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_materialInjections(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                EasyLua gen_to_be_invoked = (EasyLua)translator.FastGetCSObj(L, 1);
+                translator.Push(L, gen_to_be_invoked.materialInjections);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_spriteInjections(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                EasyLua gen_to_be_invoked = (EasyLua)translator.FastGetCSObj(L, 1);
+                translator.Push(L, gen_to_be_invoked.spriteInjections);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_textureInjections(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                EasyLua gen_to_be_invoked = (EasyLua)translator.FastGetCSObj(L, 1);
+                translator.Push(L, gen_to_be_invoked.textureInjections);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_componentInjections(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                EasyLua gen_to_be_invoked = (EasyLua)translator.FastGetCSObj(L, 1);
+                translator.Push(L, gen_to_be_invoked.componentInjections);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_gameObjectListInjections(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                EasyLua gen_to_be_invoked = (EasyLua)translator.FastGetCSObj(L, 1);
+                translator.Push(L, gen_to_be_invoked.gameObjectListInjections);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
         static int _g_get_delayNextEvent(RealStatePtr L)
         {
 		    try {
@@ -431,6 +587,126 @@ namespace XLua.CSObjectWrap
 			
                 EasyLua gen_to_be_invoked = (EasyLua)translator.FastGetCSObj(L, 1);
                 gen_to_be_invoked.audioClipInjections = (AudioClipInjection[])translator.GetObject(L, 2, typeof(AudioClipInjection[]));
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_vector3Injections(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                EasyLua gen_to_be_invoked = (EasyLua)translator.FastGetCSObj(L, 1);
+                gen_to_be_invoked.vector3Injections = (Vector3Injection[])translator.GetObject(L, 2, typeof(Vector3Injection[]));
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_colorInjections(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                EasyLua gen_to_be_invoked = (EasyLua)translator.FastGetCSObj(L, 1);
+                gen_to_be_invoked.colorInjections = (ColorInjection[])translator.GetObject(L, 2, typeof(ColorInjection[]));
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_transformInjections(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                EasyLua gen_to_be_invoked = (EasyLua)translator.FastGetCSObj(L, 1);
+                gen_to_be_invoked.transformInjections = (TransformInjection[])translator.GetObject(L, 2, typeof(TransformInjection[]));
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_materialInjections(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                EasyLua gen_to_be_invoked = (EasyLua)translator.FastGetCSObj(L, 1);
+                gen_to_be_invoked.materialInjections = (MaterialInjection[])translator.GetObject(L, 2, typeof(MaterialInjection[]));
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_spriteInjections(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                EasyLua gen_to_be_invoked = (EasyLua)translator.FastGetCSObj(L, 1);
+                gen_to_be_invoked.spriteInjections = (SpriteInjection[])translator.GetObject(L, 2, typeof(SpriteInjection[]));
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_textureInjections(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                EasyLua gen_to_be_invoked = (EasyLua)translator.FastGetCSObj(L, 1);
+                gen_to_be_invoked.textureInjections = (TextureInjection[])translator.GetObject(L, 2, typeof(TextureInjection[]));
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_componentInjections(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                EasyLua gen_to_be_invoked = (EasyLua)translator.FastGetCSObj(L, 1);
+                gen_to_be_invoked.componentInjections = (ComponentInjection[])translator.GetObject(L, 2, typeof(ComponentInjection[]));
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_gameObjectListInjections(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                EasyLua gen_to_be_invoked = (EasyLua)translator.FastGetCSObj(L, 1);
+                gen_to_be_invoked.gameObjectListInjections = (GameObjectListInjection[])translator.GetObject(L, 2, typeof(GameObjectListInjection[]));
             
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);

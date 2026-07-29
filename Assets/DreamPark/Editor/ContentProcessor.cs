@@ -1148,6 +1148,14 @@ namespace DreamPark {
                           $"+{result.groupsCreated}/-{result.groupsRemoved} groups, " +
                           $"{result.orphanFilesRemoved} orphan files cleaned.");
             }
+
+            // ── Retired art groups ───────────────────────────────────────
+            // Preview thumbnails and the content logo are delivered by the
+            // backend now, so their bundles are never built or uploaded (July
+            // 2026). Runs on BOTH strategies and on incremental passes — the
+            // groups exist in every project that ever published, and a project
+            // that hasn't run the Smart pass yet still must not build them.
+            SmartBundleGrouper.ExcludeRetiredArtGroupsFromBuild(settings, gameId);
         }
 
         public static Texture2D CreateAlphaMask(Texture2D original, Color bg, float threshold = 0.1f)

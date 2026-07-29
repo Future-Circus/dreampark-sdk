@@ -69,7 +69,7 @@ function start()
             end)
         end
     end
-    rawset(_G, "example_manager", self.lua)
+    rawset(_G, "example_manager", self.ScriptScope)
     refresh_display()
 end
 

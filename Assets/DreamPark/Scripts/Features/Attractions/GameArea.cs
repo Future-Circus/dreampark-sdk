@@ -72,7 +72,42 @@ namespace DreamPark {
         {
             ComputeBounds();
             zoneColor = GameAreaColorFromId(gameId);
+
+            // A prop nested under a LevelTemplate/AttractionTemplate can never be
+            // the active zone — the container always outranks it — so its zone is
+            // pure overhead and pure noise.
+            //
+            // PropTemplate.TrySuppressUnderTemplate already sets `enabled = false`
+            // for this case, but it does so from ITS Awake, and Awake order between
+            // two components on the same object is arbitrary. When GameArea.Awake
+            // won the race it had already run allGameAreas.Add(this); disabling a
+            // component before its first OnEnable means OnDisable never fires, so
+            // the matching Remove never happened. Result: an inert zone stranded in
+            // the registry forever. Harmless to gameplay (a disabled component
+            // never Updates, so it cannot claim currentGameArea) but it made
+            // allGameAreas a misleading place to look — a real Zombiez
+            // investigation lost time to 33 phantom entries.
+            //
+            // Deciding here instead makes it order-independent: we simply never
+            // register.
+            if (IsRedundantPropZone()) {
+                enabled = false;
+                return;
+            }
+
             allGameAreas.Add(this);
+        }
+
+        /// <summary>
+        /// True when this zone belongs to a prop sitting inside a containing
+        /// level/attraction, which already owns the player-rig zone for the space.
+        /// Mirrors PropTemplate.IsNestedUnderTemplate — read from the hierarchy, so
+        /// it is valid before either component's Awake has finished.
+        /// </summary>
+        private bool IsRedundantPropZone()
+        {
+            var prop = GetComponent<PropTemplate>();
+            return prop != null && prop.IsNestedUnderTemplate;
         }
 
 #if UNITY_EDITOR
