@@ -30,11 +30,29 @@ public class NetId : MonoBehaviour
 
     public uint Id { get; private set; }
 
+    private Action<string> _onNetEvent;
+
     /// <summary>
     /// Subscribe to receive network events targeting this object.
     /// Payload is the raw JSON string from the sender.
+    ///
+    /// Subscribing DRAINS any events that arrived before you existed. NetId
+    /// registers in Start(), but a LuaBehaviour is forbidden from booting — and
+    /// therefore from wiring onnet — while park content is parked, which is the
+    /// entire load span and every Build→Play transition. Without this, a receiver
+    /// that wires up late would never see the host's join-time state burst.
+    ///
+    /// Making subscription itself the trigger means no caller has to remember to
+    /// ask for a replay, and the buffer cannot be stranded once someone is finally
+    /// listening.
     /// </summary>
-    public event Action<string> OnNetEvent;
+    public event Action<string> OnNetEvent {
+        add {
+            _onNetEvent += value;
+            if (_registered) NetRegistry.TryFlushBuffered(this);
+        }
+        remove { _onNetEvent -= value; }
+    }
 
     bool _registered;
 
@@ -63,20 +81,29 @@ public class NetId : MonoBehaviour
         if (_registered) NetRegistry.Unregister(Id);
     }
 
-    public void ReceiveEvent(string payload)
+    /// <summary>
+    /// Whether anything is actually listening. NetRegistry checks this BEFORE
+    /// draining its replay buffer: a buffer that exists to cover the not-ready
+    /// window must not throw the payload away during that window.
+    /// </summary>
+    public bool HasSubscribers => _onNetEvent != null;
+
+    /// <summary>Delivers, and reports whether a subscriber actually took it.</summary>
+    public bool ReceiveEvent(string payload)
     {
         // A delivered event with nobody listening must not vanish silently —
         // it means no TestNetObject/LuaBehaviour(onnet) is wired on this object.
-        if (OnNetEvent == null)
+        if (_onNetEvent == null)
         {
             Debug.LogWarning($"[NetId {Id}] Event delivered but NO subscribers on '{gameObject.name}' — is the receiving script (onnet/TestNetObject) attached on this client?");
-            return;
+            return false;
         }
 
         // Untrusted network input flows straight into creator Lua (onnet). Isolate
         // handler exceptions so a malformed/hostile payload can't crash the caller.
-        try { OnNetEvent.Invoke(payload); }
+        try { _onNetEvent.Invoke(payload); }
         catch (Exception e) { Debug.LogWarning($"[NetId {Id}] onnet handler threw: {e.Message}"); }
+        return true;
     }
 
     /// <summary>

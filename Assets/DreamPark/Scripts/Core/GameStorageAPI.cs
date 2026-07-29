@@ -205,6 +205,25 @@ namespace DreamPark.API
             if (callback == null) return;
             var store = EnsureStore(contentId);
             if (store == null) return;
+            // AN UNBOUND GUEST WAITS HERE, ON PURPOSE. Do not "fix" this.
+            //
+            // With no identity bound there is no server snapshot, so the callback
+            // stays queued. That is the guest-merge feature working: the queue is
+            // deliberately preserved across an unbound->bound transition (see the
+            // _epoch comment above - OnIdentityBound does NOT bump it), and
+            // HookIdentity refetches on bind, which drains this queue with the
+            // player's REAL data.
+            //
+            // Firing early with local defaults looks like a fix and breaks exactly
+            // that: the queue would already be empty, so when the guest signs in
+            // mid-session and the real snapshot lands, the content would never be
+            // told. A high-score display would sit on 0 for the rest of the session.
+            //
+            // Gameplay does not hang on this, because gameplay does not need it:
+            // storage.get is synchronous against the local cache and works fine
+            // unbound. onReady means "you now have server data" - for a guest that
+            // is honestly never, and the shipped sample uses it to REFRESH a
+            // display, not to gate the round starting.
             // Fire immediately when loaded — or when the fetch already
             // exhausted its retries (nothing will refire until the next
             // identity bind; the caller proceeds on local data).
