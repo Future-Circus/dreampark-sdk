@@ -2825,7 +2825,7 @@ namespace XLua.CSObjectWrap
                 ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			
                 UnityEngine.Animator gen_to_be_invoked = (UnityEngine.Animator)translator.FastGetCSObj(L, 1);
-                translator.Push(L, gen_to_be_invoked.cullingMode);
+                translator.PushUnityEngineAnimatorCullingMode(L, gen_to_be_invoked.cullingMode);
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }

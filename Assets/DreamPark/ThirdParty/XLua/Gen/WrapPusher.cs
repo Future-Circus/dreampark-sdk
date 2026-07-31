@@ -37,6 +37,7 @@ namespace XLua
 				translator.RegisterPushAndGetAndUpdate<UnityEngine.Ray>(translator.PushUnityEngineRay, translator.Get, translator.UpdateUnityEngineRay);
 				translator.RegisterPushAndGetAndUpdate<UnityEngine.Bounds>(translator.PushUnityEngineBounds, translator.Get, translator.UpdateUnityEngineBounds);
 				translator.RegisterPushAndGetAndUpdate<UnityEngine.Ray2D>(translator.PushUnityEngineRay2D, translator.Get, translator.UpdateUnityEngineRay2D);
+				translator.RegisterPushAndGetAndUpdate<UnityEngine.AnimatorCullingMode>(translator.PushUnityEngineAnimatorCullingMode, translator.Get, translator.UpdateUnityEngineAnimatorCullingMode);
 				translator.RegisterPushAndGetAndUpdate<UnityEngine.Space>(translator.PushUnityEngineSpace, translator.Get, translator.UpdateUnityEngineSpace);
 				translator.RegisterPushAndGetAndUpdate<UnityEngine.ForceMode>(translator.PushUnityEngineForceMode, translator.Get, translator.UpdateUnityEngineForceMode);
 				translator.RegisterPushAndGetAndUpdate<UnityEngine.PrimitiveType>(translator.PushUnityEnginePrimitiveType, translator.Get, translator.UpdateUnityEnginePrimitiveType);
@@ -51,6 +52,8 @@ namespace XLua
 				translator.RegisterPushAndGetAndUpdate<UnityEngine.FilterMode>(translator.PushUnityEngineFilterMode, translator.Get, translator.UpdateUnityEngineFilterMode);
 				translator.RegisterPushAndGetAndUpdate<UnityEngine.RenderMode>(translator.PushUnityEngineRenderMode, translator.Get, translator.UpdateUnityEngineRenderMode);
 				translator.RegisterPushAndGetAndUpdate<UnityEngine.SendMessageOptions>(translator.PushUnityEngineSendMessageOptions, translator.Get, translator.UpdateUnityEngineSendMessageOptions);
+				translator.RegisterPushAndGetAndUpdate<UnityEngine.FindObjectsSortMode>(translator.PushUnityEngineFindObjectsSortMode, translator.Get, translator.UpdateUnityEngineFindObjectsSortMode);
+				translator.RegisterPushAndGetAndUpdate<UnityEngine.FindObjectsInactive>(translator.PushUnityEngineFindObjectsInactive, translator.Get, translator.UpdateUnityEngineFindObjectsInactive);
 				translator.RegisterPushAndGetAndUpdate<UnityEngine.HideFlags>(translator.PushUnityEngineHideFlags, translator.Get, translator.UpdateUnityEngineHideFlags);
 				translator.RegisterPushAndGetAndUpdate<UnityEngine.RuntimePlatform>(translator.PushUnityEngineRuntimePlatform, translator.Get, translator.UpdateUnityEngineRuntimePlatform);
 				translator.RegisterPushAndGetAndUpdate<UnityEngine.NetworkReachability>(translator.PushUnityEngineNetworkReachability, translator.Get, translator.UpdateUnityEngineNetworkReachability);
@@ -784,6 +787,90 @@ namespace XLua
                 if (!CopyByValue.Pack(buff, 0,  val))
                 {
                     throw new Exception("pack fail for UnityEngine.Ray2D ,value="+val);
+                }
+            }
+			
+            else
+            {
+                throw new Exception("try to update a data with lua type:" + LuaAPI.lua_type(L, index));
+            }
+        }
+        
+        int UnityEngineAnimatorCullingMode_TypeID = -1;
+		int UnityEngineAnimatorCullingMode_EnumRef = -1;
+        
+        public void PushUnityEngineAnimatorCullingMode(RealStatePtr L, UnityEngine.AnimatorCullingMode val)
+        {
+            if (UnityEngineAnimatorCullingMode_TypeID == -1)
+            {
+			    bool is_first;
+                UnityEngineAnimatorCullingMode_TypeID = getTypeId(L, typeof(UnityEngine.AnimatorCullingMode), out is_first);
+				
+				if (UnityEngineAnimatorCullingMode_EnumRef == -1)
+				{
+				    Utils.LoadCSTable(L, typeof(UnityEngine.AnimatorCullingMode));
+				    UnityEngineAnimatorCullingMode_EnumRef = LuaAPI.luaL_ref(L, LuaIndexes.LUA_REGISTRYINDEX);
+				}
+				
+            }
+			
+			if (LuaAPI.xlua_tryget_cachedud(L, (int)val, UnityEngineAnimatorCullingMode_EnumRef) == 1)
+            {
+			    return;
+			}
+			
+            IntPtr buff = LuaAPI.xlua_pushstruct(L, 4, UnityEngineAnimatorCullingMode_TypeID);
+            if (!CopyByValue.Pack(buff, 0, (int)val))
+            {
+                throw new Exception("pack fail fail for UnityEngine.AnimatorCullingMode ,value="+val);
+            }
+			
+			LuaAPI.lua_getref(L, UnityEngineAnimatorCullingMode_EnumRef);
+			LuaAPI.lua_pushvalue(L, -2);
+			LuaAPI.xlua_rawseti(L, -2, (int)val);
+			LuaAPI.lua_pop(L, 1);
+			
+        }
+		
+        public void Get(RealStatePtr L, int index, out UnityEngine.AnimatorCullingMode val)
+        {
+		    LuaTypes type = LuaAPI.lua_type(L, index);
+            if (type == LuaTypes.LUA_TUSERDATA )
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != UnityEngineAnimatorCullingMode_TypeID)
+				{
+				    throw new Exception("invalid userdata for UnityEngine.AnimatorCullingMode");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+				int e;
+                if (!CopyByValue.UnPack(buff, 0, out e))
+                {
+                    throw new Exception("unpack fail for UnityEngine.AnimatorCullingMode");
+                }
+				val = (UnityEngine.AnimatorCullingMode)e;
+                
+            }
+            else
+            {
+                val = (UnityEngine.AnimatorCullingMode)objectCasters.GetCaster(typeof(UnityEngine.AnimatorCullingMode))(L, index, null);
+            }
+        }
+		
+        public void UpdateUnityEngineAnimatorCullingMode(RealStatePtr L, int index, UnityEngine.AnimatorCullingMode val)
+        {
+		    
+            if (LuaAPI.lua_type(L, index) == LuaTypes.LUA_TUSERDATA)
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != UnityEngineAnimatorCullingMode_TypeID)
+				{
+				    throw new Exception("invalid userdata for UnityEngine.AnimatorCullingMode");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+                if (!CopyByValue.Pack(buff, 0,  (int)val))
+                {
+                    throw new Exception("pack fail for UnityEngine.AnimatorCullingMode ,value="+val);
                 }
             }
 			
@@ -1969,6 +2056,174 @@ namespace XLua
             }
         }
         
+        int UnityEngineFindObjectsSortMode_TypeID = -1;
+		int UnityEngineFindObjectsSortMode_EnumRef = -1;
+        
+        public void PushUnityEngineFindObjectsSortMode(RealStatePtr L, UnityEngine.FindObjectsSortMode val)
+        {
+            if (UnityEngineFindObjectsSortMode_TypeID == -1)
+            {
+			    bool is_first;
+                UnityEngineFindObjectsSortMode_TypeID = getTypeId(L, typeof(UnityEngine.FindObjectsSortMode), out is_first);
+				
+				if (UnityEngineFindObjectsSortMode_EnumRef == -1)
+				{
+				    Utils.LoadCSTable(L, typeof(UnityEngine.FindObjectsSortMode));
+				    UnityEngineFindObjectsSortMode_EnumRef = LuaAPI.luaL_ref(L, LuaIndexes.LUA_REGISTRYINDEX);
+				}
+				
+            }
+			
+			if (LuaAPI.xlua_tryget_cachedud(L, (int)val, UnityEngineFindObjectsSortMode_EnumRef) == 1)
+            {
+			    return;
+			}
+			
+            IntPtr buff = LuaAPI.xlua_pushstruct(L, 4, UnityEngineFindObjectsSortMode_TypeID);
+            if (!CopyByValue.Pack(buff, 0, (int)val))
+            {
+                throw new Exception("pack fail fail for UnityEngine.FindObjectsSortMode ,value="+val);
+            }
+			
+			LuaAPI.lua_getref(L, UnityEngineFindObjectsSortMode_EnumRef);
+			LuaAPI.lua_pushvalue(L, -2);
+			LuaAPI.xlua_rawseti(L, -2, (int)val);
+			LuaAPI.lua_pop(L, 1);
+			
+        }
+		
+        public void Get(RealStatePtr L, int index, out UnityEngine.FindObjectsSortMode val)
+        {
+		    LuaTypes type = LuaAPI.lua_type(L, index);
+            if (type == LuaTypes.LUA_TUSERDATA )
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != UnityEngineFindObjectsSortMode_TypeID)
+				{
+				    throw new Exception("invalid userdata for UnityEngine.FindObjectsSortMode");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+				int e;
+                if (!CopyByValue.UnPack(buff, 0, out e))
+                {
+                    throw new Exception("unpack fail for UnityEngine.FindObjectsSortMode");
+                }
+				val = (UnityEngine.FindObjectsSortMode)e;
+                
+            }
+            else
+            {
+                val = (UnityEngine.FindObjectsSortMode)objectCasters.GetCaster(typeof(UnityEngine.FindObjectsSortMode))(L, index, null);
+            }
+        }
+		
+        public void UpdateUnityEngineFindObjectsSortMode(RealStatePtr L, int index, UnityEngine.FindObjectsSortMode val)
+        {
+		    
+            if (LuaAPI.lua_type(L, index) == LuaTypes.LUA_TUSERDATA)
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != UnityEngineFindObjectsSortMode_TypeID)
+				{
+				    throw new Exception("invalid userdata for UnityEngine.FindObjectsSortMode");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+                if (!CopyByValue.Pack(buff, 0,  (int)val))
+                {
+                    throw new Exception("pack fail for UnityEngine.FindObjectsSortMode ,value="+val);
+                }
+            }
+			
+            else
+            {
+                throw new Exception("try to update a data with lua type:" + LuaAPI.lua_type(L, index));
+            }
+        }
+        
+        int UnityEngineFindObjectsInactive_TypeID = -1;
+		int UnityEngineFindObjectsInactive_EnumRef = -1;
+        
+        public void PushUnityEngineFindObjectsInactive(RealStatePtr L, UnityEngine.FindObjectsInactive val)
+        {
+            if (UnityEngineFindObjectsInactive_TypeID == -1)
+            {
+			    bool is_first;
+                UnityEngineFindObjectsInactive_TypeID = getTypeId(L, typeof(UnityEngine.FindObjectsInactive), out is_first);
+				
+				if (UnityEngineFindObjectsInactive_EnumRef == -1)
+				{
+				    Utils.LoadCSTable(L, typeof(UnityEngine.FindObjectsInactive));
+				    UnityEngineFindObjectsInactive_EnumRef = LuaAPI.luaL_ref(L, LuaIndexes.LUA_REGISTRYINDEX);
+				}
+				
+            }
+			
+			if (LuaAPI.xlua_tryget_cachedud(L, (int)val, UnityEngineFindObjectsInactive_EnumRef) == 1)
+            {
+			    return;
+			}
+			
+            IntPtr buff = LuaAPI.xlua_pushstruct(L, 4, UnityEngineFindObjectsInactive_TypeID);
+            if (!CopyByValue.Pack(buff, 0, (int)val))
+            {
+                throw new Exception("pack fail fail for UnityEngine.FindObjectsInactive ,value="+val);
+            }
+			
+			LuaAPI.lua_getref(L, UnityEngineFindObjectsInactive_EnumRef);
+			LuaAPI.lua_pushvalue(L, -2);
+			LuaAPI.xlua_rawseti(L, -2, (int)val);
+			LuaAPI.lua_pop(L, 1);
+			
+        }
+		
+        public void Get(RealStatePtr L, int index, out UnityEngine.FindObjectsInactive val)
+        {
+		    LuaTypes type = LuaAPI.lua_type(L, index);
+            if (type == LuaTypes.LUA_TUSERDATA )
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != UnityEngineFindObjectsInactive_TypeID)
+				{
+				    throw new Exception("invalid userdata for UnityEngine.FindObjectsInactive");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+				int e;
+                if (!CopyByValue.UnPack(buff, 0, out e))
+                {
+                    throw new Exception("unpack fail for UnityEngine.FindObjectsInactive");
+                }
+				val = (UnityEngine.FindObjectsInactive)e;
+                
+            }
+            else
+            {
+                val = (UnityEngine.FindObjectsInactive)objectCasters.GetCaster(typeof(UnityEngine.FindObjectsInactive))(L, index, null);
+            }
+        }
+		
+        public void UpdateUnityEngineFindObjectsInactive(RealStatePtr L, int index, UnityEngine.FindObjectsInactive val)
+        {
+		    
+            if (LuaAPI.lua_type(L, index) == LuaTypes.LUA_TUSERDATA)
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != UnityEngineFindObjectsInactive_TypeID)
+				{
+				    throw new Exception("invalid userdata for UnityEngine.FindObjectsInactive");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+                if (!CopyByValue.Pack(buff, 0,  (int)val))
+                {
+                    throw new Exception("pack fail for UnityEngine.FindObjectsInactive ,value="+val);
+                }
+            }
+			
+            else
+            {
+                throw new Exception("try to update a data with lua type:" + LuaAPI.lua_type(L, index));
+            }
+        }
+        
         int UnityEngineHideFlags_TypeID = -1;
 		int UnityEngineHideFlags_EnumRef = -1;
         
@@ -2718,6 +2973,12 @@ namespace XLua
 				translator.PushUnityEngineRay2D(L, array[index]);
 				return true;
 			}
+			else if (type == typeof(UnityEngine.AnimatorCullingMode[]))
+			{
+			    UnityEngine.AnimatorCullingMode[] array = obj as UnityEngine.AnimatorCullingMode[];
+				translator.PushUnityEngineAnimatorCullingMode(L, array[index]);
+				return true;
+			}
 			else if (type == typeof(UnityEngine.Space[]))
 			{
 			    UnityEngine.Space[] array = obj as UnityEngine.Space[];
@@ -2800,6 +3061,18 @@ namespace XLua
 			{
 			    UnityEngine.SendMessageOptions[] array = obj as UnityEngine.SendMessageOptions[];
 				translator.PushUnityEngineSendMessageOptions(L, array[index]);
+				return true;
+			}
+			else if (type == typeof(UnityEngine.FindObjectsSortMode[]))
+			{
+			    UnityEngine.FindObjectsSortMode[] array = obj as UnityEngine.FindObjectsSortMode[];
+				translator.PushUnityEngineFindObjectsSortMode(L, array[index]);
+				return true;
+			}
+			else if (type == typeof(UnityEngine.FindObjectsInactive[]))
+			{
+			    UnityEngine.FindObjectsInactive[] array = obj as UnityEngine.FindObjectsInactive[];
+				translator.PushUnityEngineFindObjectsInactive(L, array[index]);
 				return true;
 			}
 			else if (type == typeof(UnityEngine.HideFlags[]))
@@ -2922,6 +3195,12 @@ namespace XLua
 				translator.Get(L, obj_idx, out array[array_idx]);
 				return true;
 			}
+			else if (type == typeof(UnityEngine.AnimatorCullingMode[]))
+			{
+			    UnityEngine.AnimatorCullingMode[] array = obj as UnityEngine.AnimatorCullingMode[];
+				translator.Get(L, obj_idx, out array[array_idx]);
+				return true;
+			}
 			else if (type == typeof(UnityEngine.Space[]))
 			{
 			    UnityEngine.Space[] array = obj as UnityEngine.Space[];
@@ -3003,6 +3282,18 @@ namespace XLua
 			else if (type == typeof(UnityEngine.SendMessageOptions[]))
 			{
 			    UnityEngine.SendMessageOptions[] array = obj as UnityEngine.SendMessageOptions[];
+				translator.Get(L, obj_idx, out array[array_idx]);
+				return true;
+			}
+			else if (type == typeof(UnityEngine.FindObjectsSortMode[]))
+			{
+			    UnityEngine.FindObjectsSortMode[] array = obj as UnityEngine.FindObjectsSortMode[];
+				translator.Get(L, obj_idx, out array[array_idx]);
+				return true;
+			}
+			else if (type == typeof(UnityEngine.FindObjectsInactive[]))
+			{
+			    UnityEngine.FindObjectsInactive[] array = obj as UnityEngine.FindObjectsInactive[];
 				translator.Get(L, obj_idx, out array[array_idx]);
 				return true;
 			}

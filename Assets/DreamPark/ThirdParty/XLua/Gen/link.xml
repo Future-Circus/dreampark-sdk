@@ -60,6 +60,8 @@
 		<type fullname="UnityEngine.TextureWrapMode" preserve="all"/>
 		<type fullname="UnityEngine.FilterMode" preserve="all"/>
 		<type fullname="UnityEngine.SendMessageOptions" preserve="all"/>
+		<type fullname="UnityEngine.FindObjectsSortMode" preserve="all"/>
+		<type fullname="UnityEngine.FindObjectsInactive" preserve="all"/>
 		<type fullname="UnityEngine.HideFlags" preserve="all"/>
 		<type fullname="UnityEngine.RuntimePlatform" preserve="all"/>
 		<type fullname="UnityEngine.NetworkReachability" preserve="all"/>
@@ -82,6 +84,7 @@
 		<type fullname="UnityEngine.FixedJoint" preserve="all"/>
 		<type fullname="UnityEngine.HingeJoint" preserve="all"/>
 		<type fullname="UnityEngine.SpringJoint" preserve="all"/>
+		<type fullname="UnityEngine.CharacterJoint" preserve="all"/>
 		<type fullname="UnityEngine.ForceMode" preserve="all"/>
 		<type fullname="UnityEngine.QueryTriggerInteraction" preserve="all"/>
 		<type fullname="UnityEngine.CollisionDetectionMode" preserve="all"/>
@@ -103,6 +106,7 @@
 
 	<assembly fullname="UnityEngine.AnimationModule">
 	    <type fullname="UnityEngine.Animator" preserve="all"/>
+		<type fullname="UnityEngine.AnimatorCullingMode" preserve="all"/>
 		<type fullname="UnityEngine.AnimatorStateInfo" preserve="all"/>
 		<type fullname="UnityEngine.RuntimeAnimatorController" preserve="all"/>
 		
@@ -153,9 +157,11 @@
 		<type fullname="DreamPark.AttractionTemplate" preserve="all"/>
 		<type fullname="DreamPark.PropTemplate" preserve="all"/>
 		<type fullname="DreamPark.MusicArea" preserve="all"/>
+		<type fullname="DreamPark.FloorAnchor" preserve="all"/>
 		<type fullname="HandTracker" preserve="all"/>
 		<type fullname="EasyLua" preserve="all"/>
 		<type fullname="LuaBehaviour" preserve="all"/>
+		<type fullname="DreamPark.DreamParkLuaAPI" preserve="all"/>
 		<type fullname="DreamPark.API.GameStorageAPI" preserve="all"/>
 		<type fullname="DreamPark.API.ProfileAPI" preserve="all"/>
 		
