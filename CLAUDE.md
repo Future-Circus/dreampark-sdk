@@ -230,11 +230,46 @@ in the Editor, because Mono reflects where IL2CPP cannot.
 
 `LuaSurfaceScanner` catches this, and as of July 2026 something actually runs it:
 
-| Trigger | Sandbox-denied type | Unregistered type |
+| Check | Content upload | Player build |
 |---|---|---|
-| Content upload (`BeginUploadFromPopup`) | hard stop | warn + "Upload anyway" / "Cancel and fix" |
-| Player build (`LuaSurfaceGate.BuildCheck`) | `BuildFailedException` | console warning |
-| `DreamPark ▸ Troubleshooting ▸ Scan Lua API Surface` | error | warning |
+| **Sandbox-denied type** — throws at a venue | **blocked**, dialog | **build fails** |
+| **Codegen drift** — config has a type with no wrapper in `Gen/` | console warning | **build fails** |
+| **Unregistered type** — Lua names a type with no wrapper | console warning | console warning |
+
+Only two of those interrupt anyone, and both are checks that are *always right*. The
+third is deliberately demoted: it fires on "type has no wrapper", but the failure it
+hints at is a call signature AOT cannot fake — a struct passed by `out`, or a
+runtime-instantiated generic. Those sets barely overlap, since reflection handles
+ordinary member access on device fine. Nearly every finding is "maybe nothing", which
+is exactly the shape that teaches people to click through dialogs — and then the one
+that mattered gets dismissed too. It also has a better replacement at runtime: the SDK
+defines `NOT_GEN_WARNING`, so a creator's own headset build *names* every type that fell
+back to reflection. Observed beats predicted.
+
+**Codegen drift is the check that would have caught Zombiez.** That bug is usually
+retold as "NavMesh wasn't in the config." It wasn't — codegen had never *succeeded*
+(`DreamParkLuaConfig` duplicated four `GCOptimize` entries XLua's own `SysGenConfig`
+already declared, `OptimizeCfg.Add` threw on the duplicate key, `GenAll()` died), so
+every type was reflection-only and `NavMesh.SamplePosition` was just the first call
+unlucky enough to need a real wrapper. Build integrity, not config coverage.
+
+It blocks a *build* but not an *upload*: wrappers are AOT code inside the app, so a
+creator's stale `Gen/` can never reach a guest — but an APK built against it means
+testing a runtime you don't ship. Menu item: `DreamPark ▸ Troubleshooting ▸ Verify XLua
+Codegen`.
+
+Two notes on the gate:
+
+- **It resolves fully-qualified names only.** It strips Lua comments, follows alias
+  declarations (`local UE = CS.UnityEngine`, `local Vector3 = UE.Vector3`) to a fixpoint,
+  and looks results up by FULL name. The first version matched *simple* names with a
+  capitalised-identifier heuristic, which is the shape of a method call, not a type —
+  `Vector3.Angle(a, b)` reported `UnityEngine.UIElements.Angle` as a missing wrapper. It
+  trades recall for precision deliberately: a gate that cries wolf teaches people to
+  click through.
+- **An authoring tool opts out with `-- @editor-only`** (or by living under an `Editor/`
+  folder). A baker script under `Assets/Content` that calls `CS.UnityEditor` is correctly
+  sandbox-denied, and without the marker it would hard-block every upload.
 
 The scanner also now indexes **DreamPark's own types**, not just `UnityEngine*` — it
 previously could not have reported `CS.DreamPark.FloorAnchor`, which shipped content
