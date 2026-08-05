@@ -15,12 +15,6 @@ MonoBehaviour:
   m_GroupName: YOUR_GAME_HERE-Bundle-Player
   m_GUID: 7a6142a556ece4ea3888fd1a4fb5c96a
   m_SerializeEntries:
-  - m_GUID: 37bd2ccc608e741b1a218fd969c53815
-    m_Address: YOUR_GAME_HERE/Previews/Player
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - YOUR_GAME_HERE
-    FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: 43f3f84285667477294d9792e20ab702
     m_Address: YOUR_GAME_HERE/Player
     m_ReadOnly: 0

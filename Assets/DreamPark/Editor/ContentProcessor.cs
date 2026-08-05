@@ -35,7 +35,11 @@ namespace DreamPark {
 
         private static bool IsProcessing => sProcessingDepth > 0;
 
-        private static void ExecuteWithWatchdogPaused(Action action)
+        // internal (was private): PreUploadChecks wraps its batch fixes in this so a
+        // multi-file rename or light removal doesn't retrigger the whole stamping pass
+        // once per file. It is ref-counted and exception-safe; calling
+        // ContentFolderWatchdog.Pause/Resume by hand is neither.
+        internal static void ExecuteWithWatchdogPaused(Action action)
         {
             if (action == null)
                 return;
@@ -60,20 +64,14 @@ namespace DreamPark {
         // Helpers
         // ---------------------------------------------------------------------
 
+        // Delegates to ContentFolders so the SDK gives ONE answer to "which
+        // folder is the creator's game". This used to take subdirs[0] — the
+        // first subfolder of Assets/Content — which the bundled Sample project
+        // wins on alphabetical order, making the game prefix "Sample". See
+        // ContentFolders.cs.
         private static string GetGameFolderName()
         {
-            string[] possibleContentPaths = Directory.GetDirectories("Assets", "Content", SearchOption.AllDirectories);
-            foreach (string contentPath in possibleContentPaths)
-            {
-                var subdirs = Directory.GetDirectories(contentPath);
-                if (subdirs.Length > 0)
-                {
-                    string folderName = Path.GetFileName(subdirs[0]);
-                    if (!string.IsNullOrEmpty(folderName))
-                        return folderName;
-                }
-            }
-            return "YOUR_GAME_HERE";
+            return ContentFolders.GameFolderName();
         }
 
         public static string GetGamePrefix()
@@ -168,6 +166,13 @@ namespace DreamPark {
 
             // Snapshot of which content folders currently exist on disk —
             // anything else is fair game for empty-group removal.
+            //
+            // DELIBERATELY UNFILTERED. "Which folders exist" is a different
+            // question from "which one is the creator's game", and the bundled
+            // Sample is a legitimate answer to the first. Filtering it out with
+            // ContentFolders.IsUserContent here would make the janitor read
+            // Sample-Root as a stale group from a deleted contentId and delete
+            // it.
             var contentFolderPrefixes = new HashSet<string>(StringComparer.Ordinal);
             if (Directory.Exists("Assets/Content"))
             {

@@ -506,6 +506,7 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
     if (agents.Length > 0)
         surface.agentTypeID = agents[0].agentTypeID;
 
+    ConfigureFloorBake(surface);
     surface.BuildNavMesh();
 
     var calibrator = runtimePlane.AddComponent<CalibrateLevel>();
@@ -524,6 +525,55 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
         Componentizer.DoComponent<FloorAnchor>(child.gameObject, true).calibrator = calibrator;
     }
 }
+
+
+    /// <summary>
+    /// Bake settings for an ATTRACTION FLOOR, which is not the open world
+    /// NavMeshSurface defaults were chosen for.
+    ///
+    /// MIN REGION AREA. NavMeshSurface ships with minRegionArea = 2, meaning
+    /// "delete any walkable region smaller than 2 square metres". That is a
+    /// sensible way to clear specks of navmesh off scenery in a large level.
+    /// On a 14ft x 16ft floor — about 21 square metres — it is a rule that
+    /// throws away any piece under a TENTH of the entire attraction. Once the
+    /// floor conforms to real ground it no longer bakes as one clean slab:
+    /// relief splits it into regions, and every region that lands under the
+    /// threshold silently disappears. The attraction ends up with a fraction
+    /// of the navmesh it should have, agents cannot path across their own
+    /// floor, and nothing anywhere reports a problem.
+    ///
+    /// Zero is the correct value here, not a smaller number. Every square
+    /// metre of this mesh is deliberate, authored, walkable space — there is
+    /// no scenery to clean up, so there is nothing that should ever be
+    /// discarded for being small.
+    ///
+    /// VOXEL SIZE. Left alone, Recast voxelizes at agentRadius / 3. For the
+    /// 0.75m-radius agent type that is 0.25m — coarser than this floor's own
+    /// grid cell, so a conformed surface gets stair-stepped into steps that
+    /// were never in the mesh, and those artificial steps are what fragments
+    /// it in the first place. Resolving finer than a grid cell keeps the
+    /// voxelization faithful to the geometry the creator authored.
+    /// </summary>
+    private void ConfigureFloorBake(Unity.AI.Navigation.NavMeshSurface surface)
+    {
+        surface.minRegionArea = 0f;
+
+        float cellX = gridX > 0 ? gridWidth / gridX : gridWidth;
+        float cellZ = gridY > 0 ? gridHeight / gridY : gridHeight;
+        float cell = Mathf.Min(cellX, cellZ);
+
+        float agentRadius = 0.25f;
+        var settings = UnityEngine.AI.NavMesh.GetSettingsByID(surface.agentTypeID);
+        if (settings.agentRadius > 0f) agentRadius = settings.agentRadius;
+
+        // Never COARSER than Recast would have picked, and fine enough to put
+        // several voxels across a grid cell. The floor keeps Unity's own
+        // minimum so a tiny attraction cannot ask for an absurd voxel count.
+        float defaultVoxel = agentRadius / 3f;
+        float target = Mathf.Min(defaultVoxel, cell * 0.25f);
+        surface.overrideVoxelSize = true;
+        surface.voxelSize = Mathf.Max(0.01f, target);
+    }
 
     public void ShowSelect()
         {
@@ -693,17 +743,36 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
             Vector2 dimensions = _isCustom ? GameLevelDimensions.GetDimensionsInMeters(new Vector2(customSize.x, customSize.y)) : GameLevelDimensions.GetDimensionsInMeters(size);
             Matrix4x4 oldMatrix = Gizmos.matrix;
             Gizmos.matrix = transform.localToWorldMatrix;
-            Gizmos.color = new Color(0.5f, 0, 1f);
-            Gizmos.DrawWireCube(Vector3.zero, new Vector3(dimensions.x, 0, dimensions.y));
-            Gizmos.color = new Color(0.5f, 0, 1f, 0.1f);
-            Gizmos.DrawCube(Vector3.zero, new Vector3(dimensions.x, 0, dimensions.y));
+            Color levelPurple      = new Color(0.5f, 0, 1f);
+            Color levelPurpleFill   = new Color(0.5f, 0, 1f, 0.1f);
+            Color levelPurpleFaint  = new Color(0.5f, 0, 1f, 0.25f);
+
+            // Once the floor has calibrated, the authored flat rectangle is a
+            // lie — every vertex has its own height and this gizmo would be
+            // left hanging in space describing a floor that is no longer
+            // there, which looks exactly like a floor that FAILED to
+            // calibrate. So draw the real mesh when there is one, and fall
+            // back to the authored rectangle when there is not (edit mode,
+            // pre-calibration, or a floor that legitimately came out flat).
+            bool drewConformed = CalibratedFloorGizmo.TryDraw(
+                this, levelPurple, levelPurpleFill, levelPurpleFaint, showGridGizmo);
+
+            if (!drewConformed)
+            {
+                Gizmos.color = levelPurple;
+                Gizmos.DrawWireCube(Vector3.zero, new Vector3(dimensions.x, 0, dimensions.y));
+                Gizmos.color = levelPurpleFill;
+                Gizmos.DrawCube(Vector3.zero, new Vector3(dimensions.x, 0, dimensions.y));
+            }
 
             // Grid density visualization. Mirrors the gridX/gridY computation used
             // in floor mesh generation (line ~263) so the gizmo is exactly what the
             // floor will be subdivided into. We compute on the fly because the
             // [HideInInspector] gridX/gridY fields aren't populated until floor
             // generation runs — the gizmo needs to work in edit mode before that.
-            if (showGridGizmo && gridDensity > 0 && dimensions.x > 0 && dimensions.y > 0)
+            // Skipped when the conformed pass ran — it drew the same lattice
+            // from the real mesh, at the real heights.
+            if (!drewConformed && showGridGizmo && gridDensity > 0 && dimensions.x > 0 && dimensions.y > 0)
             {
                 float minDim = Mathf.Min(dimensions.x, dimensions.y);
                 int gx = Mathf.Max(1, Mathf.RoundToInt(gridDensity * (dimensions.x / minDim)));

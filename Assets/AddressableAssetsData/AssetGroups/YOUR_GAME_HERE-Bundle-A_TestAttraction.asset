@@ -14,19 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   m_GroupName: YOUR_GAME_HERE-Bundle-A_TestAttraction
   m_GUID: 95c727f56d6c44d498bd06edb911de42
-  m_SerializeEntries:
-  - m_GUID: 6db92470638b24eb9b0d423df60f2f5d
-    m_Address: YOUR_GAME_HERE/Levels/Micro/A_TestAttraction
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - YOUR_GAME_HERE
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: f8f519b19e48a4a8ba629b732d92cc25
-    m_Address: YOUR_GAME_HERE/Previews/A_TestAttraction
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - YOUR_GAME_HERE
-    FlaggedDuringContentUpdateRestriction: 0
+  m_SerializeEntries: []
   m_ReadOnly: 0
   m_Settings: {fileID: 11400000, guid: 5e922c848874c41bc90d6a8d78c6f5a9, type: 2}
   m_SchemaSet:

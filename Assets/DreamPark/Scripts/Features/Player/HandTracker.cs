@@ -10,7 +10,7 @@ public class HandTracker : MonoBehaviour
     private static readonly Vector3 DreamBandLocalOffset = new Vector3(-0.0003510714f, 0.01352847f, -0.004948974f);
     private static readonly Vector3 DreamBandLocalEulerOffset = new Vector3(-78.802f, 0f, -180f);
     private static readonly Vector3 DreamBandLocalScale = new Vector3(100f, 100f, 100f);
-    private static readonly Color HandGizmoColor = new Color(0.96f, 0.91f, 0.75f, 0.95f);
+    private static readonly Color HandGizmoColor = new Color(0.96f, 0.91f, 0.75f, 0.2f);
     private static readonly Vector3 HandLocalOffset = new Vector3(0.00210005f, 0.01952827f, 0.006667495f);
     private static readonly Vector3 HandLocalEulerOffset = new Vector3(-98.565f, -180.001f, 6.408005f);
     private static readonly Vector3 HandLocalScale = new Vector3(99.99998f, 99.99998f, 99.99998f);

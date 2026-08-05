@@ -196,6 +196,18 @@ namespace DreamPark
             statusIsError = false;
             Repaint();
 
+            // Capture the pre-bump version for the failure rollback below. This MUST
+            // be read before step 1 writes the new value: the rollback used to read
+            // SDKVersion.Current at failure time, by which point step 1 had already
+            // advanced it to newVersion — so the "rollback" re-committed the bump.
+            // ValidateNewVersion then forced the next attempt to bump again, and a
+            // couple of failed publishes left the shipped .unitypackage's JSON ahead
+            // of the backend manifest. A consumer installing that package reads a
+            // Current GREATER than LatestVersion, and every comparison in
+            // SDKUpdateChecker is `>= 0` → "up to date" → update prompting silently
+            // disabled forever.
+            string previousVersion = SDKVersion.Current;
+
             try
             {
                 // 1. Update the version JSON on disk so the exported package
@@ -220,6 +232,7 @@ namespace DreamPark
 
                 if (!File.Exists(tempPath))
                 {
+                    RollBackVersionFile(previousVersion);
                     FailWith("Export failed — .unitypackage was not created.");
                     return;
                 }
@@ -249,16 +262,7 @@ namespace DreamPark
                                 "OK");
                         }
                         // Roll back the local version bump so they can try again from a clean state.
-                        try
-                        {
-                            File.WriteAllText(VersionResourcePath, BuildVersionJson(SDKVersion.Current));
-                            AssetDatabase.ImportAsset(VersionResourcePath, ImportAssetOptions.ForceUpdate);
-                            SDKVersion.Reload();
-                        }
-                        catch (Exception rollbackEx)
-                        {
-                            Debug.LogWarning($"[DreamPark] Failed to roll back version file: {rollbackEx.Message}");
-                        }
+                        RollBackVersionFile(previousVersion);
                         FailWith("Publish failed: " + err);
                     }
                     Repaint();
@@ -266,7 +270,42 @@ namespace DreamPark
             }
             catch (Exception e)
             {
+                // Anything that throws between the bump and a successful upload leaves
+                // the working tree carrying a version that was never published.
+                RollBackVersionFile(previousVersion);
                 FailWith("Export failed: " + e.Message);
+            }
+        }
+
+        // Restores the version JSON to `previousVersion`. Always pass the value
+        // captured BEFORE the bump — never SDKVersion.Current, which by this point is
+        // the bumped value.
+        private static void RollBackVersionFile(string previousVersion)
+        {
+            if (string.IsNullOrEmpty(previousVersion)) return;
+
+            // "0.0.0" is SDKVersion's could-not-read fallback, not a real version.
+            // Writing it would ship a package that compares older than everything and
+            // let ValidateNewVersion accept any number at all.
+            if (previousVersion == "0.0.0")
+            {
+                Debug.LogWarning("[DreamPark] Skipping the version rollback — the pre-bump version "
+                               + "could not be read (reported 0.0.0). Restore "
+                               + "DreamParkSDKVersion.json from version control before publishing again.");
+                return;
+            }
+
+            try
+            {
+                File.WriteAllText(VersionResourcePath, BuildVersionJson(previousVersion));
+                AssetDatabase.ImportAsset(VersionResourcePath,
+                    ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
+                SDKVersion.Reload();
+                Debug.Log($"[DreamPark] Rolled the local version file back to v{SDKVersion.Current}.");
+            }
+            catch (Exception rollbackEx)
+            {
+                Debug.LogWarning($"[DreamPark] Failed to roll back version file: {rollbackEx.Message}");
             }
         }
 

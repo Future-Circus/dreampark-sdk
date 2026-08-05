@@ -9,6 +9,17 @@ namespace DreamPark
         [Header("Raycast Input")]
         public float updateInterval = 2f;
         [NonSerialized] public LayerMask arMeshLayer = -1;
+        /// Rematerialized floor prior (Auto-Calibration-Spec §5.3). Separate
+        /// mask, not merged into arMeshLayer, so live mesh always wins.
+        [NonSerialized] private LayerMask arMeshPriorLayer;
+
+        // ── Search volume ────────────────────────────────────────────────
+        // Same contract as CalibrateLevel: these are the MINIMUM reach, and
+        // GroundProbe.MeasureSpan grows them to cover whatever ground actually
+        // sits under the prop. Existing serialized values on shipped prefabs
+        // keep their meaning — a prefab authored with raycastHeight 10 /
+        // raycastLength 20 still searches at least 10m up and 10m down, it just
+        // no longer STOPS there when the ground is further away.
         public float raycastHeight = 10f;
         public float raycastLength = 20f;
 
@@ -27,6 +38,7 @@ namespace DreamPark
 
             if (arMeshLayer == -1)
                 arMeshLayer = LayerMask.GetMask("ARMesh");
+            arMeshPriorLayer = LayerMask.GetMask("ARMeshPrior");
 
 #if DREAMPARKCORE
             if (pointData != null)
@@ -52,9 +64,20 @@ namespace DreamPark
                 return;
 
             Vector3 source = propTemplate.transform.position;
-            Ray ray = new Ray(source + Vector3.up * raycastHeight, Vector3.down);
 
-            if (Physics.Raycast(ray, out var hit, raycastLength, arMeshLayer))
+            // Props and levels now genuinely agree on where the ground is —
+            // same origin rule (the object's own position), same span
+            // measurement, same "what counts as floor" test. This used to be a
+            // bare Physics.Raycast that took the FIRST hit regardless of
+            // orientation, so a prop placed under a table or against a wall
+            // bound itself to that surface while a level in the same spot
+            // correctly saw past it to the floor. See GroundProbe.cs.
+            Bounds footprint = new Bounds(source, new Vector3(1f, 0.01f, 1f));
+            GroundProbe.Span span = GroundProbe.MeasureSpan(
+                footprint, arMeshLayer, arMeshPriorLayer,
+                raycastHeight, Mathf.Max(0f, raycastLength - raycastHeight));
+
+            if (GroundProbe.TryFindGround(source, span, arMeshLayer, arMeshPriorLayer, out RaycastHit hit))
             {
                 float yOffset = hit.point.y - propTemplate.transform.position.y;
                 propTemplate.ApplyCalibrationYOffset(yOffset);

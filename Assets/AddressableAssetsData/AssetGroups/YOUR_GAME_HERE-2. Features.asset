@@ -14,13 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   m_GroupName: YOUR_GAME_HERE-2. Features
   m_GUID: d019f5332e1b74fce90ef07518b440f2
-  m_SerializeEntries:
-  - m_GUID: b5268f2713d3d45fcbedd7f36bbb0107
-    m_Address: Assets/Content/YOUR_GAME_HERE/2. Features/2. DreamBand
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - YOUR_GAME_HERE
-    FlaggedDuringContentUpdateRestriction: 0
+  m_SerializeEntries: []
   m_ReadOnly: 0
   m_Settings: {fileID: 11400000, guid: 5e922c848874c41bc90d6a8d78c6f5a9, type: 2}
   m_SchemaSet:

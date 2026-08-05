@@ -2,6 +2,7 @@ using UnityEngine;
 using System.Linq;
 using System.Collections.Generic;
 using System;
+using System.Threading;
 using UnityEngine.Analytics;
 using TMPro;
 using SuperAdventureLand;
@@ -510,7 +511,14 @@ namespace DreamPark.ParkBuilder {
         }
 
         public void Enable(bool enabled = true, OptimizationSettings settings = null, int optimizationLevel = 0) {
-            if (!LevelObjectManager.objectsEnabled) {
+            // The park-content lock outranks objectsEnabled and is checked with
+            // it, not after: OptimizedAF calls this every physics tick for every
+            // object within 35 m, and NativeInterfaceManager's leave-build
+            // coroutine flips objectsEnabled TRUE mid-load on device. Without
+            // this clause a prop is unfrozen within ~30 ticks of spawning,
+            // before any floor exists. isPriority still wins below — the player
+            // rig must never be parked (the July 2026 Zombiez bug).
+            if (!LevelObjectManager.objectsEnabled || LevelObjectManager.ParkContentLocked) {
                 enabled = false;
             }
             //we override the settings to always disable
@@ -715,6 +723,106 @@ namespace DreamPark.ParkBuilder {
                 catch (Exception e) { Debug.LogError("[LevelObjectManager] OnObjectsEnabledChanged subscriber threw: " + e); }
             }
         }
+
+        // ── PARK-CONTENT LOCK ────────────────────────────────────────────────
+        //
+        //  `objectsEnabled` was the ONLY thing keeping freshly-spawned content
+        //  parked during a park load, and it is a bare global that two systems
+        //  write from OUTSIDE the loader:
+        //
+        //   1. NativeInterfaceManager's LeaveBuildModeCoroutine (step 5) sets it
+        //      TRUE and re-enables every LevelObject. On device that coroutine is
+        //      kicked by ApplyRuntimeMode, which the LOAD PARK path itself calls —
+        //      so it fires CONCURRENTLY with the spawn loop.
+        //
+        //   2. OptimizedAF.FixedUpdate then calls Enable() on every LevelObject
+        //      inside distanceBands[0] — 35 m, i.e. an entire park — on the
+        //      PHYSICS tick. Once (1) has flipped the clamp, every prop that
+        //      registers afterwards is unfrozen within ~30 ticks of spawning,
+        //      with no floor under it yet.
+        //
+        //  Neither knows a park is loading, and neither should have to. So the
+        //  loader takes an explicit LOCK that outranks `objectsEnabled`, held from
+        //  the first LoadLevel until the floors are built and the loader itself
+        //  releases physics. Anything that flips `objectsEnabled` mid-load is now
+        //  simply ignored until then.
+        //
+        //  This is the difference between iOS and an Editor park load: nothing in
+        //  the Editor asserts a runtime mode mid-load, so the clamp was never
+        //  broken there and the bug was invisible.
+        // volatile / Interlocked throughout: BeginParkLoad and EndParkLoad run on
+        // thread-pool threads (one LoadLevel per portal), while ParkContentLocked
+        // is read from the main thread on the physics tick. A plain bool write
+        // from a worker is not guaranteed to be visible to the reader, and this is
+        // the one flag whose staleness drops props through the world.
+        private static int _parkLoadDepth;
+        private static volatile bool _parkContentLocked;
+        private static long _parkLockDeadlineTicks = DateTime.MaxValue.Ticks;
+        private static volatile bool _parkLockOverrunLogged;
+
+        /// Ceiling on the lock. A park stuck frozen is worse than a park that
+        /// dropped a prop, so a load that dies without releasing expires instead
+        /// of wedging gameplay forever.
+        private const float ParkLoadLockMaxSeconds = 120f;
+
+        /// True while park content must stay parked regardless of `objectsEnabled`.
+        /// Safe to read from any thread (no Unity API).
+        public static bool ParkContentLocked {
+            get {
+                if (!_parkContentLocked) return false;
+                if (DateTime.UtcNow.Ticks <= Interlocked.Read(ref _parkLockDeadlineTicks)) return true;
+
+                if (!_parkLockOverrunLogged) {
+                    _parkLockOverrunLogged = true;
+                    Debug.LogWarning($"[LevelObjectManager] Park-content lock held for over {ParkLoadLockMaxSeconds:F0}s " +
+                                     $"({_parkLoadDepth} level load(s) never released) — unlocking so the park can still play.");
+                }
+                return false;
+            }
+        }
+
+        /// Outstanding level loads. Read by the loader to spot a park switch that
+        /// started while it was waiting for floors.
+        public static int ParkLoadDepth => _parkLoadDepth;
+
+        /// One per LoadLevel, taken on entry. Thread-safe: level loads run
+        /// concurrently on the thread pool, one per portal.
+        public static void BeginParkLoad() {
+            Interlocked.Increment(ref _parkLoadDepth);
+            Interlocked.Exchange(ref _parkLockDeadlineTicks, DateTime.UtcNow.AddSeconds(ParkLoadLockMaxSeconds).Ticks);
+            _parkLockOverrunLogged = false;
+            // Written LAST: the deadline must be in place before any reader can
+            // observe the lock, or ParkContentLocked could compare against the
+            // previous park's expired deadline and unlock immediately.
+            _parkContentLocked = true;
+        }
+
+        /// One per BeginParkLoad, in a finally. Returns true for the LAST load
+        /// out — the one that owns releasing physics.
+        ///
+        /// Deliberately does NOT unlock: the floors do not exist yet at this
+        /// point. Unlocking here would hand the park straight back to OptimizedAF
+        /// while the gap mesh is still being built, which is the bug.
+        public static bool EndParkLoad() {
+            if (Interlocked.Decrement(ref _parkLoadDepth) > 0) return false;
+            Interlocked.Exchange(ref _parkLoadDepth, 0);
+            return true;
+        }
+
+        /// Called by the loader once the ground exists, immediately before it
+        /// enables everything.
+        public static void UnlockParkContent() {
+            _parkContentLocked = false;
+            Interlocked.Exchange(ref _parkLockDeadlineTicks, DateTime.MaxValue.Ticks);
+        }
+
+        /// Park teardown: whatever was loading is gone.
+        public static void ResetParkLoad() {
+            Interlocked.Exchange(ref _parkLoadDepth, 0);
+            _parkContentLocked = false;
+            Interlocked.Exchange(ref _parkLockDeadlineTicks, DateTime.MaxValue.Ticks);
+            _parkLockOverrunLogged = false;
+        }
         public static LevelObjectManager Instance;
         public bool gatherChildren = false;
         [HideInInspector] public List<LevelObject> levelObjects = new();
@@ -761,6 +869,17 @@ namespace DreamPark.ParkBuilder {
             bool isNestedProp = propTemplate != null && propTemplate.IsNestedUnderTemplate;
 
             if (!isNestedProp && (obj.GetComponent<LevelTemplate>() != null || propTemplate != null)) {
+                // The ROOT's own Rigidbodies still have to be parked, and the
+                // recursion below structurally cannot reach them: each child
+                // LevelObject snapshots GetComponentsInChildren<Rigidbody> FROM
+                // THAT CHILD, which never sees a body on the parent. A
+                // player-placed physics prop normally carries its Rigidbody on
+                // the template root — so startDisabled:true froze nothing on it
+                // and it fell from the frame it spawned, before the park had any
+                // floor at all. That is the "props already fully fallen through"
+                // report, and no amount of waiting later can fix it.
+                RegisterTemplateRootBodies(obj, startDisabled);
+
                 foreach (Transform child in obj.transform) {
                     RegisterLevelObject(child.gameObject, startDisabled);
                 }
@@ -794,6 +913,85 @@ namespace DreamPark.ParkBuilder {
             return true;
         }
 
+        // ── TEMPLATE-ROOT RIGIDBODIES ────────────────────────────────────────
+        //
+        //  RegisterLevelObject deliberately does NOT register a non-nested
+        //  LevelTemplate/PropTemplate root as a LevelObject: the root has to keep
+        //  working while its contents are parked (PropTemplate, GameArea and
+        //  BuildModeObjectController all live there, and the prop must stay
+        //  grabbable in Build Mode). So it recurses into the children instead —
+        //  and the root's own Rigidbody falls through the gap between them.
+        //
+        //  This parks ONLY the root's own Rigidbodies: GetComponents, not
+        //  GetComponentsInChildren, because every child is already covered by its
+        //  own LevelObject and a body in two arrays would have the second toggle
+        //  read back whatever the first one just wrote (the same invariant the
+        //  LevelObject constructor's Where() clause protects).
+        //
+        //  Colliders on the root are deliberately left ALONE. Build Mode raycasts
+        //  against them to select and drag the prop; parking them would make a
+        //  freshly-spawned prop unselectable. Freezing the body is what stops the
+        //  fall — the collider is not what moves it.
+        public class TemplateRootBodies {
+            public readonly GameObject gameObject;
+            public LevelObject.RigidbodySettings[] rigidbodies;
+            public bool enabled = true;
+
+            public TemplateRootBodies(GameObject go) {
+                gameObject = go;
+                rigidbodies = go.GetComponents<Rigidbody>()
+                                .Select(r => new LevelObject.RigidbodySettings(r))
+                                .ToArray();
+            }
+
+            public bool IsAlive => gameObject != null;
+            public bool HasBodies => rigidbodies != null && rigidbodies.Length > 0;
+
+            public void Toggle(bool enable) {
+                // Same global clamps LevelObject.Enable applies. No isPriority
+                // equivalent here: a template root is never the player rig.
+                if (!LevelObjectManager.objectsEnabled || LevelObjectManager.ParkContentLocked) enable = false;
+                if (enabled == enable) return;
+                enabled = enable;
+
+                List<LevelObject.RigidbodySettings> dead = null;
+                foreach (var rb in rigidbodies) {
+                    if (!rb.Toggle(enable)) (dead ??= new List<LevelObject.RigidbodySettings>()).Add(rb);
+                }
+                if (dead != null) rigidbodies = rigidbodies.Except(dead).ToArray();
+            }
+        }
+
+        private readonly List<TemplateRootBodies> templateRoots = new();
+
+        private void RegisterTemplateRootBodies(GameObject obj, bool startDisabled) {
+            var existing = templateRoots.Find(t => t.gameObject == obj);
+            if (existing != null) {
+                if (startDisabled) existing.Toggle(false);
+                return;
+            }
+
+            var holder = new TemplateRootBodies(obj);
+            // Nothing to park: don't grow the list with entries that can never
+            // do anything (the overwhelmingly common case — most template roots
+            // carry no Rigidbody at all).
+            if (!holder.HasBodies) return;
+
+            templateRoots.Add(holder);
+            if (startDisabled) holder.Toggle(false);
+        }
+
+        /// Toggle every tracked template root, pruning destroyed entries as it goes.
+        private void ToggleTemplateRootBodies(bool enable) {
+            for (int i = templateRoots.Count - 1; i >= 0; i--) {
+                if (!templateRoots[i].IsAlive) {
+                    templateRoots.RemoveAt(i);
+                    continue;
+                }
+                templateRoots[i].Toggle(enable);
+            }
+        }
+
         public bool PrioritizeLevelObject(GameObject obj) {
             LevelObject levelObject = levelObjects.Find(lo => lo.gameObject == obj);
             if (levelObject != null) {
@@ -805,6 +1003,8 @@ namespace DreamPark.ParkBuilder {
         }
 
         public bool UnregisterLevelObject(GameObject obj) {
+            templateRoots.RemoveAll(t => !t.IsAlive || t.gameObject == obj);
+
             LevelObject levelObject = levelObjects.Find(lo => lo.gameObject == obj);
             if (levelObject != null) {
                 levelObjects.Remove(levelObject);
@@ -821,7 +1021,32 @@ namespace DreamPark.ParkBuilder {
                     levelObject.Enable();
                 }
             }
+            ToggleTemplateRootBodies(true);
         }
+        /// THE LOADER'S AUTHORITATIVE RELEASE. Use this, not EnableAllLevelObjects,
+        /// when handing a finished park back to gameplay.
+        ///
+        /// A plain Enable() cannot undo a force-disable: `forceDisabled` is the
+        /// final word in LevelObject.Enable, and ForceEnable() early-returns
+        /// unless forceDisabled is already true — so an object that went through
+        /// DisableAllLevelObjects(force: true) is unreachable by either. That call
+        /// happens on every BUILD assert (NativeInterfaceManager, entering build),
+        /// and on device those asserts land DURING a park load, so objects
+        /// registered around one are left permanently force-disabled and the park
+        /// never comes alive.
+        ///
+        /// This is the same clear-then-enable NativeInterfaceManager's leave-build
+        /// step 5 does, for exactly the same reason; it lives here now so both
+        /// callers share one implementation.
+        public void ReleaseAllLevelObjects() {
+            foreach (var levelObject in levelObjects) {
+                if (levelObject == null) continue;
+                levelObject.forceDisabled = null;
+                levelObject.Enable(true);
+            }
+            ToggleTemplateRootBodies(true);
+        }
+
         public void DisableAllLevelObjects(bool force = false) {
             foreach (var levelObject in levelObjects) {
                 if (force) {
@@ -830,6 +1055,7 @@ namespace DreamPark.ParkBuilder {
                     levelObject.Disable();
                 }
             }
+            ToggleTemplateRootBodies(false);
         }
 
         public void Enable()

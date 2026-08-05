@@ -167,6 +167,19 @@ namespace DreamPark
             AssetDatabase.importPackageFailed -= OnImportFailed;
             AssetDatabase.importPackageFailed += OnImportFailed;
 
+            // Record the intent BEFORE importing. The import rewrites every SDK .cs
+            // file, which forces a recompile and a domain reload — and that reload
+            // destroys the in-flight importPackageCompleted callback we just
+            // subscribed. (The subscription itself is fine; SDKUpdateChecker's
+            // [InitializeOnLoad] ctor re-runs. It is specifically the ONE callback for
+            // the import that caused the reload that is lost — the one that mattered.)
+            //
+            // SessionState survives domain reload and dies on editor restart, so this
+            // marker outlives the reload without becoming permanent litter.
+            // SDKUpdateChecker.ReconcileAfterInstall picks it up on the far side and
+            // verifies the version actually changed.
+            SessionState.SetString(SDKUpdateChecker.PendingVersionKey, latestVersion);
+
             // interactive: true → Unity shows its built-in import dialog.
             // Users can uncheck files to protect any local modifications they've
             // made under Assets/DreamPark/.
@@ -177,11 +190,26 @@ namespace DreamPark
         private static void OnImportCompleted(string packageName)
         {
             UnsubscribeAll();
-            SDKVersion.Reload();
-            Debug.Log($"[DreamPark] SDK package '{packageName}' imported. Local version is now {SDKVersion.Current}.");
-            // Re-fetch the manifest so the upload-gate / Check for Updates UI
-            // reflects the new version immediately.
-            SDKUpdateChecker.CheckForUpdate();
+
+            // Defer a tick so Unity's own import bookkeeping settles before we force
+            // the version file's reimport — otherwise Reload() can re-latch the
+            // PRE-import value and then log it as a success, which is worse than not
+            // reloading at all.
+            EditorApplication.delayCall += () =>
+            {
+                SDKVersion.Reload();
+                Debug.Log($"[DreamPark] SDK package '{packageName}' imported. Local version is now {SDKVersion.Current}.");
+
+                // Verifies the install landed and clears the pending marker. Safe to
+                // call when nothing is pending — it no-ops.
+                SDKUpdateChecker.ReconcileAfterInstall();
+
+                // Re-fetch the manifest so the upload-gate / Check for Updates UI
+                // reflects the new version immediately. (Editor coroutines don't
+                // survive domain reload either, so this can still be lost — the
+                // reconcile above is what makes the outcome visible regardless.)
+                SDKUpdateChecker.CheckForUpdate();
+            };
         }
 
         private static void OnImportCancelled(string packageName)

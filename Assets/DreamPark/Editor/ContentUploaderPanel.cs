@@ -227,6 +227,16 @@ namespace DreamPark {
         private string contentRootsContentId;
         private bool contentRootsDirty;
 
+        // Per-frame snapshot of the pre-upload findings, keyed by asset path (which is
+        // what ContentRootEntry carries — the GUID is discarded during the scan).
+        // Rebuilt only when the report changes, never queried live from OnGUI: the
+        // Layout and Repaint passes must agree on whether each card has a badge, or
+        // GUI.Button's control-id stream shifts between them.
+        private Dictionary<string, KeyValuePair<PreUploadChecks.CheckSeverity, string>> preUploadBadges;
+        private Dictionary<string, KeyValuePair<PreUploadChecks.CheckSeverity, string>> preUploadBadgesPending;
+        private bool preUploadAdvisoryScheduled;
+        private double preUploadAdvisoryDueAt;
+
         // priority 0 pins Content Uploader to the top of the DreamPark menu;
         // the big priority gap to the next item (Multiplayer at 100) creates
         // a separator so it sits in its own section.
@@ -303,6 +313,9 @@ namespace DreamPark {
             // (without this, the button only shows up the next time the
             // user clicks the panel and forces a repaint).
             AdminState.AdminStateChanged += Repaint;
+            PreUploadChecks.PreUploadCheckRunner.ReportChanged += OnPreUploadReportChanged;
+
+            preUploadChecksCleared = false;
 
             RestoreContentIdSelection();
             LoadBuildTargetSelection();
@@ -314,6 +327,8 @@ namespace DreamPark {
             FetchContentUsers();
             RefreshPatchEstimate();
             RefreshContentRoots();
+            RebuildPreUploadBadges();
+            ScheduleAdvisoryPreUploadScan();
         }
 
         private void LoadFoldoutPrefs()
@@ -352,9 +367,80 @@ namespace DreamPark {
             EditorApplication.projectChanged -= OnProjectChangedForRoots;
             PreviewEditorWindow.PreviewSaved -= OnPreviewSaved;
             AdminState.AdminStateChanged -= Repaint;
+            PreUploadChecks.PreUploadCheckRunner.ReportChanged -= OnPreUploadReportChanged;
+            EditorApplication.update -= PumpAdvisoryPreUploadScan;
+            preUploadAdvisoryScheduled = false;
         }
 
         private void OnManifestUpdated() => Repaint();
+
+        // ------------------------------------------------------------------
+        // Pre-upload checks (advisory pass — the blocking gate lives in
+        // BeginUploadFromPopup).
+
+        private void OnPreUploadReportChanged()
+        {
+            RebuildPreUploadBadges();
+            Repaint();
+        }
+
+        // Staged, not applied. The report can change on an editor tick that lands
+        // between this frame's Layout and Repaint events; swapping the map right then
+        // adds or removes a GUI.Button in the card grid, which shifts every subsequent
+        // control id and misroutes clicks. The swap happens at the top of the next
+        // Layout (see OnGUI) so both passes always agree.
+        private void RebuildPreUploadBadges()
+        {
+            var report = PreUploadChecks.PreUploadCheckRunner.CachedReportFor(contentId);
+            preUploadBadgesPending = PreUploadChecks.PreUploadCheckRunner.BuildBadgeMap(report);
+        }
+
+        // Runs the cheap checks so the Park Assets tiles can carry warning badges the
+        // moment the panel is looked at. Deferred, never inside OnGUI, and never while
+        // the editor is busy — the scene-override check is deliberately excluded from
+        // this pass because it opens scenes.
+        private void ScheduleAdvisoryPreUploadScan()
+        {
+            if (string.IsNullOrEmpty(contentId)) return;
+
+            // Debounced. projectChanged fires on EVERY asset import, and the advisory
+            // pass loads prefab contents for each content root — running it per import
+            // froze the editor for seconds every time someone saved a file with the
+            // uploader open.
+            preUploadAdvisoryDueAt = EditorApplication.timeSinceStartup + 1.5;
+
+            if (preUploadAdvisoryScheduled) return;
+            preUploadAdvisoryScheduled = true;
+            EditorApplication.update += PumpAdvisoryPreUploadScan;
+        }
+
+        private void PumpAdvisoryPreUploadScan()
+        {
+            if (this == null)
+            {
+                EditorApplication.update -= PumpAdvisoryPreUploadScan;
+                return;
+            }
+
+            if (EditorApplication.timeSinceStartup < preUploadAdvisoryDueAt) return;
+            if (EditorApplication.isCompiling) return;
+            if (EditorApplication.isUpdating) return;
+            if (EditorApplication.isPlayingOrWillChangePlaymode) return;
+            if (isUploading) return;
+
+            EditorApplication.update -= PumpAdvisoryPreUploadScan;
+            preUploadAdvisoryScheduled = false;
+
+            try
+            {
+                PreUploadChecks.PreUploadCheckRunner.RunAdvisory(contentId);
+            }
+            catch (System.Exception e)
+            {
+                // Advisory only. It must never be able to disturb the panel.
+                Debug.LogWarning($"[DreamPark] Advisory pre-upload scan failed: {e.Message}");
+            }
+        }
 
         // The Preview Editor just re-baked a preview PNG. If it belongs to the
         // content package we're showing, drop the cached thumbnails and re-walk
@@ -454,6 +540,17 @@ namespace DreamPark {
 
         private void OnGUI()
         {
+            // Swap in a new badge map ONLY at the start of a Layout pass. IMGUI hands
+            // out control ids by draw order, so if the map gained or lost an entry
+            // between Layout and Repaint the card grid would allocate a different
+            // number of controls in each pass and every click after that point would
+            // land on the wrong control.
+            if (Event.current.type == EventType.Layout && preUploadBadgesPending != null)
+            {
+                preUploadBadges = preUploadBadgesPending;
+                preUploadBadgesPending = null;
+            }
+
             // Auth gate: if logged out, the rest of the panel is hidden behind a
             // single Login CTA. Authentication itself happens in AuthPopup.
             if (!AuthAPI.isLoggedIn)
@@ -477,6 +574,23 @@ namespace DreamPark {
                 Logout();
             }
             GUILayout.EndHorizontal();
+
+            // Session-expiry nudge. /auth/refresh validates a session but never extends
+            // it, so the ~14-day deadline set at sign-in is final — and the failure mode
+            // without this notice is a creator finding out when a 40-minute upload 401s at
+            // the commit step, with the build already spent and nothing to resume from.
+            // sessionExpiresInHours returns -1 when the expiry is unknown (a session
+            // stored by an SDK older than this field); that must stay silent rather than
+            // nag every existing user forever.
+            double sessionHoursLeft = AuthAPI.sessionExpiresInHours;
+            if (sessionHoursLeft >= 0 && sessionHoursLeft <= 48)
+            {
+                EditorGUILayout.HelpBox(
+                    sessionHoursLeft < 1
+                        ? "Your DreamPark session expires within the hour. Log out and back in before starting an upload."
+                        : $"Your DreamPark session expires in about {Mathf.CeilToInt((float)sessionHoursLeft)}h. Log out and back in before starting a long upload.",
+                    MessageType.Warning);
+            }
 
             GUILayout.Space(10);
             GUILayout.Label("Content Uploader", EditorStyles.boldLabel);
@@ -528,11 +642,57 @@ namespace DreamPark {
             if ((contentRootsDirty || contentRootsContentId != contentId) && !isUploading)
             {
                 RefreshContentRoots();
+
+                // Piggyback: this block already fires exactly when the root set
+                // changed (content-id switch, projectChanged, preview save) and is
+                // already debounced, so the advisory findings stay in lockstep with
+                // the tiles for free.
+                RebuildPreUploadBadges();
+                ScheduleAdvisoryPreUploadScan();
             }
 
             if (contentIdOptions.Count == 0)
             {
                 EditorGUILayout.HelpBox("No content folders found under Assets/Content. Please create at least one game/content folder.", MessageType.Warning);
+            }
+
+            // ── Sample notice. DELIBERATELY NOT A GATE.
+            //
+            //    Sample exists to be read. It is the one fully wired example a
+            //    new creator has — real attractions, real props, previews,
+            //    dimensions, a logo, the lot — so the panel stays completely
+            //    browsable while it is selected. Returning out of the draw here
+            //    (as Gate 1 does for the untouched template) would hide the
+            //    exact thing they came to look at.
+            //
+            //    What IS off is every action that pushes to the backend; see
+            //    UploadsBlocked. Sample ships with every copy of the SDK, so
+            //    "upload to Sample" means publishing over a contentId that
+            //    exists identically in everyone's install — the first person to
+            //    do it would take ownership of an SDK default for everybody
+            //    else. The backend refuses it outright
+            //    (lib/reservedContentIds.js); this is the local half, so the
+            //    refusal is explained up front rather than discovered as a
+            //    failed upload after a full compile.
+            if (ContentFolders.IsSample(contentId))
+            {
+                GUILayout.Space(8);
+                EditorGUILayout.HelpBox(
+                    "'Sample' is the worked example bundled with the SDK — browse it freely to see " +
+                    "how content is set up.\n\n" +
+                    "Upload actions are disabled: this content ID ships with every copy of the SDK, " +
+                    "so it is reserved and the backend will refuse it. Pick your own folder from the " +
+                    "dropdown above when you are ready to publish.",
+                    MessageType.Info);
+
+                // Only offered when the template folder is actually on disk —
+                // the popup renames an existing folder, it cannot create one.
+                if (!ContentFolders.HasNamedGame() && ContentFolders.PlaceholderExists()
+                    && GUILayout.Button("Set Up My Game Folder", GUILayout.Height(24)))
+                {
+                    ContentIdSetupPopup.Show(ContentFolders.PlaceholderName, OnContentFolderRenamed);
+                }
+                GUILayout.Space(4);
             }
 
             // ── Gate 1: placeholder folder name (SDK template default).
@@ -700,6 +860,7 @@ namespace DreamPark {
             bool shippable = HasShippableContent();
             bool hasBuildArtifacts = patchCurrentSnapshot != null && patchCurrentSnapshot.TotalFileCount > 0;
             bool canLaunch = !isUploading
+                             && !UploadsBlocked
                              && !string.IsNullOrEmpty(contentId)
                              && !string.IsNullOrEmpty(contentName)
                              && !sdkOutOfDate
@@ -807,11 +968,43 @@ namespace DreamPark {
         private void DrawPreLaunchSection()
         {
             EditorGUILayout.HelpBox(
-                "Run these before you publish — they shrink the bundle size your players download and "
-                + "speed up first-launch attraction load times.",
+                "Correctness checks run automatically when you upload. The optimizers below are "
+                + "optional — they shrink the bundle size your players download and speed up "
+                + "first-launch attraction load times.",
                 MessageType.None);
 
             GUILayout.Space(4);
+
+            // The correctness gate, surfaced as a button so it can be run deliberately
+            // rather than only discovered at upload time. Framed apart from the
+            // optimizers below: those are about size, this is about whether the content
+            // is correct at all.
+            {
+                var reviewIcon = EditorGUIUtility.IconContent("console.warnicon");
+                var report = PreUploadChecks.PreUploadCheckRunner.CachedReportFor(contentId);
+
+                string suffix = "";
+                if (report != null)
+                {
+                    if (report.BlockingCount > 0) suffix = $"  ({report.BlockingCount} blocking)";
+                    else if (report.WarningCount > 0) suffix = $"  ({report.WarningCount} warning{(report.WarningCount == 1 ? "" : "s")})";
+                }
+
+                var reviewContent = new GUIContent(
+                    " Review Pre-Upload Checks..." + suffix,
+                    reviewIcon != null ? reviewIcon.image : null,
+                    "Duplicate prefab names, directional lights in content, materials missing Meta "
+                    + "occlusion, unapplied scene overrides, and dependencies living outside this "
+                    + "content folder. Runs automatically before every upload; this runs the full "
+                    + "suite now, including the scene scan.");
+
+                if (GUILayout.Button(reviewContent, GUILayout.Height(28)))
+                {
+                    PreUploadChecks.PreUploadChecksPopup.ShowForReview(this, contentId);
+                }
+            }
+
+            GUILayout.Space(6);
 
             // Helper: build a 28px-tall button with a Unity built-in icon
             // (asset-type icon matching the tool's domain). The icons make
@@ -898,7 +1091,7 @@ namespace DreamPark {
 
             GUILayout.Space(6);
             bool shippable = HasShippableContent();
-            GUI.enabled = !isUploading && !string.IsNullOrEmpty(contentId) && shippable;
+            GUI.enabled = !isUploading && !UploadsBlocked && !string.IsNullOrEmpty(contentId) && shippable;
             if (GUILayout.Button(new GUIContent(
                 "Build & Inspect Groups (no upload)",
                 "Runs the full bundling pipeline for the current build target (third-party sync, " +
@@ -925,7 +1118,7 @@ namespace DreamPark {
             // didn't change — a manual repair path independent of a version
             // upload. Uses the same session auth as the normal upload flow.
             GUILayout.Space(6);
-            GUI.enabled = !isUploading && !string.IsNullOrEmpty(contentId);
+            GUI.enabled = !isUploading && !UploadsBlocked && !string.IsNullOrEmpty(contentId);
             if (GUILayout.Button(new GUIContent(
                 "Force Upload All Previews",
                 "Regenerates and uploads a preview image for every attraction and prop in this " +
@@ -954,7 +1147,7 @@ namespace DreamPark {
             // once via DreamPark → Troubleshooting → Update Attraction
             // Dimensions.
             GUILayout.Space(6);
-            GUI.enabled = !isUploading && !string.IsNullOrEmpty(contentId);
+            GUI.enabled = !isUploading && !UploadsBlocked && !string.IsNullOrEmpty(contentId);
             if (GUILayout.Button(new GUIContent(
                 "Update Attraction Dimensions",
                 "Uploads every attraction's authored dimensions (feet) to the attractions " +
@@ -979,7 +1172,7 @@ namespace DreamPark {
             // logoImageUrl without publishing a new version. The bundled
             // logoAddress the VR client uses is unaffected.
             GUILayout.Space(6);
-            GUI.enabled = !isUploading && !string.IsNullOrEmpty(contentId) && logoTexture != null;
+            GUI.enabled = !isUploading && !UploadsBlocked && !string.IsNullOrEmpty(contentId) && logoTexture != null;
             if (GUILayout.Button(new GUIContent(
                 "Re-upload Logo",
                 "Uploads the selected Logo image directly to DreamPark so web, iOS, and admin " +
@@ -1010,7 +1203,7 @@ namespace DreamPark {
             {
                 GUILayout.Space(6);
                 bool testShippable = HasShippableContent();
-                GUI.enabled = !isUploading && !string.IsNullOrEmpty(contentId) && testShippable;
+                GUI.enabled = !isUploading && !UploadsBlocked && !string.IsNullOrEmpty(contentId) && testShippable;
                 if (GUILayout.Button(new GUIContent(
                     "Upload Test Build (Test Channel)",
                     "DreamPark teammates only.\n\n" +
@@ -1832,6 +2025,33 @@ namespace DreamPark {
                 return;
             }
 
+            // This path bypasses BeginUploadFromPopup entirely — it goes straight to
+            // ContentAPI.UploadTestBuildArtifacts — and it has two callers
+            // (ContentUploadFlowPopup's Start button when an estimate is pending, and
+            // TestBuildUploadDialog). Without this, running an estimate and then
+            // pressing Start would skip every pre-upload check. The estimate compiled
+            // the same assets, so there is nothing different to validate.
+            if (!preUploadChecksCleared)
+            {
+                bool passed = PreUploadChecks.PreUploadChecksGate.Passes(
+                    this, contentId,
+                    onCleared: () =>
+                    {
+                        preUploadChecksCleared = true;
+                        EditorApplication.delayCall += () =>
+                        {
+                            if (this == null) return;
+                            try { ResumePendingTestBuildUpload(); }
+                            finally { preUploadChecksCleared = false; }
+                        };
+                    },
+                    // This path never calls SaveModifiedScenesBeforeCompile, so the
+                    // scene-override check must not assume disk is current.
+                    scenesAreSaved: false);
+                if (!passed) return;
+            }
+            preUploadChecksCleared = false;
+
             // Snapshot the pending values into locals before we kick off
             // the upload — once isUploading is true the user might cancel
             // or another flow might overwrite pendingTestBuildId.
@@ -2450,15 +2670,45 @@ namespace DreamPark {
                 return false;
             }
 
-            buildAndroid = true;
-            buildIos = true;
-            SaveBuildTargetSelection();
-
+            // Scene save moved UP from below, so it runs before the pre-upload checks
+            // rather than after. The scene-override check reads what is on disk; with
+            // the save happening afterwards it would report stale YAML, or skip.
+            //
+            // Consequence to know about: a user who then hits the pre-upload gate and
+            // cancels will have had their scenes saved anyway. That's the trade for
+            // checking the right bytes.
             if (build && !SaveModifiedScenesBeforeCompile())
             {
                 EditorUtility.DisplayDialog("Compile Cancelled", "Save all modified scenes before compiling.", "OK");
                 return false;
             }
+
+            // Pre-upload checks: duplicate prefab names, directional lights, Meta
+            // occlusion, unapplied scene overrides, dependencies outside the content
+            // folder.
+            //
+            // This is INVISIBLE when nothing is wrong — no window, no dialog, no extra
+            // click. Only an actual finding interrupts. A gate that fires on every
+            // upload is a gate people learn to click through, and then the one that
+            // mattered gets clicked through too.
+            //
+            // Asynchronous, because it opens a real window rather than a
+            // DisplayDialog: EditorWindow.ShowUtility is non-modal, so it returns false
+            // here and re-enters through the continuation if the user chooses to
+            // proceed. Same shape as SDKUpdateChecker.EnsureUpToDateThen.
+            if (!preUploadChecksCleared)
+            {
+                bool passed = PreUploadChecks.PreUploadChecksGate.Passes(
+                    this, contentId,
+                    onCleared: () => ResumeUploadAfterPreUploadChecks(build, mode, failedOnly),
+                    scenesAreSaved: build);
+                if (!passed) return false;
+            }
+            preUploadChecksCleared = false;
+
+            buildAndroid = true;
+            buildIos = true;
+            SaveBuildTargetSelection();
 
             SaveLogoSelection();
             pendingUploadMode = mode;
@@ -2468,6 +2718,29 @@ namespace DreamPark {
             ResetUploadPresentationState(build);
             UploadContent(build);
             return true;
+        }
+
+        // One-shot token. Set only for the single re-entry that follows the user
+        // pressing Continue in the Pre-Upload Checks window, and cleared as soon as
+        // the gate is passed, so it can never leave the gate permanently open.
+        private bool preUploadChecksCleared;
+
+        private void ResumeUploadAfterPreUploadChecks(bool build, UploadMode mode, bool failedOnly)
+        {
+            preUploadChecksCleared = true;
+
+            // delayCall gets us off the popup's OnGUI stack before re-entering the
+            // upload flow — the established idiom in this file.
+            EditorApplication.delayCall += () =>
+            {
+                // The panel can be closed while the checks window is open. Touching a
+                // destroyed EditorWindow throws MissingReferenceException and would
+                // start an upload with no UI attached to report it.
+                if (this == null) return;
+
+                try { BeginUploadFromPopup(build, mode, failedOnly); }
+                finally { preUploadChecksCleared = false; }
+            };
         }
 
         internal bool BeginPatchEstimateFromPopup(UploadMode mode)
@@ -3261,6 +3534,18 @@ namespace DreamPark {
         // Gate for the Compile & Upload + Build & Inspect actions: a content
         // package is only meaningful if it ships at least one Attraction or
         // Prop. A bare PlayerRig isn't a complete deliverable on its own.
+        /// True when the selected content ID is one the SDK ships with, so no
+        /// creator may publish under it (see lib/reservedContentIds.js on the
+        /// backend, which refuses these outright).
+        ///
+        /// This gates ACTIONS, not the panel. Sample stays fully browsable on
+        /// purpose — it is the reference a new creator learns from — and only
+        /// the buttons that would push to the backend are turned off.
+        private bool UploadsBlocked
+        {
+            get { return ContentFolders.IsReserved(contentId); }
+        }
+
         private bool HasShippableContent()
         {
             for (int i = 0; i < contentRoots.Count; i++)
@@ -3517,6 +3802,34 @@ namespace DreamPark {
                 GUI.Label(imgRect, entry.subLabel, placeholderStyle);
             }
 
+            // Pre-upload warning badge, top-right of the thumbnail.
+            //
+            // badgeRect is computed UNCONDITIONALLY and the badge map is a per-frame
+            // snapshot: GUI.Button consumes a control id, so a badge that exists in the
+            // Layout pass but not the Repaint pass (or vice versa) shifts the id stream
+            // and corrupts every control drawn after it in this card.
+            //
+            // IMGUI paints in draw order, so this must come after GUI.DrawTexture to
+            // sit on top of the thumbnail.
+            var badgeRect = new Rect(imgRect.xMax - 20f, imgRect.y + 2f, 18f, 18f);
+            // `= default` is load-bearing: the `&&` below short-circuits, so the
+            // compiler cannot prove TryGetValue ran and reports CS0165 on badge.Key.
+            KeyValuePair<PreUploadChecks.CheckSeverity, string> badge = default;
+            bool hasBadge = preUploadBadges != null
+                         && preUploadBadges.TryGetValue(entry.assetPath, out badge);
+            if (hasBadge)
+            {
+                var badgeIcon = badge.Key == PreUploadChecks.CheckSeverity.Blocking
+                    ? EditorGUIUtility.IconContent("console.erroricon.sml")
+                    : EditorGUIUtility.IconContent("console.warnicon.sml");
+
+                if (GUI.Button(badgeRect, new GUIContent(badgeIcon != null ? badgeIcon.image : null, badge.Value),
+                               EditorStyles.iconButton))
+                {
+                    PreUploadChecks.PreUploadChecksPopup.ShowForAsset(this, contentId, entry.assetPath);
+                }
+            }
+
             // Two-line label: name on top (bold-ish), kind on bottom.
             var nameStyle = new GUIStyle(EditorStyles.miniLabel)
             {
@@ -3530,9 +3843,16 @@ namespace DreamPark {
             // prefab, where the camera angle and zoom of its generated preview
             // can be tuned and saved. Also pings the underlying prefab in the
             // Project window for context.
+            //
+            // The badge is excluded by rect rather than by relying on event
+            // consumption. GUI.Button consumes the event on MouseDown and returns true
+            // on MouseUp — two different passes — so a Use() inside its true branch
+            // would never run during the pass this handler reads. Rect exclusion is
+            // event-phase-independent.
             if (Event.current.type == EventType.MouseDown
                 && Event.current.button == 0
-                && cardRect.Contains(Event.current.mousePosition))
+                && cardRect.Contains(Event.current.mousePosition)
+                && !(hasBadge && badgeRect.Contains(Event.current.mousePosition)))
             {
                 PreviewEditorWindow.Open(contentId, entry.assetPath, entry.name, entry.subLabel);
                 var asset = AssetDatabase.LoadMainAssetAtPath(entry.assetPath);
@@ -4310,6 +4630,13 @@ namespace DreamPark {
             return string.IsNullOrEmpty(response.error) ? "Unknown error." : response.error;
         }
 
+        // Kept only so an existing integration that calls this still compiles. DreamPark
+        // has been passwordless since July 2026 — there is no password to pass — and the
+        // in-editor sign-in path is AuthPopup (email, then an emailed 6-digit code).
+        // Obsolete rather than deleted because it is public API on a public panel type;
+        // being Obsolete itself is also what stops the AuthAPI.Login call below (now
+        // Obsolete too) from raising a warning here.
+        [Obsolete("DreamPark is passwordless as of July 2026 — sign in via AuthPopup, or call AuthAPI.RequestLoginCode/VerifyLoginCode.")]
         public void Login(string email, string password)
         {
             AuthAPI.Login(email, password, (success, response) =>
