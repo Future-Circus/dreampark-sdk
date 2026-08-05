@@ -15,8 +15,39 @@ namespace DreamPark {
         public float updateInterval = 2f;
         public float surfaceFollowSpeed = 5f;
         public LayerMask arMeshLayer = -1; // layer for AR meshes
-        private float raycastAboveDevice = 10f;  // how far above device Y to start ray
-        private float raycastLength = 20f;        // total ray length downward
+        /// Rematerialized floor prior (Auto-Calibration-Spec §5.3). Kept as a
+        /// SEPARATE mask from arMeshLayer, not merged into it, so the conform
+        /// can try live mesh first and fall back — live always beats memory.
+        private LayerMask arMeshPriorLayer = -1;
+
+        /// Set by the project-side FloorPriorManager when a floor prior has been
+        /// rematerialized with trustworthy geometry; cleared on park switch and
+        /// whenever the prior goes away (Phase 2.5 §4.1).
+        ///
+        /// This is the ONLY thing the SDK knows about the prior. One static
+        /// bool, written from the project side, so CalibrateLevel never gains a
+        /// dependency on the height field, the accumulator, or the backend.
+        public static bool allowUnanchoredCalibration;
+
+        // ── Search volume ────────────────────────────────────────────────
+        // These are FLOORS, not fixed sizes. GroundProbe.MeasureSpan sweeps
+        // the footprint before each conform and grows the span to cover the
+        // ground it actually finds; these values are the minimum it will ever
+        // use, and they reproduce the legacy ±10m volume exactly for any venue
+        // flat enough that the old code worked. Raising them costs nothing but
+        // raycast length on venues that need it; there is no reason to lower
+        // them.
+        //
+        // The volume is anchored to the LEVEL'S OWN PLANE, not to the camera.
+        // The old code started every ray at `Camera.main.y + 10` — see the
+        // header of GroundProbe.cs for why that silently discarded whole bakes
+        // whenever the guest was not standing at the attraction's elevation.
+        [Header("Ground Search (minimums — the probe grows these to fit)")]
+        [Tooltip("Minimum metres above the level plane to begin searching for ground.")]
+        public float minRaycastAbove = 10f;
+        [Tooltip("Minimum metres below the level plane the search must still reach.")]
+        public float minRaycastBelow = 10f;
+
         private Mesh dynamicMesh;
         private MeshCollider meshCollider;
         private MeshFilter meshFilter;
@@ -48,6 +79,8 @@ namespace DreamPark {
             // Assign layer if not set
             if (arMeshLayer == -1)
                 arMeshLayer = LayerMask.GetMask("ARMesh");
+            if (arMeshPriorLayer == -1)
+                arMeshPriorLayer = LayerMask.GetMask(FloorPriorLayerName);
 
             if (levelTemplate == null)
                 levelTemplate = GetComponentInParent<LevelTemplate>();
@@ -64,18 +97,43 @@ namespace DreamPark {
                     portalIsSynced = portalAnchor.isSynced;
                 }
 
-                if (isHeadset || portalIsSynced) {
+                // Auto-Calibration-Spec Phase 2.5 §3/§4.1 — the sync gate guards
+                // WORLD-SPACE PROVENANCE, and a rematerialized floor prior is
+                // not world-space. Live AR mesh arrives in session coordinates
+                // and is meaningless until the park is synced into the world,
+                // which is why this gate exists. But the prior is stored park-
+                // local, attraction transforms are park-local, and floorData is
+                // park-local vertex Y — the whole chain stays inside park space
+                // and never references the world. So an unanchored session may
+                // apply it: that is remote editing.
+                if (isHeadset || portalIsSynced || allowUnanchoredCalibration) {
                     // Don't apply yet — mark as pending so LevelAnchor can apply AFTER
                     // objects are disabled, preventing physics/collision issues from the
                     // floor shifting under active rigidbodies.
                     hasPendingCalibration = true;
-                    Debug.Log($"[CalibrateLevel] Calibration data ready (pending) for {gameObject.name} (isHeadset={isHeadset}, portalSynced={portalIsSynced})");
+                    Debug.Log($"[CalibrateLevel] Calibration data ready (pending) for {gameObject.name} (isHeadset={isHeadset}, portalSynced={portalIsSynced}, prior={allowUnanchoredCalibration})");
                 } else {
-                    Debug.Log("[CalibrateLevel] iOS - portal not synced, showing flat map for " + gameObject.name);
+                    Debug.Log("[CalibrateLevel] iOS - portal not synced and no floor prior, showing flat map for " + gameObject.name);
                     // Don't apply calibration visually, but keep floorData on CalibrateLevel
                     // so CompileCalibrationData() can preserve it during saves.
                     // (floorData is intentionally NOT cleared here)
                 }
+            }
+#else
+            // SDK / editor. The sync gate above exists to guard WORLD-SPACE
+            // PROVENANCE: live AR mesh arrives in session coordinates and is
+            // meaningless until the park is anchored into the world. There is
+            // no AR session here and no portal to sync, and floorData is
+            // park-local vertex Y, so there is nothing to guard against —
+            // received floor data is simply applied.
+            //
+            // Without this branch the SDK could never replay a saved park's
+            // floor: LevelTemplate would hand floorData to the calibrator and
+            // ApplyPendingCalibration() would silently no-op forever, so the
+            // Park Simulator would only ever exercise fresh placement and never
+            // the load path a returning guest actually takes.
+            if (floorData != null) {
+                hasPendingCalibration = true;
             }
 #endif
         }
@@ -95,7 +153,7 @@ namespace DreamPark {
 
         /// <summary>
         /// Called by LevelTemplate after creating the base grid mesh (before hole cutting).
-        /// Stores the original vertices and hole definitions for later re-cutting after calibration.
+        /// Stores the original vertices and hole definitions for later re-cutting.
         /// </summary>
         public void SetupForCalibration(Vector3[] vertices, Vector2[] uv, int gridX, int gridY, List<List<Vector2>> holes)
         {
@@ -104,7 +162,7 @@ namespace DreamPark {
             this.gridX = gridX;
             this.gridY = gridY;
             this.holeDefinitions = holes ?? new List<List<Vector2>>();
-            
+
             Debug.Log($"[CalibrateLevel] Setup for calibration: {vertices.Length} vertices, {holes?.Count ?? 0} holes");
         }
 
@@ -135,6 +193,36 @@ namespace DreamPark {
             return ConformGridToSurface(minCoverage);
         }
 
+        /// <summary>
+        /// Compute the world-space footprint of the floor grid, used to size the
+        /// ground search before any per-vertex probing happens.
+        ///
+        /// Built from originalVertices (the flat authored grid) rather than the
+        /// live mesh, for the same reason the conform itself re-clones them
+        /// every pass: the authored grid is the stable reference, so a repeated
+        /// conform in Scan mode measures the same footprint every time instead
+        /// of drifting along with its own output.
+        /// </summary>
+        private Bounds ComputeWorldFootprint(Vector3[] verts)
+        {
+            if (verts == null || verts.Length == 0) {
+                return new Bounds(transform.position, Vector3.one);
+            }
+
+            var b = new Bounds(transform.TransformPoint(verts[0]), Vector3.zero);
+            for (int i = 1; i < verts.Length; i++) {
+                b.Encapsulate(transform.TransformPoint(verts[i]));
+            }
+            // The grid is planar, so the Y extent is ~0. Give it a nominal
+            // thickness so the centre is well-defined and the corner probes are
+            // not degenerate.
+            var size = b.size;
+            if (size.y < 0.01f) {
+                b.size = new Vector3(size.x, 0.01f, size.z);
+            }
+            return b;
+        }
+
         private bool ConformGridToSurface(float minCoverage = 0f)
         {
             Debug.Log("ConformGridToSurface called");
@@ -151,23 +239,38 @@ namespace DreamPark {
 
             int hitCount = 0;
 
-            // Anchor raycast origin to device/camera height so it works on
-            // hillsides and varied terrain instead of a fixed world-space offset.
-            float deviceY = Camera.main != null ? Camera.main.transform.position.y : 0f;
-            float rayOriginY = deviceY + raycastAboveDevice;
+            // Size the search volume from the ground that actually exists under
+            // this footprint, then anchor every ray to the vertex it belongs to.
+            // See GroundProbe.cs for why this replaced a camera-anchored ±10m
+            // constant. MeasureSpan can only ever return a span at least as
+            // large as (minRaycastAbove, minRaycastBelow), so a venue that
+            // calibrates today cannot stop calibrating because of this.
+            Bounds footprint = ComputeWorldFootprint(verts);
+            GroundProbe.Span span = GroundProbe.MeasureSpan(
+                footprint, arMeshLayer, arMeshPriorLayer, minRaycastAbove, minRaycastBelow);
+
+            // Which vertices actually found ground. A vertex that MISSES keeps
+            // its authored height, and that is the problem this array exists to
+            // fix — see FillUnconformedVertices.
+            bool[] conformed = new bool[verts.Length];
 
             for (int i = 0; i < verts.Length; i++)
             {
                 Vector3 worldPos = transform.TransformPoint(verts[i]);
-                Ray ray = new Ray(new Vector3(worldPos.x, rayOriginY, worldPos.z), Vector3.down);
 
-                if (TryGetRaycastHit(ray, out RaycastHit hit))
+                if (GroundProbe.TryFindGround(worldPos, span, arMeshLayer, arMeshPriorLayer, out RaycastHit hit))
                 {
                     float targetY = hit.point.y;
                     float newY = targetY;
                     verts[i] = transform.InverseTransformPoint(new Vector3(worldPos.x, newY, worldPos.z));
+                    conformed[i] = true;
                     hitCount++;
                 }
+            }
+
+            if (hitCount > 0 && hitCount < verts.Length)
+            {
+                FillUnconformedVertices(verts, conformed);
             }
 
             // Coverage gate (Auto-Calibration-Spec §4): one-shot bakes pass a
@@ -175,11 +278,12 @@ namespace DreamPark {
             // half-off the scanned area stays flat, never a tented edge.
             // Scan mode passes 0 = legacy behavior (apply on any hits, and the
             // calibrated flag / change notification fire regardless).
+            _lastConformHitCount = hitCount;
             float coverage = verts.Length > 0 ? (float)hitCount / verts.Length : 0f;
             bool gated = minCoverage > 0f;
             if (gated && coverage < minCoverage)
             {
-                Debug.Log($"CalibrateLevel: coverage {coverage:P0} below gate {minCoverage:P0} — leaving {gameObject.name} unbaked");
+                Debug.Log($"CalibrateLevel: coverage {coverage:P0} below gate {minCoverage:P0} — leaving {gameObject.name} unbaked (searched {span})");
                 return false;
             }
 
@@ -197,23 +301,355 @@ namespace DreamPark {
                     // No holes, just update the mesh directly
                     dynamicMesh.vertices = verts;
                     dynamicMesh.RecalculateNormals();
+                    // RecalculateBounds is LOAD-BEARING, not housekeeping.
+                    // NavMeshSurface.CalculateWorldBounds derives the volume
+                    // Recast is allowed to voxelize from Mesh.bounds. Move the
+                    // vertices without refreshing it and the bake volume still
+                    // describes the FLAT authored grid while the floor has
+                    // moved down onto the terrain — so only the sliver where
+                    // the two still overlap gets navmesh. Perfectly walkable
+                    // geometry, arbitrary partial coverage, and no error
+                    // anywhere. RecutHolesAndUpdateMesh always called this,
+                    // which is why levels WITH a FloorCutout were fine and
+                    // every other level was not.
+                    dynamicMesh.RecalculateBounds();
                     meshCollider.sharedMesh = dynamicMesh;
                 }
+
+                // The floor just moved. The navmesh baked over its old shape
+                // is now wrong — see RequestNavMeshRebake.
+                RequestNavMeshRebake();
             }
             else
             {
-                Debug.LogWarning("CalibrateLevel: No hits found");
+                Debug.LogWarning("CalibrateLevel: No hits found (searched " + span + ")");
             }
+
+            // DELIBERATELY SET EVEN ON ZERO HITS. `calibrated` does not mean
+            // "the floor is uneven", it means "a calibration pass has run and
+            // this floor mesh is now authoritative". FloorAnchor.Update()
+            // hard-returns while it is false, so every floor-anchored child
+            // stops positioning until it flips. A perfectly flat venue that
+            // legitimately needs no vertex offsets must still end up here, or
+            // the operator's intent — "I calibrated this, the ground is flat" —
+            // would leave every anchored child frozen at its authored pose.
+            // Do not "fix" this to `hitCount > 0`.
             calibrated = true;
             LevelTemplate.NotifyLevelTemplateChanged();
             return hitCount > 0;
         }
 
+
+        // ── NavMesh rebake ───────────────────────────────────────────────
+        //  LevelTemplate.BuildNavSurfaceAndAnchors bakes this floor's
+        //  NavMeshSurface exactly ONCE — at creation, over the FLAT authored
+        //  grid — and only then attaches this component. Nothing rebaked it
+        //  afterwards, so every conform moved the visible floor and its
+        //  MeshCollider while the navmesh stayed behind at the authored
+        //  height. Agents then pathed across a surface that was no longer
+        //  there: they float above a floor that conformed downhill and sink
+        //  into one that conformed up.
+        //
+        //  It hid for so long because the error is proportional to the relief.
+        //  In a scanned room the conform delta is centimetres and NavMesh's
+        //  own snap tolerance swallows it. On graded ground it is metres.
+        //
+        //  UpdateNavMesh, NOT BuildNavMesh: it rebakes in place into the
+        //  already-registered NavMeshData and does it asynchronously, so a
+        //  Scan-mode conform firing every couple of seconds cannot stall the
+        //  frame, and no agent is momentarily unbound the way a
+        //  RemoveData/AddData cycle would leave it.
+        private bool _navRebakeInFlight;
+        private bool _navRebakeQueued;
+
+        private void RequestNavMeshRebake()
+        {
+            var surface = GetComponent<Unity.AI.Navigation.NavMeshSurface>();
+            if (surface == null) return;
+
+            // Never baked, or the floor was rebuilt from scratch — there is no
+            // data to update in place, so do the one-off build LevelTemplate
+            // would have done.
+            if (surface.navMeshData == null) {
+                surface.BuildNavMesh();
+                return;
+            }
+
+            // A coroutine needs a live component, and the optimizer can park a
+            // floor that Scan mode is still conforming. Fall back to the
+            // synchronous path rather than throwing.
+            if (!isActiveAndEnabled) {
+                surface.UpdateNavMesh(surface.navMeshData);
+                return;
+            }
+
+            // Coalesce. A burst of meshesChanged events during Scan would
+            // otherwise queue one bake per event and they would pile up.
+            if (_navRebakeInFlight) { _navRebakeQueued = true; return; }
+            StartCoroutine(RebakeNavMeshRoutine(surface));
+        }
+
+        private System.Collections.IEnumerator RebakeNavMeshRoutine(
+            Unity.AI.Navigation.NavMeshSurface surface)
+        {
+            _navRebakeInFlight = true;
+            try {
+                do {
+                    _navRebakeQueued = false;
+                    if (surface == null || surface.navMeshData == null) break;
+                    var op = surface.UpdateNavMesh(surface.navMeshData);
+                    while (op != null && !op.isDone) yield return null;
+#if UNITY_EDITOR
+                    ReportNavCoverage();
+#endif
+                } while (_navRebakeQueued);
+            } finally {
+                _navRebakeInFlight = false;
+                _navRebakeQueued = false;
+            }
+        }
+
+
+#if UNITY_EDITOR
+        // ── Coverage check ───────────────────────────────────────────────
+        //  A floor that bakes only part of its navmesh fails SILENTLY. The
+        //  mesh looks right, the collider is right, agents spawn fine — they
+        //  just cannot path across regions that were never baked, and the
+        //  symptom surfaces much later as an agent that refuses to move or
+        //  takes an absurd detour. Nothing in Unity warns about it, because
+        //  from Recast's point of view discarding a sub-threshold region is
+        //  the requested behaviour.
+        //
+        //  So after every rebake the floor asks the question directly: at how
+        //  many of my own vertices could an agent actually stand? Editor-only
+        //  — this is a development diagnostic and the sampling is not free.
+        private int _lastConformHitCount;
+        private const float NavCoverageProbe = 0.35f;
+        private const float NavCoverageWarnBelow = 0.75f;
+
+        private void ReportNavCoverage()
+        {
+            if (dynamicMesh == null) return;
+            var verts = dynamicMesh.vertices;
+            if (verts.Length == 0) return;
+
+            int reachable = 0;
+            for (int i = 0; i < verts.Length; i++)
+            {
+                Vector3 world = transform.TransformPoint(verts[i]);
+                if (UnityEngine.AI.NavMesh.SamplePosition(
+                        world, out _, NavCoverageProbe, UnityEngine.AI.NavMesh.AllAreas))
+                {
+                    reachable++;
+                }
+            }
+
+            float coverage = (float)reachable / verts.Length;
+            if (coverage >= NavCoverageWarnBelow) return;
+
+            // Measure the GEOMETRY, not just the outcome. These three numbers
+            // separate the two candidate causes outright, which no amount of
+            // staring at the bake can:
+            //
+            //   steep quads high  -> the conformed floor genuinely exceeds the
+            //                        agent's slope limit. Recast is correct to
+            //                        reject it and the fix belongs in how the
+            //                        floor conforms, not in bake settings.
+            //   steep quads ~zero -> the geometry is walkable and something in
+            //                        the BAKE is discarding it. Bake settings.
+            //
+            // maxDrop is reported alongside because a single stranded vertex
+            // shows up as a large drop against an otherwise gentle surface.
+            float agentSlope = 45f;
+            var surface = GetComponent<Unity.AI.Navigation.NavMeshSurface>();
+            var agentSettings = UnityEngine.AI.NavMesh.GetSettingsByID(
+                surface != null ? surface.agentTypeID : 0);
+            if (agentSettings.agentSlope > 0f) agentSlope = agentSettings.agentSlope;
+
+            int steepQuads = 0, totalQuads = 0;
+            float maxSlopeDeg = 0f, maxDrop = 0f;
+            int vertCountX = gridX + 1, vertCountY = gridY + 1;
+
+            if (verts.Length == vertCountX * vertCountY && gridX > 0 && gridY > 0)
+            {
+                float cellX = gridWidthOrDefault() / gridX;
+                float cellZ = gridHeightOrDefault() / gridY;
+
+                for (int y = 0; y < vertCountY; y++)
+                {
+                    for (int x = 0; x < vertCountX; x++)
+                    {
+                        int i = y * vertCountX + x;
+                        if (x + 1 < vertCountX) {
+                            Measure(verts[i].y, verts[i + 1].y, cellX,
+                                    ref steepQuads, ref totalQuads, ref maxSlopeDeg, ref maxDrop, agentSlope);
+                        }
+                        if (y + 1 < vertCountY) {
+                            Measure(verts[i].y, verts[i + vertCountX].y, cellZ,
+                                    ref steepQuads, ref totalQuads, ref maxSlopeDeg, ref maxDrop, agentSlope);
+                        }
+                    }
+                }
+            }
+
+            // The mesh's cached bounds against where the vertices actually
+            // are. NavMeshSurface voxelizes the former; if they disagree, the
+            // bake volume does not contain the floor.
+            float vMinY = float.MaxValue, vMaxY = float.MinValue;
+            for (int i = 0; i < verts.Length; i++) {
+                if (verts[i].y < vMinY) vMinY = verts[i].y;
+                if (verts[i].y > vMaxY) vMaxY = verts[i].y;
+            }
+            Bounds mb = dynamicMesh.bounds;
+
+            Debug.LogWarning(string.Format(
+                "[CalibrateLevel] {0}: {1:P0} navmesh coverage ({2}/{3} verts).\n" +
+                "  conform: {4}/{3} vertices found ground\n" +
+                "  slope:   {5}/{6} edges exceed the agent limit of {7:F0}deg (max {8:F1}deg, max step {9:F2}m)\n" +
+                "  bounds:  mesh.bounds y [{10:F2}, {11:F2}] vs actual vertex y [{12:F2}, {13:F2}]\n" +
+                "  -> a bounds mismatch means the bake volume does not contain the floor.",
+                gameObject.name, coverage, reachable, verts.Length,
+                _lastConformHitCount, steepQuads, totalQuads, agentSlope, maxSlopeDeg, maxDrop,
+                mb.min.y, mb.max.y, vMinY, vMaxY), this);
+        }
+
+        private float gridWidthOrDefault()
+        {
+            return levelTemplate != null && levelTemplate.gridWidth > 0f ? levelTemplate.gridWidth : 1f;
+        }
+
+        private float gridHeightOrDefault()
+        {
+            return levelTemplate != null && levelTemplate.gridHeight > 0f ? levelTemplate.gridHeight : 1f;
+        }
+
+        private static void Measure(
+            float yA, float yB, float run,
+            ref int steep, ref int total, ref float maxSlopeDeg, ref float maxDrop, float limitDeg)
+        {
+            if (run <= 0f) return;
+            total++;
+            float drop = Mathf.Abs(yA - yB);
+            float deg = Mathf.Atan2(drop, run) * Mathf.Rad2Deg;
+            if (deg > maxSlopeDeg) maxSlopeDeg = deg;
+            if (drop > maxDrop) maxDrop = drop;
+            if (deg > limitDeg) steep++;
+        }
+#endif
+
+
+        /// <summary>
+        /// Give every vertex that found no ground a height interpolated from
+        /// the neighbours that did.
+        ///
+        /// WITHOUT THIS THE FLOOR IS A MIXTURE OF TWO SURFACES. A vertex whose
+        /// raycast missed keeps its AUTHORED height — the flat plane — while
+        /// its neighbours have been pulled down onto real ground. The coverage
+        /// gate then happily applies the bake at anything over 60%, so up to
+        /// four vertices in ten can be left standing at the old elevation.
+        /// Each one is a spike, every triangle touching it is near-vertical,
+        /// and near-vertical triangles fail the agent's 45-degree slope limit
+        /// and become non-walkable. Recast then erodes agentRadius around each
+        /// of those, so a single stranded vertex punches roughly a square metre
+        /// out of the navmesh. Dozens of them shred it into the slivers this
+        /// was diagnosed from.
+        ///
+        /// It never showed on a headset because a scanned room gives close to
+        /// 100% coverage — the mixture needs misses to exist at all.
+        ///
+        /// Iterative nearest-neighbour relaxation over the grid rather than a
+        /// single pass: a hole several vertices wide has interior vertices with
+        /// no conformed neighbour at all on the first sweep, and they fill
+        /// inward one ring at a time. Bounded by the grid's own dimensions, so
+        /// it always terminates.
+        /// </summary>
+        private void FillUnconformedVertices(Vector3[] verts, bool[] conformed)
+        {
+            int vertCountX = gridX + 1;
+            int vertCountY = gridY + 1;
+            if (vertCountX <= 0 || vertCountY <= 0) return;
+            if (verts.Length != vertCountX * vertCountY) return;
+
+            int maxRings = Mathf.Max(vertCountX, vertCountY);
+            var filledThisRing = new List<int>();
+
+            for (int ring = 0; ring < maxRings; ring++)
+            {
+                filledThisRing.Clear();
+
+                for (int y = 0; y < vertCountY; y++)
+                {
+                    for (int x = 0; x < vertCountX; x++)
+                    {
+                        int i = y * vertCountX + x;
+                        if (conformed[i]) continue;
+
+                        float sum = 0f;
+                        int n = 0;
+                        AccumulateNeighbour(verts, conformed, x - 1, y, vertCountX, vertCountY, ref sum, ref n);
+                        AccumulateNeighbour(verts, conformed, x + 1, y, vertCountX, vertCountY, ref sum, ref n);
+                        AccumulateNeighbour(verts, conformed, x, y - 1, vertCountX, vertCountY, ref sum, ref n);
+                        AccumulateNeighbour(verts, conformed, x, y + 1, vertCountX, vertCountY, ref sum, ref n);
+                        if (n == 0) continue;
+
+                        verts[i].y = sum / n;
+                        filledThisRing.Add(i);
+                    }
+                }
+
+                if (filledThisRing.Count == 0) break;
+
+                // Marked AFTER the whole sweep, from an explicit list. Marking
+                // inline would let a vertex filled earlier in this same sweep
+                // act as a source for one filled later in it, so the result
+                // would depend on iteration order and drift across the hole
+                // instead of growing evenly inward from its rim.
+                for (int k = 0; k < filledThisRing.Count; k++)
+                {
+                    conformed[filledThisRing[k]] = true;
+                }
+            }
+        }
+
+        private static void AccumulateNeighbour(
+            Vector3[] verts, bool[] conformed, int x, int y, int w, int h, ref float sum, ref int n)
+        {
+            if (x < 0 || y < 0 || x >= w || y >= h) return;
+            int i = y * w + x;
+            if (!conformed[i]) return;
+            sum += verts[i].y;
+            n++;
+        }
+
         private void RecutHolesAndUpdateMesh(Vector3[] calibratedVertices)
         {
-            // Push vertices out of holes (same logic as LevelTemplate)
-            float cellSizeX = gridX > 0 ? (calibratedVertices[gridX].x - calibratedVertices[0].x) : 1f;
-            float step = cellSizeX * 0.25f;
+            // Push step must be a fraction of ONE CELL, matching
+            // LevelTemplate.GenerateFloorWithHoles:
+            //     cellSize = Mathf.Min(width / gridX, height / gridY)
+            //     step     = cellSize * 0.25f
+            //
+            // This previously read `calibratedVertices[gridX].x -
+            // calibratedVertices[0].x`, which is the span of the ENTIRE FIRST
+            // ROW (vertCountX == gridX + 1, so index gridX is the row's last
+            // vertex), not one cell. That made the step ~gridX times too large
+            // — 10x at the default gridDensity of 10 — so a vertex found inside
+            // a FloorCutout was shoved a quarter of the level's WIDTH per
+            // iteration, up to 20 iterations, dragging the mesh far outside the
+            // level and shredding the geometry around every cutout. It only
+            // surfaced on levels that have cutouts AND have been baked, which
+            // is why it survived this long.
+            float cellSizeX = gridX > 0
+                ? Mathf.Abs(calibratedVertices[gridX].x - calibratedVertices[0].x) / gridX
+                : 1f;
+            float cellSizeZ = gridY > 0 && calibratedVertices.Length > (gridY * (gridX + 1))
+                ? Mathf.Abs(calibratedVertices[gridY * (gridX + 1)].z - calibratedVertices[0].z) / gridY
+                : cellSizeX;
+            float cellSize = Mathf.Min(
+                cellSizeX > 0f ? cellSizeX : float.MaxValue,
+                cellSizeZ > 0f ? cellSizeZ : float.MaxValue);
+            if (cellSize <= 0f || float.IsInfinity(cellSize)) cellSize = 1f;
+
+            float step = cellSize * 0.25f;
             const int maxPushIters = 20;
 
             // Precompute centroids
@@ -278,7 +714,7 @@ namespace DreamPark {
             dynamicMesh.RecalculateBounds();
             meshCollider.sharedMesh = dynamicMesh;
 
-            Debug.Log($"[CalibrateLevel] Re-cut holes: {triangles.Count / 3} triangles");
+            Debug.Log($"[CalibrateLevel] Re-cut holes: {triangles.Count / 3} triangles (cell {cellSize:F2}m, step {step:F2}m)");
         }
 
         private void TryAddTriangle(List<int> triangles, Vector3[] vertices, int a, int b, int c)
@@ -385,7 +821,13 @@ namespace DreamPark {
             }
             dynamicMesh.vertices = verts;
             dynamicMesh.RecalculateNormals();
+            // Same reason as the conform path — see there. A replayed floor
+            // moves exactly as far as a freshly conformed one.
+            dynamicMesh.RecalculateBounds();
             meshCollider.sharedMesh = dynamicMesh;
+            // Saved floor data reshapes the floor, so the navmesh baked over
+            // the flat grid must follow.
+            RequestNavMeshRebake();
             Debug.Log("[CalibrateLevel] Applied calibration data for " + gameObject.name);
             calibrated = true;
             LevelTemplate.NotifyLevelTemplateChanged();
@@ -421,35 +863,20 @@ namespace DreamPark {
                 }
                 dynamicMesh.vertices = verts;
                 dynamicMesh.RecalculateNormals();
+                // Flattening moves vertices too, so the bounds are just as
+                // stale as they are on the way down.
+                dynamicMesh.RecalculateBounds();
                 meshCollider.sharedMesh = dynamicMesh;
             }
 
             LevelTemplate.NotifyLevelTemplateChanged();
             Debug.Log("[CalibrateLevel] Cleared calibration data for " + gameObject.name);
         }
-        // Minimum upward component of surface normal to count as "floor".
-        // 0.5 ≈ 60° from vertical — accepts slopes, rejects walls and ceilings.
-        private const float minFloorNormalY = 0.5f;
 
-        private bool TryGetRaycastHit(Ray ray, out RaycastHit hit)
-        {
-            // RaycastAll so we can skip walls/ceilings and find the floor behind them.
-            var hits = Physics.RaycastAll(ray, raycastLength, arMeshLayer);
-            hit = default;
-            if (hits.Length == 0) return false;
-
-            // Sort by distance (closest first) and pick the first floor-like surface.
-            System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
-            for (int i = 0; i < hits.Length; i++)
-            {
-                if (hits[i].normal.y >= minFloorNormalY)
-                {
-                    hit = hits[i];
-                    return true;
-                }
-            }
-            return false;
-        }
+        /// Must match FloorPriorSurface.LayerName. Named here rather than
+        /// referenced so the SDK keeps no compile-time edge to the project-side
+        /// prior builder.
+        private const string FloorPriorLayerName = "ARMeshPrior";
 
         void OnEnable()
         {

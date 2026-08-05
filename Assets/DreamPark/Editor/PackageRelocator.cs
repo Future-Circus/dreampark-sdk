@@ -32,7 +32,11 @@ namespace DreamPark.EditorTools
         // When adding a new SDK that drops a top-level folder, add its folder name
         // here. The content-based check is a safety net but the allowlist is the
         // first-class way to declare intent.
-        static readonly HashSet<string> ProtectedTopLevelFolders = new HashSet<string>
+        // internal (was implicitly private): PreUploadChecks reads this so the
+        // "dependency outside the content folder" check never offers to relocate the
+        // Meta XR SDK or Unity's own managed folders. Duplicating a 27-entry list that
+        // is meant to grow is a guaranteed drift.
+        internal static readonly HashSet<string> ProtectedTopLevelFolders = new HashSet<string>
         {
             // DreamPark
             "Content",          // park-specific content (the canonical location)
@@ -71,7 +75,9 @@ namespace DreamPark.EditorTools
         // these markers indicate it's NOT a stray vendor asset pack and should be
         // left alone. Catches new SDKs that haven't been added to the allowlist yet.
         // Returns false (skip — leave it alone) if the folder contains any sentinel.
-        static bool LooksLikeImportedAssetPack(string folderAssetPath)
+        // internal (was implicitly private): shared with PreUploadChecks as the
+        // content-based safety net for folders not on the allowlist.
+        internal static bool LooksLikeImportedAssetPack(string folderAssetPath)
         {
             string fullPath = Path.Combine(Application.dataPath, "..", folderAssetPath);
             // UPM-style package.json at the root → not a vendor asset pack

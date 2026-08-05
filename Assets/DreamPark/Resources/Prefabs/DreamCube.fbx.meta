@@ -3,7 +3,12 @@ guid: 15ba79b238b6a470baefc6393b48f4c1
 ModelImporter:
   serializedVersion: 22200
   internalIDToNameTable: []
-  externalObjects: {}
+  externalObjects:
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: DreamCube
+    second: {fileID: 2100000, guid: 1abf2c7f3495e42f9aaf8d5de43222d8, type: 2}
   materials:
     materialImportMode: 2
     materialName: 0

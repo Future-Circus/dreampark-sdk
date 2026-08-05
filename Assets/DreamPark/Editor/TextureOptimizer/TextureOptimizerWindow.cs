@@ -114,15 +114,11 @@ namespace DreamPark.EditorTools.TextureOptimization
 
         private static string AutoPickContentFolder()
         {
-            if (!AssetDatabase.IsValidFolder("Assets/Content")) return "Assets/Content";
-            // Prefer the first subfolder under Assets/Content that isn't
-            // the placeholder.
-            foreach (var sub in AssetDatabase.GetSubFolders("Assets/Content"))
-            {
-                if (!sub.EndsWith("YOUR_GAME_HERE", StringComparison.OrdinalIgnoreCase))
-                    return sub;
-            }
-            return "Assets/Content";
+            // Delegates to ContentFolders. This used to return the first
+            // non-placeholder subfolder, which the bundled Sample project wins
+            // — pointing this window at Sample's assets instead of the
+            // creator's. See ContentFolders.cs.
+            return ContentFolders.AutoPickContentFolder();
         }
 
         // ─── OnGUI ──────────────────────────────────────────────────────

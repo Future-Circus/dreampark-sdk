@@ -14,19 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   m_GroupName: YOUR_GAME_HERE-Bundle-P_Enemy
   m_GUID: 2e2186bd1a0224a16a7bda79e22e6f3d
-  m_SerializeEntries:
-  - m_GUID: 26e6d774ae35c417680fac2ff5a9295b
-    m_Address: YOUR_GAME_HERE/Props/Generic/P_Enemy
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - YOUR_GAME_HERE
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: 6cdc0232e56db4096a5a12259f7b9714
-    m_Address: YOUR_GAME_HERE/Previews/P_Enemy
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - YOUR_GAME_HERE
-    FlaggedDuringContentUpdateRestriction: 0
+  m_SerializeEntries: []
   m_ReadOnly: 0
   m_Settings: {fileID: 11400000, guid: 5e922c848874c41bc90d6a8d78c6f5a9, type: 2}
   m_SchemaSet:

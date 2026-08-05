@@ -1,0 +1,59 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bbb281ee3bf0b054c82ac2347e9e782c, type: 3}
+  m_Name: Sample-Prefabs
+  m_EditorClassIdentifier: 
+  m_GroupName: Sample-Prefabs
+  m_GUID: 8babf8290973d4c73af09112d25429bd
+  m_SerializeEntries:
+  - m_GUID: 29d0ca3435c4742cf946c517ad3843c0
+    m_Address: Sample/Props/Generic/P_TestPoint
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - Sample
+    - SampleGame
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 9248e67eb51b4467db385f8b4d58e074
+    m_Address: Sample/Props/Generic/P_TestProp
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - Sample
+    - SampleGame
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: cbf21234c0cc8416f9c9491719b3bb23
+    m_Address: Sample/Props/Generic/P_Enemy
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - Sample
+    - SampleGame
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: f99bd0386e51a402c9e7d9c31cde2e30
+    m_Address: Sample/Player
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - Sample
+    - SampleGame
+    - '[SampleGame]'
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: fbf9cd41da0b9409087e11f26980716a
+    m_Address: Sample/Levels/Micro/A_TestAttraction
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - Sample
+    - SampleGame
+    FlaggedDuringContentUpdateRestriction: 0
+  m_ReadOnly: 0
+  m_Settings: {fileID: 11400000, guid: 5e922c848874c41bc90d6a8d78c6f5a9, type: 2}
+  m_SchemaSet:
+    m_Schemas:
+    - {fileID: 11400000, guid: e82ef08a5edbf4d57a7a0b30e08e784b, type: 2}
+    - {fileID: 11400000, guid: fb57fba15def343e9a92180fd7c28331, type: 2}

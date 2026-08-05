@@ -1,0 +1,15 @@
+{
+    "version": 1,
+    "entries": [
+        {
+            "name": "A_TestAttraction",
+            "settings": {
+                "azimuth": 122.0,
+                "elevation": 30.0,
+                "zoom": 1.0,
+                "hideGizmoLayer": false,
+                "animationPoses": []
+            }
+        }
+    ]
+}

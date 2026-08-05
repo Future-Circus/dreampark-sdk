@@ -127,7 +127,7 @@ namespace DreamPark {
         {
             Matrix4x4 oldMatrix = Gizmos.matrix;
             Gizmos.matrix = transform.localToWorldMatrix;
-            Gizmos.color = Color.white;
+            Gizmos.color = new Color(0.96f, 0.91f, 0.75f, 0.2f);
             Mesh humanMesh = Resources.Load<Mesh>("Meshes/HumanReference");
             Gizmos.DrawMesh(humanMesh, new Vector3(0, -1.6f, 0));
             Gizmos.matrix = oldMatrix;
