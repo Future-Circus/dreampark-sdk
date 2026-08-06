@@ -14,7 +14,8 @@
 //     pressed Play is pinned and appears in every single generation. The
 //     attraction you are working on must be in the park you are looking
 //     at — a Regenerate that rotated it out would make the button useless
-//     for the one thing it is most used for.
+//     for the one thing it is most used for. Content injected by a host
+//     tool is pinned for the same reason: somebody asked for it by name.
 //
 //  2. THE REST FILLS TO 80% ATTRACTIONS / 20% PROPS. Attractions are what
 //     the park is made of and what actually exercises calibration,
@@ -25,6 +26,14 @@
 //  3. CAPACITY IS THE MARKER COUNT, never a constant. park.fbx decides how
 //     many places exist; adding markers raises the ceiling with no code
 //     change, and content beyond it rotates.
+//
+//  A REAL PARK TAKES RULE 1 AND STOPS. When the simulator is dropping
+//  content into a park somebody else built, that park is already full of
+//  its own attractions — the free pool is not filling empty space, it is
+//  crowding a venue. So pinnedOnly turns rules 2 and 3 off entirely and
+//  places exactly what was asked for: your scene, plus your injections.
+//  Rotating strangers through a customer's park would bury the one thing
+//  you opened it to look at.
 //
 //  NOT TRUE RANDOM — A SHUFFLE BAG. Independent random draws would show
 //  you the same attraction three generations running and leave another
@@ -56,9 +65,14 @@ namespace DreamPark.ParkSim
         /// <summary>
         /// Pick the content for one generation. <paramref name="capacity"/> is
         /// the number of spawn markers the park actually has.
+        ///
+        /// <paramref name="pinnedOnly"/> places what was asked for and nothing
+        /// else — see the header. Used when the park came from a source rather
+        /// than from park.fbx.
         /// </summary>
         public static List<ContentEntry> Choose(
-            List<ContentEntry> all, int capacity, int seed, List<string> notes)
+            List<ContentEntry> all, int capacity, int seed, List<string> notes,
+            bool pinnedOnly = false)
         {
             var chosen = new List<ContentEntry>();
             if (all == null || all.Count == 0) return chosen;
@@ -86,14 +100,29 @@ namespace DreamPark.ParkSim
                 if (pinned.Count > capacity)
                 {
                     notes.Add(string.Format(
-                        "Your scene has {0} placeable objects but the park only has {1} spawn markers — " +
-                        "{2} were left out. Regenerate cannot help here; the scene itself is over capacity.",
+                        "{0} object(s) are pinned but the park only has {1} place(s) to put them — " +
+                        "{2} were left out. Regenerate cannot help here; the request itself is over " +
+                        "capacity.",
                         pinned.Count, capacity, pinned.Count - capacity));
                 }
                 return chosen;
             }
 
             chosen.AddRange(pinned);
+
+            if (pinnedOnly)
+            {
+                int skipped = freeAttractions.Count + freeProps.Count;
+                if (skipped > 0)
+                {
+                    notes.Add(string.Format(
+                        "Placed {0} pinned object(s). This park already has its own content, so the " +
+                        "{1} other prefab(s) in your project were not rotated into it.",
+                        pinned.Count, skipped));
+                }
+                return chosen;
+            }
+
             int remaining = capacity - pinned.Count;
 
             Attractions.Sync(freeAttractions, seed);

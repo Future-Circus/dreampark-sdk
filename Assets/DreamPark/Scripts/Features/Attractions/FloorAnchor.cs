@@ -99,6 +99,19 @@ namespace DreamPark {
 
         // Single point tracking
         private int closestVertexIndex = -1;
+
+        // ── The authored sink depth, captured ONCE ───────────────────────
+        //  centerLocalOffset is recomputed on every recache as
+        //  (object position - floor vertex) — it measures a position THIS
+        //  COMPONENT set last cycle. Place the object slightly wrong, recache,
+        //  and the wrong position becomes the new intended offset, so the next
+        //  placement compounds it. The vertical relationship between an
+        //  anchored prop and its floor is an AUTHORING decision, not a runtime
+        //  measurement: read once, from the first cache (before any placement
+        //  has run, while the floor is still the flat authored grid), never
+        //  revised.
+        private bool authoredVerticalCaptured = false;
+        private float authoredVerticalOffset = 0f;
         
         // Multi-point tracking (4 corners + center)
         private int[] cornerVertexIndices = new int[4] { -1, -1, -1, -1 };
@@ -409,42 +422,151 @@ namespace DreamPark {
                 heights[i] = floorVertices[i].y;
             }
             
-            // Calculate median height for comparison
-            float[] sortedHeights = new float[4];
-            System.Array.Copy(heights, sortedHeights, 4);
-            System.Array.Sort(sortedHeights);
-            float medianHeight = (sortedHeights[1] + sortedHeights[2]) / 2f;
+            // ── Outliers are measured against the best-fit PLANE ─────────
+            //
+            //  This used to compare each corner's height to the MEDIAN of the
+            //  four and reject anything more than maxHeightDeviation (0.3m)
+            //  away. That test contradicts the feature it serves. Match-grade
+            //  exists precisely because the corners sit at DIFFERENT heights —
+            //  that spread IS the grade — so on any real slope the uphill and
+            //  downhill corners are outliers by definition. A 3.9m-long pit on
+            //  a 10 degree grade spans 0.69m corner to corner, so two of its
+            //  four corners get thrown out for doing exactly what they are
+            //  there to do. Fewer than three survive, the plane cannot be
+            //  fitted, and the whole thing collapses to a fallback. Flat
+            //  ground hid it completely, which is why this only ever shows up
+            //  on a slope.
+            //
+            //  A graded floor is a PLANE, so residual-from-plane is the
+            //  meaningful measure. All four corners of a properly conformed
+            //  pit lie near one plane however steep it is; a genuinely bad
+            //  sample — a rim vertex flung somewhere odd — does not.
+            //
+            //  The plane is chosen by trying each triple and keeping the one
+            //  whose excluded corner fits best. With four near-coplanar points
+            //  every triple agrees; with one bad point, the triple that
+            //  excludes it wins, so the bad point is the only large residual.
+            float[] residuals = ComputePlaneResiduals(floorVertices);
             
-            // Filter corners
-            System.Collections.Generic.List<int> validIndices = new System.Collections.Generic.List<int>();
-            System.Collections.Generic.List<Vector3> validPositions = new System.Collections.Generic.List<Vector3>();
-            
+            // ── Filter corners, DEGRADING RATHER THAN FAILING ──────────────
+            //
+            //  Strict first, then height-only, then everything. The old code
+            //  had only the strict tier and no fallback, so when it rejected
+            //  every corner the caller silently reverted to positioning from
+            //  one cached vertex — which is the behaviour the corner plane
+            //  exists to replace.
+            //
+            //  The distance test is the one that has to yield, and a
+            //  FloorCutout is exactly why. Corners are taken from the object's
+            //  full bounds, so a 2.3m x 3.9m pit samples nearly 2m out from
+            //  its own centre; and every floor vertex inside a cutout has been
+            //  PUSHED OUT to the rim. The nearest surviving vertex is then far
+            //  past maxVertexDistance (1m) essentially by construction. For an
+            //  object sitting over a hole a large distance is not evidence of
+            //  a bad sample — it is what a hole IS, and the rim is precisely
+            //  the surface the object should sit flush with.
+            //
+            //  The height test keeps its authority through the second tier,
+            //  because a corner that disagrees vertically really is suspect
+            //  regardless of how far away it sits.
+            var strict = FilterCorners(residuals, true, true);
+            if (strict.Count >= 3) return Emit(strict, floorVertices, "strict");
+
+            var heightOnly = FilterCorners(residuals, true, false);
+            if (heightOnly.Count >= 3) return Emit(heightOnly, floorVertices, "distance test relaxed");
+
+            var all = FilterCorners(residuals, false, false);
+            return Emit(all, floorVertices, "all corners");
+        }
+
+        /// <summary>
+        /// Least-squares plane y = a*x + b*z + c through the given points, or
+        /// null when they are degenerate (collinear / coincident in XZ).
+        /// </summary>
+        static bool TryFitPlane(Vector3[] pts, int count, out float a, out float b, out float c)
+        {
+            a = b = c = 0f;
+            if (count < 3) return false;
+
+            double Sxx=0, Sxz=0, Szz=0, Sx=0, Sz=0, S1=0, Sxy=0, Szy=0, Sy=0;
+            for (int i = 0; i < count; i++)
+            {
+                double x = pts[i].x, y = pts[i].y, z = pts[i].z;
+                Sxx += x*x; Sxz += x*z; Szz += z*z; Sx += x; Sz += z; S1 += 1;
+                Sxy += x*y; Szy += z*y; Sy += y;
+            }
+
+            double det =
+                Sxx*(Szz*S1 - Sz*Sz) - Sxz*(Sxz*S1 - Sz*Sx) + Sx*(Sxz*Sz - Szz*Sx);
+            if (System.Math.Abs(det) < 1e-9) return false;
+
+            double da =
+                Sxy*(Szz*S1 - Sz*Sz) - Sxz*(Szy*S1 - Sz*Sy) + Sx*(Szy*Sz - Szz*Sy);
+            double db =
+                Sxx*(Szy*S1 - Sy*Sz) - Sxy*(Sxz*S1 - Sz*Sx) + Sx*(Sxz*Sy - Szy*Sx);
+            double dc =
+                Sxx*(Szz*Sy - Szy*Sz) - Sxz*(Sxz*Sy - Szy*Sx) + Sxy*(Sxz*Sz - Szz*Sx);
+
+            a = (float)(da/det); b = (float)(db/det); c = (float)(dc/det);
+            return true;
+        }
+
+        /// <summary>
+        /// Vertical distance of each corner from the least-squares plane through
+        /// ALL of them.
+        ///
+        /// Least squares rather than anything cleverer, deliberately. The four
+        /// corners of a rectangle are affinely dependent (y3 = y1 + y2 - y0),
+        /// so "corner 1 is 1m high" and "corner 3 is 1m low" are the SAME
+        /// observation — a single bad corner is mathematically unidentifiable
+        /// from four samples. Any scheme that claims to name the culprit is
+        /// resolving that tie arbitrarily, and half the time it drops a good
+        /// corner and keeps the bad one, tilting the plane it was supposed to
+        /// protect. Least squares spreads the disagreement evenly (a 1m error
+        /// becomes 0.25m on each corner), never picks wrong, and leaves the
+        /// centre off by a quarter of the error instead of all of it.
+        ///
+        /// What it is still good at is the case that matters: a corner that is
+        /// grossly wrong lands far enough outside maxHeightDeviation to be cut,
+        /// while every corner of a floor on a genuine SLOPE has a residual of
+        /// zero however steep it is — which is the whole reason this replaced
+        /// deviation-from-median.
+        /// </summary>
+        float[] ComputePlaneResiduals(Vector3[] c)
+        {
+            var r = new float[4];
+            if (!TryFitPlane(c, 4, out float a, out float b, out float cc)) return r;
             for (int i = 0; i < 4; i++)
             {
-                bool isHeightOutlier = Mathf.Abs(heights[i] - medianHeight) > maxHeightDeviation;
-                bool isDistanceOutlier = cornerVertexDistances[i] > maxVertexDistance;
-                
-                if (isHeightOutlier || isDistanceOutlier)
-                {
-                    if (debugOutlierFiltering)
-                    {
-                        string reason = isHeightOutlier ? $"height deviation ({heights[i] - medianHeight:F3}m)" : "";
-                        if (isDistanceOutlier) reason += (reason.Length > 0 ? " and " : "") + $"distance ({cornerVertexDistances[i]:F3}m)";
-                        Debug.Log($"[FloorAnchor] Corner {i} excluded: {reason}");
-                    }
-                    continue;
-                }
-                
-                validIndices.Add(i);
-                validPositions.Add(floorVertices[i]);
+                r[i] = Mathf.Abs(c[i].y - (a * c[i].x + b * c[i].z + cc));
             }
-            
-            if (debugOutlierFiltering && validIndices.Count < 4)
+            return r;
+        }
+
+        System.Collections.Generic.List<int> FilterCorners(
+            float[] residuals, bool applyHeight, bool applyDistance)
+        {
+            var kept = new System.Collections.Generic.List<int>();
+            for (int i = 0; i < 4; i++)
             {
-                Debug.Log($"[FloorAnchor] Using {validIndices.Count}/4 corners for grade calculation");
+                if (applyHeight && residuals[i] > maxHeightDeviation) continue;
+                if (applyDistance && cornerVertexDistances[i] > maxVertexDistance) continue;
+                kept.Add(i);
             }
-            
-            return (validIndices.ToArray(), validPositions.ToArray());
+            return kept;
+        }
+
+        (int[] validIndices, Vector3[] validPositions) Emit(
+            System.Collections.Generic.List<int> kept, Vector3[] floorVertices, string tier)
+        {
+            var positions = new Vector3[kept.Count];
+            for (int i = 0; i < kept.Count; i++) positions[i] = floorVertices[kept[i]];
+
+            if (debugOutlierFiltering)
+            {
+                Debug.Log($"[FloorAnchor] Using {kept.Count}/4 corners for grade calculation ({tier})");
+            }
+            return (kept.ToArray(), positions);
         }
 
         /// <summary>
@@ -574,10 +696,66 @@ namespace DreamPark {
             
             Vector3 centerVertexLocal = verts[centerVertexIndex];
             Vector3 centerVertexWorld = floorTransform.TransformPoint(centerVertexLocal);
-            Vector3 targetPositionWorld = centerVertexWorld + floorTransform.TransformVector(centerLocalOffset);
-            
+
             // Get valid corners (filtered for outliers)
             var (validIndices, validPositions) = GetValidCorners(verts);
+
+            // ── Height comes from the SAME plane the grade is fitted to ──
+            //
+            //  This used to rigidly track ONE cached vertex:
+            //
+            //      target = verts[centerVertexIndex] + centerLocalOffset
+            //
+            //  so the object translated, in XZ as well as Y, by whatever that
+            //  single vertex did. Rotation meanwhile came from a plane fitted
+            //  through four corner vertices WITH outlier rejection. Two
+            //  different answers to "where is the floor", and nothing
+            //  reconciling them: an object could be tilted to its corners
+            //  while sitting at the height of one unrelated vertex.
+            //
+            //  It is worst by far for anything over a FloorCutout — a lava
+            //  pit, a pool. centerVertexIndex is picked as the nearest vertex
+            //  to the object's centre, but every vertex under a cutout has
+            //  been PUSHED OUT of the hole by the hole-cutting pass. The
+            //  object therefore latches onto a rim vertex that has since been
+            //  displaced, and inherits whatever terrain height that vertex
+            //  ended up at. The cutout polygon is authored geometry and stays
+            //  put, which is why the hole looks right while the pit floats
+            //  above it.
+            //
+            //  Fitting the height to the corner plane fixes both halves:
+            //  position and rotation now describe the same surface, and for a
+            //  cutout object the rim corners are genuinely what it should sit
+            //  flush with. XZ is left alone — an anchored prop belongs where
+            //  the creator placed it and should only ride the floor
+            //  vertically.
+            // Authored depth, NOT the live delta — see authoredVerticalOffset.
+            float verticalOffset = floorTransform.TransformVector(
+                new Vector3(0f, authoredVerticalOffset, 0f)).y;
+            Vector3 anchorHere = transform.position;
+            Vector3 targetPositionWorld = centerVertexWorld + floorTransform.TransformVector(centerLocalOffset);
+
+            if (validPositions.Length >= 3)
+            {
+                // Fitted through EVERY kept corner, not an arbitrary three of
+                // them — with four corners available, ignoring one throws away
+                // a quarter of the evidence for no reason and makes the result
+                // depend on which corner happened to be first.
+                if (TryFitPlane(validPositions, validPositions.Length,
+                                out float pa, out float pb, out float pc))
+                {
+                    float planeY = pa * anchorHere.x + pb * anchorHere.z + pc;
+                    targetPositionWorld = new Vector3(anchorHere.x, planeY + verticalOffset, anchorHere.z);
+                }
+            }
+            else if (validPositions.Length == 2)
+            {
+                // Two corners define a line, not a plane. Their mean height is
+                // the honest answer — better than one arbitrary vertex, and it
+                // matches what CalculateGradeRotation does with two points.
+                float meanY = (validPositions[0].y + validPositions[1].y) * 0.5f;
+                targetPositionWorld = new Vector3(anchorHere.x, meanY + verticalOffset, anchorHere.z);
+            }
             
             Quaternion targetRotationWorld;
             
@@ -729,6 +907,12 @@ namespace DreamPark {
             {
                 Vector3 centerLocal = floorTransform.InverseTransformPoint(currentPos);
                 centerLocalOffset = centerLocal - verts[nearestCenterIndex];
+
+                if (!authoredVerticalCaptured)
+                {
+                    authoredVerticalOffset = centerLocalOffset.y;
+                    authoredVerticalCaptured = true;
+                }
                 
                 if (debugLogValues)
                 {
@@ -861,10 +1045,16 @@ namespace DreamPark {
                         if (cornerVertexIndices[i] >= 0 && cornerVertexIndices[i] < verts.Length)
                             heights[i] = floorTransform.TransformPoint(verts[cornerVertexIndices[i]]).y;
                     }
-                    float[] sortedHeights = new float[4];
-                    System.Array.Copy(heights, sortedHeights, 4);
-                    System.Array.Sort(sortedHeights);
-                    float medianHeight = (sortedHeights[1] + sortedHeights[2]) / 2f;
+                    // Same rule the real filter uses, so the gizmo cannot
+                    // disagree with the placement it is drawn to explain.
+                    Vector3[] cornerWorld = new Vector3[4];
+                    for (int i = 0; i < 4; i++)
+                    {
+                        cornerWorld[i] = (cornerVertexIndices[i] >= 0 && cornerVertexIndices[i] < verts.Length)
+                            ? floorTransform.TransformPoint(verts[cornerVertexIndices[i]])
+                            : Vector3.zero;
+                    }
+                    float[] gizmoResiduals = ComputePlaneResiduals(cornerWorld);
 
                     for (int i = 0; i < 4; i++)
                     {
@@ -873,7 +1063,7 @@ namespace DreamPark {
                             Vector3 vertexWorld = floorTransform.TransformPoint(verts[cornerVertexIndices[i]]);
                             
                             // Check if this corner would be filtered
-                            bool isHeightOutlier = Mathf.Abs(heights[i] - medianHeight) > maxHeightDeviation;
+                            bool isHeightOutlier = gizmoResiduals[i] > maxHeightDeviation;
                             bool isDistanceOutlier = cornerVertexDistances[i] > maxVertexDistance;
                             bool isFiltered = isHeightOutlier || isDistanceOutlier;
                             

@@ -25,6 +25,12 @@
 //  real world; it is the floor MESH that follows the grade, via
 //  CalibrateLevel. Tilting the attraction itself would double-apply the
 //  slope and is not something that can happen in a real park.
+//
+//  ONLY THE SYNTHETIC PARK USES ALL OF THIS. A ParkSimParkSource that
+//  supplies a real park never calls SpawnEnvironment or CollectSpawnPoints
+//  — but DropToGround and RingAround are placement primitives rather than
+//  park.fbx specifics, so both are public for a source to build its own
+//  free places out of.
 // ─────────────────────────────────────────────────────────────────────
 
 using System.Collections.Generic;
@@ -237,10 +243,80 @@ namespace DreamPark.ParkSim
         }
 
         /// <summary>
+        /// Free places BESIDE content that is already standing — the spawn
+        /// points a park source hands back when the park it built came with
+        /// its own attractions and has no Empty markers of its own.
+        ///
+        /// The offsets are a golden-angle fan at a fixed radius, the same
+        /// arrangement props use around their host, and for the same reason:
+        /// successive placements spread around the anchor instead of stacking
+        /// on one bearing, deterministically, so a repro survives a restart.
+        ///
+        /// EACH POINT IS DROPPED. In a park with no ARMesh the drop is a no-op
+        /// and the point keeps the anchor's elevation, which is the correct
+        /// answer there — but a source that DOES provide ground (a scanned
+        /// venue, a stand-in plane) gets its content sitting on it for free.
+        ///
+        /// Anchors are taken in a seeded shuffle, so Regenerate moves injected
+        /// content to a different neighbour rather than rebuilding the same
+        /// arrangement.
+        /// </summary>
+        public static List<SpawnPoint> RingAround(
+            IList<Transform> anchors, int perAnchor, float radius, int seed, string labelPrefix = null)
+        {
+            var points = new List<SpawnPoint>();
+            if (anchors == null || anchors.Count == 0 || perAnchor <= 0) return points;
+
+            var order = new List<Transform>();
+            foreach (var t in anchors) if (t != null) order.Add(t);
+            if (order.Count == 0) return points;
+
+            var rng = new System.Random(seed);
+            for (int i = order.Count - 1; i > 0; i--) {
+                int j = rng.Next(i + 1);
+                var tmp = order[i]; order[i] = order[j]; order[j] = tmp;
+            }
+
+            string prefix = string.IsNullOrEmpty(labelPrefix) ? "beside " : labelPrefix;
+
+            // Ring index runs across the whole set rather than restarting per
+            // anchor, so two neighbours never both get their first placement on
+            // the same bearing and end up facing each other a metre apart.
+            int ring = 0;
+            for (int slot = 0; slot < perAnchor; slot++) {
+                foreach (var anchor in order) {
+                    float angle = ring * 137.508f * Mathf.Deg2Rad;
+                    ring++;
+
+                    Vector3 candidate = anchor.position +
+                        new Vector3(Mathf.Cos(angle), 0f, Mathf.Sin(angle)) * radius;
+
+                    Vector3 dropped = DropToGround(candidate);
+
+                    points.Add(new SpawnPoint {
+                        markerName = prefix + anchor.name,
+                        position = dropped,
+                        // Face the anchor's forward, flattened. Content placed
+                        // beside a real attraction should read as part of the
+                        // same row, not rotated arbitrarily against it.
+                        rotation = YawOnly(anchor),
+                        grounded = dropped != candidate,
+                    });
+                }
+            }
+
+            return points;
+        }
+
+        /// <summary>
         /// Drop a world position onto the park mesh. Same probe the spawn
         /// markers use, exposed so derived placements (props clustered beside
         /// an attraction) land on the ground rather than at their host's
         /// elevation on sloped terrain.
+        ///
+        /// Returns the position unchanged when there is no ARMesh layer in the
+        /// project or no ground under the point — including in a real park,
+        /// where there is no scanned mesh in the editor at all.
         /// </summary>
         public static Vector3 DropToGround(Vector3 worldPos)
         {

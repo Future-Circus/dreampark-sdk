@@ -18,6 +18,14 @@
 //  of that is the shipping implementation, which is the whole point: a bug
 //  reproduced here is a real bug, and a fix verified here is really fixed.
 //
+//  WHERE THE PARK COMES FROM IS PLUGGABLE. By default it is park.fbx and
+//  its markers. A host app can register a ParkSimParkSource instead — most
+//  usefully a REAL park document loaded through the shipping loader — and
+//  then the simulator does not build a synthetic venue at all: it adopts
+//  the park the source built, and places the creator's own content into it.
+//  Loading a real park stopped being a competing feature and became a
+//  different source for the same simulation. See ParkSimSource.cs.
+//
 //  ORDERING IS THE SPECIFICATION. The sequence below mirrors
 //  LevelAnchor.LoadLevel exactly, and the order is not incidental:
 //
@@ -32,6 +40,13 @@
 //    ApplyPendingCalibration   floors move only while rigidbodies are parked
 //    wait floors, wait gaps    LevelTemplate.runtimePlane, then GapFiller
 //    Unlock + Release          exactly once, park-wide, at the very end
+//
+//  THE SIMULATOR ONLY TOUCHES WHAT IT PLACED. With a source in play the
+//  scene also contains objects the SOURCE spawned, which have already run
+//  that ladder themselves and carry floor data baked against a real venue.
+//  Calibrating them again would overwrite a real floor with a guess, so
+//  every step above is scoped to the simulator's own sub-tree and every
+//  report item records whether the simulator owns it.
 //
 //  Everything the simulator creates is destroyed on regenerate, and Unity's
 //  scene reload discards the rest on exiting Play. Nothing it does to the
@@ -66,6 +81,19 @@ namespace DreamPark.ParkSim
         public string marker;
         public bool floorReplayed;
         public Transform instance;
+
+        /// The simulator instantiated this and is responsible for its
+        /// calibration, its registration and its floor cache. False for
+        /// anything a park source spawned — that content already loaded
+        /// through the shipping path and must not be touched again.
+        public bool simulatorOwned = true;
+
+        /// Injected through ParkSimExternalContent rather than found by the
+        /// project scan — published content, a test build, a Content Manager
+        /// pick. Carries the ticket id so the overlay can drop it again.
+        public bool external;
+        public string externalId;
+        public string externalOrigin;
     }
 
     public class ParkSimReport
@@ -73,8 +101,25 @@ namespace DreamPark.ParkSim
         public int seed;
         public double generateMilliseconds;
         public string playerName;
+
+        /// What park this is. Null for the synthetic park built from park.fbx.
+        public string parkName;
+        public string parkDetail;
+
+        /// Set when a park source could not build its park. The overlay shows
+        /// this instead of an empty item list, because "the park failed to
+        /// load" and "the park is empty" are very different problems.
+        public string sourceFailure;
+
         public readonly List<PlacedItem> items = new List<PlacedItem>();
         public readonly List<string> notes = new List<string>();
+
+        /// Items the simulator placed itself — everything it may calibrate,
+        /// cache floors for, or wait on before releasing physics.
+        public IEnumerable<PlacedItem> OwnedItems
+        {
+            get { foreach (var i in items) if (i.simulatorOwned) yield return i; }
+        }
     }
 
     [InitializeOnLoad]
@@ -94,8 +139,15 @@ namespace DreamPark.ParkSim
         /// say which one you are looking at.
         public static PlacedItem FramedOn { get; private set; }
 
+        /// Where the park comes from. Null means the synthetic park built from
+        /// park.fbx, which is what every SDK project gets.
+        public static ParkSimParkSource ParkSource { get { return _source; } }
+
         private static GameObject _root;
         private static GameObject _environment;
+        private static ParkSimParkSource _source;
+        private static bool _deferAutoGenerate;
+
         private static readonly List<GameObject> _pendingSuspension = new List<GameObject>();
         private static readonly List<GameObject> _disabledSceneTemplates = new List<GameObject>();
 
@@ -122,6 +174,13 @@ namespace DreamPark.ParkSim
                 if (ParkSimSettings.Enabled) ParkSimViewpoint.Capture();
             } else if (change == PlayModeStateChange.EnteredPlayMode) {
                 if (!ParkSimSettings.Enabled) return;
+                if (_deferAutoGenerate) {
+                    // A host tool is still assembling what the park should
+                    // contain. It owns the first Generate now — see
+                    // DeferAutoGenerate.
+                    _deferAutoGenerate = false;
+                    return;
+                }
                 Generate(NextSeed());
             } else if (change == PlayModeStateChange.ExitingPlayMode) {
                 // Unity's scene reload undoes all of it anyway; clearing the
@@ -134,11 +193,19 @@ namespace DreamPark.ParkSim
                 FramedOn = null;
                 Stopped = false;
                 IsGenerating = false;
+                // A deferral that was never honoured must not carry into the
+                // next play session, where it would silently suppress the park.
+                _deferAutoGenerate = false;
                 // Cycling state is per play session. The domain reload clears
                 // it anyway, but "Enter Play Mode Options" can skip that reload
                 // and a bag left mid-cycle would make the next session's first
                 // Regenerate look arbitrary.
                 ParkSimSelection.Reset();
+                // Tickets hold live resolvers over Addressables handles that do
+                // not outlive the play session. A host that wants a tap to
+                // survive re-entering Play re-adds its own descriptors — it is
+                // the only thing that can resolve the prefab again.
+                ParkSimExternalContent.Clear();
             }
         }
 
@@ -147,6 +214,82 @@ namespace DreamPark.ParkSim
             int pinned = ParkSimSettings.Seed;
             if (pinned != 0) return pinned;
             return Random.Range(1, int.MaxValue);
+        }
+
+        /// <summary>
+        /// Choose where the park comes from. Pass null to go back to the
+        /// synthetic park built from park.fbx.
+        ///
+        /// Does NOT rebuild on its own: a caller setting a source before
+        /// entering play mode wants the normal entry to pick it up, and a
+        /// caller swapping sources mid-session decides for itself whether that
+        /// is worth a Regenerate.
+        /// </summary>
+        public static void SetParkSource(ParkSimParkSource source)
+        {
+            if (ReferenceEquals(_source, source)) return;
+            if (_source != null) {
+                try { _source.Teardown(); }
+                catch (System.Exception e) { Debug.LogException(e); }
+            }
+            _source = source;
+            SceneView.RepaintAll();
+        }
+
+        /// <summary>
+        /// Skip the automatic generate on the NEXT play-mode entry, because a
+        /// host tool is still working out what the park should contain — a
+        /// content pick that has to mount a catalog before it can be resolved,
+        /// say. One-shot, and it expires whether or not the host uses it.
+        ///
+        /// A host that calls this MUST call Generate or Regenerate itself,
+        /// including on its own failure paths: a deferral nobody honours is a
+        /// play session with no park in it, which is worse than a park with
+        /// something missing from it.
+        ///
+        /// Meant to be called from an [InitializeOnLoad] static constructor,
+        /// which is the only place ordering against the simulator's own
+        /// play-mode handler is guaranteed.
+        /// </summary>
+        public static void DeferAutoGenerate()
+        {
+            _deferAutoGenerate = true;
+        }
+
+        /// <summary>
+        /// Rebuild as soon as the simulator is free, rather than dropping the
+        /// request if it happens to be busy.
+        ///
+        /// Regenerate no-ops while a generation is running, which is correct
+        /// for a button a human presses — the overlay greys it out — and wrong
+        /// for a tool calling it. A real park's Build can be awaiting the
+        /// network for tens of seconds, and that is EXACTLY the window in which
+        /// somebody taps a second attraction. Dropping that tap silently is the
+        /// bug; waiting a few frames is not.
+        ///
+        /// Also handles the stopped case, so callers do not each have to
+        /// remember that Regenerate warns and does nothing after a Stop.
+        /// </summary>
+        public static void RegenerateWhenIdle()
+        {
+            if (!Application.isPlaying) return;
+
+            if (!IsGenerating) {
+                if (Stopped) Start(); else Regenerate();
+                return;
+            }
+
+            // Deadline so a generation that never finishes cannot leave a
+            // callback on EditorApplication.update forever.
+            double deadline = EditorApplication.timeSinceStartup + 180d;
+            EditorApplication.CallbackFunction tick = null;
+            tick = () => {
+                if (IsGenerating && EditorApplication.timeSinceStartup < deadline) return;
+                EditorApplication.update -= tick;
+                if (!Application.isPlaying) return;
+                if (Stopped) Start(); else Regenerate();
+            };
+            EditorApplication.update += tick;
         }
 
         /// <summary>
@@ -223,7 +366,48 @@ namespace DreamPark.ParkSim
 
         // ── Generation ───────────────────────────────────────────────────
 
+        /// <summary>
+        /// Drives the generation by hand so an exception inside it cannot leave
+        /// IsGenerating stuck true.
+        ///
+        /// That matters more than it looks: Regenerate and Generate both no-op
+        /// silently while IsGenerating is set, so ONE throw — a bad prefab's
+        /// Awake, a park source faulting mid-load — would kill the simulator
+        /// for the rest of the play session with no way back except exiting
+        /// play mode. Unity's own coroutine runner logs the exception and stops
+        /// the coroutine, which means a plain try/finally around a nested
+        /// `yield return inner` would never run its finally.
+        ///
+        /// MoveNext is inside the try and the yield is outside it, which is
+        /// what C# requires (CS1626) and is also what makes this work at all.
+        /// </summary>
         private static IEnumerator GenerateRoutine(int seed)
+        {
+            var inner = GenerateRoutineBody(seed);
+
+            while (true) {
+                object current = null;
+                try {
+                    if (!inner.MoveNext()) break;
+                    current = inner.Current;
+                } catch (System.Exception e) {
+                    Debug.LogException(e);
+                    var failed = Report;
+                    if (failed != null && string.IsNullOrEmpty(failed.sourceFailure)) {
+                        failed.sourceFailure = "The park generation threw: " + e.Message +
+                                               " — see the console.";
+                    }
+                    IsGenerating = false;
+                    SceneView.RepaintAll();
+                    yield break;
+                }
+                yield return current;
+            }
+
+            IsGenerating = false;
+        }
+
+        private static IEnumerator GenerateRoutineBody(int seed)
         {
             IsGenerating = true;
             var stopwatch = Stopwatch.StartNew();
@@ -233,16 +417,84 @@ namespace DreamPark.ParkSim
             // Domain reload normally clears these, but "Enter Play Mode
             // Options" can be configured to skip it, and a run aborted inside
             // a load leaves the content lock held for up to two minutes. Cheap
-            // to reset, expensive to debug.
+            // to reset, expensive to debug. Done BEFORE a source builds, so a
+            // source running the real load ladder is never reset out from
+            // under itself.
             ParkBuilder.LevelObjectManager.ResetParkLoad();
             ParkBuilder.LevelObjectManager.objectsEnabled = true;
 
             EnsureOptimizedAF(report.notes);
 
-            _environment = ParkSimPark.SpawnEnvironment(report.notes);
-            if (_environment != null) _environment.transform.SetParent(_root.transform, true);
+            var source = _source;
+            List<SpawnPoint> spawnPoints;
+            bool sourceProvidesGround = true;
 
-            var spawnPoints = ParkSimPark.CollectSpawnPoints(_environment, seed, report.notes);
+            if (source == null) {
+                // ── The synthetic park ───────────────────────────────────
+                _environment = ParkSimPark.SpawnEnvironment(report.notes);
+                if (_environment != null) _environment.transform.SetParent(_root.transform, true);
+                spawnPoints = ParkSimPark.CollectSpawnPoints(_environment, seed, report.notes);
+            } else {
+                // ── Somebody else's park ─────────────────────────────────
+                report.parkName = source.DisplayName;
+                report.parkDetail = source.Detail;
+
+                var context = new ParkSimSourceContext(_root.transform, seed, report.notes);
+                IEnumerator build = null;
+                try { build = source.Build(context); }
+                catch (System.Exception e) {
+                    Debug.LogException(e);
+                    context.Fail("The park source threw before it started: " + e.Message);
+                }
+
+                // Driven by hand rather than `yield return build`, for the same
+                // reason GenerateRoutine drives this method by hand: a nested
+                // `yield return <IEnumerator>` is run by Unity's coroutine
+                // scheduler, so a throw inside the source is logged by Unity and
+                // never reaches us — and the generation would hang with
+                // IsGenerating set and an overlay stuck on "Building park…".
+                // A source's park is the most likely thing here to fail: it is
+                // the only part that talks to a network.
+                //
+                // MoveNext inside the try, yield outside it (CS1626).
+                while (build != null && !context.Failed) {
+                    object step = null;
+                    try {
+                        if (!build.MoveNext()) break;
+                        step = build.Current;
+                    } catch (System.Exception e) {
+                        Debug.LogException(e);
+                        context.Fail("The park source threw while building " +
+                                     source.DisplayName + ": " + e.Message + " — see the console.");
+                        break;
+                    }
+                    yield return step;
+                }
+
+                if (context.Failed) {
+                    report.sourceFailure = context.FailureReason;
+                    stopwatch.Stop();
+                    report.generateMilliseconds = stopwatch.Elapsed.TotalMilliseconds;
+                    IsGenerating = false;
+                    Debug.LogError("[ParkSim] " + context.FailureReason);
+                    SceneView.RepaintAll();
+                    yield break;
+                }
+
+                try { source.Describe(report); }
+                catch (System.Exception e) { Debug.LogException(e); }
+                foreach (var item in report.items) item.simulatorOwned = false;
+
+                spawnPoints = source.CollectSpawnPoints(seed, report.notes) ?? new List<SpawnPoint>();
+                sourceProvidesGround = source.ProvidesGroundMesh;
+
+                if (!sourceProvidesGround) {
+                    report.notes.Add(
+                        "This park has no ARMesh surface to raycast against — its own attractions carry " +
+                        "floor data baked at the venue, but anything placed here from your project or the " +
+                        "Content Manager cannot conform and will sit flat.");
+                }
+            }
 
             var scan = ParkSimContent.Scan(ParkSimSettings.IncludeProps);
             report.notes.AddRange(scan.notes);
@@ -250,6 +502,9 @@ namespace DreamPark.ParkSim
             DisableSceneTemplates(scan);
 
             // ── The load ─────────────────────────────────────────────────
+            // Refcounted, so nesting this inside a source that has already
+            // finished its own load pair is safe: depth returns to zero here
+            // and the unlock at the end is the one that matters.
             ParkBuilder.LevelObjectManager.BeginParkLoad();
             if (ParkBuilder.LevelObjectManager.Instance != null)
                 ParkBuilder.LevelObjectManager.Instance.Disable();
@@ -263,14 +518,27 @@ namespace DreamPark.ParkSim
             // to one from a headset.
             Transform subLevelRoot = NewChild(portalAnchor, "SubLevelRoot");
 
-            // Capacity is the marker count — park.fbx decides how many places
-            // exist, so adding markers raises the ceiling with no code change.
+            // Capacity is the marker count — with the synthetic park, park.fbx
+            // decides how many places exist, so adding markers raises the
+            // ceiling with no code change. With a source it is however many
+            // free places that park reported.
+            //
+            // A source's park is already full of its own attractions, so
+            // nothing rotates into it: only content that is PINNED — what was
+            // in your scene when you pressed Play, plus anything injected —
+            // gets placed. Rotating strangers through a real venue would bury
+            // the one thing you are trying to look at.
             var selected = ParkSimSelection.Choose(
-                scan.placeables, spawnPoints.Count, seed, report.notes);
+                scan.placeables, spawnPoints.Count, seed, report.notes, source != null);
 
             var placements = AssignPlacements(selected, spawnPoints, report.notes);
 
-            bool playerSpawned = false;
+            // A source's park usually brings its own player rig. Spawning a
+            // second one would bind every global on Player.prefab twice.
+            bool playerSpawned = source != null && _root.GetComponentInChildren<PlayerRig>(true) != null;
+            if (playerSpawned) {
+                report.playerName = "(from " + (report.parkName ?? "the park source") + ")";
+            }
             int objectIndex = 0;
 
             for (int i = 0; i < selected.Count; i++) {
@@ -329,14 +597,17 @@ namespace DreamPark.ParkSim
             // floor out from under a rigidbody that has already woken up.
             yield return new WaitForSeconds(1f);
 
-            foreach (var calibrator in _root.GetComponentsInChildren<CalibrateLevel>(true)) {
+            // Scoped to what the simulator placed. A source's attractions have
+            // already applied their own calibration during their own load, and
+            // re-running it would move a real venue floor for no reason.
+            foreach (var calibrator in parkAnchor.GetComponentsInChildren<CalibrateLevel>(true)) {
                 calibrator.ApplyPendingCalibration();
             }
 
-            yield return CalibrateFresh(report);
+            yield return CalibrateFresh(report, sourceProvidesGround);
 
             bool lastOut = ParkBuilder.LevelObjectManager.EndParkLoad();
-            if (lastOut) yield return ReleaseParkPhysics(report);
+            if (lastOut) yield return ReleaseParkPhysics(report, parkAnchor);
 
             CacheFloorData(report);
 
@@ -358,8 +629,11 @@ namespace DreamPark.ParkSim
             }
 
             Debug.Log(string.Format(
-                "[ParkSim] Park generated: {0} placed ({1} carrying unapplied scene changes), seed {2}, {3:F0}ms.",
-                report.items.Count, CountDirty(report), seed, report.generateMilliseconds));
+                "[ParkSim] {0}: {1} object(s) ({2} placed by the simulator, {3} carrying unapplied " +
+                "scene changes), seed {4}, {5:F0}ms.",
+                report.parkName ?? "Simulated park",
+                report.items.Count, CountOwned(report), CountDirty(report), seed,
+                report.generateMilliseconds));
 
             foreach (var note in report.notes) Debug.LogWarning("[ParkSim] " + note);
 
@@ -457,7 +731,9 @@ namespace DreamPark.ParkSim
                     // Dropped, not inherited: on a slope the host's elevation a
                     // few metres away is not the ground, and a prop floating
                     // above or buried under it would feed GapFiller exactly the
-                    // bad height this whole arrangement exists to avoid.
+                    // bad height this whole arrangement exists to avoid. With no
+                    // ARMesh in the world the drop is a no-op and returns the
+                    // candidate unchanged, which is the right answer there too.
                     position = ParkSimPark.DropToGround(candidate),
                     rotation = host.rotation,
                     grounded = true,
@@ -469,6 +745,10 @@ namespace DreamPark.ParkSim
             if (attractions > 0 && markers.Count > 0 && attractions > markers.Count) {
                 notes.Add(attractions + " attractions but only " + markers.Count +
                           " spawn markers — markers were reused, so some overlap.");
+            }
+            if (attractions > 0 && markers.Count == 0) {
+                notes.Add("This park reported no free places to put anything, so " + attractions +
+                          " object(s) are stacked at the origin.");
             }
             return new List<SpawnPoint>(result);
         }
@@ -567,6 +847,10 @@ namespace DreamPark.ParkSim
                 marker = point.markerName,
                 floorReplayed = replayed,
                 instance = instance.transform,
+                simulatorOwned = true,
+                external = entry.external,
+                externalId = entry.externalId,
+                externalOrigin = entry.externalOrigin,
             };
             report.items.Add(item);
 
@@ -578,22 +862,27 @@ namespace DreamPark.ParkSim
         }
 
         /// Fresh placement calibration — the operator-commits-a-placement path
-        /// (LevelAnchor.AutoCalibrateNewObject). Only for content that did not
-        /// already receive cached floor data, so a regenerate exercises the load
-        /// path where it can and the placement path where it cannot.
-        private static IEnumerator CalibrateFresh(ParkSimReport report)
+        /// (LevelAnchor.AutoCalibrateNewObject). Only for content the simulator
+        /// placed that did not already receive cached floor data, so a
+        /// regenerate exercises the load path where it can and the placement
+        /// path where it cannot.
+        private static IEnumerator CalibrateFresh(ParkSimReport report, bool hasGroundMesh)
         {
             // One frame so every LevelTemplate.Start has built its grid and
             // attached its CalibrateLevel.
             yield return null;
 
             foreach (var item in report.items) {
+                if (!item.simulatorOwned) continue;
                 if (item.instance == null || item.floorReplayed) continue;
 
                 var calibrateLevel = item.instance.GetComponentInChildren<CalibrateLevel>(true);
                 if (calibrateLevel != null) {
                     bool applied = calibrateLevel.ConformOnce();
-                    if (!applied) {
+                    if (!applied && hasGroundMesh) {
+                        // Without a ground mesh this is expected and already
+                        // reported once for the whole park; repeating it per
+                        // attraction would bury the notes that matter.
                         report.notes.Add(
                             item.name + " did not bake a floor at " + item.marker +
                             " — coverage gate not met, so it is sitting flat.");
@@ -610,10 +899,15 @@ namespace DreamPark.ParkSim
         /// the GapFiller to have filled between them, and only then unlock. A
         /// park that releases early drops rigidbodies through a floor that does
         /// not exist yet.
-        private static IEnumerator ReleaseParkPhysics(ParkSimReport report)
+        private static IEnumerator ReleaseParkPhysics(ParkSimReport report, Transform ownedRoot)
         {
             float deadline = Time.realtimeSinceStartup + 10f;
-            var templates = _root.GetComponentsInChildren<LevelTemplate>(true);
+            // Only the simulator's own templates: a source's park finished its
+            // own floors before it handed control back, and waiting on them
+            // again would stall this generation on work already done.
+            var templates = ownedRoot != null
+                ? ownedRoot.GetComponentsInChildren<LevelTemplate>(true)
+                : new LevelTemplate[0];
             while (Time.realtimeSinceStartup < deadline) {
                 bool allReady = true;
                 foreach (var t in templates) {
@@ -646,6 +940,7 @@ namespace DreamPark.ParkSim
         private static void CacheFloorData(ParkSimReport report)
         {
             foreach (var item in report.items) {
+                if (!item.simulatorOwned) continue;
                 if (item.instance == null || item.floorReplayed) continue;
 
                 var calibrateLevel = item.instance.GetComponentInChildren<CalibrateLevel>(true);
@@ -779,6 +1074,13 @@ namespace DreamPark.ParkSim
             // Stop any patrol before the park it is walking around disappears.
             ParkSimCamera.Reset();
 
+            // Before the root goes: a source may own objects outside it, or
+            // hold state that a bare DestroyImmediate would strand.
+            if (_source != null) {
+                try { _source.Teardown(); }
+                catch (System.Exception e) { Debug.LogException(e); }
+            }
+
             if (_root != null) Object.DestroyImmediate(_root);
             _root = null;
             _environment = null;
@@ -794,6 +1096,13 @@ namespace DreamPark.ParkSim
         {
             int n = 0;
             foreach (var i in report.items) if (i.fromUnappliedOverrides) n++;
+            return n;
+        }
+
+        private static int CountOwned(ParkSimReport report)
+        {
+            int n = 0;
+            foreach (var i in report.items) if (i.simulatorOwned) n++;
             return n;
         }
 

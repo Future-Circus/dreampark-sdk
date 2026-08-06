@@ -1,0 +1,35 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bbb281ee3bf0b054c82ac2347e9e782c, type: 3}
+  m_Name: Sample-Materials
+  m_EditorClassIdentifier: 
+  m_GroupName: Sample-Materials
+  m_GUID: d13bb3bd2755f42b2a9f6bc26091887b
+  m_SerializeEntries:
+  - m_GUID: 1abf2c7f3495e42f9aaf8d5de43222d8
+    m_Address: Sample/Materials/DreamCube
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - Sample
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 6987c48fc9c6141ada4699116cb50b1c
+    m_Address: Assets/Content/Sample/Materials/DreamCube 1.mat
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - Sample
+    FlaggedDuringContentUpdateRestriction: 0
+  m_ReadOnly: 0
+  m_Settings: {fileID: 11400000, guid: 5e922c848874c41bc90d6a8d78c6f5a9, type: 2}
+  m_SchemaSet:
+    m_Schemas:
+    - {fileID: 11400000, guid: 4433ff779dba9492f992d38e143b6daa, type: 2}
+    - {fileID: 11400000, guid: 937fc25c837db4dbdb469abf1106bf97, type: 2}

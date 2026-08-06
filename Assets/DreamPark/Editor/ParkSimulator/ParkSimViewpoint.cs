@@ -112,20 +112,29 @@ namespace DreamPark.ParkSim
             var localRot = new Quaternion(F(p[5]), F(p[6]), F(p[7]), F(p[8]));
             float size = F(p[9]);
 
+            // OWNED ITEMS FIRST, at every step. Once the park can come from a
+            // source, report.items also holds the park's OWN attractions — and
+            // a real park very often contains a published copy of the very
+            // thing the creator is editing, under the same name. Falling onto
+            // that copy would frame the shipped version of their attraction
+            // instead of the one they just changed, which is the single most
+            // confusing thing this feature could do.
             PlacedItem match = null;
             if (!string.IsNullOrEmpty(assetPath)) {
+                // Only simulator-placed items carry an asset path at all — a
+                // source's content came out of a bundle — so this pass is
+                // already owned-only, and is listed first because it is the
+                // strongest identifier.
                 foreach (var item in report.items)
                     if (item.assetPath == assetPath) { match = item; break; }
             }
-            if (match == null) {
-                foreach (var item in report.items)
-                    if (item.name == name) { match = item; break; }
-            }
+            if (match == null) match = FirstByName(report, name, true);
+            if (match == null) match = FirstByName(report, name, false);
+            if (match == null) match = FirstAttraction(report, true);
             if (match == null) {
                 // Better to arrive at SOME attraction than at the world origin
                 // staring at empty terrain.
-                foreach (var item in report.items)
-                    if (item.kind == ContentKind.Attraction) { match = item; break; }
+                match = FirstAttraction(report, false);
             }
             if (match == null || match.instance == null) return null;
 
@@ -133,6 +142,24 @@ namespace DreamPark.ParkSim
             view.LookAt(t.TransformPoint(localPivot), t.rotation * localRot, size);
             view.Repaint();
             return match;
+        }
+
+        private static PlacedItem FirstByName(ParkSimReport report, string name, bool ownedOnly)
+        {
+            foreach (var item in report.items) {
+                if (ownedOnly && !item.simulatorOwned) continue;
+                if (item.name == name) return item;
+            }
+            return null;
+        }
+
+        private static PlacedItem FirstAttraction(ParkSimReport report, bool ownedOnly)
+        {
+            foreach (var item in report.items) {
+                if (ownedOnly && !item.simulatorOwned) continue;
+                if (item.kind == ContentKind.Attraction) return item;
+            }
+            return null;
         }
 
         public static void Clear()

@@ -96,6 +96,15 @@ namespace DreamPark {
         
         [Tooltip("How far to search for nearby floor edges when setting vertex heights")]
         public float edgeBlendDistance = 1f;
+
+        [Tooltip("Spacing of the boundary samples that feed the triangulated height field. " +
+                 "Finer resolves tighter gaps between floors; coarser is cheaper to triangulate.")]
+        public float tinSampleSpacing = 1f;
+
+        /// Triangulated height field over every floor's boundary, rebuilt each
+        /// generation. See HeightTin — this is what makes the fill ramp between
+        /// neighbouring floors instead of sagging toward the park average.
+        private HeightTin _tin;
         
         [Tooltip("Material for the gap filler mesh")]
         public Material floorMaterial;
@@ -341,16 +350,23 @@ namespace DreamPark {
             
             public float GetHeightAtPoint(Vector2 point)
             {
-                // Bilinear interpolation based on position within the quad
-                // For simplicity, use inverse distance weighting from corners
+                // Inverse-distance weighting from the four corner heights.
+                //
+                // Power 1, matching GetHeightAtPoint on the outer blend and for
+                // the same reason: inverse SQUARE is so peaked that the surface
+                // pins to whichever corner is nearest and then flattens, giving
+                // four raised quadrants meeting at ridges instead of one smooth
+                // ramp across the footprint. On a floor whose corners genuinely
+                // sit at different heights — which is every floor on a slope —
+                // that shows up as terracing.
                 float totalWeight = 0f;
                 float weightedHeight = 0f;
-                
+
                 for (int i = 0; i < 4; i++)
                 {
                     float dist = Vector2.Distance(point, worldFootprint[i]);
                     if (dist < 0.001f) return cornerHeights[i];
-                    float weight = 1f / (dist * dist);
+                    float weight = 1f / dist;
                     totalWeight += weight;
                     weightedHeight += cornerHeights[i] * weight;
                 }
@@ -820,7 +836,73 @@ namespace DreamPark {
             if (debugLog)
                 Debug.Log($"[GapFiller] Combined bounds: center={combinedBounds.center}, size={combinedBounds.size}");
 
+            ReportContributorHeights();
             return true;
+        }
+
+        /// <summary>
+        /// Name every contributor and its height, and flag any that sit well
+        /// below the rest.
+        ///
+        /// The fill is an inverse-distance weighted average of these heights,
+        /// so it is mathematically BOUNDED by them — it cannot dip below the
+        /// lowest contributor. If the gap surface is sitting lower than the
+        /// attractions, then something in this list is lower than the
+        /// attractions, and it is almost certainly not an attraction.
+        ///
+        /// Props are the usual suspect. ExtractFloorData(PropTemplate) feeds in
+        /// PropTemplate.SurfaceHeight — the prop's OWN surface — for all four
+        /// corners. That is right for a crate resting on the ground and wrong
+        /// for anything deliberately sunk into it: a pit anchored flush reports
+        /// the bottom of the pit as though it were ground, and every gap vertex
+        /// within range gets pulled down toward it. Turning off
+        /// affectsGapFiller on such a prop is the fix, which is why this names
+        /// the object rather than just reporting a number.
+        /// </summary>
+        private void ReportContributorHeights()
+        {
+            if (levelFloors == null || levelFloors.Count < 2) return;
+
+            float min = float.MaxValue, max = float.MinValue, sum = 0f;
+            int counted = 0;
+            for (int i = 0; i < levelFloors.Count; i++)
+            {
+                var f = levelFloors[i];
+                if (f == null || f.cornerHeights == null || f.cornerHeights.Length == 0) continue;
+                float h = 0f;
+                for (int k = 0; k < f.cornerHeights.Length; k++) h += f.cornerHeights[k];
+                h /= f.cornerHeights.Length;
+                if (h < min) min = h;
+                if (h > max) max = h;
+                sum += h; counted++;
+            }
+            if (counted < 2) return;
+
+            float mean = sum / counted;
+            // A contributor a long way under the mean is what drags the fill
+            // into a basin. Half a metre is well past floor-to-floor variation
+            // on any sane site and comfortably inside "something is sunk".
+            const float SuspiciousDrop = 0.5f;
+            if (mean - min < SuspiciousDrop && !debugLog) return;
+
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"[GapFiller] {counted} height contributors, mean {mean:F2}m, range {min:F2}..{max:F2}m:");
+            for (int i = 0; i < levelFloors.Count; i++)
+            {
+                var f = levelFloors[i];
+                if (f == null || f.cornerHeights == null || f.cornerHeights.Length == 0) continue;
+                float h = 0f;
+                for (int k = 0; k < f.cornerHeights.Length; k++) h += f.cornerHeights[k];
+                h /= f.cornerHeights.Length;
+                string flag = (mean - h) >= SuspiciousDrop ? "   <-- PULLS THE FILL DOWN" : "";
+                sb.AppendLine($"    {h,8:F2}m  {f.sourceName}{flag}");
+            }
+            sb.Append("  The gap surface is a weighted average of these, so it cannot sit below the lowest. ");
+            sb.Append("A prop that is sunk into the floor reports its own surface as ground — ");
+            sb.Append("clear affectsGapFiller on it if that is what you are seeing.");
+
+            if (mean - min >= SuspiciousDrop) Debug.LogWarning(sb.ToString(), this);
+            else Debug.Log(sb.ToString(), this);
         }
 
         private LevelFloorData ExtractFloorData(LevelTemplate template)
@@ -1069,6 +1151,52 @@ namespace DreamPark {
             return scaled;
         }
 
+
+        /// <summary>
+        /// Sample every floor's boundary and triangulate the result.
+        ///
+        /// The boundary is the right thing to sample because it is exactly
+        /// where the fill has to agree with the floor. Delaunay adjacency
+        /// between two floors' boundary samples then means "these two face
+        /// each other across this gap", so the surface between them is a
+        /// straight ramp edge to edge — which is what inverse-distance
+        /// weighting could never produce, since every floor in the park pulled
+        /// on every point and dragged the middle toward the global average.
+        /// </summary>
+        private HeightTin BuildHeightTin()
+        {
+            if (levelFloors == null || levelFloors.Count == 0) return null;
+
+            float step = Mathf.Max(0.25f, tinSampleSpacing);
+            var samples = new List<Vector3>();
+
+            for (int f = 0; f < levelFloors.Count; f++)
+            {
+                var floor = levelFloors[f];
+                var poly = floor != null ? floor.worldFootprint : null;
+                if (poly == null || poly.Length < 3) continue;
+
+                for (int i = 0; i < poly.Length; i++)
+                {
+                    Vector2 a = poly[i];
+                    Vector2 b = poly[(i + 1) % poly.Length];
+                    int n = Mathf.Max(1, Mathf.CeilToInt(Vector2.Distance(a, b) / step));
+
+                    // Half-open: the next edge contributes its own start point,
+                    // so closing it here would duplicate every polygon corner.
+                    for (int k = 0; k < n; k++)
+                    {
+                        Vector2 p = Vector2.Lerp(a, b, (float)k / n);
+                        samples.Add(new Vector3(p.x, GetFloorHeightAtPoint(floor, p), p.y));
+                    }
+                }
+            }
+
+            if (samples.Count < 3) return null;
+            var tin = new HeightTin(samples, Mathf.Max(1f, step * 2f));
+            return tin.IsUsable ? tin : null;
+        }
+
         private GapMeshData ComputeGapMeshData(Bounds bounds)
         {
             // Calculate grid dimensions
@@ -1093,6 +1221,11 @@ namespace DreamPark {
             // the hot loops: one pass, on this thread, so the caches below are
             // read-only for the rest of the build.
             for (int i = 0; i < levelFloors.Count; i++) levelFloors[i].EnsureHoleBounds();
+
+            // Built here rather than in GatherFloors so the triangulation cost
+            // lands on the worker thread with the rest of the compute. It reads
+            // only the floor data already captured on the main thread.
+            _tin = BuildHeightTin();
 
             // Generate base grid vertices
             List<Vector3> verticesList = new List<Vector3>();
@@ -1551,6 +1684,18 @@ namespace DreamPark {
                     return floor.GetHeightAtPoint(point);
             }
             
+            // ── Triangulated height field ────────────────────────────────
+            //  The primary answer. Barycentric interpolation inside the
+            //  triangle containing this point, so the value is bounded by that
+            //  triangle's own three corners and nothing else in the park can
+            //  reach it. Returns false outside the hull, where there is no
+            //  content to interpolate between and the old distance blend below
+            //  is still the sensible extrapolation.
+            if (_tin != null && _tin.TrySampleOrExtend(point, out float tinHeight))
+            {
+                return tinHeight;
+            }
+
             // Find the closest edge point from all floors
             float closestDist = float.MaxValue;
             float closestHeight = 0f;
@@ -1579,18 +1724,41 @@ namespace DreamPark {
                 }
             }
             
-            // If very close to an edge, just use that height
-            if (closestDist < 0.05f)
+            // If essentially ON an edge, take that height exactly. The
+            // threshold is tight (5mm, was 50mm) because with the gentler
+            // kernel below the blend already agrees with the edge to well
+            // inside a millimetre by the time you reach it — a wide snap is
+            // now a step where there used to be a ramp.
+            if (closestDist < 0.005f)
                 return closestHeight;
-            
-            // Blend heights from all nearby floors based on inverse distance
+
+            // ── Blend, INVERSE DISTANCE, NOT INVERSE SQUARE ───────────────
+            //
+            //  This is where the ledges came from. 1/(d^2 + 0.01) is an
+            //  extremely peaked kernel: a centimetre from a floor edge that
+            //  one contributor's weight is ~100 and it completely dominates,
+            //  so the fill sits exactly at that floor's height; a metre out
+            //  the weights have collapsed to near-parity and the surface
+            //  flattens to the average of everything in the park. The entire
+            //  transition happens within centimetres of each floor — a step,
+            //  not a slope, which is exactly what a lip around every
+            //  attraction looks like.
+            //
+            //  Power 1 keeps the property that matters — weight still goes to
+            //  infinity as d approaches 0, so the fill still meets each floor
+            //  edge exactly and there is no seam — while spreading the
+            //  transition over metres instead of centimetres. This is Shepard
+            //  interpolation; p=2 is the peaked variant, p=1 the smooth one.
+            //
+            //  The epsilon is small and exists only to keep the division safe;
+            //  it is not a blend radius. Widening it would flatten the fill
+            //  near edges and reintroduce a seam.
             float totalWeight = 0f;
             float weightedHeight = 0f;
-            
+
             foreach (var (dist, height, _) in nearbyEdges)
             {
-                // Use inverse distance squared for smoother blending
-                float weight = 1f / (dist * dist + 0.01f);
+                float weight = 1f / (dist + 0.001f);
                 totalWeight += weight;
                 weightedHeight += height * weight;
             }
