@@ -10,9 +10,9 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 1
   m_Script: {fileID: 11500000, guid: e5d17a21594effb4e9591490b009e7aa, type: 3}
-  m_Name: Sample-Scripts_BundledAssetGroupSchema
+  m_Name: Sample-VFX_BundledAssetGroupSchema
   m_EditorClassIdentifier: 
-  m_Group: {fileID: 11400000, guid: 538df676bffe545eba83aa8f908d36e3, type: 2}
+  m_Group: {fileID: 11400000, guid: 0999140517c454a268a35d3b4f77cd2f, type: 2}
   m_InternalBundleIdMode: 1
   m_Compression: 1
   m_IncludeAddressInCatalog: 1

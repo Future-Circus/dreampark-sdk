@@ -15,14 +15,38 @@ MonoBehaviour:
   m_GroupName: Sample-Materials
   m_GUID: d13bb3bd2755f42b2a9f6bc26091887b
   m_SerializeEntries:
+  - m_GUID: 0abaaff587e274310b676556b42998bf
+    m_Address: Assets/Content/Sample/Materials/M_DreamPortal_Inner.mat
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - Sample
+    FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: 1abf2c7f3495e42f9aaf8d5de43222d8
     m_Address: Sample/Materials/DreamCube
     m_ReadOnly: 0
     m_SerializedLabels:
     - Sample
     FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: 6987c48fc9c6141ada4699116cb50b1c
-    m_Address: Assets/Content/Sample/Materials/DreamCube 1.mat
+  - m_GUID: 1e86f0fd2a223413396852cc3efce6fe
+    m_Address: Sample/Materials/FX_DreamGlow
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - Sample
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 28a345e895f2d418c880c0f26be5f3e1
+    m_Address: Assets/Content/Sample/Materials/M_DreamPortal_Ring.mat
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - Sample
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 2c8d55323688a486da1b6fa68ee5988a
+    m_Address: Assets/Content/Sample/Materials/M_DreamPortal_Button.mat
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - Sample
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: dacb26d58ab7941758faccde2e6d437b
+    m_Address: Sample/Materials/FX_DreamSpark
     m_ReadOnly: 0
     m_SerializedLabels:
     - Sample

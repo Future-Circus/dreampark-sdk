@@ -200,6 +200,26 @@ namespace DreamPark
             return norm.StartsWith(Root + "/" + SampleName + "/", StringComparison.OrdinalIgnoreCase);
         }
 
+        /// <summary>
+        /// The content folder an asset lives in — the segment straight after
+        /// Assets/Content/ — or empty for anything outside it.
+        ///
+        /// This is the unit a PlayerRig is keyed by: ContentProcessor stamps
+        /// gameId from the folder name, and PlayerRig.instances is a
+        /// Dictionary&lt;gameId, PlayerRig&gt;. So "which content package does
+        /// this belong to" and "which rig serves it" are the same question.
+        /// </summary>
+        public static string FolderOfAsset(string assetPath)
+        {
+            if (string.IsNullOrEmpty(assetPath)) return string.Empty;
+            string norm = assetPath.Replace('\\', '/');
+            string prefix = Root + "/";
+            if (!norm.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return string.Empty;
+            string rest = norm.Substring(prefix.Length);
+            int slash = rest.IndexOf('/');
+            return slash >= 0 ? rest.Substring(0, slash) : rest;
+        }
+
         private static string NameOf(string nameOrPath)
         {
             if (string.IsNullOrEmpty(nameOrPath)) return string.Empty;

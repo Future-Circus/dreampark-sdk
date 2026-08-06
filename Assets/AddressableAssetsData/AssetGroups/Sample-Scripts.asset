@@ -15,6 +15,18 @@ MonoBehaviour:
   m_GroupName: Sample-Scripts
   m_GUID: e64f870ea82c94ddba6654ed6beabda0
   m_SerializeEntries:
+  - m_GUID: 2f5a2d417d9454a4b89b2474e7196bab
+    m_Address: Sample/Data/dreamsequence-level-music.lua
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - Sample
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 3266e7ad4bb564335ae52bdb6b39438f
+    m_Address: Sample/Data/dreamsequence-portal.lua
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - Sample
+    FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: 41a49180b825f44beaf9e178038833fc
     m_Address: Sample/Data/lua_damage_effect.lua
     m_ReadOnly: 0
@@ -23,6 +35,18 @@ MonoBehaviour:
     - SampleGame
     - '[SampleGame]'
     FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 5bd3f90df6fd74e6b89b7e8a391b8ff4
+    m_Address: Sample/Data/dreamsequence-start-button.lua
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - Sample
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 6c1f74a5141844094b7c2d6cf67a6478
+    m_Address: Sample/Data/dreamsequence-controller.lua
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - Sample
+    FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: 9f8eba9afe964488ea66be5638be47ea
     m_Address: Sample/Data/lua_example_collision.lua
     m_ReadOnly: 0
@@ -30,6 +54,12 @@ MonoBehaviour:
     - Sample
     - SampleGame
     - '[SampleGame]'
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: b951f2d34dabf4e6e837401746b8571e
+    m_Address: Sample/Data/dreamsequence-scorecard.lua
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - Sample
     FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: bdf91daf57ce84c9cbabb33a8eaacd63
     m_Address: Sample/Data/lua_example_manager.lua

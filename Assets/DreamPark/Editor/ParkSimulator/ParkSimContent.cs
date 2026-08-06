@@ -89,13 +89,33 @@ namespace DreamPark.ParkSim
         public string externalId;
         public string externalOrigin;
 
+        /// The content folder this came from — Sample, YOUR_GAME_HERE, or
+        /// whatever the creator renamed theirs to. For a PLAYER entry this is
+        /// the identity that matters: rigs are keyed by gameId and there is
+        /// one per content package, not one per park.
+        public string contentFolder;
+
         public GameObject Source { get { return sceneTemplate != null ? sceneTemplate : prefabAsset; } }
     }
 
     public class ScanResult
     {
         public readonly List<ContentEntry> placeables = new List<ContentEntry>();
-        public ContentEntry player;
+
+        /// ONE RIG PER CONTENT PACKAGE, not one per park.
+        ///
+        /// PlayerRig.instances is a Dictionary&lt;gameId, PlayerRig&gt; and
+        /// GameArea.Enter() looks the rig up by the zone's gameId to decide
+        /// which one to Show(). A park holding Sample attractions AND the
+        /// creator's own therefore needs BOTH rigs present — the globals that
+        /// live on each Player.prefab only exist if its rig was spawned, and a
+        /// zone whose gameId has no rig never gets claimed at all.
+        ///
+        /// Spawning a single rig looked fine right up until you walked into an
+        /// attraction from the other package, which is exactly the case the
+        /// simulator exists to reproduce.
+        public readonly List<ContentEntry> players = new List<ContentEntry>();
+
         public readonly List<string> notes = new List<string>();
 
         public int AttractionCount
@@ -159,8 +179,6 @@ namespace DreamPark.ParkSim
 
             foreach (var rig in Object.FindObjectsByType<PlayerRig>(FindObjectsInactive.Include, FindObjectsSortMode.None))
             {
-                if (result.player != null) break;
-
                 // A PlayerRig nested inside an attraction belongs to that
                 // attraction and is not the park's player. The OVR/XR camera
                 // rig never carries PlayerRig at all, so it is out of scope
@@ -169,7 +187,9 @@ namespace DreamPark.ParkSim
                 if (rig.transform.parent != null &&
                     rig.transform.parent.GetComponentInParent<LevelTemplate>(true) != null) continue;
 
-                result.player = BuildEntry(rig.gameObject, ContentKind.Player, claimedAssets, sceneOriginAssets);
+                // No early break: a scene can legitimately hold one rig per
+                // content package and every one of them has to come along.
+                AddPlayer(result, BuildEntry(rig.gameObject, ContentKind.Player, claimedAssets, sceneOriginAssets));
             }
 
             // ── Project scan ─────────────────────────────────────────────
@@ -179,11 +199,6 @@ namespace DreamPark.ParkSim
                 if (string.IsNullOrEmpty(path)) continue;
                 if (claimedAssets.Contains(path)) continue;
 
-                if (!ParkSimSettings.IncludeSample && ContentFolders.IsUnderSample(path)) {
-                    sampleSkipped++;
-                    continue;
-                }
-
                 var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
                 if (prefab == null) continue;
 
@@ -192,6 +207,17 @@ namespace DreamPark.ParkSim
                 else if (includeProps && prefab.GetComponent<PropTemplate>() != null) kind = ContentKind.Prop;
                 else if (prefab.GetComponent<PlayerRig>() != null) kind = ContentKind.Player;
                 else continue;
+
+                // Filter applied AFTER the kind is known: excluding Sample is a
+                // choice about what gets PLACED, and dropping the Sample rig
+                // with it stranded every Sample zone in the park with no rig to
+                // claim it. A rig for content that never got placed costs one
+                // hidden GameObject; a missing one costs the zone swap.
+                if (!ParkSimSettings.IncludeSample && ContentFolders.IsUnderSample(path)
+                    && kind != ContentKind.Player) {
+                    sampleSkipped++;
+                    continue;
+                }
 
                 var entry = new ContentEntry {
                     displayName = prefab.name,
@@ -203,9 +229,10 @@ namespace DreamPark.ParkSim
 
                 entry.fromSample = ContentFolders.IsUnderSample(path);
                 entry.fromScene = sceneOriginAssets.Contains(path);
+                entry.contentFolder = ContentFolders.FolderOfAsset(path);
 
                 if (kind == ContentKind.Player) {
-                    if (result.player == null) result.player = entry;
+                    AddPlayer(result, entry);
                 } else {
                     result.placeables.Add(entry);
                 }
@@ -214,7 +241,7 @@ namespace DreamPark.ParkSim
             // ── Injected content ─────────────────────────────────────────
             AppendExternal(result, includeProps);
 
-            if (result.player == null) {
+            if (result.players.Count == 0) {
                 result.notes.Add(
                     "No Player prefab found (nothing in the project or scene carries PlayerRig). " +
                     "Global systems that live on Player.prefab will be absent, so score, audio and " +
@@ -300,12 +327,32 @@ namespace DreamPark.ParkSim
 
                 if (kind == ContentKind.Player) {
                     // An injected player is an explicit request and outranks
-                    // whatever the scan happened to find first.
-                    result.player = entry;
+                    // whatever the scan found for the same content package.
+                    AddPlayer(result, entry, replaceExisting: true);
                 } else {
                     result.placeables.Add(entry);
                 }
             }
+        }
+
+        /// <summary>
+        /// Record a rig for its content package. First one in wins — the scene
+        /// sweep runs before the project sweep, so a rig the creator has in
+        /// front of them beats the asset it came from, exactly like an
+        /// attraction. `replaceExisting` is for injected content, which is an
+        /// explicit request rather than something the scan stumbled on.
+        /// </summary>
+        private static void AddPlayer(ScanResult result, ContentEntry entry, bool replaceExisting = false)
+        {
+            if (entry == null) return;
+
+            string key = entry.contentFolder ?? string.Empty;
+            for (int i = 0; i < result.players.Count; i++) {
+                if ((result.players[i].contentFolder ?? string.Empty) != key) continue;
+                if (replaceExisting) result.players[i] = entry;
+                return;
+            }
+            result.players.Add(entry);
         }
 
         private static void TriageSceneInstance(
@@ -357,14 +404,54 @@ namespace DreamPark.ParkSim
             }
 
             bool fromSample = ContentFolders.IsUnderSample(assetPath);
-            if (fromSample && !ParkSimSettings.IncludeSample) {
+            string contentFolder = ContentFolders.FolderOfAsset(assetPath);
+            if (string.IsNullOrEmpty(contentFolder) && kind == ContentKind.Player) {
+                // A bare scene rig with no asset behind it still has an
+                // identity: the gameId it registers itself under.
+                var rig = go.GetComponent<PlayerRig>();
+                if (rig != null) contentFolder = rig.gameId ?? string.Empty;
+            }
+
+            if (fromSample && !ParkSimSettings.IncludeSample && kind != ContentKind.Player) {
                 // Returned BEFORE the clean-instance branch below, so a Sample
                 // instance the creator has excluded is left in their scene
                 // rather than deleted out of it.
+                //
+                // The PLAYER is exempt. "Include Sample Content" is a choice
+                // about what gets PLACED in the park; the player is not placed
+                // content, it is the thing doing the looking. Excluding it took
+                // the rig out of the run entirely — every global that lives on
+                // Player.prefab silently went missing — which is never what
+                // unticking that box was meant to mean.
                 return null;
             }
 
             bool dirty = isInstance && HasUnappliedOverrides(go);
+
+            // The player rig in the scene is ALWAYS the spawn source, clean or
+            // not — same treatment a scene attraction gets: suspended in place,
+            // duplicated into the park. Deferring it to the project scan (what
+            // the clean-instance branch below does) had two failure modes that
+            // both ended with no rig in the park at all: the asset could be
+            // filtered out of that scan, and a project with the player only in
+            // the scene has no asset for it to find. Core spawns the rig first
+            // and everything binding to a Player.prefab global depends on it,
+            // so "usually resolves" is not good enough here.
+            if (kind == ContentKind.Player) {
+                if (!string.IsNullOrEmpty(assetPath)) claimedAssets.Add(assetPath);
+
+                return new ContentEntry {
+                    displayName = go.name,
+                    kind = kind,
+                    sceneTemplate = go,
+                    prefabAsset = asset,
+                    assetPath = assetPath,
+                    hasUnappliedOverrides = dirty,
+                    fromSample = fromSample,
+                    fromScene = true,
+                    contentFolder = contentFolder,
+                };
+            }
 
             if (dirty || !isInstance) {
                 // Either the developer has un-applied edits, or this is a bare
@@ -384,6 +471,7 @@ namespace DreamPark.ParkSim
                     hasUnappliedOverrides = dirty,
                     fromSample = fromSample,
                     fromScene = true,
+                    contentFolder = contentFolder,
                 };
             }
 

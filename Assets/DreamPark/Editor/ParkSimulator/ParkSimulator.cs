@@ -535,8 +535,8 @@ namespace DreamPark.ParkSim
 
             // A source's park usually brings its own player rig. Spawning a
             // second one would bind every global on Player.prefab twice.
-            bool playerSpawned = source != null && _root.GetComponentInChildren<PlayerRig>(true) != null;
-            if (playerSpawned) {
+            bool playersSpawned = source != null && _root.GetComponentInChildren<PlayerRig>(true) != null;
+            if (playersSpawned) {
                 report.playerName = "(from " + (report.parkName ?? "the park source") + ")";
             }
             int objectIndex = 0;
@@ -554,18 +554,15 @@ namespace DreamPark.ParkSim
                 Transform levelAnchor = NewChild(subLevelRoot, levelId);
                 levelAnchor.SetPositionAndRotation(point.position, point.rotation);
 
-                // Player rig FIRST, before any attraction's Start runs. Core
+                // Player rigs FIRST, before any attraction's Start runs. Core
                 // does this for the same reason (LevelAnchor.LoadLevel, the
                 // "PLAYER RIG FIRST" block): globals live on Player.prefab and
                 // anything that binds to them in Start would otherwise miss.
-                if (!playerSpawned && scan.player != null && scan.player.Source != null) {
-                    var player = InstantiateSource(scan.player);
-                    player.name = scan.player.displayName;
-                    player.transform.SetParent(levelAnchor, true);
-                    player.transform.localPosition = Vector3.zero;
-                    Register(player, false);
-                    report.playerName = scan.player.displayName;
-                    playerSpawned = true;
+                //
+                // ALL of them, one per content package — see ScanResult.players.
+                if (!playersSpawned) {
+                    SpawnPlayers(scan, levelAnchor, report);
+                    playersSpawned = true;
                 }
 
                 var placed = SpawnOne(entry, levelAnchor, levelId, objectIndex, point, report);
@@ -577,19 +574,14 @@ namespace DreamPark.ParkSim
             }
 
             // A project with a Player but no attractions yet still deserves a
-            // running park to look at, and the player must never be left
+            // running park to look at, and the rigs must never be left
             // unspawned just because the loop above had nothing to iterate.
-            if (!playerSpawned && scan.player != null && scan.player.Source != null) {
+            if (!playersSpawned && scan.players.Count > 0) {
                 Transform soloAnchor = NewChild(subLevelRoot, "lvl-player");
                 if (spawnPoints.Count > 0) {
                     soloAnchor.SetPositionAndRotation(spawnPoints[0].position, spawnPoints[0].rotation);
                 }
-                var player = InstantiateSource(scan.player);
-                player.name = scan.player.displayName;
-                player.transform.SetParent(soloAnchor, true);
-                player.transform.localPosition = Vector3.zero;
-                Register(player, false);
-                report.playerName = scan.player.displayName;
+                SpawnPlayers(scan, soloAnchor, report);
             }
 
             // Mirrors LoadLevel's `await UniTask.Delay(1000)`: templates need a
@@ -1012,6 +1004,35 @@ namespace DreamPark.ParkSim
             }
         }
 
+        /// <summary>
+        /// Every rig the scan found, one per content package, parented to the
+        /// same anchor. They do not fight: PlayerRig.Awake registers each under
+        /// its own gameId, and Start hides all but the one claiming the zone the
+        /// player is actually standing in. What matters is that each one EXISTS,
+        /// because the globals its Player.prefab carries are only bound if it
+        /// does — and a zone whose gameId has no rig never gets claimed.
+        /// </summary>
+        private static void SpawnPlayers(ScanResult scan, Transform anchor, ParkSimReport report)
+        {
+            var names = new List<string>();
+
+            foreach (var entry in scan.players) {
+                if (entry == null || entry.Source == null) continue;
+
+                var player = InstantiateSource(entry);
+                if (player == null) continue;
+
+                player.name = entry.displayName;
+                player.transform.SetParent(anchor, true);
+                player.transform.localPosition = Vector3.zero;
+                Register(player, false);
+                names.Add(entry.displayName +
+                    (string.IsNullOrEmpty(entry.contentFolder) ? "" : " (" + entry.contentFolder + ")"));
+            }
+
+            if (names.Count > 0) report.playerName = string.Join(", ", names);
+        }
+
         private static GameObject InstantiateSource(ContentEntry entry)
         {
             if (entry.sceneTemplate != null) {
@@ -1050,10 +1071,12 @@ namespace DreamPark.ParkSim
                     _disabledSceneTemplates.Add(entry.sceneTemplate);
                 }
             }
-            if (scan.player != null && scan.player.sceneTemplate != null &&
-                scan.player.sceneTemplate.activeSelf) {
-                scan.player.sceneTemplate.SetActive(false);
-                _disabledSceneTemplates.Add(scan.player.sceneTemplate);
+            foreach (var entry in scan.players) {
+                if (entry == null || entry.sceneTemplate == null) continue;
+                if (entry.sceneTemplate.activeSelf) {
+                    entry.sceneTemplate.SetActive(false);
+                    _disabledSceneTemplates.Add(entry.sceneTemplate);
+                }
             }
         }
 

@@ -1,0 +1,108 @@
+-- ============================================================
+-- dreamsequence-start-button.lua.txt — the interactive start button
+--
+-- A big physical button on a podium. The player pushes it with a hand
+-- and the Dream Sequence begins. Press = squash to `pressedHeight`,
+-- click SFX, then `start_game()` on the attraction's controller.
+--
+-- This is deliberately ONE Lua script rather than an EasyEvent chain
+-- (EasyTrigger → EasyAudio → EasyScale → EasyLua). Chains are fine for
+-- set dressing, but the interaction a guest actually touches should be
+-- readable in one file — see the DO NOT list in CLAUDE.md.
+--
+-- Requires a Collider with Is Trigger ON on this GameObject.
+--
+-- @var pressedHeight float 0.06
+-- @var pressDuration float 0.1
+-- @var releaseDuration float 0.25
+-- @var clickSfx audioclip
+-- @var rearmOnSequenceEnd bool true
+-- ============================================================
+
+local UE = CS.UnityEngine
+local Time = UE.Time
+local Vector3 = UE.Vector3
+
+local controller = nil
+local restScale = nil
+local pressedScale = nil
+
+local armed = true
+local phase = "idle"      -- idle | pressing | releasing
+local phaseStartedAt = 0.0
+
+local function get_press_duration()
+    if pressDuration == nil or pressDuration <= 0 then return 0.1 end
+    return pressDuration
+end
+
+local function get_release_duration()
+    if releaseDuration == nil or releaseDuration <= 0 then return 0.25 end
+    return releaseDuration
+end
+
+function onready()
+    restScale = self.transform.localScale
+
+    local height = pressedHeight
+    if height == nil or height <= 0 then height = 0.06 end
+    pressedScale = Vector3(restScale.x, height, restScale.z)
+
+    controller = dp.attraction(self.gameObject)
+
+    -- Re-arm the button when a run ends, so the next guest can start
+    -- another one without the attraction being reloaded.
+    if rearmOnSequenceEnd == true and controller ~= nil and controller.on_sequence_complete ~= nil then
+        controller.on_sequence_complete(function()
+            armed = true
+        end)
+    end
+end
+
+function ontriggerenter(other)
+    if not armed or phase ~= "idle" then return end
+    if not dp.is_player(other) then return end
+
+    local ds = controller
+    if ds == nil or ds.start_game == nil then
+        UE.Debug.LogWarning("[DreamStartButton] No Dream Sequence controller found on this attraction.")
+        return
+    end
+
+    if ds.is_running ~= nil and ds.is_running() then return end
+
+    armed = false
+    phase = "pressing"
+    phaseStartedAt = Time.time
+
+    if clickSfx ~= nil then
+        CS.CoreExtensions.PlaySFX(clickSfx, self.transform.position, 1.0, 1.0, nil)
+    end
+
+    ds.start_game()
+end
+
+function update()
+    if phase == "idle" then return end
+
+    if phase == "pressing" then
+        local t = (Time.time - phaseStartedAt) / get_press_duration()
+        if t >= 1.0 then
+            self.transform.localScale = pressedScale
+            phase = "releasing"
+            phaseStartedAt = Time.time
+            return
+        end
+        self.transform.localScale = Vector3.Lerp(restScale, pressedScale, t)
+        return
+    end
+
+    -- releasing
+    local t = (Time.time - phaseStartedAt) / get_release_duration()
+    if t >= 1.0 then
+        self.transform.localScale = restScale
+        phase = "idle"
+        return
+    end
+    self.transform.localScale = Vector3.Lerp(pressedScale, restScale, t)
+end

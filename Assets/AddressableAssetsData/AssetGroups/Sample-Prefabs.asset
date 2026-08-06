@@ -22,6 +22,12 @@ MonoBehaviour:
     - Sample
     - SampleGame
     FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 7d98e45aa6adb4802bf80252edec7362
+    m_Address: Sample/Levels/Micro/A_DreamSequence
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - Sample
+    FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: 9248e67eb51b4467db385f8b4d58e074
     m_Address: Sample/Props/Generic/P_TestProp
     m_ReadOnly: 0
@@ -35,6 +41,18 @@ MonoBehaviour:
     m_SerializedLabels:
     - Sample
     - SampleGame
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: f0cbc33d2b8c9454e8e3b5b04c101c9f
+    m_Address: Sample/Props/Generic/P_DreamPortal
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - Sample
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: f3a8073249221400bb755d711afe4631
+    m_Address: Sample/Props/Generic/P_Pit
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - Sample
     FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: f99bd0386e51a402c9e7d9c31cde2e30
     m_Address: Sample/Player

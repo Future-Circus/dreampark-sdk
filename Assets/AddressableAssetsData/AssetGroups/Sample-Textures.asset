@@ -1,0 +1,35 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bbb281ee3bf0b054c82ac2347e9e782c, type: 3}
+  m_Name: Sample-Textures
+  m_EditorClassIdentifier: 
+  m_GroupName: Sample-Textures
+  m_GUID: d690d3aa2cf3044d0a429c546e63f87b
+  m_SerializeEntries:
+  - m_GUID: 16d1ab7e4019b4abbaa485f46d5e27eb
+    m_Address: Sample/Textures/DreamGlow
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - Sample
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: eb3062f69c57447af91e6686c8595b68
+    m_Address: Sample/Textures/DreamSpark
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - Sample
+    FlaggedDuringContentUpdateRestriction: 0
+  m_ReadOnly: 0
+  m_Settings: {fileID: 11400000, guid: 5e922c848874c41bc90d6a8d78c6f5a9, type: 2}
+  m_SchemaSet:
+    m_Schemas:
+    - {fileID: 11400000, guid: e476a964efd5c464d9e191f5f2440e1c, type: 2}
+    - {fileID: 11400000, guid: 1af12c0de9d914f6f8e5d5b7aa0e1e1a, type: 2}

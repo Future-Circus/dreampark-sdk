@@ -278,7 +278,11 @@ namespace DreamPark {
             // half-off the scanned area stays flat, never a tented edge.
             // Scan mode passes 0 = legacy behavior (apply on any hits, and the
             // calibrated flag / change notification fire regardless).
+#if UNITY_EDITOR
+            // Editor-only diagnostic (ReportNavCoverage); the field itself lives in
+            // the UNITY_EDITOR region below, so the write must be guarded too.
             _lastConformHitCount = hitCount;
+#endif
             float coverage = verts.Length > 0 ? (float)hitCount / verts.Length : 0f;
             bool gated = minCoverage > 0f;
             if (gated && coverage < minCoverage)
