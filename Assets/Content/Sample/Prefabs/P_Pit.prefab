@@ -102,15 +102,15 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 15325a4554159408fbe12e2f22af8906, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  gameId: 
-  resourceName: 
+  gameId: Sample
+  resourceName: Sample/Props/Generic/P_Pit
   priority: 0
   isPlaying: 0
   padding: 2
   showPaddingGizmo: 1
   halfExtents: {x: 2.5, y: 50, z: 2.5}
   unpaddedHalfExtents: {x: 0.5, y: 50, z: 0.5}
-  zoneColor: {r: 0.5, g: 0.5, b: 0.5, a: 1}
+  zoneColor: {r: 0.27, g: 0.9, b: 0.31199995, a: 1}
 --- !u!114 &8491900258782859032
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -124,7 +124,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   gameId: Sample
-  resourceName: 
+  resourceName: Sample/Props/Generic/P_Pit
   category: 0
   affectsGapFiller: 1
   cutGapFillerHole: 0

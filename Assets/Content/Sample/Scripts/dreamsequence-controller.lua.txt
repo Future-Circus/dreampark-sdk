@@ -1,0 +1,583 @@
+-- ============================================================
+-- dreamsequence-controller.lua.txt
+--
+-- The Dream Sequence attraction format: one attraction that plays a
+-- SEQUENCE of small levels back to back, with a particle transition
+-- between them, in a single physical play space.
+--
+-- Put this on the attraction root (the GameObject with
+-- AttractionTemplate/GameArea/MusicArea) via LuaBehaviour. Levels are
+-- child GameObjects of `levelParent` named `Level*`. Exactly one level
+-- is active at a time; the controller activates the first one, waits
+-- for it to report completion, plays the transition, and swaps.
+--
+-- ── HOW A LEVEL FINISHES ─────────────────────────────────────
+-- Nothing in here knows what your game is about. A level ends when a
+-- script you wrote says so. Two ways, both public API:
+--
+--   1. Just tell it. From any script inside the attraction:
+--
+--        local ds = dp.attraction(self.gameObject)
+--        ds.advance()          -- this level is done, move on
+--
+--      That is the whole contract. `dreamsequence-portal.lua.txt` is a
+--      seven-line example: walk into the portal, call advance().
+--
+--   2. Register objectives and let it count. For levels that end when
+--      N things are done rather than on one event:
+--
+--        ds.register_objective(self.gameObject)   -- in onready()
+--        ds.complete_objective(self.gameObject)   -- when collected
+--
+--      The level advances by itself once every objective registered
+--      for it reports complete. Objectives are cleared on each level
+--      change, so a level only ever waits on its own.
+--
+-- Mixing is fine: a level with objectives can still be short-circuited
+-- by an explicit advance().
+--
+-- ── REACTING TO THE SEQUENCE ─────────────────────────────────
+--   ds.on_level_start(function(index, go)    ... end)
+--   ds.on_level_complete(function(index, go) ... end)
+--   ds.on_sequence_complete(function(score)  ... end)
+--
+-- Handlers registered after the fact are NOT replayed — register them
+-- in onready(), which is sticky and always arrives.
+--
+-- ── SCORING & HIGH SCORE ─────────────────────────────────────
+-- The controller keeps a plain run score. Your game adds to it:
+--
+--   ds.add_score(10)
+--   ds.get_score() / ds.get_high_score()
+--
+-- When the sequence ends the run is written ONCE through `storage`,
+-- which LuaBehaviour auto-binds to the attraction this script lives
+-- on (no gameIds to pass around):
+--
+--   storage.max("high_score", score)   -- set-if-greater, race-safe
+--   storage.increment("runs_played", 1)
+--
+-- `max` rather than read-compare-set, so a better score this profile
+-- wrote on another headset can never be clobbered — max/increment are
+-- applied server-side. Writes queue offline / before the guest pairs
+-- and flush when they scan in, so nothing is lost either way. See
+-- Assets/DreamPark/Samples/GameStorage/storage_high_score.lua.txt.
+--
+-- Adventure Log: keys containing score/best/record/streak are treated
+-- as score-like, so `max("high_score", ...)` emits a timeline row only
+-- when the guest actually beats their record — a personal best is worth
+-- a notification, an ordinary run is not.
+--
+-- @var levelParent gameobject
+-- @var transitionEffect gameobject
+-- @var transitionDelay float 2.5
+-- @var completionSfx audioclip
+-- @var autoStart bool false
+-- @var loopSequence bool false
+-- @var globalName string
+-- ============================================================
+
+local UE = CS.UnityEngine
+local Debug = UE.Debug
+local Time = UE.Time
+local Mathf = UE.Mathf
+local MusicAreaType = typeof(CS.DreamPark.MusicArea)
+local LevelTemplateType = typeof(CS.DreamPark.LevelTemplate)
+local ParticleSystemType = typeof(UE.ParticleSystem)
+local ParticleSystemStopBehavior = UE.ParticleSystemStopBehavior
+
+-- ── State ────────────────────────────────────────────────────
+local rootGameObject = nil
+local rootTransform = nil
+local levels = {}
+local currentLevelIndex = -1
+local transitionEndsAt = -1.0
+local pendingLevelIndex = -1
+local transitionRequested = false
+local sequenceFinished = false
+local gameStarted = false
+
+local objectives = {}        -- [gameObject] = true (complete) / false (pending)
+local objectivesPending = 0
+local objectivesRegistered = 0
+
+local score = 0
+local bestScore = 0
+local scoreSaved = false
+
+local levelStartHandlers = {}
+local levelCompleteHandlers = {}
+local sequenceCompleteHandlers = {}
+
+local function log(message)
+    Debug.Log("[DreamSequence] " .. message)
+end
+
+local function fire(handlers, a, b)
+    for i = 1, #handlers do
+        local ok, err = pcall(handlers[i], a, b)
+        if not ok then
+            Debug.LogError("[DreamSequence] handler threw: " .. tostring(err))
+        end
+    end
+end
+
+-- Plain-Lua clamp: keeps score maths off XLua's Mathf.Max(int,int) vs
+-- Mathf.Max(float,float) overload resolution.
+local function max0(value)
+    if value == nil or value < 0 then return 0 end
+    return value
+end
+
+local function get_transition_delay()
+    if transitionDelay == nil then return 2.5 end
+    return Mathf.Max(0.1, transitionDelay)
+end
+
+-- ── Scene helpers ────────────────────────────────────────────
+local function get_music_area()
+    if rootGameObject == nil then return nil end
+    return rootGameObject:GetComponent(MusicAreaType)
+end
+
+local function get_level_parent_transform()
+    if levelParent ~= nil then return levelParent.transform end
+    return rootTransform
+end
+
+-- The attraction's floor is generated from the LevelTemplate; levels
+-- may cut holes in it, so it is rebuilt whenever the level changes.
+local function regenerate_parent_floor()
+    if rootGameObject == nil then return end
+
+    local levelTemplate = rootGameObject:GetComponent(LevelTemplateType)
+    if levelTemplate == nil or not levelTemplate.generateFloor then return end
+
+    levelTemplate:RegenerateFloor()
+end
+
+local function get_transition_particles()
+    if transitionEffect == nil then return nil end
+    return transitionEffect:GetComponentsInChildren(ParticleSystemType, true)
+end
+
+-- Restart, not resume.
+--
+-- Stop(StopEmitting) deliberately lets the tail of the last transition fade
+-- out naturally — but it leaves a LOOPING system reporting isPlaying = true
+-- until that tail expires, and Play() on a system that thinks it is already
+-- playing is a no-op. So the first transition worked, every one after it
+-- silently emitted nothing.
+--
+-- StopEmittingAndClear puts it in a genuinely stopped state first, so Play()
+-- always has something to do. It also means an authored Play On Awake cannot
+-- leave the effect running behind our back.
+local function play_transition_effect()
+    if transitionEffect == nil then return end
+
+    if not transitionEffect.activeSelf then
+        transitionEffect:SetActive(true)
+    end
+
+    local particles = get_transition_particles()
+    if particles == nil then return end
+
+    for i = 0, particles.Length - 1 do
+        particles[i]:Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear)
+        particles[i]:Play(true)
+    end
+end
+
+local function stop_transition_effect()
+    local particles = get_transition_particles()
+    if particles == nil then return end
+
+    for i = 0, particles.Length - 1 do
+        particles[i]:Stop(true, ParticleSystemStopBehavior.StopEmitting)
+    end
+end
+
+local function play_completion_sfx()
+    if completionSfx == nil or rootTransform == nil then return end
+    CS.CoreExtensions.PlaySFX(completionSfx, rootTransform.position, 1.0, 1.0, nil)
+end
+
+local function is_level_candidate(gameObject)
+    if gameObject == nil then return false end
+    local name = gameObject.name
+    return name ~= nil and string.sub(name, 1, 5) == "Level"
+end
+
+local function rebuild_level_list()
+    levels = {}
+
+    local levelParentTransform = get_level_parent_transform()
+    if levelParentTransform == nil then return end
+
+    local childCount = levelParentTransform.childCount
+    for i = 0, childCount - 1 do
+        local childGameObject = levelParentTransform:GetChild(i).gameObject
+
+        if childGameObject ~= transitionEffect and is_level_candidate(childGameObject) then
+            levels[#levels + 1] = childGameObject
+        end
+    end
+end
+
+local function deactivate_other_level_children(activeGameObject)
+    local levelParentTransform = get_level_parent_transform()
+    if levelParentTransform == nil then return end
+
+    local childCount = levelParentTransform.childCount
+    for i = 0, childCount - 1 do
+        local childGameObject = levelParentTransform:GetChild(i).gameObject
+        if childGameObject ~= activeGameObject and childGameObject.activeSelf then
+            childGameObject:SetActive(false)
+        end
+    end
+end
+
+-- Whatever is on screen when the run starts is the SPLASH — the tutorial
+-- level holding the start button. start_game() transitions AWAY from it into
+-- the first playable level, which is why this is a lookup and not just 0.
+local function find_active_level_index()
+    for i = 1, #levels do
+        if levels[i] ~= nil and levels[i].activeSelf then return i end
+    end
+    return 0
+end
+
+local function has_next_level(levelIndex)
+    if levelIndex < 0 then return false end
+    if loopSequence == true and #levels > 0 then return true end
+    return levelIndex < #levels and levels[levelIndex + 1] ~= nil
+end
+
+local function next_level_index(levelIndex)
+    local nextIndex = levelIndex + 1
+    if nextIndex > #levels then
+        if loopSequence == true then return 1 end
+        return -1
+    end
+    return nextIndex
+end
+
+-- ── Objectives ───────────────────────────────────────────────
+local function clear_objectives()
+    objectives = {}
+    objectivesPending = 0
+    objectivesRegistered = 0
+end
+
+-- ── Scoring ──────────────────────────────────────────────────
+local function save_run_score()
+    if scoreSaved then return end
+    scoreSaved = true
+
+    local finalScore = math.floor(max0(score))
+
+    if storage == nil then
+        log("No storage scope available — score " .. tostring(finalScore) .. " not saved.")
+        return
+    end
+
+    local ok, err = pcall(function()
+        -- set-if-greater: safe even if this profile is mid-session on
+        -- another headset with a better score.
+        bestScore = storage.max("high_score", finalScore) or bestScore
+        storage.increment("runs_played", 1)
+    end)
+
+    if not ok then
+        Debug.LogError("[DreamSequence] Failed to save score: " .. tostring(err))
+        return
+    end
+
+    log(string.format("Run saved. score=%d best=%d", finalScore, math.floor(max0(bestScore))))
+end
+
+-- ── Sequence flow ────────────────────────────────────────────
+local function complete_sequence_on_current_level()
+    local currentLevel = levels[currentLevelIndex]
+    local currentLevelName = currentLevel ~= nil and currentLevel.name or "current level"
+
+    stop_transition_effect()
+    transitionEndsAt = -1.0
+    pendingLevelIndex = -1
+    transitionRequested = false
+    sequenceFinished = true
+    gameStarted = false
+    save_run_score()
+    fire(sequenceCompleteHandlers, math.floor(max0(score)))
+    log("Sequence complete. No next level; staying on " .. currentLevelName .. ".")
+end
+
+local function begin_level(levelIndex)
+    local levelGameObject = levels[levelIndex]
+    if levelGameObject == nil then
+        currentLevelIndex = -1
+        return
+    end
+
+    deactivate_other_level_children(levelGameObject)
+
+    if not levelGameObject.activeSelf then
+        levelGameObject:SetActive(true)
+    end
+
+    regenerate_parent_floor()
+
+    currentLevelIndex = levelIndex
+    transitionRequested = false
+    clear_objectives()
+
+    log(levelGameObject.name .. " started.")
+    fire(levelStartHandlers, levelIndex, levelGameObject)
+end
+
+local function finish_transition()
+    local currentLevel = nil
+    if currentLevelIndex >= 1 then
+        currentLevel = levels[currentLevelIndex]
+    end
+
+    if currentLevel ~= nil then
+        currentLevel:SetActive(false)
+    end
+
+    if pendingLevelIndex >= 1 and pendingLevelIndex <= #levels then
+        levels[pendingLevelIndex]:SetActive(true)
+        stop_transition_effect()
+        transitionEndsAt = -1.0
+        transitionRequested = false
+        begin_level(pendingLevelIndex)
+        pendingLevelIndex = -1
+        return
+    end
+
+    stop_transition_effect()
+    transitionEndsAt = -1.0
+    pendingLevelIndex = -1
+    transitionRequested = false
+    currentLevelIndex = -1
+    sequenceFinished = true
+    gameStarted = false
+    save_run_score()
+    fire(sequenceCompleteHandlers, math.floor(max0(score)))
+    log("Sequence complete.")
+end
+
+local function begin_transition(source)
+    if transitionRequested or transitionEndsAt >= 0.0 or sequenceFinished then
+        return false
+    end
+
+    transitionRequested = true
+
+    if currentLevelIndex >= 1 then
+        fire(levelCompleteHandlers, currentLevelIndex, levels[currentLevelIndex])
+    end
+
+    if not has_next_level(currentLevelIndex) then
+        complete_sequence_on_current_level()
+        return true
+    end
+
+    -- Dip the attraction music under the transition so the sting reads.
+    local musicArea = get_music_area()
+    if musicArea ~= nil then
+        musicArea:Duck(get_transition_delay())
+    end
+
+    play_completion_sfx()
+    play_transition_effect()
+
+    pendingLevelIndex = next_level_index(currentLevelIndex)
+    transitionEndsAt = Time.time + get_transition_delay()
+
+    if source ~= nil then
+        log("Transition requested by " .. tostring(source) .. ".")
+    end
+    return true
+end
+
+-- ============================================================
+--  PUBLIC API — reach it from any script inside the attraction:
+--      local ds = dp.attraction(self.gameObject)
+-- ============================================================
+
+-- Start (or restart) the run from the first level.
+function start_game()
+    if rootGameObject == nil then
+        rootGameObject = self.gameObject
+        rootTransform = self.transform
+    end
+
+    if transitionEndsAt >= 0.0 then
+        log("start_game() called while a transition is already in progress.")
+        return false
+    end
+
+    rebuild_level_list()
+
+    if #levels <= 0 then
+        log("No child levels found under " .. rootGameObject.name .. ".")
+        return false
+    end
+
+    -- Start from whatever level is currently showing and transition to the
+    -- NEXT one. The active level at that moment is the splash: a tutorial
+    -- level carrying the start button, which the guest is standing in front of
+    -- when they press it. Pressing start is the intentional trigger that puts
+    -- them into the game; portals carry them from there.
+    --
+    -- With nothing active, this is 0 and the run begins at level 1.
+    currentLevelIndex = find_active_level_index()
+    pendingLevelIndex = -1
+    transitionRequested = false
+    sequenceFinished = false
+    gameStarted = true
+    scoreSaved = false
+    score = 0
+    clear_objectives()
+
+    return begin_transition("start_game")
+end
+
+-- This level is finished — play the transition and move to the next.
+function advance()
+    sequenceFinished = false
+    gameStarted = true
+    return begin_transition("advance")
+end
+
+-- Aliases kept so existing Dream Sequence content keeps working.
+function next_game() return advance() end
+function end_game()  return advance() end
+function trigger()   return start_game() end
+
+-- Stop the run where it stands and save the score.
+function finish()
+    if sequenceFinished then return false end
+    complete_sequence_on_current_level()
+    return true
+end
+
+function is_running()      return gameStarted and not sequenceFinished end
+function is_transitioning() return transitionEndsAt >= 0.0 end
+function get_level_count() return #levels end
+function get_level_index() return currentLevelIndex end
+
+function get_level()
+    if currentLevelIndex < 1 then return nil end
+    return levels[currentLevelIndex]
+end
+
+function get_level_name()
+    local level = get_level()
+    return level ~= nil and level.name or nil
+end
+
+-- ── Objectives ───────────────────────────────────────────────
+-- Register in onready(); complete when your thing is done. The level
+-- advances by itself once every registered objective is complete.
+function register_objective(objective)
+    if objective == nil then return false end
+    if objectives[objective] ~= nil then return false end
+
+    objectives[objective] = false
+    objectivesPending = objectivesPending + 1
+    objectivesRegistered = objectivesRegistered + 1
+    return true
+end
+
+function complete_objective(objective)
+    if objective == nil then return false end
+    if objectives[objective] ~= false then return false end
+
+    objectives[objective] = true
+    objectivesPending = objectivesPending - 1
+
+    if objectivesPending <= 0 and objectivesRegistered > 0 and is_running() then
+        advance()
+    end
+    return true
+end
+
+function get_objectives_remaining() return objectivesPending end
+
+-- ── Score ────────────────────────────────────────────────────
+function add_score(amount)
+    if amount == nil then return score end
+    score = max0(score + amount)
+    return score
+end
+
+function set_score(value)
+    score = max0(value or 0)
+    return score
+end
+
+function get_score()      return math.floor(max0(score)) end
+function get_high_score() return math.floor(max0(bestScore)) end
+
+-- ── Events ───────────────────────────────────────────────────
+function on_level_start(fn)
+    if fn ~= nil then levelStartHandlers[#levelStartHandlers + 1] = fn end
+end
+
+function on_level_complete(fn)
+    if fn ~= nil then levelCompleteHandlers[#levelCompleteHandlers + 1] = fn end
+end
+
+function on_sequence_complete(fn)
+    if fn ~= nil then sequenceCompleteHandlers[#sequenceCompleteHandlers + 1] = fn end
+end
+
+-- ── Lifecycle ────────────────────────────────────────────────
+-- awake() runs BEFORE the park loader parents and poses this object,
+-- so it only publishes globals and reads storage. Anything positional
+-- or hierarchical waits for onready().
+function awake()
+    if globalName ~= nil and globalName ~= "" then
+        rawset(_G, globalName, self.ScriptScope)
+    end
+
+    -- Reads work immediately (local cache / defaults); onReady fires once
+    -- the player's persisted values have actually arrived from the server.
+    if storage ~= nil then
+        bestScore = storage.get("high_score", 0) or 0
+
+        storage.onReady(function()
+            bestScore = storage.get("high_score", 0) or 0
+            log("High score synced: " .. tostring(math.floor(max0(bestScore)))
+                .. " over " .. tostring(storage.get("runs_played", 0)) .. " run(s).")
+        end)
+    end
+end
+
+-- onready(): spawned, placed, floors built, enabled. Sticky — if the
+-- world was already real before this script existed, it still arrives.
+function onready()
+    rootGameObject = self.gameObject
+    rootTransform = self.transform
+
+    rebuild_level_list()
+    stop_transition_effect()
+
+    if autoStart == true then
+        start_game()
+    end
+end
+
+function ondestroy()
+    if globalName ~= nil and globalName ~= "" then
+        rawset(_G, globalName, nil)
+    end
+end
+
+function update()
+    if transitionEndsAt >= 0.0 and Time.time >= transitionEndsAt then
+        finish_transition()
+    end
+end

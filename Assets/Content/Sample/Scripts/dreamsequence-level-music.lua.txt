@@ -1,0 +1,64 @@
+-- ============================================================
+-- dreamsequence-level-music.lua.txt — per-level music swap
+--
+-- Put this on a `Level*` GameObject inside a Dream Sequence. When that
+-- level becomes the active one, it crossfades the attraction's shared
+-- MusicArea onto this level's track. Levels with no `levelMusic` set
+-- keep whatever is already playing.
+--
+-- One MusicArea for the whole attraction, one clip per level: the
+-- guest hears a continuous score that changes with the world around
+-- them rather than a hard cut per level.
+--
+-- `musicAreaObject` is optional — left empty, the script finds the
+-- MusicArea on the attraction root by itself.
+--
+-- @var musicAreaObject gameobject
+-- @var levelMusic audioclip
+-- @var swapDuration float 0.75
+-- ============================================================
+
+local MusicAreaType = typeof(CS.DreamPark.MusicArea)
+
+local function find_music_area_from_parents()
+    local current = self.transform
+
+    while current ~= nil do
+        local musicArea = current.gameObject:GetComponent(MusicAreaType)
+        if musicArea ~= nil then return musicArea end
+        current = current.parent
+    end
+
+    return nil
+end
+
+local function resolve_music_area()
+    if musicAreaObject ~= nil then
+        local musicArea = musicAreaObject:GetComponent(MusicAreaType)
+        if musicArea ~= nil then return musicArea end
+    end
+
+    -- dp.attraction_root is the GameArea/AttractionTemplate root — where
+    -- LevelTemplate's [RequireComponent] puts the MusicArea.
+    local root = dp.attraction_root(self.gameObject)
+    if root ~= nil then
+        local musicArea = root:GetComponent(MusicAreaType)
+        if musicArea ~= nil then return musicArea end
+    end
+
+    return find_music_area_from_parents()
+end
+
+-- onenable() is normally NOT a gameplay event — the optimizer parks and
+-- unparks components during load. It is correct HERE because the Dream
+-- Sequence controller drives level activation with SetActive, so this
+-- level object going active IS the gameplay event. The swap is
+-- idempotent, so a spurious load-time enable is harmless.
+function onenable()
+    if levelMusic == nil then return end
+
+    local musicArea = resolve_music_area()
+    if musicArea == nil then return end
+
+    musicArea:SwapAudioClip(levelMusic, swapDuration or 0.75)
+end

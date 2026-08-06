@@ -1,0 +1,158 @@
+-- ============================================================
+-- dreamsequence-portal.lua.txt — "walk in here to finish the level"
+--
+-- The simplest possible completion rule, and the one the sample uses:
+-- put this on a trigger collider at the end of a level, the player
+-- walks into it, the Dream Sequence advances.
+--
+-- It is also the shortest example of the controller's public API —
+-- everything below the fold is polish. The part that matters is:
+--
+--     find_controller().advance()
+--
+-- and NOT dp.attraction(), which cannot work from inside a prop: it
+-- resolves to the nearest GameArea and PropTemplate gives every prop its
+-- own, so it hands this portal back its own script scope. See
+-- find_controller() below.
+--
+-- Requires a Collider with Is Trigger ON on this GameObject.
+--
+-- NOTE: ontriggerenter() also fires for overlaps that ALREADY existed
+-- when the object came up — colliders are disabled during load, so the
+-- SDK sweeps once on the first real frame. A portal the player happens
+-- to be standing in when the level activates still fires. That is why
+-- `armDelay` exists: it gives the guest a moment to step off the exit
+-- of the previous level before the next one can be triggered.
+--
+-- Once used, the portal stops being a portal: the emitters stop and the
+-- trigger switches off so it cannot fire twice. It does NOT shrink away or
+-- deactivate itself — a prop sinking into the floor reads as a glitch, and
+-- deactivating the GameObject kills the particle tail mid-air. Stopping
+-- emission lets the last particles finish and the portal just goes quiet.
+--
+-- @var armDelay float 0.75
+-- @var enterSfx audioclip
+-- ============================================================
+
+local UE = CS.UnityEngine
+local Time = UE.Time
+
+local ParticleSystemType = typeof(UE.ParticleSystem)
+local ParticleSystemStopBehavior = UE.ParticleSystemStopBehavior
+
+local controller = nil
+local armedAt = -1.0
+local used = false
+
+-- Finding the controller from inside a PROP is not what dp.attraction()
+-- does, and this is the trap:
+--
+--   dp.attraction() resolves to the nearest GameArea, and PropTemplate gives
+--   EVERY prop its own GameArea. So from in here it returns THIS PORTAL's own
+--   script scope, which has no advance(), and the portal silently does nothing
+--   when you walk into it.
+--
+-- Walk up from the PARENT instead, taking the first scope that can actually
+-- run a sequence. dp.scope() boots each script it touches, so this does not
+-- depend on Awake ordering.
+local function find_controller()
+    local current = self.transform.parent
+
+    while current ~= nil do
+        local scope = dp.scope(current.gameObject)
+        if scope ~= nil and scope.advance ~= nil then
+            return scope
+        end
+        current = current.parent
+    end
+
+    -- A portal used as a plain child rather than a prop has no GameArea of its
+    -- own, so the ordinary lookup is correct for it.
+    local scope = dp.attraction(self.gameObject)
+    if scope ~= nil and scope.advance ~= nil then
+        return scope
+    end
+
+    return nil
+end
+
+local function get_controller()
+    if controller == nil then
+        controller = find_controller()
+    end
+    return controller
+end
+
+-- Every emitter under this portal, however the art is arranged.
+local function get_particles()
+    return self.gameObject:GetComponentsInChildren(ParticleSystemType, true)
+end
+
+local function set_particles(playing)
+    local particles = get_particles()
+    if particles == nil then return end
+
+    for i = 0, particles.Length - 1 do
+        if playing then
+            particles[i]:Play(true)
+        else
+            -- StopEmitting, not Clear: the particles already in flight finish
+            -- their arc instead of vanishing the instant the player arrives.
+            particles[i]:Stop(true, ParticleSystemStopBehavior.StopEmitting)
+        end
+    end
+end
+
+local function set_trigger(enabled)
+    local collider = self.gameObject:GetComponent(typeof(UE.Collider))
+    if collider ~= nil then collider.enabled = enabled end
+end
+
+local function get_arm_delay()
+    if armDelay == nil or armDelay < 0 then return 0.0 end
+    return armDelay
+end
+
+function onready()
+    armedAt = Time.time + get_arm_delay()
+    used = false
+    set_trigger(true)
+    get_controller()
+end
+
+-- Levels are activated and deactivated by the controller, so a portal
+-- re-arms every time its level comes back around (loopSequence).
+-- Levels are activated and deactivated by the controller, so a portal
+-- re-opens every time its level comes back around (loopSequence).
+function onenable()
+    armedAt = Time.time + get_arm_delay()
+    used = false
+    set_trigger(true)
+    set_particles(true)
+end
+
+function ontriggerenter(other)
+    if used then return end
+    if Time.time < armedAt then return end
+    if not dp.is_player(other) then return end
+
+    local ds = get_controller()
+    if ds == nil or ds.advance == nil then
+        UE.Debug.LogWarning("[DreamPortal] No Dream Sequence controller found on this attraction.")
+        return
+    end
+
+    used = true
+
+    if enterSfx ~= nil then
+        CS.CoreExtensions.PlaySFX(enterSfx, self.transform.position, 1.0, 1.0, nil)
+    end
+
+    ds.advance()
+
+    -- Spent. The emitters go quiet and the trigger switches off so walking
+    -- back through it cannot advance the sequence a second time. The object
+    -- stays exactly where it is.
+    set_particles(false)
+    set_trigger(false)
+end
