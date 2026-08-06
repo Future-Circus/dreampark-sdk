@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────
 //  ParkSimContent.cs — what the simulator is going to spawn
 //
-//  Two jobs, and the second one is the subtle one.
+//  Three jobs, and the second one is the subtle one.
 //
 //  SCAN. Every prefab in the project whose ROOT carries LevelTemplate
 //  (which catches AttractionTemplate through inheritance), PropTemplate,
@@ -23,6 +23,13 @@
 //                                         identical to it by definition, and
 //                                         spawning from the asset keeps one
 //                                         code path
+//
+//  ADOPT. Content that a scan can never find because it does not exist on
+//  disk — an attraction resolved out of a downloaded Addressables catalog,
+//  handed over by a host tool through ParkSimExternalContent. Those come
+//  in as PINNED entries, so tapping an attraction in a content browser and
+//  pressing Regenerate shows you the same attraction somewhere new rather
+//  than losing it to the shuffle.
 //
 //  THE ROOT TRANSFORM IS NOT AN OVERRIDE. Every placed prefab instance
 //  carries m_LocalPosition/m_LocalRotation/m_LocalScale/m_Name/m_RootOrder
@@ -65,12 +72,22 @@ namespace DreamPark.ParkSim
         /// overrides, or a bare scene object) or was a clean instance that the
         /// park respawns from its asset. Both were on screen when Play was
         /// pressed, which is the only thing that matters here.
+        ///
+        /// Also true for externally injected content, which is pinned for the
+        /// same reason: somebody asked for it by name.
         public bool fromScene;
         /// Sourced from the bundled Sample project rather than the creator's
         /// own content. Surfaced so a spawned attraction can never be mistaken
         /// for something they wrote.
         public bool fromSample;
         public string assetPath;
+
+        /// Handed over by a host tool rather than found on disk — see
+        /// ParkSimExternalContent. Carries the ticket id so the overlay can
+        /// take it back out again.
+        public bool external;
+        public string externalId;
+        public string externalOrigin;
 
         public GameObject Source { get { return sceneTemplate != null ? sceneTemplate : prefabAsset; } }
     }
@@ -194,6 +211,9 @@ namespace DreamPark.ParkSim
                 }
             }
 
+            // ── Injected content ─────────────────────────────────────────
+            AppendExternal(result, includeProps);
+
             if (result.player == null) {
                 result.notes.Add(
                     "No Player prefab found (nothing in the project or scene carries PlayerRig). " +
@@ -210,6 +230,82 @@ namespace DreamPark.ParkSim
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Fold in whatever a host tool handed us. Resolution happens HERE,
+        /// once per generation, rather than at the moment the ticket was
+        /// created: a catalog can be remounted or a version swapped in
+        /// between, and a ticket that re-asks survives that where a stored
+        /// GameObject would be pointing at a released asset.
+        ///
+        /// THE PREFAB DECIDES THE KIND, not the caller. A host tool
+        /// classifying from a catalog key path ("…/Levels/…", "…/Props/…") is
+        /// reading a naming convention; the components on the resolved prefab
+        /// are the actual answer, and getting it wrong would place an
+        /// attraction as a prop — clustered beside a host and feeding
+        /// GapFiller a height it has no business contributing.
+        /// </summary>
+        private static void AppendExternal(ScanResult result, bool includeProps)
+        {
+            foreach (var ticket in ParkSimExternalContent.Tickets)
+            {
+                if (ticket == null || ticket.resolve == null) continue;
+
+                GameObject prefab = null;
+                try {
+                    prefab = ticket.resolve();
+                } catch (System.Exception e) {
+                    result.notes.Add(ticket.displayName + " could not be resolved: " + e.Message);
+                    continue;
+                }
+
+                if (prefab == null) {
+                    result.notes.Add(
+                        ticket.displayName + " is still listed but its prefab did not resolve this " +
+                        "generation — its catalog is probably no longer mounted. Tap it again, or " +
+                        "remove it from the Park Sim panel.");
+                    continue;
+                }
+
+                ContentKind kind;
+                if (prefab.GetComponent<LevelTemplate>() != null) kind = ContentKind.Attraction;
+                else if (prefab.GetComponent<PropTemplate>() != null) kind = ContentKind.Prop;
+                else if (prefab.GetComponent<PlayerRig>() != null) kind = ContentKind.Player;
+                else {
+                    kind = ticket.declaredKind;
+                    result.notes.Add(
+                        ticket.displayName + " carries no LevelTemplate, PropTemplate or PlayerRig, so " +
+                        "it will be placed as plain geometry — no floor, no navmesh, no calibration. " +
+                        "That is what it would do in a real park too.");
+                }
+
+                if (kind == ContentKind.Prop && !includeProps) continue;
+
+                var entry = new ContentEntry {
+                    displayName = ticket.displayName,
+                    kind = kind,
+                    prefabAsset = prefab,
+                    // No asset path: this prefab lives in a bundle, not on
+                    // disk. The floor cache and the viewpoint restore both fall
+                    // back to the display name, which is stable for a ticket.
+                    assetPath = null,
+                    hasUnappliedOverrides = false,
+                    fromSample = false,
+                    fromScene = true,
+                    external = true,
+                    externalId = ticket.id,
+                    externalOrigin = ticket.origin,
+                };
+
+                if (kind == ContentKind.Player) {
+                    // An injected player is an explicit request and outranks
+                    // whatever the scan happened to find first.
+                    result.player = entry;
+                } else {
+                    result.placeables.Add(entry);
+                }
+            }
         }
 
         private static void TriageSceneInstance(
@@ -239,6 +335,13 @@ namespace DreamPark.ParkSim
             // PropTemplate to it later fails safe instead of silently killing
             // the camera.
             if (go.GetComponentInParent<Simulator>(true) != null) return null;
+
+            // Nor anything a park source built. Those objects loaded through
+            // the shipping path, are already registered with the optimizer, and
+            // in a real park carry floor data baked at the venue — respawning
+            // them here would place a second copy on a marker and calibrate it
+            // against ground that is not theirs.
+            if (go.GetComponentInParent<ParkSimRoot>(true) != null) return null;
 
             bool isInstance = PrefabUtility.IsPartOfPrefabInstance(go);
             string assetPath = null;
