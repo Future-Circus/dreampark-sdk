@@ -25,13 +25,15 @@ A fuller tour of the program lives at **[dreampark.app/developer](https://dreamp
 
 ## Quick start
 
-**You need:** a **Meta Quest 3S** (or Quest 3) in Developer Mode, a USB-C **data** cable, and [Unity Hub](https://unity.com/download).
+**You need:** a **Meta Quest 3S** (or Quest 3) in Developer Mode, a USB-C **data** cable, [Unity Hub](https://unity.com/download), and [Git LFS](https://git-lfs.com).
 
-1. **Install Unity `6000.0.58f2`** via Unity Hub, with **Android Build Support** (including its OpenJDK and Android SDK & NDK sub-modules) and **iOS Build Support**.
-2. **Clone this repo:**
+1. **Install Unity `6000.0.39f1`** via Unity Hub, with **Android Build Support** (including its OpenJDK and Android SDK & NDK sub-modules) and **iOS Build Support**.
+2. **Install Git LFS, then clone this repo.** The SDK's art, audio, models and native plugins live in [Git LFS](https://git-lfs.com). Without it the clone still *appears* to work, but every binary arrives as a small text placeholder and the project opens broken.
    ```bash
+   git lfs install   # once per machine — before cloning
    git clone https://github.com/Future-Circus/dreampark-sdk.git MyGame
    ```
+   Already cloned without it? Open the project and run `DreamPark → Troubleshooting → Check Git LFS` — the SDK finds the placeholders and downloads the real files for you.
 3. **Open it in Unity** — Unity Hub → Add → pick the folder. Let packages resolve (a few minutes), then give your game an ID in the popup. That renames the placeholder content folder; **the folder name is your content ID**.
 4. **Sign in:** `DreamPark → Sign In`. New here? Hit **Sign Up** in the popup first.
 5. **Open the example scene:** `Assets/Content/<your game ID>/1. Scenes/Template.unity` — an example Attraction and Prop, already wired up.
@@ -98,7 +100,9 @@ You don't need a finished park to publish. Every upload bundles whatever attract
 <details>
 <summary><strong>Setup and build</strong></summary>
 
-- **"Editor version not found" in Unity Hub** — `6000.0.58f2` isn't installed. Install it.
+- **"Editor version not found" in Unity Hub** — `6000.0.39f1` isn't installed. Install it. Newer 6000.x releases aren't supported yet; the project is pinned to this one.
+- **Pink materials, silent audio, missing meshes, or a native plugin that won't load** — the repo was cloned without Git LFS, so those assets are text placeholders rather than real files. Run `DreamPark → Troubleshooting → Check Git LFS` to download them, or from a terminal in the project folder: `git lfs install && git lfs pull`. The SDK also checks for this automatically when the project opens.
+- **A dialog asks to send "XLua Version / Unity Version / Device Identifier"** — that's XLua's own analytics ping, and it's removed from this version of the SDK. If you're on an older clone, either button is safe; **Deny** just skips the ping and nothing in the SDK depends on it.
 - **Console errors on first open** — let Unity finish downloading packages. Still broken? Close Unity, delete the project's `Library` folder, reopen.
 - **Quest doesn't appear when you press Play** — check Developer Mode is on, that the USB-C cable carries data (not charge-only), and that you accepted the USB Debugging prompt inside the headset.
 - **Sign-in fails** — reset your password from the **Sign Up** link in the popup, then reopen `DreamPark → Sign In`.

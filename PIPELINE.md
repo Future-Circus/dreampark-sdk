@@ -1,6 +1,6 @@
 # DreamPark SDK — Unity Mixed Reality Game Pipeline
 
-End-to-end ordered checklist for shipping a mixed-reality experience on Meta Quest 3S using the **dreampark-sdk** (Unity 6000.0.58f2, URP, OpenXR, Meta XR SDK 81, Addressables, XLua).
+End-to-end ordered checklist for shipping a mixed-reality experience on Meta Quest 3S using the **dreampark-sdk** (Unity 6000.0.39f1, URP, OpenXR, Meta XR SDK 81, Addressables, XLua).
 
 The paradigm in one paragraph: a creator clones `dreampark-sdk`, opens it in Unity, and names their game in the setup popup that appears (renaming `Assets/Content/YOUR_GAME_HERE/` to a `PascalCase` game name, e.g. `CoinCollector` — the folder name IS the content ID), then authors the experience as one or more **Attractions** (rooms / activities) populated with **Props** (interactive objects). The headset's `Camera.main` position drives a `GameArea` enter/exit check on every Attraction; the matching `PlayerRig` and `DreamBand` (wrist UI) `Show()` while inside, `Hide()` outside. **All gameplay logic lives in Lua scripts** attached to GameObjects via the `LuaBehaviour` component (XLua) — never write C# for gameplay. Final output is automatically bundled via Addressables and deployed to DreamPark servers via `DreamPark → Content Uploader`.
 
@@ -33,7 +33,7 @@ Anything more elaborate must be expressed by combining these three.
 
 ## Phase 1 — Project Bootstrap
 
-1. Verify Unity Hub has **Unity 6000.0.58f2** with the **Android Build Support** module (includes OpenJDK + Android SDK + NDK).
+1. Verify Unity Hub has **Unity 6000.0.39f1** with the **Android Build Support** module (includes OpenJDK + Android SDK + NDK).
 2. Clone the SDK: `git clone https://github.com/Future-Circus/dreampark-sdk.git MyPark` then `cd MyPark`.
 3. Open the project in Unity. On first load a **setup popup** appears — enter your game ID (letters and digits only, starting with a letter, e.g. `MyParkName`). It renames `Assets/Content/YOUR_GAME_HERE/` to `Assets/Content/MyParkName/` and rewrites every `gameId: YOUR_GAME_HERE` reference inside prefabs and scenes. (Dismissed it? The Content Uploader's **Set Content ID** button reopens it.)
 4. Wait for the package resolver to finish (`com.meta.xr.sdk.core 81.0.0`, `com.unity.xr.oculus 4.5.0`, `com.unity.addressables 2.3.16`, etc., listed in `Packages/manifest.json`).
