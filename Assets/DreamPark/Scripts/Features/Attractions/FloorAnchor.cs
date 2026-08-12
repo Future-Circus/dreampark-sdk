@@ -112,7 +112,44 @@ namespace DreamPark {
         //  revised.
         private bool authoredVerticalCaptured = false;
         private float authoredVerticalOffset = 0f;
-        
+
+        // ── The authored orientation, captured ONCE ──────────────────────
+        //  Grade matching must decide TILT ONLY. Yaw — where the object faces
+        //  in the XZ plane — is an authoring decision and the floor has no
+        //  opinion about it.
+        //
+        //  It used to derive yaw from the floor samples themselves:
+        //
+        //      forward = (backCenter - frontCenter).normalized
+        //      rotation = Quaternion.LookRotation(forward, up)
+        //
+        //  Those centres come from cornerVertexIndices, which snap the
+        //  object's four bounds corners to the NEAREST FLOOR VERTEX. For
+        //  anything shallower than the floor's vertex spacing — a barricade
+        //  0.66m deep on a grid with ~0.9m spacing — both front corners and
+        //  both back corners land on the same vertices. backCenter minus
+        //  frontCenter is then either numerical noise or a vector pointing
+        //  along the floor GRID, and normalising it produces a confident,
+        //  completely wrong heading. That heading was written as the object's
+        //  whole world rotation, so long thin props swung up to 90 degrees and
+        //  every connected run of track came apart.
+        //
+        //  Now the samples supply only the plane normal, and the correction is
+        //  the minimal-arc rotation carrying world up onto that normal:
+        //
+        //      rotation = FromToRotation(Vector3.up, gradeUp) * authored
+        //
+        //  A minimal-arc rotation has a horizontal axis, so it introduces no
+        //  twist about up — the authored yaw survives exactly, while the
+        //  object still lies flush with the grade.
+        //
+        //  Captured once and never revised, for the same reason
+        //  authoredVerticalOffset is: this component WRITES rotation, so
+        //  re-reading it later would read back its own last output and let any
+        //  error compound. firstUpdate resets on recalibration; this must not.
+        private bool authoredRotationCaptured = false;
+        private Quaternion authoredLocalRotation = Quaternion.identity;
+
         // Multi-point tracking (4 corners + center)
         private int[] cornerVertexIndices = new int[4] { -1, -1, -1, -1 };
         private Vector3[] cornerLocalOffsets = new Vector3[4];
@@ -570,107 +607,89 @@ namespace DreamPark {
         }
 
         /// <summary>
-        /// Calculates rotation from valid corners. Handles 2, 3, or 4 corner cases.
+        /// Plane normal from the valid corners. Handles 2, 3, or 4 corner cases.
+        /// Returns false when there is not enough evidence to fit anything, in
+        /// which case the caller must leave the rotation alone.
+        ///
+        /// This deliberately answers ONLY "which way is up here". It used to
+        /// return a full Quaternion including a heading derived from the sample
+        /// positions — see authoredLocalRotation for why that was wrong.
         /// </summary>
-        Quaternion CalculateGradeRotation(int[] validIndices, Vector3[] validPositions)
+        bool TryCalculateGradeNormal(int[] validIndices, Vector3[] validPositions, out Vector3 up)
         {
+            up = Vector3.up;
+
             if (validPositions.Length < 2)
             {
-                // Not enough points - return current rotation
                 if (debugOutlierFiltering)
                     Debug.LogWarning("[FloorAnchor] Less than 2 valid corners - cannot calculate grade");
-                return transform.rotation;
+                return false;
             }
-            
-            Vector3 up;
-            Vector3 forward;
-            
+
             if (validPositions.Length >= 3)
             {
                 // 3+ points: calculate plane normal
                 Vector3 edge1 = validPositions[1] - validPositions[0];
                 Vector3 edge2 = validPositions[2] - validPositions[0];
-                up = Vector3.Cross(edge1, edge2).normalized;
-                
+                Vector3 n = Vector3.Cross(edge1, edge2);
+
+                // Collinear samples cross to nothing. Normalising that yields a
+                // unit vector built from rounding error, which is exactly the
+                // class of bug this method was rewritten to remove.
+                if (n.sqrMagnitude < 1e-10f)
+                {
+                    if (debugOutlierFiltering)
+                        Debug.LogWarning("[FloorAnchor] Corner samples are collinear - cannot fit a plane");
+                    return false;
+                }
+
+                up = n.normalized;
                 if (up.y < 0)
                     up = -up;
-                
-                // Calculate forward from the valid corners we have
-                forward = CalculateForwardFromValidCorners(validIndices, validPositions, up);
+                return true;
             }
-            else // exactly 2 points
+
+            // Exactly 2 points: estimate tilt along one axis, keep the other level.
+            Vector3 edge = validPositions[1] - validPositions[0];
+            Vector3 horizontal = new Vector3(edge.x, 0, edge.z);
+            if (horizontal.sqrMagnitude < 1e-10f)
             {
-                // 2 points: estimate tilt along one axis, keep other axis level
-                Vector3 edge = validPositions[1] - validPositions[0];
-                Vector3 horizontal = new Vector3(edge.x, 0, edge.z).normalized;
-                float tiltAngle = Mathf.Atan2(edge.y, new Vector2(edge.x, edge.z).magnitude) * Mathf.Rad2Deg;
-                
-                // Determine if this edge is more front-back or left-right based on corner indices
-                bool isFrontBackEdge = (validIndices[0] <= 1 && validIndices[1] >= 2) || (validIndices[1] <= 1 && validIndices[0] >= 2);
-                
-                if (isFrontBackEdge)
-                {
-                    // Tilt forward/back
-                    up = Quaternion.AngleAxis(-tiltAngle, Vector3.Cross(Vector3.up, horizontal)) * Vector3.up;
-                    forward = horizontal;
-                }
-                else
-                {
-                    // Tilt left/right - keep forward as current forward projected
-                    Vector3 right = horizontal;
-                    up = Quaternion.AngleAxis(tiltAngle, right) * Vector3.up;
-                    forward = Vector3.Cross(right, up).normalized;
-                }
-                
+                // The two samples are vertically stacked — no horizontal run to
+                // measure a slope against.
                 if (debugOutlierFiltering)
-                    Debug.Log($"[FloorAnchor] 2-corner fallback: edge tilt={tiltAngle:F1}°, isFrontBack={isFrontBackEdge}");
+                    Debug.LogWarning("[FloorAnchor] 2-corner fallback: samples share an XZ position");
+                return false;
             }
-            
-            forward = Vector3.ProjectOnPlane(forward, up).normalized;
-            return Quaternion.LookRotation(forward, up);
+            horizontal = horizontal.normalized;
+
+            float tiltAngle = Mathf.Atan2(edge.y, new Vector2(edge.x, edge.z).magnitude) * Mathf.Rad2Deg;
+
+            // Which axis the edge spans still matters: it decides the sign and
+            // the axis the tilt is applied about.
+            bool isFrontBackEdge = (validIndices[0] <= 1 && validIndices[1] >= 2) || (validIndices[1] <= 1 && validIndices[0] >= 2);
+
+            up = isFrontBackEdge
+                ? Quaternion.AngleAxis(-tiltAngle, Vector3.Cross(Vector3.up, horizontal)) * Vector3.up
+                : Quaternion.AngleAxis(tiltAngle, horizontal) * Vector3.up;
+
+            if (debugOutlierFiltering)
+                Debug.Log($"[FloorAnchor] 2-corner fallback: edge tilt={tiltAngle:F1}°, isFrontBack={isFrontBackEdge}");
+            return true;
         }
-        
-        Vector3 CalculateForwardFromValidCorners(int[] validIndices, Vector3[] validPositions, Vector3 up)
+
+        /// <summary>
+        /// Tilt the AUTHORED orientation onto the measured grade, changing nothing else.
+        /// FromToRotation gives the minimal arc from world up to the grade normal; its
+        /// axis is horizontal, so it adds no twist about up and the authored yaw comes
+        /// through untouched.
+        /// </summary>
+        Quaternion GradeRotationFromNormal(Vector3 gradeUp)
         {
-            // Corner layout: 0=front-left, 1=front-right, 2=back-right, 3=back-left
-            // Try to find front and back centers from available corners
-            
-            System.Collections.Generic.List<Vector3> frontPoints = new System.Collections.Generic.List<Vector3>();
-            System.Collections.Generic.List<Vector3> backPoints = new System.Collections.Generic.List<Vector3>();
-            
-            for (int i = 0; i < validIndices.Length; i++)
-            {
-                int cornerIdx = validIndices[i];
-                if (cornerIdx <= 1) // front corners (0, 1)
-                    frontPoints.Add(validPositions[i]);
-                else // back corners (2, 3)
-                    backPoints.Add(validPositions[i]);
-            }
-            
-            Vector3 forward;
-            
-            if (frontPoints.Count > 0 && backPoints.Count > 0)
-            {
-                // We have at least one front and one back point
-                Vector3 frontCenter = Vector3.zero;
-                foreach (var p in frontPoints) frontCenter += p;
-                frontCenter /= frontPoints.Count;
-                
-                Vector3 backCenter = Vector3.zero;
-                foreach (var p in backPoints) backCenter += p;
-                backCenter /= backPoints.Count;
-                
-                forward = (backCenter - frontCenter).normalized;
-            }
-            else
-            {
-                // All points on one side - use object's current forward projected onto plane
-                forward = Vector3.ProjectOnPlane(transform.forward, up).normalized;
-                if (forward.sqrMagnitude < 0.001f)
-                    forward = Vector3.ProjectOnPlane(Vector3.forward, up).normalized;
-            }
-            
-            return forward;
+            Quaternion authoredWorld = transform.parent != null
+                ? transform.parent.rotation * authoredLocalRotation
+                : authoredLocalRotation;
+
+            return Quaternion.FromToRotation(Vector3.up, gradeUp) * authoredWorld;
         }
 
         void UpdateMultiPoint()
@@ -692,8 +711,17 @@ namespace DreamPark {
                 }
             }
 
+            // Read the authored orientation before this component has written
+            // any rotation. Every later cycle reads back its own output, so this
+            // is the only moment the value is trustworthy.
+            if (!authoredRotationCaptured)
+            {
+                authoredLocalRotation = transform.localRotation;
+                authoredRotationCaptured = true;
+            }
+
             Vector3[] verts = floorMesh.vertices;
-            
+
             Vector3 centerVertexLocal = verts[centerVertexIndex];
             Vector3 centerVertexWorld = floorTransform.TransformPoint(centerVertexLocal);
 
@@ -752,17 +780,21 @@ namespace DreamPark {
             {
                 // Two corners define a line, not a plane. Their mean height is
                 // the honest answer — better than one arbitrary vertex, and it
-                // matches what CalculateGradeRotation does with two points.
+                // matches what TryCalculateGradeNormal does with two points.
                 float meanY = (validPositions[0].y + validPositions[1].y) * 0.5f;
                 targetPositionWorld = new Vector3(anchorHere.x, meanY + verticalOffset, anchorHere.z);
             }
             
-            Quaternion targetRotationWorld;
-            
+            // Keep the current rotation unless the samples actually support a
+            // change. "No usable grade" must mean "leave it alone", not "adopt
+            // whatever a degenerate fit produced".
+            Quaternion targetRotationWorld = transform.rotation;
+            Vector3 gradeUp = Vector3.up;
+            bool haveGrade = false;
+
             if (validIndices.Length >= 2)
             {
-                // Calculate rotation from valid corners
-                targetRotationWorld = CalculateGradeRotation(validIndices, validPositions);
+                haveGrade = TryCalculateGradeNormal(validIndices, validPositions, out gradeUp);
             }
             else
             {
@@ -772,24 +804,25 @@ namespace DreamPark {
                 {
                     floorVertices[i] = floorTransform.TransformPoint(verts[cornerVertexIndices[i]]);
                 }
-                
+
                 Vector3 edge1 = floorVertices[1] - floorVertices[0];
                 Vector3 edge2 = floorVertices[2] - floorVertices[0];
-                Vector3 up = Vector3.Cross(edge1, edge2).normalized;
-                
-                if (up.y < 0)
-                    up = -up;
+                Vector3 n = Vector3.Cross(edge1, edge2);
 
-                Vector3 frontCenter = (floorVertices[0] + floorVertices[1]) / 2f;
-                Vector3 backCenter = (floorVertices[2] + floorVertices[3]) / 2f;
-                Vector3 forward = (backCenter - frontCenter).normalized;
-                forward = Vector3.ProjectOnPlane(forward, up).normalized;
+                if (n.sqrMagnitude > 1e-10f)
+                {
+                    gradeUp = n.normalized;
+                    if (gradeUp.y < 0)
+                        gradeUp = -gradeUp;
+                    haveGrade = true;
+                }
 
-                targetRotationWorld = Quaternion.LookRotation(forward, up);
-                
                 if (debugOutlierFiltering)
                     Debug.LogWarning("[FloorAnchor] Not enough valid corners, using all corners (may include outliers)");
             }
+
+            if (haveGrade)
+                targetRotationWorld = GradeRotationFromNormal(gradeUp);
 
             Vector3 targetPositionLocal = targetPositionWorld;
             Quaternion targetRotationLocal = targetRotationWorld;
@@ -875,12 +908,104 @@ namespace DreamPark {
             };
         }
 
+        /// <summary>
+        /// Roughly the distance between neighbouring floor vertices, in world units.
+        /// A 60ft attraction at grid density 20 works out around 0.9m.
+        /// </summary>
+        float FloorVertexSpacing()
+        {
+            if (floorMesh == null || floorTransform == null) return 0f;
+
+            Vector3 sizeWorld = floorTransform.TransformVector(floorMesh.bounds.size);
+            float area = Mathf.Abs(sizeWorld.x) * Mathf.Abs(sizeWorld.z);
+            int n = Mathf.Max(floorMesh.vertexCount, 1);
+            if (area <= 0f) return 0f;
+
+            return Mathf.Sqrt(area / n);
+        }
+
+        /// <summary>
+        /// The rectangle whose corners get snapped to floor vertices — the object's
+        /// own footprint, but never smaller than the floor can actually resolve.
+        ///
+        /// The corners are snapped to the NEAREST FLOOR VERTEX, so an object
+        /// shallower than the vertex spacing has all four of its corners land on
+        /// the same row. A jiggle barricade is 0.23m deep once placed at 0.35
+        /// scale, against ~0.9m spacing: four samples, one line, no plane. The
+        /// grade fit then either produces a normal built from rounding error, or —
+        /// once that was guarded — correctly declines to fit anything, which is
+        /// why the barricades sat flat while everything else tilted.
+        ///
+        /// Widening the sample rectangle to about one grid cell fixes it, and is
+        /// not a fudge: the floor mesh has no information at a finer scale than
+        /// its own vertices, so the grade "under" a 23cm-deep prop is necessarily
+        /// the grade of the cell it sits in. Large objects are untouched — their
+        /// own extents already exceed the minimum.
+        ///
+        /// The rectangle is built on the object's own axes, so it stays aligned to
+        /// the prop rather than to the world, and is emitted in a single canonical
+        /// order (0=-A-B, 1=+A-B, 2=-A+B, 3=+A+B). That also settles a discrepancy
+        /// between the two sources feeding this: GetBoundsCorners returned rows
+        /// while precalculatedCorners returned winding order, so index 2 and 3
+        /// meant different corners depending on which path ran — which the
+        /// front/back edge test in the 2-corner fallback silently depended on.
+        /// </summary>
+        Vector3[] BuildSampleRectangle(Vector3[] boundsCorners)
+        {
+            Vector3 c = Vector3.zero;
+            float y = boundsCorners[0].y;
+            for (int i = 0; i < 4; i++)
+            {
+                c += boundsCorners[i];
+                y = Mathf.Min(y, boundsCorners[i].y);
+            }
+            c *= 0.25f;
+
+            Vector3 axisA = Vector3.ProjectOnPlane(transform.right, Vector3.up);
+            Vector3 axisB = Vector3.ProjectOnPlane(transform.forward, Vector3.up);
+            if (axisA.sqrMagnitude < 1e-6f) axisA = Vector3.right;
+            if (axisB.sqrMagnitude < 1e-6f) axisB = Vector3.forward;
+            axisA = axisA.normalized;
+            axisB = axisB.normalized;
+            // An object pitched to face straight up or down flattens both axes onto
+            // the same line; rebuild the second one perpendicular.
+            if (Mathf.Abs(Vector3.Dot(axisA, axisB)) > 0.99f)
+                axisB = Vector3.Cross(Vector3.up, axisA).normalized;
+
+            float halfA = 0f, halfB = 0f;
+            for (int i = 0; i < 4; i++)
+            {
+                Vector3 d = boundsCorners[i] - c;
+                d.y = 0f;
+                halfA = Mathf.Max(halfA, Mathf.Abs(Vector3.Dot(d, axisA)));
+                halfB = Mathf.Max(halfB, Mathf.Abs(Vector3.Dot(d, axisB)));
+            }
+
+            float minHalf = FloorVertexSpacing() * 1.25f;
+            bool widened = halfA < minHalf || halfB < minHalf;
+            halfA = Mathf.Max(halfA, minHalf);
+            halfB = Mathf.Max(halfB, minHalf);
+
+            if (widened && debugOutlierFiltering)
+                Debug.Log($"[FloorAnchor] {name}: sample rectangle widened to " +
+                          $"{halfA * 2f:F2} x {halfB * 2f:F2}m so the floor grid can resolve a plane");
+
+            Vector3 center = new Vector3(c.x, y, c.z);
+            return new Vector3[4]
+            {
+                center - axisA * halfA - axisB * halfB,
+                center + axisA * halfA - axisB * halfB,
+                center - axisA * halfA + axisB * halfB,
+                center + axisA * halfA + axisB * halfB,
+            };
+        }
+
         void CacheCornerVertices()
         {
             if (floorMesh == null || floorTransform == null) return;
 
             cachedBounds = CalculateAccurateBounds();
-            Vector3[] corners = GetBoundsCorners(cachedBounds);
+            Vector3[] corners = BuildSampleRectangle(GetBoundsCorners(cachedBounds));
 
             Vector3[] verts = floorMesh.vertices;
 
@@ -1035,7 +1160,10 @@ namespace DreamPark {
 
                 if (floorMeshFilter != null && floorMesh != null)
                 {
-                    Vector3[] corners = GetBoundsCorners(cachedBounds);
+                    // Same rectangle CacheCornerVertices sampled, widening included —
+                    // drawing the raw bounds here would show a footprint the
+                    // placement never used.
+                    Vector3[] corners = BuildSampleRectangle(GetBoundsCorners(cachedBounds));
                     Vector3[] verts = floorMesh.vertices;
                     
                     // Calculate which corners are valid for visualization

@@ -129,9 +129,24 @@ public class HandTracker : MonoBehaviour
     void UpdateStep()
     {
 #if UNITY_EDITOR
+        // FindHandAnchors() ends by calling ChooseHand(), so the device
+        // selection logic runs here too — if the editor is reporting real
+        // tracking (Meta XR Simulator, Link) this behaves exactly as a
+        // headset does, handPreference and all.
         FindHandAnchors();
-        activeHand = leftHand;
-        activeHandAnchor = leftAnchor;
+
+        // Nothing tracked is the NORMAL editor case: there is no hand to
+        // raise. Fall back to the preferred hand so the rig is still usable,
+        // which is why this branch existed at all — it just used to hardcode
+        // the left one, so handPreference was unreachable in the editor and
+        // right-handed content could not be tested without a headset.
+        // DreamPark ▸ Hand Tracking sets that preference.
+        if (!isActiveAndTracking)
+        {
+            bool preferRight = handPreference == HandPreference.Right;
+            activeHand       = preferRight ? rightHand   : leftHand;
+            activeHandAnchor = preferRight ? rightAnchor : leftAnchor;
+        }
 #else
         if (!activeHandAnchor) {
             FindHandAnchors();
