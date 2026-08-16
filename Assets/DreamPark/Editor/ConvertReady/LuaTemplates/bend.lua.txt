@@ -1,0 +1,212 @@
+-- ============================================================
+-- {PROP}.lua.txt — this prop's script. Bendy.
+--
+-- THIS IS YOUR FILE. Convert generated it and will not touch it
+-- again. It leans away from whatever comes near it, on a damped
+-- spring, and settles back. Everything else this prop ever does
+-- goes below.
+--
+-- WHERE IT LIVES
+--   On the Motion node, NEVER on the prop root.
+--
+--   This script writes localRotation every frame. The park loader
+--   instantiates the prefab and writes localRotation on the spawned
+--   ROOT afterwards — so anything owning the root's rotation
+--   overwrites the park's authored yaw on the first live frame, and
+--   every bendy prop in the park snaps to the same facing. It reads
+--   as a park-data bug and it is not one. The Motion node exists so
+--   the root's rotation stays the park's and the lean stays ours.
+--
+-- NO COLLIDER NEEDED
+--   The lean is driven by an OverlapSphere, not by contact, so a
+--   bendy prop does not need a collider of its own and the Bendy
+--   preset does not fit one. Add one if you want the prop to be
+--   grabbable or to stop things passing through it — the bend does
+--   not care either way, and self-colliders are filtered out below.
+--
+-- WHAT BENDS IT
+--   Anything on any layer, by default, that carries a Rigidbody —
+--   plus the player, always, whether or not their rig has one. The
+--   Rigidbody test is what keeps a wall or a floor from leaning the
+--   prop over permanently: static geometry never moves out of range,
+--   so without it a prop next to a wall lies down and stays down.
+--   Set requireRigidbody false and you will see exactly that.
+--
+-- @var detectionOffset vector3
+-- @var detectionRadius float 0.35
+-- @var maxTiltAngle float 22.0
+-- @var springStrength float 55.0
+-- @var springDamping float 7.0
+-- @var influence float 1.0
+-- @var requireRigidbody bool true
+-- @var ignoreTriggers bool true
+-- @var detectionMask int -1
+-- @var queryInterval float 0.05
+-- ============================================================
+
+local UE = CS.UnityEngine
+local Physics = UE.Physics
+local Time = UE.Time
+local Quaternion = UE.Quaternion
+local Vector3 = UE.Vector3
+
+local ColliderType = typeof(UE.Collider)
+
+-- ── Injected knobs, defended ────────────────────────────────
+
+local detection_offset = detectionOffset or Vector3.zero
+local detection_radius = detectionRadius or 0.35
+local max_tilt         = maxTiltAngle or 22.0
+local spring_strength  = springStrength or 55.0
+local spring_damping   = springDamping or 7.0
+local influence_mult   = influence or 1.0
+local detection_mask   = detectionMask or -1     -- -1 == ~0 == every layer
+local query_interval   = queryInterval or 0.05
+
+local require_rigidbody = requireRigidbody
+if require_rigidbody == nil then require_rigidbody = true end
+
+local ignore_triggers = ignoreTriggers
+if ignore_triggers == nil then ignore_triggers = true end
+
+local QUERY_MODE = UE.QueryTriggerInteraction.Collide
+if ignore_triggers then QUERY_MODE = UE.QueryTriggerInteraction.Ignore end
+
+-- ── State ───────────────────────────────────────────────────
+
+local base_local_rotation = nil
+local self_colliders = nil
+
+local tilt_x, tilt_y = 0.0, 0.0            -- degrees
+local vel_x, vel_y = 0.0, 0.0              -- degrees/sec
+
+-- The overlap query is the expensive half and the spring is the half
+-- that has to be smooth. They are decoupled: the query runs at
+-- queryInterval and the spring integrates every frame towards whatever
+-- it last found. At the default that is 20 queries a second instead of
+-- 72–120, for motion nobody can tell apart — Physics.OverlapSphere
+-- allocates a fresh array per call, and a park full of bendy props
+-- calling it every frame is a GC problem you find on a headset and not
+-- in the editor.
+local next_query_at = -1.0
+local target_x, target_y = 0.0, 0.0
+
+-- ── Detection ───────────────────────────────────────────────
+
+local function is_self(hit)
+    if hit == nil or self_colliders == nil then return false end
+    for i = 0, self_colliders.Length - 1 do
+        if hit == self_colliders[i] then return true end
+    end
+    return false
+end
+
+-- Accepted if it carries a Rigidbody, OR if it is the player.
+--
+-- The `or` is not redundant. requireRigidbody exists to filter out
+-- static geometry, but whether a hand-tracking rig's colliders have an
+-- attachedRigidbody is a property of the rig, not of this prop — and if
+-- they do not, the strictly-correct version of this check makes the prop
+-- ignore the one thing it is supposed to react to, silently, forever.
+local function accepts(hit)
+    if not require_rigidbody then return true end
+    if hit.attachedRigidbody ~= nil then return true end
+    return dp.is_player(hit)
+end
+
+local function query()
+    -- Centred on the prop's MIDDLE, not on this node's origin. After the
+    -- ground-pivot stage that origin sits on the FLOOR, so a sphere centred
+    -- there is half underground: it misses a hand reaching for the top of a
+    -- tall prop, and it is centred on the one surface the prop is guaranteed
+    -- to be touching.
+    local origin = self.transform:TransformPoint(detection_offset)
+    local hits = Physics.OverlapSphere(origin, detection_radius, detection_mask, QUERY_MODE)
+    if hits == nil then return 0.0, 0.0 end
+
+    local best_weight = 0.0
+    local best_x, best_y = 0.0, 0.0
+
+    for i = 0, hits.Length - 1 do
+        local hit = hits[i]
+        if hit ~= nil and not is_self(hit) and accepts(hit) then
+            -- ClosestPoint, not transform.position: a hand is a metre of
+            -- collider and its pivot may be at the wrist. Leaning away from
+            -- the pivot makes the prop react before the fingers arrive.
+            local away = origin - hit:ClosestPoint(origin)
+            local dist = away.magnitude
+
+            if dist > 0.0001 and dist <= detection_radius then
+                local weight = 1.0 - (dist / detection_radius)
+                if weight > best_weight then
+                    -- Local space, so the lean is relative to how the prop is
+                    -- standing rather than to the world. (z, -x) maps a push
+                    -- along +Z to a tilt about X and a push along +X to a
+                    -- tilt about Z — i.e. it leans AWAY.
+                    local local_away = self.transform:InverseTransformDirection(away.normalized)
+                    local amount = max_tilt * weight * influence_mult
+                    best_weight = weight
+                    best_x = local_away.z * amount
+                    best_y = -local_away.x * amount
+                end
+            end
+        end
+    end
+
+    return best_x, best_y
+end
+
+-- ── Public API ──────────────────────────────────────────────
+
+--- Push it by hand, from any world position. Useful for a scripted
+--- reaction that has no collider behind it — a gust, a distant impact.
+function nudge_from(world_point)
+    if world_point == nil then return end
+    local away = self.transform.position - world_point
+    if away.magnitude < 0.0001 then return end
+    local local_away = self.transform:InverseTransformDirection(away.normalized)
+    target_x = local_away.z * max_tilt
+    target_y = -local_away.x * max_tilt
+    next_query_at = Time.time + query_interval
+end
+
+--- Current lean in degrees, as it is being rendered.
+function get_tilt()
+    return tilt_x, tilt_y
+end
+
+-- ── Lifecycle ───────────────────────────────────────────────
+
+function onready()
+    -- Not awake(): the park spawner parents and poses this object AFTER
+    -- Awake, so a localRotation cached there is the prefab's, not the
+    -- park's — and every frame after would spring back to the wrong rest
+    -- pose. onready() is sticky and fires once the world is real.
+    base_local_rotation = self.transform.localRotation
+    self_colliders = self.gameObject:GetComponentsInChildren(ColliderType, true)
+end
+
+function update()
+    if base_local_rotation == nil then return end
+
+    local dt = Time.deltaTime
+    if dt <= 0 then return end
+
+    if Time.time >= next_query_at then
+        next_query_at = Time.time + query_interval
+        target_x, target_y = query()
+    end
+
+    -- Damped spring: leans away, overshoots a little, settles. Integrated
+    -- every frame regardless of the query rate, so the motion is smooth
+    -- even though the target is not updated every frame.
+    local accel_x = ((target_x - tilt_x) * spring_strength) - (vel_x * spring_damping)
+    local accel_y = ((target_y - tilt_y) * spring_strength) - (vel_y * spring_damping)
+
+    vel_x = vel_x + accel_x * dt
+    vel_y = vel_y + accel_y * dt
+    tilt_x = tilt_x + vel_x * dt
+    tilt_y = tilt_y + vel_y * dt
+
+    self.transform.localRotation = base_local_rotation * Quaternion.Euler(tilt_x, 0.0, tilt_y)
+end

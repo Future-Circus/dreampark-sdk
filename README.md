@@ -27,21 +27,23 @@ A fuller tour of the program lives at **[dreampark.app/developer](https://dreamp
 
 **You need:** a **Meta Quest 3S** (or Quest 3) in Developer Mode, a USB-C **data** cable, [Unity Hub](https://unity.com/download), and [Git LFS](https://git-lfs.com).
 
-1. **Install Unity `6000.0.39f1`** via Unity Hub, with **Android Build Support** (including its OpenJDK and Android SDK & NDK sub-modules) and **iOS Build Support**.
+1. **Install Unity `6000.0.39f1`** via Unity Hub, with **Android Build Support** (including its OpenJDK and Android SDK & NDK sub-modules) and **iOS Build Support** — the uploader builds both on every release and neither can be turned off. Add **Mac** and **Windows Build Support** too; those two editor targets are toggles in the upload window, on by default, and required for an official release.
 2. **Install Git LFS, then clone this repo.** The SDK's art, audio, models and native plugins live in [Git LFS](https://git-lfs.com). Without it the clone still *appears* to work, but every binary arrives as a small text placeholder and the project opens broken.
    ```bash
    git lfs install   # once per machine — before cloning
    git clone https://github.com/Future-Circus/dreampark-sdk.git MyGame
    ```
    Already cloned without it? Open the project and run `DreamPark → Troubleshooting → Check Git LFS` — the SDK finds the placeholders and downloads the real files for you.
-3. **Open it in Unity** — Unity Hub → Add → pick the folder. Let packages resolve (a few minutes), then give your game an ID in the popup. That renames the placeholder content folder; **the folder name is your content ID**.
-4. **Sign in:** `DreamPark → Sign In`. New here? Hit **Sign Up** in the popup first.
-5. **Open the example scene:** `Assets/Content/<your game ID>/1. Scenes/Template.unity` — an example Attraction and Prop, already wired up.
-6. **Verify your headset:** plug in over USB-C, accept *Allow USB Debugging?* in the headset, press **Play**, and confirm passthrough and hand tracking work.
-7. **Upload:** `DreamPark → Content Uploader` → **Upload Content (Build & Push)**.
+3. **Open it in Unity** — Unity Hub → Add → pick the folder. Let packages resolve (a few minutes), then give your game an ID in the setup popup. Use **letters and digits only, starting with a letter**, 2–64 characters (`CoinCollector`); dashes, spaces and underscores break uploads. That renames `Assets/Content/YOUR_GAME_HERE/` and rewrites the `gameId` references inside it — **the folder name is your content ID**. Dismissed the popup? `DreamPark → Content Uploader` → **Set Content ID** reopens it.
+4. **Sign in:** `DreamPark → Sign In`. Sign-in is passwordless — enter your email, then the 6-digit code we send you. There's no separate sign-up step: the first code you verify creates the account.
+5. **Look at the starting scene:** `Assets/[StartHere].unity` opens by itself the first time the project comes up. It has the Meta camera rig, hand tracking, passthrough and occlusion pre-wired, plus your `Player.prefab` and `Attraction.prefab` — build here. Point it somewhere else with `DreamPark → Startup Scene...`.
+6. **Verify your headset:** put it in Developer Mode, connect over Quest Link (USB-C data cable) or Air Link, accept the prompts in the headset, press **Play**, and confirm passthrough and hand tracking work.
+7. **Upload:** `DreamPark → Content Uploader`. Fill in the title and description there, then hit **Compile & Upload**. That opens the launch window for release notes and build targets; hit **Start · All** to ship. Every upload is a full one by default — the cheaper **Patch** and **Code only** modes need the experimental Smart bundling strategy turned on first.
 8. **Play it:** open the DreamPark iOS app (private TestFlight beta — email **aidan@dreampark.app** for an invite) and toggle **Experimental Mode** on in your park settings.
 
-From there the loop is: edit → Content Uploader → Build & Push → reopen on the Quest.
+From there the loop is: edit → Content Uploader → Compile & Upload → Start → reopen on the Quest.
+
+**Want a worked example?** `Assets/Content/Sample/` is a complete project that ships with the SDK — two attractions, five props, a scene, and the Lua behind them. Browse and edit it freely, but build your own game elsewhere: `Sample` is a reserved name and can't be published, so copy what you need into your own folder.
 
 ## The three primitives
 
@@ -57,7 +59,7 @@ Parks contain Attractions. Attractions contain Props. The Player runs your globa
 
 All of your work lives in `Assets/Content/<your game ID>/`. Never hand-edit Addressables — the SDK's `ContentProcessor` stamps addresses, labels and `gameId` fields for you. Preview tile art is auto-generated into `Previews/`.
 
-Each subfolder of `Assets/Content/` is an independent package, so several games can share one project; the Content Uploader picks which to publish, and each versions and earns separately.
+Each of your subfolders under `Assets/Content/` is an independent package, so several games can share one project; the Content Uploader picks which to publish, and each versions and earns separately. Two names are reserved and never publishable: `Sample` (the bundled example) and `YOUR_GAME_HERE` (the template folder before you rename it).
 
 ## Write gameplay in Lua
 
@@ -105,15 +107,15 @@ You don't need a finished park to publish. Every upload bundles whatever attract
 - **A dialog asks to send "XLua Version / Unity Version / Device Identifier"** — that's XLua's own analytics ping, and it's removed from this version of the SDK. If you're on an older clone, either button is safe; **Deny** just skips the ping and nothing in the SDK depends on it.
 - **Console errors on first open** — let Unity finish downloading packages. Still broken? Close Unity, delete the project's `Library` folder, reopen.
 - **Quest doesn't appear when you press Play** — check Developer Mode is on, that the USB-C cable carries data (not charge-only), and that you accepted the USB Debugging prompt inside the headset.
-- **Sign-in fails** — reset your password from the **Sign Up** link in the popup, then reopen `DreamPark → Sign In`.
+- **The sign-in code doesn't arrive** — check spam, wait out the 30-second cooldown, then **Resend code**. The server allows three sends per address per ten minutes, so don't burn them faster than the email can land. There is no password to reset.
 </details>
 
 <details>
 <summary><strong>Publishing and content</strong></summary>
 
-- **Upload fails partway** — usually a network blip; retry. If it persists, check the Unity Console for the specific error.
+- **Upload fails partway** — usually a network blip. Hit **Try Reupload** in the Content Uploader; it re-sends what's already built without recompiling, and if some bundles failed last run it offers to re-send just those. If it persists, check the Unity Console for the specific error.
 - **Attraction doesn't appear in the app** — make sure **Experimental Mode** is on in your park settings, and that you're signed into the same account as the Content Uploader.
-- **Missing from the Attractions browser** — the prefab root needs an `AttractionTemplate` (or `PropTemplate`); that component is what produces the catalog entry. Avoid the `L_` prefix, which is reserved for legacy levels.
+- **Missing from the Attractions browser** — the prefab root needs an `AttractionTemplate` (or `PropTemplate`); that component is what stamps the address the catalog classifies on. Naming attractions `A_` and props `P_` is still the house convention but no longer affects discovery — with one exception: **never name a new attraction `L_*`**, which marks a pre-attraction legacy level and hides it from the browser.
 - **Loads on mobile but doesn't behave** — new C# scripts need manual approval and a future app release before they run on device. Use Lua for fast iteration.
 </details>
 
@@ -122,7 +124,7 @@ You don't need a finished park to publish. Every upload bundles whatever attract
 
 - **Awards or saves seem to do nothing** — check the Unity Console. Every rejected write logs the reason, and held writes log that they're waiting for the player to enter an attraction.
 - **`429` responses** — profile writes are rate limited per guest, well above what a real attraction does. Award on game events (a pickup, a run ending), not in `update()`.
-- **Nothing happens in the editor** — run `DreamPark → Sign In`, then `DreamPark → Profile → Bind to Logged-In User`. The preview session lasts about an hour; re-bind if it expires.
+- **Nothing happens in the editor** — run `DreamPark → Sign In`, then `DreamPark → Profile → Bind to Logged-In User`. The preview session expires after a while; re-bind when writes start failing.
 </details>
 
 ## Learn more

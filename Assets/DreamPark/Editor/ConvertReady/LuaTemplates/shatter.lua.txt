@@ -1,0 +1,357 @@
+-- ============================================================
+-- {PROP}.lua.txt — this prop's script. Shatterable.
+--
+-- THIS IS YOUR FILE. Convert generated it and will not touch it
+-- again. Rename things, delete what you don't want, add whatever
+-- the game actually needs. The shatter logic below is a starting
+-- point, not a contract.
+--
+-- WHAT IT DOES OUT OF THE BOX
+--   Something hits this prop hard enough → the intact mesh hides,
+--   the baked pieces wake up and fly apart from the contact point,
+--   then shrink away and despawn.
+--
+-- WHERE IT LIVES
+--   On the Anchor, because that is where the fitted collider is.
+--   Unity delivers OnCollisionEnter to the collider's GameObject
+--   and to the GameObject of that collider's attached Rigidbody —
+--   and LuaMessageRelays adds its relay to THIS GameObject only,
+--   with no ancestor walk. On the root this file would fire only
+--   when the prop has a Rigidbody, and go silent when it doesn't.
+--
+-- WHAT THE CONVERTER BAKED FOR YOU
+--   shatteredRoot — an inactive node of Piece_NN objects, each with
+--   a convex MeshCollider (disabled) and a parked Rigidbody.
+--   intactVisual  — the whole mesh, active.
+--
+-- FIVE THINGS BELOW LOOK OPTIONAL AND ARE NOT. They are marked
+-- !! in the code. Read those before you delete a line.
+--
+-- @var intactVisual gameobject
+-- @var shatteredRoot gameobject
+-- @var minImpactSpeed float 2.0
+-- @var impactTag string ""
+-- @var burstImpulse float 2.0
+-- @var pieceLifetime float 8.0
+-- @var despawnSeconds float 1.0
+-- ============================================================
+
+local UE = CS.UnityEngine
+local Debug = UE.Debug
+local Time = UE.Time
+local Vector3 = UE.Vector3
+local Random = UE.Random
+local ForceMode = UE.ForceMode
+
+local ColliderType = typeof(UE.Collider)
+local RigidbodyType = typeof(UE.Rigidbody)
+
+-- ── Injected knobs, defended ────────────────────────────────
+-- Injections are written into this script's scope BEFORE the body runs
+-- (LuaBehaviour.EnsureBooted: InjectAll, then DoString), so reading them
+-- at file scope is legal. They are defended anyway — a prop wired by
+-- hand, or one whose injection list got cleared in the inspector,
+-- arrives with nils, and `nil * falloff` is a runtime error raised
+-- inside a collision callback, which is the worst place to find one.
+local min_impact_speed = minImpactSpeed or 2.0
+local burst_impulse    = burstImpulse   or 2.0
+local piece_lifetime   = pieceLifetime  or 8.0
+local despawn_seconds  = despawnSeconds or 1.0
+local impact_tag       = impactTag      or ""
+
+-- Pieces closer to the contact point than this take the full impulse.
+local BURST_FALLOFF_METERS = 0.5
+
+-- Random tumble in radians/sec, so the shards don't all translate away
+-- like a diagram of an explosion.
+local TUMBLE_SPIN = 6.0
+
+-- ── State ───────────────────────────────────────────────────
+
+local shattered = false
+local detached = false
+local despawning = false
+local despawn_at = -1.0
+
+local pieces = nil          -- Rigidbody[]  (0-based C# array)
+local piece_colliders = nil -- Collider[]
+local piece_scales = nil    -- Lua table, 1-based, of the authored localScale
+local intact_colliders = nil
+
+local on_shatter_handlers = {}
+
+local function log(message)
+    Debug.Log("[{PROP}] " .. message)
+end
+
+-- ── Caching ─────────────────────────────────────────────────
+
+local function is_piece(collider)
+    if collider == nil or shatteredRoot == nil then return false end
+    return collider.transform:IsChildOf(shatteredRoot.transform)
+end
+
+local function cache()
+    if pieces ~= nil then return end
+
+    if shatteredRoot == nil then
+        pieces = nil
+        return
+    end
+
+    pieces = shatteredRoot:GetComponentsInChildren(RigidbodyType, true)
+    piece_colliders = {}
+    piece_scales = {}
+
+    for i = 0, pieces.Length - 1 do
+        local body = pieces[i]
+        if body ~= nil then
+            piece_colliders[i + 1] = body:GetComponent(ColliderType)
+            piece_scales[i + 1] = body.transform.localScale
+        end
+    end
+
+    -- Everything that is NOT a piece — the intact prop's own colliders.
+    intact_colliders = {}
+    local all = self.gameObject:GetComponentsInChildren(ColliderType, true)
+    local w = 1
+    for i = 0, all.Length - 1 do
+        if not is_piece(all[i]) then
+            intact_colliders[w] = all[i]
+            w = w + 1
+        end
+    end
+end
+
+-- ── The shattered state ─────────────────────────────────────
+
+local function apply_shattered_state()
+    if intactVisual ~= nil then
+        -- !! 1. Never deactivate an ancestor of this script. It would take
+        -- the despawn timer down with it and the shards would sit on the
+        -- floor forever. The baked hierarchy puts Visual below Anchor so
+        -- this is safe; a hand-wired one can get it wrong.
+        if self.transform:IsChildOf(intactVisual.transform) then
+            Debug.LogWarning("[{PROP}] intactVisual is this object or one of its parents — "
+                .. "leaving it active so the script keeps running. Point it at the Visual child.")
+        else
+            intactVisual:SetActive(false)
+        end
+    end
+
+    if shatteredRoot ~= nil then shatteredRoot:SetActive(true) end
+
+    -- !! 2. The intact collider must be DISABLED, not just hidden. The
+    -- shards are baked INSIDE the volume it occupies, so leaving it on has
+    -- PhysX resolve a dozen deep interpenetrations on the first frame and
+    -- fire the pieces across the room.
+    if intact_colliders ~= nil then
+        for i = 1, #intact_colliders do
+            if intact_colliders[i] ~= nil then intact_colliders[i].enabled = false end
+        end
+    end
+
+    -- The prop's own body has nothing left to carry. Leaving it awake sends
+    -- an invisible, collider-less object falling through the floor.
+    local own = self.gameObject:GetComponentInParent(RigidbodyType)
+    if own ~= nil and not own.isKinematic then own.isKinematic = true end
+end
+
+local function detach()
+    if detached or shatteredRoot == nil then return end
+    detached = true
+    -- !! 3. Detach, keeping world pose. The pieces are Rigidbodies; left
+    -- parented under a prop root that has its own Rigidbody they become
+    -- nested bodies whose local poses fight the parent's motion. Their
+    -- colliders would also join PropTemplate's footprint, which GapFiller
+    -- and FloorCutout both consume — so the prop's hole in the floor would
+    -- follow the debris around the room.
+    shatteredRoot.transform:SetParent(nil, true)
+end
+
+-- ── Public API ──────────────────────────────────────────────
+-- Reachable from any other script via dp.scope(go) or dp.attraction(go).
+
+--- Break, throwing the pieces away from a world-space point.
+--- Safe to call more than once; the second call is a no-op rather than a
+--- second burst on already-flying debris.
+function shatter(contact_point)
+    if shattered then return end
+
+    if shatteredRoot == nil then
+        Debug.LogWarning("[{PROP}] no shatteredRoot — nothing to break into. "
+            .. "Re-run Convert to DreamPark-Ready > Shatterable to bake the pieces.")
+        return
+    end
+
+    if contact_point == nil then contact_point = self.transform.position end
+
+    shattered = true
+    cache()
+    apply_shattered_state()
+    detach()
+
+    for i = 0, pieces.Length - 1 do
+        local body = pieces[i]
+        if body ~= nil then
+            body.isKinematic = false
+            body.detectCollisions = true
+
+            -- !! 4. Piece colliders are baked DISABLED and turned on HERE.
+            -- Deactivating their node is not enough to hide them from
+            -- PropTemplate: TryGetColliderFootprint calls
+            -- GetComponentsInChildren(includeInactive) and filters on
+            -- Collider.enabled alone, which is independent of
+            -- activeInHierarchy. An enabled piece collider on an inactive
+            -- node therefore reaches the footprint, and Collider.bounds with
+            -- no PhysX shape behind it reads as a zeroed Bounds at the world
+            -- origin — so GapFiller cuts a hole from this prop back to
+            -- (0,0,0). Enabling them after detach() means they are never
+            -- both enabled and a descendant of the PropTemplate.
+            local col = piece_colliders[i + 1]
+            if col ~= nil then col.enabled = true end
+
+            body:WakeUp()
+
+            local away = body.worldCenterOfMass - contact_point
+            local distance = away.magnitude
+            -- A piece sitting exactly on the contact point has no direction
+            -- to go. Straight up beats a NaN.
+            local direction = Vector3.up
+            if distance > 0.0001 then direction = away / distance end
+
+            -- Nearest pieces take the full hit and the far side of the prop
+            -- barely moves, which is what a strike looks like. A uniform
+            -- impulse looks like the prop was inflated.
+            local falloff = BURST_FALLOFF_METERS / (BURST_FALLOFF_METERS + distance)
+
+            body:AddForce(direction * (burst_impulse * falloff), ForceMode.Impulse)
+            body:AddTorque(Random.onUnitSphere * (TUMBLE_SPIN * falloff), ForceMode.VelocityChange)
+        end
+    end
+
+    if piece_lifetime > 0 then
+        despawn_at = Time.time + piece_lifetime
+    else
+        despawn_at = -1.0
+    end
+
+    for i = 1, #on_shatter_handlers do
+        -- pcall around a CALLER's handler, so a throwing listener cannot
+        -- take the rest of the shatter down with it.
+        local ok, err = pcall(on_shatter_handlers[i], contact_point)
+        if not ok then Debug.LogError("[{PROP}] on_shatter handler threw: " .. tostring(err)) end
+    end
+end
+
+--- Break from the prop's own position.
+function shatter_here()
+    shatter(self.transform.position)
+end
+
+--- Has it broken yet?
+function is_shattered()
+    return shattered
+end
+
+--- fn(contact_point) when this prop breaks. Register in onready().
+--- Handlers added after it has already broken are NOT replayed.
+function on_shatter(fn)
+    if fn ~= nil then on_shatter_handlers[#on_shatter_handlers + 1] = fn end
+end
+
+-- ── Lifecycle ───────────────────────────────────────────────
+
+function onready()
+    cache()
+end
+
+function onenable()
+    -- The park optimizer restores whatever was live when it parked us, so
+    -- this is belt-and-braces. Two comparisons, and it removes any doubt
+    -- about a prop that was culled mid-shatter.
+    if shattered then apply_shattered_state() end
+end
+
+function oncollisionenter(collision)
+    if shattered then return end
+    if collision == nil then return end
+
+    -- relativeVelocity is the closing speed of the two bodies, which is what
+    -- "hard enough" means. Reading the prop's own velocity instead would
+    -- miss the case that matters most: a thrown object hitting a prop that
+    -- is standing still.
+    if collision.relativeVelocity.magnitude < min_impact_speed then return end
+
+    -- Empty impactTag = anything that hits hard enough breaks it. Set it to
+    -- one of the park tags (Projectile, Ball, Stone...) to be pickier. The
+    -- player's own rig is always allowed through, because "I hit it" is the
+    -- one interaction nobody should have to opt into.
+    if impact_tag ~= "" then
+        local other = collision.gameObject
+        if other ~= nil and other.tag ~= impact_tag and not dp.is_player(other) then return end
+    end
+
+    -- contacts[0] is where it was actually struck, so the burst reads as a
+    -- reaction to the hit rather than a uniform pop.
+    local point = self.transform.position
+    if collision.contactCount > 0 then point = collision:GetContact(0).point end
+
+    shatter(point)
+end
+
+function update()
+    if not shattered or despawn_at < 0 or pieces == nil then return end
+
+    local fade = despawn_seconds
+    if piece_lifetime * 0.5 < fade then fade = piece_lifetime * 0.5 end
+
+    local remaining = despawn_at - Time.time
+    if remaining > fade then return end
+
+    if remaining <= 0 then
+        -- Destroyed, not deactivated: the node was detached when it fired,
+        -- so nothing else owns it and deactivating would leave it in the
+        -- scene for the rest of the session.
+        despawn_at = -1.0
+        if shatteredRoot ~= nil then UE.Object.Destroy(shatteredRoot) end
+        shatteredRoot = nil
+        return
+    end
+
+    if not despawning then
+        despawning = true
+        -- Park the physics BEFORE the shrink starts. Scaling a convex
+        -- MeshCollider makes PhysX re-cook its hull that frame, so shrinking
+        -- twelve live pieces over a second is ~700 hull cooks — a visible
+        -- hitch on a Quest, for debris nobody is looking at any more.
+        for i = 0, pieces.Length - 1 do
+            local col = piece_colliders[i + 1]
+            if col ~= nil then col.enabled = false end
+            if pieces[i] ~= nil then pieces[i].isKinematic = true end
+        end
+    end
+
+    local t = 0
+    if fade > 0 then t = remaining / fade end
+
+    for i = 0, pieces.Length - 1 do
+        local body = pieces[i]
+        if body ~= nil then
+            body.transform.localScale = piece_scales[i + 1] * t
+        end
+    end
+end
+
+function ondestroy()
+    -- !! 5. detach() moved the pieces to the scene root, which took them out
+    -- of the attraction's hierarchy — so when the park unloads this prop,
+    -- nothing takes the debris down with it and update() (the only thing
+    -- that ever destroys it) stops running. Without this, every
+    -- shatter-then-unload in a session leaves another set of convex
+    -- MeshCollider rigidbodies simulating forever.
+    --
+    -- Guarded on `detached` so an unfired prop never destroys its own baked
+    -- node — that one is still parented and still part of the prefab.
+    if detached and shatteredRoot ~= nil then UE.Object.Destroy(shatteredRoot) end
+end
