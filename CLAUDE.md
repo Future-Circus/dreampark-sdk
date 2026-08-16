@@ -6,23 +6,36 @@ SDK template for third-party game developers. A complete Unity 6 project cloned 
 ## Template Structure
 ```
 Assets/
-├── DreamPark/         ← SDK source (~540 C# files, must match dreampark-core exactly)
+├── [StartHere].unity  ← Startup scene, auto-opened on first project open (StartupSceneOpener,
+│                        configured in Assets/.dreampark-editor.json, mode FirstOpenOnly;
+│                        re-point via DreamPark → Startup Scene...). Meta building blocks
+│                        pre-wired + Player.prefab and Attraction.prefab instances.
+├── DreamPark/         ← SDK source (~240 first-party C# files, 661 counting vendored
+│                        ThirdParty/; must match dreampark-core exactly)
 ├── Content/
-│   └── YOUR_GAME_HERE/        ← Renamed via the in-editor setup popup (ContentIdSetupPopup, auto-opened by PlaceholderContentDetector; letters+digits, starts with a letter). Folder name = content ID. Multiple content folders may coexist — each is an independent package; the Content Uploader's dropdown picks which to publish.
-│       ├── 1. Scenes/Template.unity
-│       ├── 2. Features/1. Player/Player.prefab
-│       ├── Prefabs/            ← A_*.prefab attractions (AttractionTemplate root), P_*.prefab props (PropTemplate root)
+│   ├── Sample/                ← Bundled worked example (2 attractions, 5 props, Sample.unity,
+│   │                            8 Lua scripts). Deliberately NOT gated for browsing/editing;
+│   │                            RESERVED only in that it is never the creator's content and
+│   │                            cannot be published. See ContentFolders.IsSample.
+│   └── YOUR_GAME_HERE/        ← Renamed via the in-editor setup popup (ContentIdSetupPopup, auto-opened by PlaceholderContentDetector; letters+digits, starts with a letter, 2–64 chars). Folder name = content ID. Also reserved until renamed. Multiple content folders may coexist — each is an independent package; the Content Uploader's dropdown picks which to publish.
+│       ├── Prefabs/            ← Player.prefab + Attraction.prefab ship in the template;
+│       │                         A_*.prefab attractions (AttractionTemplate root),
+│       │                         P_*.prefab props (PropTemplate root)
 │       ├── Previews/           ← {prefabName}.png tile art
-│       ├── Scripts/            ← Game-specific C# (minimal — prefer Lua)
-│       └── ThirdParty/         ← Only used assets (git-tracked, shipped in builds)
-└── ThirdPartyLocal/            ← Imported packages land here (gitignored, not in builds)
+│       ├── Scripts/            ← Game-specific C# (minimal — prefer Lua) + .lua.txt
+│       ├── ThirdParty/         ← Only used assets (git-tracked, shipped in builds)
+│       └── ThirdPartyLocal/    ← Imported packages land here (excluded from builds by
+│                                 ContentProcessor — but NOT actually gitignored, despite
+│                                 what several comments in the repo claim)
 ```
 
+There are no `1. Scenes/` or `2. Features/` folders — that layout predates the current template.
+
 ## SDK Sync
-The ~540 files in Assets/DreamPark/ must match dreampark-core exactly. `#if DREAMPARKCORE` blocks (core-only code) are conditionally compiled out of this SDK distribution — the source remains visible but doesn't compile in SDK builds. Use conditional compilation to mark what's core-specific. Anything entirely core-only (no SDK reason to exist at all, e.g. consumer-app pairing flows, internal admin tooling) should live in dreampark-core's own `Assets/Scripts/` outside `Assets/DreamPark/` rather than as an empty SDK file.
+The files in Assets/DreamPark/ must match dreampark-core exactly (~240 first-party C# files; 661 including vendored `ThirdParty/`). `#if DREAMPARKCORE` blocks (core-only code) are conditionally compiled out of this SDK distribution — the source remains visible but doesn't compile in SDK builds. Use conditional compilation to mark what's core-specific. Anything entirely core-only (no SDK reason to exist at all, e.g. consumer-app pairing flows, internal admin tooling) should live in dreampark-core's own `Assets/Scripts/` outside `Assets/DreamPark/` rather than as an empty SDK file.
 
 ## The Three Primitives
-- **Player.prefab** (`2. Features/1. Player/`): Root player object (persists across attractions). Global systems (audio, score, park state) live here as LuaBehaviours.
+- **Player.prefab** (`Assets/Content/{GameName}/Prefabs/`): Root player object (persists across attractions). Global systems (audio, score, park state) live here as LuaBehaviours.
 - **AttractionTemplate** (: LevelTemplate): root component of an attraction prefab — a self-contained experience (arcade game, boss battle, challenge course). LevelTemplate's `[RequireComponent]`s auto-add GameArea (presence detection — drives PlayerRig show/hide AND playtime-based revenue attribution) and MusicArea. Defines the physical space (size/customSize, floor generation, calibration).
 - **PropTemplate**: root component of a prop prefab — the individual interactive elements that make up an attraction (coin, hammer, enemy). Auto-adds its own GameArea at priority -1 (self-suppressed when nested inside an attraction). Props are also placeable standalone in parks.
 
@@ -32,10 +45,42 @@ There is no creator-facing DreamBand or Level prefab — the DreamBand wrist UI 
 An attraction is a prefab under `Assets/Content/{GameName}/` with an `AttractionTemplate` (: `LevelTemplate`) on its root; a prop has `PropTemplate`. `ContentProcessor` (SDK-synced, `Assets/DreamPark/Editor/`) watches `Assets/Content/` and automates everything else — do NOT hand-edit Addressables addresses or labels:
 - **Naming**: prefixing attraction prefabs `A_` and props `P_` is still the convention, but no longer required for backend discovery (July 2026): the attractions catalog classifies by the stamped ADDRESS NAMESPACE — anything with a `{gameId}/Levels/…` address (i.e. any prefab whose root has AttractionTemplate/LevelTemplate) is an attraction, `{gameId}/Props/…` is a prop. **Exception: an `L_` prefix marks a pre-attraction Legacy Level** (hidden from the Attractions browser, entry-fee-priced only) — never name a new attraction `L_*`. If an attraction is missing from the browser, check that the prefab root has the right template component (that's what produces the address).
 - **Runtime address** (assigned automatically): `{gameId}/Levels/{size}/{name}` for attractions, `{gameId}/Props/{category}/{name}` for props, `{gameId}/{TypeFolder}/{name}` for typed assets (Models/Audio/Textures/…). Label = `{gameId}`. Preview PNGs and the content logo still get addresses (`{gameId}/Previews/{name}`, `{gameId}/Logos/{name}`) but their groups are EXCLUDED FROM THE BUILD since July 2026 — those addresses resolve in the editor and nowhere else.
-- **TWO identifier namespaces — never conflate them**: the runtime Addressables ADDRESS above vs the backend catalog `resourceName`, which is the internal ASSET-PATH stem (`Content/{GameName}/Attractions/A_X` — asset path with `Assets/` + extension stripped). They only coincided for legacy folder layouts. Core's `LevelAnchor.ResolveSpawnAddress` translates stem→address at spawn; treat `resourceName` as an opaque join key, never a loadable address.
+- **TWO identifier namespaces — never conflate them**: the runtime Addressables ADDRESS above vs the backend catalog `resourceName`. Historically `resourceName` was the internal ASSET-PATH stem (`Content/{GameName}/Attractions/A_X`), translated stem→address at spawn by core's `LevelAnchor.ResolveSpawnAddress`. ⚠️ **This is now contradicted by the SDK itself**: `ContentProcessor.ResolveAttractionAddress` (`ContentProcessor.cs:608-624`) stamps `resourceName` with the address form `{gameId}/Levels/{size}/{name}` and its comment claims that value "matches the backend attractions catalog exactly". `LevelAnchor` does not exist in this repo, so one of the two is stale — settle it against core before relying on either. Either way, treat `resourceName` as an opaque join key, never something you hand to Addressables yourself.
 - **Stamping pass** (`ContentProcessor`, EditPrefabContentsScope + SaveAsPrefabAsset): injects `gameId` into any component with a `gameId` field and stamps the per-attraction address onto `GameArea`/`PropTemplate.resourceName` — this is the revenue-attribution key, so it must match what the backend catalog derives. Skips `ThirdPartyLocal/`. Prefabs get edited + saved dirty by this pass; that's expected — commit the churn.
 - **Previews**: `Assets/Content/{GameName}/Previews/{prefabName}.png` (or sibling `{name}_preview.png`) — powers Attractions-browser/level-picker tiles and the consumer map. Auto-generated for every attraction/prop; regenerate via `DreamPark → Troubleshooting → Regenerate Level Previews` after visual changes. **They do NOT ship in a bundle (July 2026)**: the uploader pushes each PNG to the backend (`POST /api/content/:id/attractions/preview`) after a successful commit, and every client reads the backend image. Same story for the content logo (`POST /api/content/:id/logo` → `content.logoImageUrl`). The `{gameId}-Previews` / `{gameId}-Logos` Addressables groups still exist but are build-excluded (`SmartBundleGrouper.ExcludeRetiredArtGroupsFromBuild`), so preview churn can no longer abort a Code-only upload — which is why `UploadMode.PreviewsOnly` is gone.
-- **Catalog population is automated**: uploading a build publishes the attractions catalog server-side (discovered from the catalog's `m_InternalIds`). There is no manual registration step — if an attraction is missing from the browser, check the `A_`/`P_` prefix and that the prefab root has the right template component.
+- **Catalog population is automated**: uploading a build publishes the attractions catalog server-side (discovered from the catalog's `m_InternalIds`). There is no manual registration step — if an attraction is missing from the browser, check that the prefab root has the right template component (the prefix is not what's checked; see Naming above).
+
+## Materials & Shaders — use the DreamPark universal shaders for EVERYTHING
+DreamPark is mixed reality. Every pixel of virtual geometry has to be clipped by the guest's real room via Meta's Depth API, or it draws on top of their hands, furniture and walls. That integration lives in the shader, so **shader choice is a correctness requirement, not an art preference.**
+
+**The three shaders. Use one of them for every material you ship:**
+
+| Use for | Declared shader name | Source |
+|---|---|---|
+| Anything lit (props, environment, characters) | `Shader Graphs/DreamPark-UniversalShader` | `Assets/DreamPark/Shaders/DreamPark-UniversalShader.shadergraph` |
+| Anything unlit / flat / emissive / UI-in-world | `Shader Graphs/DreamPark-Unlit` | `Assets/DreamPark/Shaders/DreamPark-Unlit.shadergraph` |
+| Every ParticleSystem material | `DreamPark/Particles` | `Assets/DreamPark/Shaders/DreamPark-Particles.shader` |
+
+These names are the canonical constants (`MaterialConverter/MaterialPlan.cs:182-184`, `DreamParkShaderNames`); the pre-upload gate matches on them exactly.
+
+- **Never ship Standard/URP-Lit, URP-Unlit, marketplace, Hovl/Kriptofx-style, or asset-pack shaders.** They compile fine and look fine in the Editor — the failure only appears on-headset, where the object refuses to be occluded.
+- **Opaque ⇒ Alpha Clipping ON. Always. This is not a preference and not a default — it is enforced.** The occlusion subgraph drives its result into the fragment's **alpha**. A *Transparent* surface consumes that alpha through the blend, so occlusion works with no further setup. An *Opaque* surface has nothing downstream that reads alpha — the clip is the only consumer — so with Alpha Clipping off the occlusion value is computed, written and thrown away. The material renders at full opacity over the guest's hands, furniture and walls.
+  - **This is the failure mode that survives every other check.** The shader is correct, so `meta-occlusion` passes. The Editor and Play mode look perfect. It is wrong only on a headset, only in passthrough, and only after upload.
+  - **Two pieces of state, and they can disagree.** `_AlphaClip` (float) is what the inspector draws; `_ALPHATEST_ON` is the keyword that actually selects the clipping variant. `material.shader = x` carries over same-named floats *and* the old keyword set, so a converted material routinely lands with one on and the other off — including the case where the inspector shows the toggle ON while the shader is not clipping. **Never test just one.** `DreamParkMaterialRules.IsSatisfied(mat)` requires both; use it rather than reading either property yourself.
+  - **Enforcement, four layers** (`Assets/DreamPark/Editor/Shaders/`): `DreamParkMaterialRules` is the single definition of the rule; `DreamParkShaderGUI` re-establishes it on every inspector repaint, so toggling Alpha Clipping off on an Opaque material snaps straight back; `DreamParkMaterialPostprocessor` repairs any `.mat` on import, which covers script-created and hand-edited materials; `MaterialConverter` applies it on every conversion. The pre-upload gate is the backstop.
+  - **What Alpha is actually built from** — both graphs multiply the occlusion result into it, which is why the clip is the consumer:
+    - `DreamPark-UniversalShader`: `Alpha = baseTex.a × (_opacity × Occlusion)`, clip threshold from the exposed `_alphaClipping` (Range 0-1, default 0.5).
+    - `DreamPark-Unlit`: `Alpha = baseTex.a × Occlusion × _baseColor.a`, threshold is an unexposed constant 0.5.
+    - There is **no `_Cutoff`** on either — that is URP Lit's name and a Shader Graph does not get one for free. Use `DreamParkMaterialRules.ThresholdProp`.
+    - Consequence: on an Opaque material `_opacity` / `_baseColor.a` are dead weight until clipping is on, then they are live. `DreamParkMaterialRules` resets them to 1 as part of the repair (unconditionally — a threshold test is not enough, since the scalar is multiplied by the texture's alpha), so enabling clipping fixes occlusion and changes nothing else.
+    - **The one thing the repair cannot fix**: an albedo whose alpha channel is empty or garbage (some asset packs ship one). Enabling clipping makes that object vanish in the Scene view. That is not a bug in the fix — it means the material could never have been occluded and the texture needs fixing. Always look at the Scene view after a bulk repair.
+  - **If you need soft blending, switch Surface Type to Transparent** — don't reach for the clip toggle. On Transparent, Alpha Clipping is genuinely optional and occlusion works either way.
+  - **Fixing a whole project at once:** `DreamPark → Troubleshooting → Fix Opaque Materials Missing Alpha Clipping`. Import-time repair only reaches materials that get imported; existing ones sit as-is until touched.
+- **Converting imported assets**: `DreamPark → Optimization → Material Optimizer...` rewrites third-party materials onto the three shaders and ports the feature keywords (emission, camera fade, distortion, dissolve, soft particles, vertex colour/blend modes, flipbook streams). Run it on every imported pack before doing anything else. Expect `ParticleSystemRenderer` Custom Vertex Streams to be reset to the default set by the post-convert pass — that is the fix for the "whole flipbook visible at once" symptom, not a regression.
+- **If a custom shader is genuinely unavoidable, it must integrate Meta occlusion itself.** The requirement is the standard Meta environment-depth keywords — `HARD_OCCLUSION` / `SOFT_OCCLUSION` (and, for transparent output, `META_DEPTH_OCCLUDE_OUTPUT_PREMULTIPLY`) — reachable in the shader's compiled keyword space, driving the occlusion value into alpha. Copy the pattern from `DreamPark-Particles.shader:19-24` for HLSL, or drop the occlusion subgraph node into a Shader Graph the way `DreamPark-UniversalShader.shadergraph` does. When neither keyword is enabled the Meta macros expand to no-ops, so there is no cost on non-passthrough platforms.
+- **Occlusion is NOT a per-material property.** `HARD_OCCLUSION`/`SOFT_OCCLUSION` are *global* keywords set at runtime by Meta's `EnvironmentDepthManager`/`OcclusionToggle`. `Material.IsKeywordEnabled(...)` and `material.enabledKeywords` will never tell you whether occlusion is integrated — the question is only ever answerable at the SHADER level. Don't write material-level checks and don't believe them. The Alpha Clipping rule above is *not* a counterexample: whether occlusion is **integrated** is a shader question, whether the material **consumes the result** is a material question, and both have to be true.
+- **Known SDK shaders that deliberately lack occlusion** and are allowlisted (`MetaOcclusionCheck.IntentionallyExempt`): `Meta/EnvironmentDepth/DepthMask` (produces depth), `Meta/MRUK/MixedReality/InvisibleOccluderCulled` (z-only occluder), `DreamPark/KeepAliveObject`, `Unlit/NormalOverlay` (editor debug viz). `Shader Graphs/LavaScreen` ships without occlusion and WILL be flagged — don't build content on it.
+- Related gotcha that bites shader work: never mix a `MaterialPropertyBlock` writer and a `renderer.material` writer on the same object (see Multiplayer) — the MPB silently masks material changes.
 
 ## Game Storage (per-user save data: high scores, progress, coins)
 Spec: dreampark-core `Docs/Game-Storage-Spec.md`. Sample: `Assets/DreamPark/Samples/GameStorage/storage_high_score.lua.txt`. Every LuaBehaviour gets a `storage` variable auto-bound to its attraction (lazy walk up to GameArea/PropTemplate/LevelTemplate — no ids to pass):
@@ -52,7 +97,7 @@ storage.onReady(function() ... end)    -- server snapshot loaded (reads work bef
 
 Rules & gotchas:
 - **Backed by `GameStorageAPI`** (SDK-synced, `Scripts/Core/`) → `/app/profile/storage/{contentId}`. Editor testing uses the SDK preview key (same `ProfileAPI.BindToLoggedInUser` pairing flow as inventory); production auth is the headset binding.
-- **Hard caps** — this is progress/score storage, NOT a blob store: keys `[A-Za-z0-9_-]` ≤64 chars, 64 keys & 8 KB per scope, 64 KB per game. Oversized writes fail locally with a warning (`set` returns false).
+- **Hard caps** — this is progress/score storage, NOT a blob store: keys `[A-Za-z0-9_-]` ≤64 chars, string values ≤1 KB, 64 keys & 8 KB per scope, and at most 64 attraction scopes per game (`MaxAttractionScopes` — a scope count, not a byte cap). Oversized writes fail locally with a warning (`set` returns false).
 - **Prefer `max`/`min`/`increment` over read-compare-`set`** — ops apply server-side, so the same profile playing on another headset can't be clobbered. Writes are debounced/coalesced automatically; per-frame `increment` is fine.
 - **Works unbound**: guest play reads/writes locally and merges into the account if the player pairs mid-session. Nothing persists for a session that never pairs.
 - Scripts outside any attraction (e.g. Player.prefab park systems) use `dp.storage.game(gameId)`; the injected `storage` there would warn-once and no-op.
@@ -61,14 +106,97 @@ Rules & gotchas:
 ## DO NOT
 - Add core-specific code (e.g., backend debug toggles, internal versioning systems).
 - Modify Assets/DreamPark/ files without syncing back to dreampark-core.
-- Use keyboard controls, virtual cameras, or EasyEvent chains as primary interaction pattern.
+- Use keyboard controls or virtual cameras as an interaction pattern. This is VR — hands and physical presence are the input.
+- **Author gameplay with EasyEvent components. EasyEvent is DEPRECATED** — see below. All code functionality goes in Lua via `LuaBehaviour`, with no exceptions worth taking.
+- Ship a material on any shader other than the three DreamPark shaders, unless that shader integrates Meta occlusion itself (see Materials & Shaders).
+- Ship a material set to Surface Type = Opaque with Alpha Clipping off, or "fix" a material by turning Alpha Clipping off to get soft edges — switch to Transparent instead (see Materials & Shaders).
+- Upload with an empty Name/Description, or with unresolved pre-upload findings (see Shipping).
+
+## EasyEvent is deprecated — all code functionality goes in Lua
+
+**Do not author new content with EasyEvent components.** Not `EasyBend`, not
+`EasyShatter`, not `EasyInteraction`, `EasyAudio`, `EasySpawn`, `EasyMove`, or
+any of the 58 `Easy*` behaviours under
+`Assets/DreamPark/Scripts/Features/EasyEvent/`. If you are reaching for one,
+the answer is a `LuaBehaviour` and the `dp` API.
+
+That includes `EasyLua`. Running a Lua script from an inspector-wired event
+chain is the half-in-half-out shape this section exists to stop — if the logic
+is Lua, put the `LuaBehaviour` on the object and skip the chain.
+
+**They are not going anywhere, and they are not broken.** Every `Easy*`
+component still works, is still supported, and is not scheduled for removal —
+shipped prefabs and live content depend on them, and deleting a MonoBehaviour
+that live content references turns every one of those prefabs into a
+missing-script reference. This is a rule about what to author NEXT, not a
+migration. Present and working ≠ the pattern to copy.
+
+**Why Lua and not inspector-wired event chains:**
+
+- Everything the platform actually supports is on the Lua surface. Storage
+  (`storage.*`), multiplayer (`net_send`/`onnet`), the whole `dp` API,
+  attraction scoping — none of it has an EasyEvent equivalent, so any
+  non-trivial game ends up half-wired in the inspector and half-written in Lua,
+  which is worse than either.
+- A `.lua.txt` file diffs, reviews and greps. A chain of serialized
+  `UnityEvent` references in a prefab does none of the three, and the only way
+  to find out what it does is to click through it in the inspector.
+- Lua ships over the air. Content-only updates can change gameplay without an
+  app release; a behaviour baked into a prefab's serialized wiring cannot be
+  reasoned about the same way, and anything needing a new C# component needs a
+  whole app release.
+- One place to look. "Where does this object's logic live" has exactly one
+  answer, instead of depending on whether the previous author preferred the
+  inspector that day.
+
+**If you are an agent generating content or tooling:** do not add `Easy*`
+components to prefabs you author from scratch, and do not propose them as the
+answer to a new problem.
+
+**And do not go and fix the ones already there.** Existing C# that attaches or
+subclasses `Easy*` — in the SDK, in tooling, in shipped prefabs — is working
+code, and rewriting it is not an improvement, it is churn with a risk of
+regression attached. That includes "while I was in here" cleanups, porting an
+`Easy*` component to Lua because this section says Lua, and flagging existing
+usage as a bug. It is not a bug. It is the previous convention, still running.
+Leave it alone unless a human has asked you, in those words, to change it.
+
+Start at **Lua Lifecycle Under Park Loading** and **The `dp` Creator API**
+below. Both are further down this file.
 
 ## Workflow
 1. Creator clones dreampark-sdk as a new project.
 2. On first editor open, the setup popup renames YOUR_GAME_HERE to the game name (e.g., CoinCollector). (There is no new-park.sh — the popup is the rename mechanism.)
 3. Creator adds game content, Lua scripts, and prefabs to Assets/Content/{GameName}/.
-4. All gameplay logic is Lua-first via LuaBehaviour.
-5. Built Addressable prefabs are deployed to DreamPark servers via DreamPark → Content Uploader — one attraction at a time or a whole park's worth; each upload publishes the attractions catalog automatically and is immediately playable in the iOS app with Experimental Mode on.
+4. All gameplay logic is Lua via LuaBehaviour. Not "Lua-first" — Lua. C# in `Assets/Content/` should be interop shims and nothing else, and EasyEvent components are deprecated (see above).
+5. Built Addressable prefabs are deployed to DreamPark servers via DreamPark → Content Uploader: fill the panel's **Name** and **Description** fields (the launch window shows them read-only, and an empty Name blocks the upload), clear the pre-upload checks (see Shipping below), hit **Compile & Upload**, then **Start · All** in the launch window. One attraction at a time or a whole park's worth; each upload publishes the attractions catalog automatically and is immediately playable in the iOS app with Experimental Mode on. Uploads are full re-uploads unless the experimental Smart bundling strategy is on, which is what unlocks the Patch and Code-only modes.
+6. Sign-in (`DreamPark → Sign In`) is passwordless as of July 2026 — email + 6-digit OTP, and `/auth/otp/verify` get-or-creates the account, so there is no separate sign-up path and no password to reset.
+
+## Shipping: the Content Uploader (`DreamPark → Content Uploader`)
+Open it from the **`DreamPark` menu in the Unity Editor's top menu bar** — a first-party menu the SDK adds, alongside File/Edit/Assets/GameObject. `DreamPark → Content Uploader` is the first item. The same menu holds `Sign In`, `Optimization → Material Optimizer...`, `Troubleshooting → …` and `Startup Scene...`; every SDK tool referenced in this file lives under it.
+
+The game is not done when it plays in the Editor. It is done when it goes through the uploader clean. Two things are required there and both are on you, not on the human reviewing later.
+
+**1. Set the Name and Description.** The panel's **Name** and **Description** fields are the store-facing metadata for the content package — they're what a guest sees in the Attractions browser and the consumer app. The launch window shows them read-only, and an **empty Name blocks the upload outright**. Write a real description (what the attraction is, what the guest does), not a placeholder. Pick the right content package first if the project has more than one — the dropdown at the top of the panel selects which `Assets/Content/{GameName}/` gets published.
+
+**2. Run the pre-upload verification and fix everything it reports.** `Pre Launch Options → Review Pre-Upload Checks...` opens the unified checks window; the Content Uploader also runs an advisory scan when the panel is engaged and shows per-attraction tile badges. The upload path is gated by `PreUploadChecksGate.Passes(...)` — Blocking findings stop the upload. The six checks (`Assets/DreamPark/Editor/PreUploadChecks/Checks/`):
+
+| Check id | Severity | What it means |
+|---|---|---|
+| `duplicate-names` | **Blocking** (case-only clashes: Warning) | Two prefabs share a name → collided Addressables address, preview PNG, `PreviewMetadataStore` key and `GameArea.resourceName` (the revenue-attribution key). Always a true positive. |
+| `meta-occlusion` | **Blocking** when a material's shader definitely lacks occlusion; **Warning** when undeterminable | See the Materials & Shaders section. Fix action: *Convert selected materials to DreamPark shaders*. |
+| `opaque-alpha-clip` | **Blocking** | A DreamPark material set to Surface Type = Opaque with Alpha Clipping off. `meta-occlusion`'s blind spot — the shader has the occlusion wiring, the material discards it. No heuristic and no third state, which is why it blocks. Fix action: *Enable Alpha Clipping*. |
+| `sun-light` | **Blocking** (inactive lights: Warning) | A directional light shipped in content lights *every* attraction in the park and no other creator can opt out. |
+| `scene-overrides` | Warning | Unapplied prefab overrides in scenes — what you see in the test scene isn't what ships. Apply them to the prefab, or confirm the scene tweak is intentional. |
+| `outside-content-folder` | Warning (`Assets/Plugins/`-style protected folders and `ThirdPartyLocal/`: Info) | A prefab depends on an asset outside `Assets/Content/{GameName}/` — it won't be in the bundle. Move it in. |
+
+Rules for agents working the checks list:
+
+- **Fix findings; do not ignore them.** Every finding has a fix action in the popup — use it. `Ignore` writes a permanent, typed-reason entry into `Assets/Content/{contentId}/.preupload-ignores.json` that is git-tracked and visible to the whole team. Only a human decides to ignore a Blocking finding.
+- **Warnings and Info still get resolved or explained.** They don't block, but `scene-overrides` and `outside-content-folder` warnings are usually real content bugs that only show up after upload, when they're expensive.
+- **A clean project shows no popup at all** — the gate opens the window only when there's at least one non-ignored Blocking or Warning finding. If the popup appears, there is work to do; don't click through it.
+- Re-run the checks after fixing. Results are cached per content id and refresh on `ReportChanged`.
+- Then **Compile & Upload**, then **Start · All** in the launch window.
 
 ## Multiplayer (LAN peer-host + DreamBox relay)
 Full spec: dreampark-core `Docs/LAN-PeerHost-Spec.md`. Stack lives in `Assets/DreamPark/Scripts/Features/Net/` (SDK-synced).
