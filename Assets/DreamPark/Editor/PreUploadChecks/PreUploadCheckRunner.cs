@@ -38,6 +38,7 @@ namespace DreamPark.PreUploadChecks
                     new Checks.OpaqueAlphaClipCheck(),
                     new Checks.SceneOverridesCheck(),
                     new Checks.OutsideContentFolderCheck(),
+                    new Checks.NetBudgetInvariantCheck(),
 
                     // Warning, so it sorts after the blocking checks above. It
                     // catches a PropTemplate/GameArea whose resourceName has

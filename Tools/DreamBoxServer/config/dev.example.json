@@ -18,6 +18,11 @@
   // Plenty for local testing.
   "maxConnections": 16,
 
+  // Hard cap on one inbound message, matching PeerRelayServer and
+  // DreamBoxClient. Untrusted LAN peers; 16 KB is generous for the
+  // small JSON events this protocol carries.
+  "maxMessageBytes": 16384,
+
   // LAN discovery beacon.
   // On a flat home/office LAN this works — your Quest headsets will
   // auto-discover this relay. If you're on a corporate / guest Wi-Fi

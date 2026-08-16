@@ -1327,8 +1327,8 @@ namespace DreamPark
             return settings.CreateGroup(groupName, false, false, true,
                 new List<AddressableAssetGroupSchema>
                 {
-                    (AddressableAssetGroupSchema)Activator.CreateInstance(typeof(BundledAssetGroupSchema)),
-                    (AddressableAssetGroupSchema)Activator.CreateInstance(typeof(ContentUpdateGroupSchema)),
+                    ScriptableObject.CreateInstance<BundledAssetGroupSchema>(),
+                    ScriptableObject.CreateInstance<ContentUpdateGroupSchema>(),
                 });
         }
 

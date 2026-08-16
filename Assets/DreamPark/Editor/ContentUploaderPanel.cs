@@ -5579,8 +5579,8 @@ namespace DreamPark {
             var group = settings.groups.FirstOrDefault(g => g != null && g.Name == groupName)
                 ?? settings.CreateGroup(groupName, false, false, true, new List<AddressableAssetGroupSchema>
                 {
-                    (AddressableAssetGroupSchema)Activator.CreateInstance(typeof(BundledAssetGroupSchema)),
-                    (AddressableAssetGroupSchema)Activator.CreateInstance(typeof(ContentUpdateGroupSchema))
+                    ScriptableObject.CreateInstance<BundledAssetGroupSchema>(),
+                    ScriptableObject.CreateInstance<ContentUpdateGroupSchema>()
                 });
 
             var bag = group.GetSchema<BundledAssetGroupSchema>() ?? group.AddSchema<BundledAssetGroupSchema>();

@@ -82,6 +82,43 @@ These names are the canonical constants (`MaterialConverter/MaterialPlan.cs:182-
 - **Known SDK shaders that deliberately lack occlusion** and are allowlisted (`MetaOcclusionCheck.IntentionallyExempt`): `Meta/EnvironmentDepth/DepthMask` (produces depth), `Meta/MRUK/MixedReality/InvisibleOccluderCulled` (z-only occluder), `DreamPark/KeepAliveObject`, `Unlit/NormalOverlay` (editor debug viz). `Shader Graphs/LavaScreen` ships without occlusion and WILL be flagged — don't build content on it.
 - Related gotcha that bites shader work: never mix a `MaterialPropertyBlock` writer and a `renderer.material` writer on the same object (see Multiplayer) — the MPB silently masks material changes.
 
+
+## The attraction prefab IS the attraction (authored-state rule)
+
+**Every environmental prop, character and interactable that belongs to an attraction
+must exist, enabled, inside the attraction prefab.** Do not spawn the contents of an
+attraction at runtime.
+
+This is not a style preference. The preview PNG is rendered from the prefab, and that
+image is the *only* thing a guest sees in the Attractions browser and on the consumer
+map before they walk in. An attraction that populates itself in `start()` renders as an
+empty room, and the tile tells the guest nothing about the layout, the activity, or the
+point of the attraction. A prefab that looks empty in the Project view is a bug even if
+it plays correctly.
+
+The rule, concretely:
+
+- **Author the world, then vary it.** Runtime code may *choose among*, *reposition*,
+  *retheme* or *retire* authored objects. It must not *conjure* them. `SetActive(false)`
+  on a slot the player never fills is fine; an empty `Transform` that gets an
+  `Instantiate` on the first frame is not.
+- **Something must always be on screen.** If content genuinely arrives late — streamed,
+  server-driven, or picked per session — ship a **visible authored stand-in**: the start
+  screen layout, a plinth with placeholder art, a roped-off area, silhouettes. Never a
+  blank floor, never a missing-asset gap, never geometry that pops in on frame one.
+- **Disabled-by-default is a preview bug.** If most of an attraction ships disabled, the
+  preview is a lie. Enable a representative arrangement — one creature per pen, one prop
+  per station — and let the runtime swap or hide from there.
+- **Space the authored set honestly.** Objects must not interpenetrate or stack at the
+  origin in the authored state. If the preview shows overlapping meshes, the attraction
+  reads as unfinished regardless of how it plays.
+- **Regenerate previews after any layout change** (`DreamPark - Troubleshooting -
+  Regenerate Level Previews`) and *look at the PNG*. Ask: could someone who has never
+  seen this attraction tell what it is and what they would do in it?
+
+The test: **a guest should never be confused about what an attraction is, how it is laid
+out, or what it is for, from its preview image alone.**
+
 ## Game Storage (per-user save data: high scores, progress, coins)
 Spec: dreampark-core `Docs/Game-Storage-Spec.md`. Sample: `Assets/DreamPark/Samples/GameStorage/storage_high_score.lua.txt`. Every LuaBehaviour gets a `storage` variable auto-bound to its attraction (lazy walk up to GameArea/PropTemplate/LevelTemplate — no ids to pass):
 
@@ -201,20 +238,29 @@ Rules for agents working the checks list:
 ## Multiplayer (LAN peer-host + DreamBox relay)
 Full spec: dreampark-core `Docs/LAN-PeerHost-Spec.md`. Stack lives in `Assets/DreamPark/Scripts/Features/Net/` (SDK-synced).
 
-**Model**: one relay per session, two interchangeable host types — DreamBox kiosk (external) or an elected headset (`PeerRelayServer` in-process). Identical wire protocol; the host headset connects to its own relay via 127.0.0.1, so gameplay/Lua can never tell which host type it's on. The relay is a dumb pipe: rebroadcasts every message verbatim to all OTHER peers (never echoes the sender), ReliableOrdered, 16 KB cap, 60 msg/s per-peer rate cap, MaxPeers 16 (soft, tunable).
+**Writing a networked game: read `Assets/DreamPark/Samples/Multiplayer/MULTIPLAYER.md`** — the long-form guide (wire shape, identity without a server, which data structures cannot desync, the send budget, diagnosis). Reusable primitives sit next to it in `mp_kit.lua.txt`: roster/join-order/leader, shared clock, ownership leases, grow-only counters, send budget, replay dedupe.
 
-**Enabling**: add `NetSessionArbiter` next to `DreamBoxClient` — presence is the on-switch (DreamBoxClient defers discovery to it). The arbiter owns the ladder: DreamBox beacon → join kiosk (always outranks, preempts peer sessions) → peer beacon → join → 3–5 s silence → self-elect host. Host loss (doff/battery) → coordinator-free re-election in ~1–3 s (sorted hostIds, staggered timers, lowest wins ties). Session state is ephemeral by design — nothing migrates on host change; design content as last-write-wins cosmetics.
+**Model**: one relay per session, two interchangeable host types — DreamBox kiosk (external) or an elected headset (`PeerRelayServer` in-process). Identical wire protocol; the host headset connects to its own relay via 127.0.0.1, so gameplay/Lua can never tell which host type it's on. The relay is a dumb pipe: rebroadcasts every message verbatim to all OTHER peers (never echoes the sender), ReliableOrdered, 16 KB cap, MaxPeers 16 (soft, tunable).
+
+**Send budget**: `PeerRelayServer` drops anything past **60 msg/s per peer** — silently, with no error to the sender. The kiosk relay does not rate limit at all, so the cap that applies depends on which host you landed on. Two numbers, and only one belongs in your head: **`dp.relay().budget` is what you design against** (always the floor, never moves); `dp.relay().cap` is what today's host enforces (0 = none advertised) and is diagnostic only. Budget for the floor regardless — a kiosk session can hand the room to a peer host mid-play (`Reelection`), and content tuned to kiosk headroom falls over at exactly that moment. The client warns on both thresholds; the host logs actual drops as `[PeerRelay] Rate limit`.
+
+**Enabling**: add `NetSessionArbiter` next to `DreamBoxClient` — presence is the on-switch (DreamBoxClient defers discovery to it). The arbiter owns the ladder: DreamBox beacon → join kiosk (always outranks, preempts peer sessions) → peer beacon → join → 3–5 s silence → self-elect host. Host loss (doff/battery) → coordinator-free re-election in ~1–3 s (sorted hostIds, staggered timers, lowest wins ties). **Nothing migrates on host change** — the relay carries no state, so anything that must survive has to live in the peers. That is achievable and not hard: a value merged with `max()`, rebroadcast at low rate by every peer rather than just the leader, survives arbitrary host churn as long as one player remains (see `MULTIPLAYER.md` §5). Design cosmetics as last-write-wins; design anything you care about as a merge.
 
 **Scoping**: beacons carry `parkId` (sessions never merge across parks; set automatically in core via ParkAnchor.LoadPark, or on the arbiter Inspector) and `ch` — `"sdk"` in SDK builds, `"prod"` in core builds (from the `DREAMPARKCORE` define). SDK test sessions can NEVER collide with production sessions on shared Wi-Fi; set `channelOverride` on the arbiter to cross intentionally. Kiosk/dev-relay beacons are channel-exempt.
 
-**NetId identity (deterministic by design — no explicitId needed)**: ids finalize in `Start` (not Awake — the park spawner parents/renames/stamps AFTER Instantiate) and hash with three rules:
+**NetId identity — an ADDRESS, not an owner.** Every player's copy of the same object has the SAME id, and that is the transport: the relay has no concept of "a player", so the only way one headset reaches another is that the same object everywhere computes the same id. Sending on it lands on that object's twin in every other session. *Which player* rides in the payload (a `u` field), never in the id — receivers key their tables by that, which is how one shared address carries per-player state. `[NetRegistry] NetId COLLISION` means two objects **inside one running app** claim one id (ambiguous routing); the same id across ten headsets is the point, not a fault.
+
+**You do not author ids** — none of the SDK's sample content sets one. Ids finalize in `Start` (not Awake — the park spawner parents/renames/stamps AFTER Instantiate) and hash with three rules:
 1. **Park-spawned attraction content is scope-anchored**: core's `LevelAnchor.Spawn` stamps a `NetScope` on every spawned attraction root with `{levelId}|{objectIndex}|{resourceName}` — all park-doc data, identical on every client. `NetId.ComputeId` walks up, STOPS at the NetScope, and mixes its key. Levels and objects spawn concurrently (`Task.Run` / `Task.WhenAll`), so sibling order ABOVE an attraction root reflects download completion order and differs per device — it never enters the hash. Below the scope, hierarchy comes from the prefab asset — identical everywhere.
 2. **Scene roots hash by name only** (no sibling index) — device builds order scene roots differently than the Editor. Keep scene-placed networked props uniquely named at root, or a `[NetRegistry] NetId COLLISION` warning fires.
 3. **Deterministic string hashing** (FNV over chars, `(Clone)` stripped) — never `string.GetHashCode()`, which is not stable across Mono (Editor) and IL2CPP (device).
-`explicitId` still exists as a manual override, but generated ids are stable without it. Mismatch symptom: `[NetRegistry] Event for UNREGISTERED NetId` on the receiver; with Verbose Net Logs, compare `Registered NetId` lines between devices. Note for anyone touching LuaBehaviour: `net_send` must read `netId.Id` at send time, never capture it at Awake (id isn't final until Start).
+`explicitId` remains a manual override, and it has one real use: an object sitting **outside any `NetScope`** whose path you cannot rely on — in practice a cross-attraction bus on the **player rig**, which nothing stamps a scope onto. (That is why LaserTag pins its Session object.) It is scoped now too — `NetId.ScopeExplicit` mixes the `scopeKey` when there is a `NetScope` above the object and returns the id verbatim when there is not — so an authored id no longer opts out of per-instance discrimination, and two live copies of one attraction no longer collide. Scene-placed props are unchanged byte-for-byte. If you set one, it must be unique within the park.
+
+Mismatch symptom: `[NetRegistry] Event for UNREGISTERED NetId` on the receiver; with Verbose Net Logs, compare `Registered NetId` lines between devices. Note for anyone touching LuaBehaviour: `net_send` must read `netId.Id` at send time, never capture it at Awake (id isn't final until Start).
 
 **Writing Lua multiplayer scripts** (reference sample: `Assets/DreamPark/Samples/Multiplayer/lua_touch_color_switch.lua.txt`):
-- `onnet(payload)` at file scope is auto-wired to the sibling NetId's events; `net_send(eventType, payloadJson)` is injected — both require a `NetId` on the SAME GameObject as the LuaBehaviour, and net_send additionally requires DreamBoxClient to exist at Awake. Always nil-guard: `if net_send then net_send(...) end` (solo play must work).
+- `onnet(payload)` at file scope is auto-wired to the sibling NetId's events; `net_send(eventType, payloadJson)` is injected — both require a `NetId` on the SAME GameObject as the LuaBehaviour. `net_send` now resolves `DreamBoxClient.Instance` at SEND time (same reason `netId.Id` is read at send time), so a client that appears late starts working instead of leaving the object permanently single-player. It is therefore always injected when a NetId is present: **`if net_send then` now means "is this object networkable" — a stable property of the prefab — not "did a client exist at boot".** Whether a message actually went out is `dp.relay().connected`.
+- Messages sent before the link comes up are **queued** (64 deep, 5 s TTL, drained inside the budget) rather than dropped, so a join handshake survives the second or two discovery takes. That fixes delivery, not timing: if your handshake opens a listen window at `start()`, use `dp.on_connected(fn)` — one-shot, fires immediately if already connected — or the window closes against an empty roster.
 - `onnet` receives the FULL wire JSON `{"type":"...","payload":{"netId":N,...}}` — use the global `json_parse(payload)` and read `t.payload.<field>`.
 - The relay never echoes your own message back: apply changes locally when sending (optimistic apply).
 - One owner per networked visual property: never mix a MaterialPropertyBlock writer (e.g. TestNetObject) and a `renderer.material` writer (Lua) on the same object — the MPB silently masks material changes.
@@ -439,7 +485,7 @@ A_DreamSequence                    ← AttractionTemplate + GameArea + MusicArea
 │                                    + LuaBehaviour: dreamsequence-controller
 ├── TransitionEffect               ← FX played between levels (VFX/FX_DreamTransition)
 └── LevelParent
-    ├── Level1   ACTIVE            ← 1. THE START TRIGGER (a "splash")
+    ├── Level1   ACTIVE            ← 1. THE MAIN MENU (splash + start action)
     │   ├── StartPodium/StartButton     dreamsequence-start-button
     │   └── set dressing
     ├── Level2   inactive          ← 2. THE SEQUENCE
@@ -452,9 +498,11 @@ A_DreamSequence                    ← AttractionTemplate + GameArea + MusicArea
         └── score display               dreamsequence-scorecard on a TMP label
 ```
 
-1. **A start trigger.** The only level active on load. The guest is standing in
-   front of it when they arrive, and pressing the button is the intentional act
-   that begins the run. Nothing is timed until they do.
+1. **A main menu.** The only level active on load, so it is what the preview PNG
+   shows and the first thing the guest sees. It carries the branding and one
+   definitive start action — a button, a portal, or a visual that responds to
+   the guest arriving — and taking it is the intentional act that begins the
+   run. Nothing is timed until they do. **It is never empty** (see below).
 2. **A sequence of levels.** Each holds whatever the game is about and a way
    out — usually a portal. One is active at a time; the controller owns that.
 3. **A final area.** The last level, with **no portal**, so the sequence ends
@@ -464,6 +512,52 @@ A_DreamSequence                    ← AttractionTemplate + GameArea + MusicArea
 Vary it freely: no button (`autoStart`), two levels or twenty, a final area that
 loops back (`loopSequence`), objectives instead of portals. The controller cares
 about exactly one thing — children of `levelParent` named `Level*`.
+
+### Level1 is a main menu. Empty is a failure mode.
+
+`Level1` is the *only* thing in the attraction a guest sees before they act — it
+is also what the preview PNG renders, because it is the only level active on
+load. Treat it as a **main menu / splash screen**, not as an empty room with a
+button floating in it.
+
+Every Dream Sequence's `Level1` must have, at minimum:
+
+- **A definitive start action.** One unmistakable thing to do. Pick one:
+  a **start button** (`dreamsequence-start-button` on a podium), a **portal**
+  the guest walks into, or a **responsive visual** that reacts to the guest
+  entering the space and begins the run. Whichever it is, it must read as
+  "press/enter me" from across the room, with nothing else competing for the
+  same read.
+- **Branded visuals.** The title, the mascot, the logo — enough that a guest who
+  has never heard of this attraction knows what it is called and what it is
+  about while they are deciding whether to press the button.
+- **Something on screen in every direction the guest is likely to face.** The
+  splash is a room, not a wall.
+
+**A `Level1` with nothing in it is a bug, not a placeholder.** It renders an
+empty preview tile, it gives the guest no reason to start, and it makes a
+finished game look broken. If the real art is not ready, ship the placeholder
+treatment below — an unfinished-but-deliberate splash beats a blank one every
+time.
+
+#### The inflatable placeholder treatment
+
+The look that has worked across our Dream Sequences, and the default to reach
+for when final art is not ready:
+
+- Take the **branded prefabs** — title text, logo, mascot, arch, podium — as
+  simple geometry.
+- Apply a **transparent purple "inflatable" material**: URP/Lit, Surface Type
+  *Transparent*, alpha ≈ 0.55–0.7, a purple base colour, smoothness high enough
+  to catch a highlight, and Render Face *Both* so the inside of the balloon
+  reads.
+- Put an **`EasyBend` component on each element** so it sways and settles
+  independently. The motion is what sells it as a stylised bouncy-castle prop
+  rather than as missing art.
+
+The result reads as intentional theming — a soft, inflatable lobby — rather than
+as a grey-box placeholder, so it is shippable while the final assets land, and
+it photographs well in the preview.
 
 ### Borrow from the Sample
 

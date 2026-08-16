@@ -11,14 +11,36 @@ public class RelayConfig
     [JsonPropertyName("connectionKey")]
     public string ConnectionKey { get; set; } = "dreambox";
 
+    /// <summary>
+    /// Per-message console logging. DEFAULTS OFF, and that is a capacity
+    /// decision rather than a tidiness one.
+    ///
+    /// The receive handler does a UTF8 decode plus a synchronous
+    /// Console.WriteLine per relayed message, inside a single-threaded
+    /// while(true) { PollEvents(); Thread.Sleep(15); } loop. Ten headsets at
+    /// 60 msg/s is 600 console writes a second on a Raspberry Pi — the relay
+    /// falls over there long before any rate limiter would have engaged, and it
+    /// presents as "the relay got slow", not as "the relay is logging".
+    ///
+    /// MessageLog (the bounded 200-entry ring behind the web panel) is
+    /// unaffected and stays on — it is what you actually want for inspection.
+    /// </summary>
     [JsonPropertyName("debug")]
-    public bool Debug { get; set; } = true;
+    public bool Debug { get; set; } = false;
 
     [JsonPropertyName("pollIntervalMs")]
     public int PollIntervalMs { get; set; } = 15;
 
     [JsonPropertyName("maxConnections")]
     public int MaxConnections { get; set; } = 32;
+
+    /// <summary>
+    /// Hard cap on an inbound message, matching PeerRelayServer and
+    /// DreamBoxClient. Untrusted LAN peers; 16 KB is generous for the small
+    /// JSON events this protocol carries.
+    /// </summary>
+    [JsonPropertyName("maxMessageBytes")]
+    public int MaxMessageBytes { get; set; } = 16 * 1024;
 
     [JsonPropertyName("discoveryPort")]
     public int DiscoveryPort { get; set; } = 7700;
