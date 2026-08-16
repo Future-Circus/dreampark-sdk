@@ -18,6 +18,11 @@
   // Max simultaneous peer connections. One session = 4-8 headsets typically.
   "maxConnections": 32,
 
+  // Hard cap on one inbound message, matching PeerRelayServer and
+  // DreamBoxClient. Untrusted LAN peers; 16 KB is generous for the
+  // small JSON events this protocol carries.
+  "maxMessageBytes": 16384,
+
   // UDP discovery beacon — headsets listen on this port to find the relay.
   "discoveryPort": 7700,
   "discoveryEnabled": true,

@@ -71,9 +71,41 @@ public class NetId : MonoBehaviour
     void EnsureRegistered()
     {
         if (_registered) return;
-        Id = explicitId != 0 ? explicitId : ComputeId();
+        Id = explicitId != 0 ? ScopeExplicit(explicitId) : ComputeId();
         NetRegistry.Register(this);
         _registered = true;
+    }
+
+    /// <summary>
+    /// Discriminate an authored id per spawned instance, using the same
+    /// boundary the hash path already uses.
+    ///
+    /// explicitId is a hand-authored constant on a SHARED prefab, and it
+    /// bypasses ComputeId entirely — so two live copies of one attraction both
+    /// answer to the same number and routing becomes ambiguous. That is not a
+    /// gap in the id scheme; it is an opt-out from the part of the scheme that
+    /// already solves this. ComputeId stops at the first NetScope and mixes its
+    /// scopeKey ("{levelId}|{objectIndex}|{resourceName}"), and objectIndex
+    /// differs per park-doc entry, so two instances of one attraction hash
+    /// apart today for every NetId that uses the hash.
+    ///
+    /// Mixing the same scopeKey into an authored id gives it the same property
+    /// for free. Scene-placed props have no NetScope ancestor and are returned
+    /// verbatim, so every shipped park keeps its current ids byte-for-byte.
+    ///
+    /// NOTE for anyone tempted to use a spawn ordinal instead: don't. Spawn
+    /// order is async download completion order, which differs on every device
+    /// — attraction N here is attraction M there. It would look correct in the
+    /// Editor and on a single device and desync only in a real session, which
+    /// is exactly what NetScope exists to prevent. objectIndex is park-doc
+    /// data and is safe; the ordinal is not.
+    /// </summary>
+    uint ScopeExplicit(uint id)
+    {
+        for (Transform t = transform; t != null; t = t.parent)
+            if (t.TryGetComponent<DreamPark.NetScope>(out var scope) && !string.IsNullOrEmpty(scope.scopeKey))
+                return MixString(id, scope.scopeKey);
+        return id;
     }
 
     void OnDestroy()

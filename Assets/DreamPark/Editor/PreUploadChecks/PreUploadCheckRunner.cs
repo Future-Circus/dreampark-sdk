@@ -32,6 +32,7 @@ namespace DreamPark.PreUploadChecks
                     new Checks.MetaOcclusionCheck(),
                     new Checks.SceneOverridesCheck(),
                     new Checks.OutsideContentFolderCheck(),
+                    new Checks.NetBudgetInvariantCheck(),
                 };
             }
         }

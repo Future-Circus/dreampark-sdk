@@ -164,6 +164,19 @@ listener.PeerDisconnectedEvent += (peer, info) =>
 
 listener.NetworkReceiveEvent += (peer, reader, channel, method) =>
 {
+    // Inbound size cap. Both PeerRelayServer (:29) and DreamBoxClient (:559)
+    // cap at 16 KB; the Pi had no length check anywhere on this path, so one
+    // peer on a venue LAN could push an arbitrary-size payload through to every
+    // headset in the room. The peer relay was written later and more
+    // defensively; this brings the kiosk to the same floor.
+    if (reader.AvailableBytes > config.MaxMessageBytes)
+    {
+        Console.WriteLine($"[relay] dropping oversized message from {peer}: " +
+                          $"{reader.AvailableBytes} bytes (cap {config.MaxMessageBytes}).");
+        reader.Recycle();
+        return;
+    }
+
     var bytes = reader.GetRemainingBytes();
     state.RecordRelay(bytes.Length);
     state.Log.Record(peer.Id, peer.ToString() ?? "?", bytes);
