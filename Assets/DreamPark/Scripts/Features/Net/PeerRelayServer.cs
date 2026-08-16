@@ -27,8 +27,15 @@ namespace DreamPark
 
         // Same inbound cap as DreamBoxClient — untrusted LAN peers.
         const int MaxIncomingMessageBytes = 16 * 1024;
-        // Per-peer inbound rate cap so one client can't flood the fan-out.
-        const int MaxMessagesPerPeerPerSecond = 60;
+        /// <summary>
+        /// Per-peer inbound rate cap so one client can't flood the fan-out.
+        /// Public so DreamBoxClient can advertise the real number instead of
+        /// carrying its own copy — a duplicated 60 is a stale guess waiting to
+        /// happen. NOTE: this is the PEER relay's cap. The DreamBox kiosk relay
+        /// (Tools/DreamBoxServer) does not rate limit at all, so this number
+        /// does not apply to a kiosk session.
+        /// </summary>
+        public const int MaxMessagesPerPeerPerSecond = 60;
 
         /// <summary>
         /// Soft cap, tunable per venue — NOT a system limit. The Wi-Fi medium is
@@ -59,7 +66,20 @@ namespace DreamPark
 
         // Per-peer rate limiting: peer.Id -> (windowStartMs, countInWindow)
         readonly Dictionary<int, RateWindow> _rate = new();
-        struct RateWindow { public int startMs; public int count; }
+        // `dropped` rides along in the same struct rather than in a parallel
+        // dictionary: the deny path has already done the TryGetValue, so
+        // recording there costs one store instead of a second lookup and store.
+        // It accumulates across window rolls and is zeroed when reported.
+        struct RateWindow { public int startMs; public int count; public int dropped; }
+
+        /// <summary>Messages dropped by the rate limiter since start. Surfaced so
+        /// a HUD or a test harness can show the number, not just infer it.</summary>
+        public int RateLimitedMessageCount { get; private set; }
+
+        // Dropped-message reporting, batched. The drop itself is in the hot path
+        // and fires 60+ times a second when it fires at all, so we accumulate in
+        // RateWindow and summarise every 5 s rather than logging per message.
+        int _nextDropReportMs;
 
         // Reused for non-alloc fan-out (this LiteNetLib fork has no ConnectedPeerList).
         readonly List<NetPeer> _fanout = new();
@@ -148,7 +168,7 @@ namespace DreamPark
                 try
                 {
                     if (reader.AvailableBytes > MaxIncomingMessageBytes) return;
-                    if (!AllowRate(peer.Id)) return;
+                    if (!AllowRate(peer.Id)) return;   // AllowRate records the drop
 
                     // Forward the raw payload untouched — preserves the client's
                     // length-prefixed string encoding without re-serializing.
@@ -194,7 +214,44 @@ namespace DreamPark
         }
 
         /// <summary>Pump network events. Call every frame while running.</summary>
-        public void Poll() => _server?.PollEvents();
+        public void Poll()
+        {
+            _server?.PollEvents();
+            ReportDrops();
+        }
+
+        /// <summary>
+        /// A rate-limited message used to disappear with no trace anywhere in the
+        /// system: the sender got no error, the receiver got no gap it could see,
+        /// and the host logged nothing. That made "we exceeded 60 msg/s" look
+        /// exactly like "the other headset stopped responding" — and the two have
+        /// completely different fixes. The host is the only party that knows, so
+        /// the host has to say so.
+        /// </summary>
+        void ReportDrops()
+        {
+            if (_rate.Count == 0) return;
+            int now = Environment.TickCount;
+            if (now < _nextDropReportMs) return;
+            _nextDropReportMs = now + 5000;
+
+            List<int> reported = null;
+            foreach (var kv in _rate)
+            {
+                if (kv.Value.dropped == 0) continue;
+                Debug.LogWarning($"[PeerRelay] Rate limit: dropped {kv.Value.dropped} message(s) from peer " +
+                                 $"{kv.Key} in the last 5 s (cap {MaxMessagesPerPeerPerSecond}/s per peer). " +
+                                 "That peer's events are being lost — it needs to send less, not retry more.");
+                (reported ??= new List<int>()).Add(kv.Key);
+            }
+            if (reported == null) return;
+            foreach (var id in reported)
+            {
+                var w = _rate[id];
+                w.dropped = 0;
+                _rate[id] = w;
+            }
+        }
 
         public void Stop()
         {
@@ -213,10 +270,19 @@ namespace DreamPark
             int now = Environment.TickCount;
             if (!_rate.TryGetValue(peerId, out var w) || now - w.startMs >= 1000)
             {
-                _rate[peerId] = new RateWindow { startMs = now, count = 1 };
+                // Carry `dropped` across the window roll — it is a report-cadence
+                // counter, not a per-second one. `w` is default (dropped = 0) when
+                // the peer is new.
+                _rate[peerId] = new RateWindow { startMs = now, count = 1, dropped = w.dropped };
                 return true;
             }
-            if (w.count >= MaxMessagesPerPeerPerSecond) return false;
+            if (w.count >= MaxMessagesPerPeerPerSecond)
+            {
+                RateLimitedMessageCount++;
+                w.dropped++;
+                _rate[peerId] = w;
+                return false;
+            }
             w.count++;
             _rate[peerId] = w;
             return true;

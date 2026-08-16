@@ -5,7 +5,8 @@ using UnityEngine;
 namespace DreamPark
 {
     /// <summary>
-    /// Owns the multiplayer fallback ladder (see Docs/LAN-PeerHost-Spec.md):
+    /// Owns the multiplayer fallback ladder (see dreampark-core
+    /// Docs/LAN-PeerHost-Spec.md):
     ///
     ///   SEARCHING ── DreamBox beacon ─────────▶ CLIENT (dreambox)   [kiosk always wins]
     ///       │
@@ -46,6 +47,14 @@ namespace DreamPark
         public SessionState State { get; private set; } = SessionState.Idle;
         public string HostId { get; private set; }          // our own stable id
         public string CurrentHostId { get; private set; }   // who we're connected/connecting to
+
+        /// <summary>
+        /// Messages/sec/peer the current host says it enforces, or 0 when it does
+        /// not advertise a cap (every kiosk today, and any pre-msgCap peer).
+        /// Read straight off the beacon we joined from — this is the only
+        /// authoritative source; everything else is inference.
+        /// </summary>
+        public int HostAdvertisedCap { get; private set; }
         public bool IsHost => State == SessionState.Hosting;
         public int HostedPeerCount => _relay?.PeerCount ?? 0;
         public event Action<SessionState> OnStateChanged;
@@ -394,6 +403,7 @@ namespace DreamPark
         void Join(DiscoveryListener.BeaconInfo info, SessionState asState)
         {
             CurrentHostId = string.IsNullOrEmpty(info.hostId) ? info.dreamboxId : info.hostId;
+            HostAdvertisedCap = info.msgCap;
             _joinStartedAt = Time.unscaledTime;
             _client.Connect(info.host, info.port, string.IsNullOrEmpty(info.key) ? null : info.key);
             SetState(asState);
@@ -427,6 +437,7 @@ namespace DreamPark
             // The host is just another client of its own relay — gameplay and
             // Lua cannot tell the difference. Loopback, so always reachable.
             CurrentHostId = HostId;
+            HostAdvertisedCap = PeerRelayServer.MaxMessagesPerPeerPerSecond;   // we ARE the relay
             _client.Connect("127.0.0.1", _relay.Port, _sessionKey);
             SetState(SessionState.Hosting);
         }

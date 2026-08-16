@@ -103,6 +103,9 @@ namespace DreamPark
                 ",\"seq\":" + Seq +
                 ",\"v\":" + ProtocolVersion +
                 ",\"ch\":\"" + _channel + "\"" +
+                // What THIS relay actually enforces, so clients stop inferring it
+                // from which rung of the ladder they think they are on.
+                ",\"msgCap\":" + PeerRelayServer.MaxMessagesPerPeerPerSecond +
                 "}";
 
             try

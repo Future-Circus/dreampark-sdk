@@ -422,26 +422,72 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
         // Match host state now in case this component starts disabled (OnEnable won't fire).
         LuaMessageRelays.SetEnabled(luaRelays, isActiveAndEnabled);
 
-        // auto-wire NetId if present on same GameObject
-        var netId = GetComponent<NetId>();
-        if (luaOnNet != null && netId != null)
-            netId.OnNetEvent += luaOnNet;
-
         // inject net_send(eventType, payloadJson) into this script's scope.
         // Read netId.Id at SEND time, not here: NetId finalizes its id in
         // Start (after the park spawner parents/renames/stamps NetScope),
         // which runs after this Awake — capturing the value now would
         // freeze a stale/zero id for park-spawned content.
+        var netId = GetComponent<NetId>();
         if (netId != null) {
-            var client = FindObjectOfType<DreamBoxClient>();
-            if (client != null) {
-                scriptScopeTable.Set("net_send", new Action<string, string>((eventType, payload) => {
-                    client.SendToNetId(netId.Id, eventType, payload);
-                }));
-            }
+            // Resolve BOTH the client and the id at SEND time. The id has to be
+            // late for the reason documented above; the client has to be late for
+            // the same class of reason — it is a scene singleton that may be
+            // spawned, enabled, or bundled in after this scope is built. Binding
+            // it here (the old FindObjectOfType) permanently decided "there is no
+            // networking" for the lifetime of the script, so a client arriving one
+            // frame later left the object quietly single-player forever.
+            //
+            // net_send is therefore ALWAYS injected when a NetId is present. That
+            // matters for content: `if net_send then` (which the SDK's own
+            // lua_touch_color_switch sample uses) now means "is this object
+            // networkable", which is a property of the prefab and is stable —
+            // rather than "did a client happen to exist at boot", which is a race.
+            // Whether a message actually went out is dp.relay().connected.
+            bool warnedNoClient = false;
+            scriptScopeTable.Set("net_send", new Action<string, string>((eventType, payload) => {
+                var client = DreamBoxClient.Instance;
+                if (client == null) {
+                    if (!warnedNoClient) {
+                        warnedNoClient = true;
+                        Debug.LogWarning($"[LuaBehaviour] '{luaScript.name}' on '{gameObject.name}' called " +
+                                         $"net_send('{eventType}') with no DreamBoxClient in the scene — " +
+                                         "running single-player. This self-heals if a client appears later. " +
+                                         "See Assets/DreamPark/Samples/Multiplayer/README.md.");
+                    }
+                    return;
+                }
+                client.SendToNetId(netId.Id, eventType, payload);
+            }));
         }
 
-        luaAwake?.Invoke();
+        // Auto-wire NetId AFTER awake() has run — in a finally, so a throwing
+        // awake() cannot strand the replay buffer.
+        //
+        // Subscribing is what DRAINS NetRegistry's replay buffer: NetId.OnNetEvent's
+        // add accessor calls TryFlushBuffered, but only `if (_registered)`. That
+        // condition is why this bug is invisible where you would look for it:
+        //
+        //   • Plain scene (not parked): this boots in Awake, which runs BEFORE
+        //     NetId.Start, so _registered is false, nothing flushes here, and the
+        //     backlog is delivered later by NetRegistry.Register — after awake().
+        //     There is no bug, and there is no way to reproduce one.
+        //
+        //   • In a park: content is parked, so booting is deferred to OnEnable or
+        //     the first Update — both of which are long after NetId.Start. By then
+        //     _registered is true, so subscribing flushes the backlog SYNCHRONOUSLY,
+        //     and with the subscription before awake() that backlog reached onnet
+        //     before awake() had built anything it reads.
+        //
+        // So this is not an intermittent race. It is deterministic for parked
+        // content — which is all shipped content — and structurally impossible to
+        // observe in the test scene you would use to chase it.
+        try {
+            luaAwake?.Invoke();
+        }
+        finally {
+            if (luaOnNet != null && netId != null)
+                netId.OnNetEvent += luaOnNet;
+        }
     }
 
     // Unity fires Start exactly once and never again, so a script that was still

@@ -176,7 +176,7 @@ namespace DreamPark {
         }
 
         /// <summary>
-        /// Auto-calibration Phase 1 (Docs/Auto-Calibration-Spec.md §4): one-shot
+        /// Auto-calibration Phase 1 (dreampark-core Docs/Auto-Calibration-Spec.md §4): one-shot
         /// conform against whatever raycastable environment exists right now
         /// (AR mesh chunks persist across mode switches within a session, so a
         /// Scan sweep keeps paying off after the user leaves Scan mode).
@@ -896,7 +896,7 @@ namespace DreamPark {
 
         private void OnMeshesChanged(ARMeshesChangedEventArgs args)
         {
-            // Auto-calibration Phase 1 (Docs/Auto-Calibration-Spec.md §4/§6):
+            // Auto-calibration Phase 1 (dreampark-core Docs/Auto-Calibration-Spec.md §4/§6):
             // conform ONLY while Scan mode is active. Meshing also runs in AR
             // build mode (placement raycasts), and mesh updates there used to
             // silently re-conform every placed floor. Floors may change only

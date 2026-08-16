@@ -23,13 +23,15 @@ public class DiscoveryListener : IDisposable
         public string dreamboxId;
 
         // Peer-host extension fields (absent on kiosk beacons — see
-        // Docs/LAN-PeerHost-Spec.md §3.2). Old beacons parse fine: these stay "".
+        // dreampark-core Docs/LAN-PeerHost-Spec.md §3.2). Old beacons parse
+        // fine: these stay "".
         public string hostType;   // "" / "dreambox" = kiosk, "peer" = elected headset
         public string hostId;     // stable device id of the peer host
         public string parkId;     // session scope — two parks on one LAN don't merge
         public int seq;           // beacon sequence number
         public int v;             // peer protocol version (0 = pre-versioning/kiosk)
         public string channel;    // "prod" (core builds) / "sdk" (creator projects) — peer sessions don't cross channels
+        public int msgCap;        // messages/sec/peer this relay enforces; 0 = not advertised
     }
 
     /// <summary>Fired on background thread when a valid beacon is received.</summary>
@@ -119,6 +121,12 @@ public class DiscoveryListener : IDisposable
                 var seqField = obj.GetField("seq");
                 var vField = obj.GetField("v");
                 var channelField = obj.GetField("ch");
+                // Optional, and additive by construction — an absent field is 0,
+                // which every reader already has to treat as "not advertised".
+                // No version gate and no coordination with the Pi: a relay that
+                // does not send it keeps working exactly as before, and starts
+                // being believed the day it does.
+                var capField = obj.GetField("msgCap");
 
                 if (hostField == null || portField == null) continue;
 
@@ -133,7 +141,8 @@ public class DiscoveryListener : IDisposable
                     parkId = parkIdField != null ? parkIdField.stringValue : "",
                     seq = seqField != null ? seqField.intValue : 0,
                     v = vField != null ? vField.intValue : 0,
-                    channel = channelField != null ? channelField.stringValue : ""
+                    channel = channelField != null ? channelField.stringValue : "",
+                    msgCap = capField != null ? capField.intValue : 0
                 };
 
                 // Unfiltered feed for the arbiter (every valid beacon).

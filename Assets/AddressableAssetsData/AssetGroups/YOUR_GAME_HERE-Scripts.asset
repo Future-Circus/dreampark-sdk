@@ -15,6 +15,12 @@ MonoBehaviour:
   m_GroupName: YOUR_GAME_HERE-Scripts
   m_GUID: 8e718d07cd5aa4fa08dc3feff8eb3bbc
   m_SerializeEntries:
+  - m_GUID: 4f120475acf6a4c79b0d90f117b11d82
+    m_Address: YOUR_GAME_HERE/Data/lua_damage_effect.lua
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - YOUR_GAME_HERE
+    FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: ba8d3416751504baf8759ff2b1cc8714
     m_Address: YOUR_GAME_HERE/Data/lua_touch_color_switch.lua
     m_ReadOnly: 0
