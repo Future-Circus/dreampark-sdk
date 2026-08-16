@@ -1,0 +1,98 @@
+-- ============================================================
+-- {PROP}.lua.txt — this prop's script. Billboard plane.
+--
+-- THIS IS YOUR FILE. Convert generated it and will not touch it
+-- again. Turning the plane to face the guest is all it does out of
+-- the box; everything else this prop ever does goes below.
+--
+-- WHERE IT LIVES
+--   On the Motion node, NEVER on the prop root.
+--
+--   The park loader instantiates the prefab and writes
+--   localRotation on the spawned root AFTERWARDS. Anything that
+--   owns the root's rotation every frame therefore overwrites the
+--   park's authored yaw on the first live frame, and every poster
+--   in the park snaps to the same facing — which reads as a
+--   park-data bug and is not one. The Motion node exists so the
+--   root's rotation stays the park's and the spin stays ours.
+--
+--   The fitted collider is on the Anchor, deliberately not here:
+--   PropTemplate.TryGetColliderFootprint walks
+--   GetComponentsInChildren<Collider>(), and GapFiller and
+--   FloorCutout both consume that footprint. On a rotating node the
+--   prop's hole in the floor would spin with the guest's head. The
+--   Anchor collider is sized to the SWEPT volume instead.
+--
+-- WHICH WAY IT FACES
+--   The generated quad's visible face is -Z with normals (0,0,-1) —
+--   Unity's own Quad and SpriteRenderer convention, so the texture
+--   reads left-to-right rather than mirrored. That means forward
+--   points AWAY from the guest. Do not "fix" the sign below unless
+--   you have also flipped the mesh.
+--
+-- YAW-ONLY vs FULL
+--   Yaw-only is right for anything standing on the floor. A full
+--   billboard tips as the guest crouches and the base of the plane
+--   lifts off the ground, which is the single most common way a
+--   poster stops looking like it is in the room.
+--
+-- @var yawOnly bool true
+-- ============================================================
+
+local UE = CS.UnityEngine
+local Vector3 = UE.Vector3
+local Quaternion = UE.Quaternion
+
+-- Injections land in this script's scope before the body runs. Defended
+-- anyway: `if yaw_only` on a nil silently takes the full-billboard branch,
+-- which is a bug you notice a week later when a poster tips over.
+local yaw_only = yawOnly
+if yaw_only == nil then yaw_only = true end
+
+-- Below this the direction is degenerate and LookRotation would spam the
+-- console. Squared, so there is no sqrt in the per-frame path.
+local MIN_SQR_DISTANCE = 0.000001
+
+-- ── State ───────────────────────────────────────────────────
+
+local head = nil
+
+-- ── Facing ──────────────────────────────────────────────────
+
+-- Resolved lazily and re-resolved when it goes away. The player rig is a
+-- DIFFERENT addressable from this attraction, so at the moment this script
+-- boots there may be no head yet — "not there yet" is an ordinary state on
+-- arrival here, not an error. There is also nothing to serialize a
+-- reference to, which is why this is a lookup rather than an injection.
+local function get_head()
+    if head == nil then head = dp.head() end
+    return head
+end
+
+function face_guest()
+    local h = get_head()
+    if h == nil then return end
+
+    -- position - head, not head - position: forward points AWAY. See the
+    -- header — the quad's visible face is -Z.
+    local d = self.transform.position - h.position
+    if yaw_only then d = Vector3(d.x, 0, d.z) end
+    if d.sqrMagnitude < MIN_SQR_DISTANCE then return end
+
+    self.transform.rotation = Quaternion.LookRotation(d)
+end
+
+-- ── Lifecycle ───────────────────────────────────────────────
+
+-- lateupdate, not update: the guest's head moves in the camera's own update,
+-- so facing it from update() is always one frame stale. On a plane held
+-- close that reads as the poster lagging behind the head turn.
+function lateupdate()
+    face_guest()
+end
+
+function onready()
+    -- Face the right way on the first frame the guest can see it, rather
+    -- than showing the prefab's authored facing for a frame first.
+    face_guest()
+end

@@ -189,6 +189,151 @@ namespace DreamPark
             return null;
         }
 
+        // ── dp.hand(side) / dp.hands() ───────────────────────────────
+        //
+        // REPLACES, in shipped content:
+        //     GameObject.Find("RightHandAnchor")   -- every frame, in Lua
+        //     ...or giving up and using the collider that happened to touch
+        //     the trigger, which is whichever child collider Unity reported.
+        //
+        // Content that spawns FROM the hand (a bolt, a spell, a thrown item)
+        // has had no way to ask where the hand is. The three sanctioned
+        // interaction patterns are all collider-driven, so a script only ever
+        // learned about a hand at the moment one hit something — which is too
+        // late to aim with, and gives a different transform depending on which
+        // sub-collider of the rig fired.
+        //
+        // Resolved through the ACTIVE RIG's HandTracker, not a global
+        // GameObject.Find. HandTracker is the SDK component that owns hand
+        // state, it sits on every Player.prefab, and going through it means
+        // dp.hand() and dp.player() are always talking about the same rig —
+        // PlayerRig.instances is a dictionary, so more than one rig can exist
+        // and a naked Find would return whichever the scene graph offered.
+        //
+        // GameObject.Find on the Meta anchor names stays as a FALLBACK because
+        // that is what HandTracker itself falls back to (HandTracker.cs), and
+        // what Simulator creates in the Editor when there is no headset. It is
+        // the second choice, not the convention.
+        static Transform _handL, _handR;
+
+        static HandTracker RigHandTracker()
+        {
+            var rig = Player();
+            return rig != null ? rig.GetComponentInChildren<HandTracker>(true) : null;
+        }
+
+        // The anchor is the OVRHand's parent (same relationship Simulator
+        // builds); fall back to the hand transform itself if it is unparented.
+        static Transform AnchorOf(OVRHand hand)
+        {
+            if (hand == null) return null;
+            var t = hand.transform;
+            return t.parent != null ? t.parent : t;
+        }
+
+        public static Transform Hand(string side)
+        {
+            bool wantLeft  = side == "left"  || side == "L" || side == "l";
+            bool wantRight = side == "right" || side == "R" || side == "r";
+
+            var tracker = RigHandTracker();
+            if (tracker != null)
+            {
+                if (!wantLeft && !wantRight)
+                {
+                    var active = AnchorOf(tracker.ActiveHand);
+                    if (active != null) return active;
+                }
+                else
+                {
+                    var picked = AnchorOf(wantLeft ? tracker.leftHand : tracker.rightHand);
+                    if (picked != null) return picked;
+                }
+            }
+
+            // Fallback path.
+            if (!wantLeft && !wantRight)
+            {
+                var r = Hand("right");
+                return r != null ? r : Hand("left");
+            }
+
+            // Explicit branches rather than a ref local: Unity's == overload
+            // means a DESTROYED Transform is "fake null", which ?? does not see.
+            if (wantLeft)
+            {
+                if (_handL == null)
+                {
+                    var gl = GameObject.Find("LeftHandAnchor");
+                    _handL = gl != null ? gl.transform : null;
+                }
+                return _handL;
+            }
+
+            if (_handR == null)
+            {
+                var gr = GameObject.Find("RightHandAnchor");
+                _handR = gr != null ? gr.transform : null;
+            }
+            return _handR;
+        }
+
+        // ── dp.relay() / dp.session() ────────────────────────────────
+        //
+        // REPLACES, in shipped content:
+        //     pcall(function() local c = CS.DreamBoxClient.Instance
+        //                      if c ~= nil then ping = c.Ping end end)
+        //
+        // Every multiplayer game wants to show connection state, and every one
+        // of them reaches through CS.* to a singleton that may not exist, in a
+        // pcall, because a nil there is a hard error mid-frame. Worse, the two
+        // things a creator actually needs to reason about — am I over the send
+        // budget, and did the host just change — were not reachable at all.
+        //
+        // Returns a plain LuaTable of primitives (no bespoke C# type crossing
+        // the boundary, so no [LuaCallCSharp] and no XLua codegen churn).
+        public static LuaTable Relay()
+        {
+            var env = LuaBehaviour.GetLuaEnv();
+            var t = env.NewTable();
+            var c = DreamBoxClient.Instance;
+            t.Set("present",   c != null);
+            t.Set("state",     c != null ? c.ConnectionState.ToString() : "none");
+            t.Set("connected", c != null && c.ConnectionState == DreamBoxClient.State.Connected);
+            t.Set("ping",      c != null ? c.Ping : -1);
+            t.Set("received",  c != null ? c.MessageCount : 0);
+            t.Set("sent",      c != null ? c.SentCount : 0);
+            t.Set("send_rate", c != null ? c.SendRate : 0);
+            // TWO numbers, deliberately.
+            //   cap    — what THIS host enforces right now. 0 = it advertises
+            //            none (every kiosk today). Diagnostic; it moves.
+            //   budget — what to DESIGN against. Always the floor, whoever is
+            //            hosting, because a kiosk session can lose the kiosk
+            //            mid-play and a headset takes over. Budgeting to kiosk
+            //            headroom breaks at exactly that moment.
+            // If you are putting one number in your head, it is budget.
+            t.Set("cap",       c != null ? c.EffectiveSendCap : 0);
+            t.Set("budget",    DreamBoxClient.DesignBudget);
+            // Outbox depth. Lets content report "queued" as a fact rather than
+            // inferring it from present && !connected.
+            t.Set("queued",    c != null ? c.QueuedCount : 0);
+            return t;
+        }
+
+        public static LuaTable Session()
+        {
+            var env = LuaBehaviour.GetLuaEnv();
+            var t = env.NewTable();
+            var a = NetSessionArbiter.Instance;
+            t.Set("present", a != null);
+            t.Set("state",   a != null ? a.State.ToString() : "none");
+            t.Set("host",    a != null ? (a.CurrentHostId ?? "") : "");
+            t.Set("is_host", a != null && a.IsHost);
+            t.Set("peers",   a != null ? a.HostedPeerCount : 0);
+            t.Set("park",    a != null ? (a.parkId ?? "") : "");
+            return t;
+        }
+
         // ── dp.on_global(name, fn) ───────────────────────────────────
         //
         // REPLACES: `if manager then ... end` on every single call, plus
@@ -228,6 +373,15 @@ namespace DreamPark
                 env.Global.Set("dp_attraction_root",  new Func<GameObject, GameObject>(AttractionRoot));
                 env.Global.Set("dp_game_id",          new Func<GameObject, string>(GameId));
                 env.Global.Set("dp_ensure_pump",      new Action(EnsurePump));
+                env.Global.Set("dp_hand",             new Func<string, Transform>(Hand));
+                // Cheap enough to poll every frame — dp.relay() allocates a table,
+                // this does not.
+                env.Global.Set("dp_connected",        new Func<bool>(() => {
+                    var c = DreamBoxClient.Instance;
+                    return c != null && c.ConnectionState == DreamBoxClient.State.Connected;
+                }));
+                env.Global.Set("dp_relay",            new Func<LuaTable>(Relay));
+                env.Global.Set("dp_session",          new Func<LuaTable>(Session));
 
                 // No double quotes inside this verbatim block.
                 env.DoString(@"
@@ -245,6 +399,44 @@ dp.attraction  = function(go) return dp_attraction_scope(go) end
 dp.attraction_root = function(go) return dp_attraction_root(go) end
 dp.game_id     = function(go) return dp_game_id(go) end
 
+-- Where the player's hand is, right now. side is 'left' / 'right', or
+-- omitted for the rig's own hand anchor. May be nil before the rig exists.
+dp.hand        = function(side) return dp_hand(side or '') end
+dp.hands       = function()   return dp_hand('left'), dp_hand('right') end
+
+-- Live networking state. Never nil, never throws: fields report an absent
+-- client rather than making every caller wrap the lookup in a pcall.
+--   dp.relay()   -> { present, state, connected, ping, received, sent,
+--                     send_rate, cap }
+--   dp.session() -> { present, state, host, is_host, peers, park }
+dp.relay       = function()   return dp_relay() end
+dp.session     = function()   return dp_session() end
+
+-- One-shot: run fn as soon as the relay link is up (immediately if it already
+-- is). This is the hook for anything whose TIMING matters, not just its
+-- delivery — a join handshake has to open its listen window when the link
+-- comes up, and no amount of queueing on the send side fixes a window that
+-- opened and closed while the client was still connecting.
+__dp_connect_waiters = __dp_connect_waiters or {}
+
+dp.on_connected = function(fn)
+    if fn == nil then return end
+    if dp_connected() then fn() return end
+    __dp_connect_waiters[#__dp_connect_waiters + 1] = fn
+    dp_ensure_pump()
+end
+
+function __dp_pump_connected()
+    if #__dp_connect_waiters == 0 then return end
+    if not dp_connected() then return end
+    local list = __dp_connect_waiters
+    __dp_connect_waiters = {}
+    for i = 1, #list do
+        local ok, err = pcall(list[i])
+        if not ok then print('[dp.on_connected] handler threw: ' .. tostring(err)) end
+    end
+end
+
 -- Sticky global waiter. Fires now if the global exists, else when it appears.
 __dp_global_waiters = __dp_global_waiters or {}
 
@@ -257,6 +449,7 @@ dp.on_global = function(name, fn)
 end
 
 function __dp_pump_globals()
+    __dp_pump_connected()
     if #__dp_global_waiters == 0 then return end
     local still = {}
     for i = 1, #__dp_global_waiters do

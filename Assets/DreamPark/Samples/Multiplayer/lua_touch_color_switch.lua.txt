@@ -81,11 +81,21 @@ local function on_touched()
 
     -- Broadcast to everyone else in the session (peer host or DreamBox —
     -- same call either way). No-op if no session is up: solo still works.
+    -- net_send exists whenever this object has a NetId. Whether the message
+    -- reached anyone is a question about the LINK, not about the function —
+    -- so ask dp.relay() rather than inferring it from net_send being non-nil.
     if net_send then
         net_send("color", string.format('{"r":%.2f,"g":%.2f,"b":%.2f}', r, g, b))
-        print("[touch_color] SENT color over network")
+        local link = dp.relay()
+        if link.connected then
+            print("[touch_color] sent colour to the session")
+        elseif link.present then
+            print("[touch_color] queued colour — relay not connected yet")
+        else
+            print("[touch_color] no DreamBoxClient in the scene — local only")
+        end
     else
-        print("[touch_color] net_send is nil — LuaBehaviour didn't find DreamBoxClient/NetId at Awake, nothing sent")
+        print("[touch_color] no NetId on this object — local only, nothing sent")
     end
 end
 

@@ -1,0 +1,93 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 51930355d21a64ce19dc3f2899260ff2, type: 3}
+  m_Name: ConvertReadyManifest
+  m_EditorClassIdentifier: 
+  entries:
+  - prefabGuid: 7643dfe51bf664e9f90403b3d77657f5
+    prefabPath: Assets/P_TestShrimp/P_TestShrimp.prefab
+    sourceGuid: 3c30fc450dac5417aa831d3dcb920d94
+    sourcePath: Assets/TestShrimp.fbx
+    presetName: Interactive
+    planJson: '{"track":0,"presetName":"Interactive","convertMaterials":true,"extractEmbeddedMaterials":true,"fitScale":true,"scale":{"apply":false,"targetMeters":0.0,"axis":1,"measuredMeters":0.0,"fileScale":0.0,"confidence":0,"humanReference":""},"groundPivot":true,"upAxis":0,"collider":0,"emitPropPrefab":true,"category":0,"affectsGapFiller":true,"addRigidbody":true,"behavior":1,"bend":{"maxTiltAngle":22.0,"springStrength":55.0,"springDamping":7.0,"minDetectionRadius":0.15000000596046449,"eventOnStart":true,"boneRadius":0.41999998688697817,"colliderSpacing":0.009999999776482582,"jointSpring":5000000.0,"jointMaxForce":500.0,"archway":false},"fracture":{"pieces":12,"insideMaterial":{"instanceID":0},"capUvScale":1.0,"burstImpulse":2.0,"pieceLifetime":8.0},"plane":{"billboard":0,"heightMeters":1.0,"twoSided":true,"alphaClip":true},"audio":{"looping":false,"audibleRadius":8.0,"volume":1.0,"normalizeImportSettings":true},"shared":{"enabled":false,"familyName":"","shareCollider":false}}'
+    insideMaterialGuid: 
+    anchorPath: Anchor
+    motionPath: 
+    visualPath: Anchor/Visual
+    version: 1
+    firstConvertedUtc: 2026-08-16T04:16:28.2557090Z
+    lastConvertedUtc: 2026-08-16T04:16:28.3378770Z
+  - prefabGuid: 5b336814ea68a4cfeb7219e570b1719c
+    prefabPath: Assets/P_TestShrimp/P_TestShrimp.prefab
+    sourceGuid: 9cf997bfbf3b74148a796437e4b950b1
+    sourcePath: Assets/TestShrimp.fbx
+    presetName: Interactive
+    planJson: '{"track":0,"presetName":"Interactive","convertMaterials":true,"extractEmbeddedMaterials":true,"fitScale":true,"scale":{"apply":false,"targetMeters":0.0,"axis":1,"measuredMeters":0.0,"fileScale":0.0,"confidence":0,"humanReference":""},"groundPivot":true,"upAxis":0,"collider":0,"emitPropPrefab":true,"category":0,"affectsGapFiller":true,"addRigidbody":true,"behavior":1,"bend":{"maxTiltAngle":22.0,"springStrength":55.0,"springDamping":7.0,"minDetectionRadius":0.15000000596046449,"eventOnStart":true,"boneRadius":0.41999998688697817,"colliderSpacing":0.009999999776482582,"jointSpring":5000000.0,"jointMaxForce":500.0,"archway":false},"fracture":{"pieces":12,"insideMaterial":{"instanceID":0},"capUvScale":1.0,"burstImpulse":2.0,"minImpactSpeed":2.0,"pieceLifetime":8.0},"plane":{"billboard":0,"heightMeters":1.0,"twoSided":true,"alphaClip":true},"audio":{"looping":false,"audibleRadius":8.0,"volume":1.0,"normalizeImportSettings":true},"shared":{"enabled":false,"familyName":"","shareCollider":false}}'
+    insideMaterialGuid: 
+    anchorPath: Anchor
+    motionPath: 
+    visualPath: Anchor/Visual
+    version: 1
+    firstConvertedUtc: 2026-08-16T09:18:13.0220420Z
+    lastConvertedUtc: 2026-08-16T09:55:45.1166120Z
+  - prefabGuid: ae055bdf5576944fd9492c4cb69a65ec
+    prefabPath: Assets/P_TestShrimp/P_TestShrimp_2.prefab
+    sourceGuid: 9cf997bfbf3b74148a796437e4b950b1
+    sourcePath: Assets/P_TestShrimp/TestShrimp.fbx
+    presetName: Shatterable
+    planJson: '{"track":0,"presetName":"Shatterable","convertMaterials":true,"extractEmbeddedMaterials":true,"fitScale":true,"scale":{"apply":false,"targetMeters":0.0,"axis":1,"measuredMeters":0.0,"fileScale":0.0,"confidence":0,"humanReference":""},"groundPivot":true,"upAxis":0,"collider":0,"emitPropPrefab":true,"category":0,"affectsGapFiller":true,"addRigidbody":true,"behavior":3,"bend":{"maxTiltAngle":22.0,"springStrength":55.0,"springDamping":7.0,"minDetectionRadius":0.15000000596046449,"eventOnStart":true,"boneRadius":0.41999998688697817,"colliderSpacing":0.009999999776482582,"jointSpring":5000000.0,"jointMaxForce":500.0,"archway":false},"fracture":{"pieces":12,"insideMaterial":{"instanceID":0},"capUvScale":1.0,"burstImpulse":2.0,"minImpactSpeed":2.0,"pieceLifetime":8.0},"plane":{"billboard":0,"heightMeters":1.0,"twoSided":true,"alphaClip":true},"audio":{"looping":false,"audibleRadius":8.0,"volume":1.0,"normalizeImportSettings":true},"shared":{"enabled":false,"familyName":"","shareCollider":false}}'
+    insideMaterialGuid: 
+    anchorPath: Anchor
+    motionPath: 
+    visualPath: Anchor/Visual
+    version: 1
+    firstConvertedUtc: 2026-08-16T09:19:32.2846060Z
+    lastConvertedUtc: 2026-08-16T09:56:58.0989150Z
+  - prefabGuid: a11a71550bf704c0fba5967f2720775c
+    prefabPath: Assets/P_TestShrimp/P_TestShrimp_3.prefab
+    sourceGuid: 9cf997bfbf3b74148a796437e4b950b1
+    sourcePath: Assets/P_TestShrimp/TestShrimp.fbx
+    presetName: Bendy
+    planJson: '{"track":0,"presetName":"Bendy","convertMaterials":true,"extractEmbeddedMaterials":true,"fitScale":true,"scale":{"apply":false,"targetMeters":0.0,"axis":1,"measuredMeters":0.0,"fileScale":0.0,"confidence":0,"humanReference":""},"groundPivot":true,"upAxis":0,"collider":0,"emitPropPrefab":true,"category":4,"affectsGapFiller":true,"addRigidbody":false,"behavior":2,"bend":{"maxTiltAngle":22.0,"springStrength":55.0,"springDamping":7.0,"minDetectionRadius":0.15000000596046449,"eventOnStart":true,"boneRadius":0.41999998688697817,"colliderSpacing":0.009999999776482582,"jointSpring":5000000.0,"jointMaxForce":500.0,"archway":false},"fracture":{"pieces":12,"insideMaterial":{"instanceID":0},"capUvScale":1.0,"burstImpulse":2.0,"minImpactSpeed":2.0,"pieceLifetime":8.0},"plane":{"billboard":0,"heightMeters":1.0,"twoSided":true,"alphaClip":true},"audio":{"looping":false,"audibleRadius":8.0,"volume":1.0,"normalizeImportSettings":true},"shared":{"enabled":false,"familyName":"","shareCollider":false}}'
+    insideMaterialGuid: 
+    anchorPath: Anchor
+    motionPath: Anchor/Motion
+    visualPath: Anchor/Motion/Visual
+    version: 1
+    firstConvertedUtc: 2026-08-16T09:57:51.3627860Z
+    lastConvertedUtc: 2026-08-16T09:57:51.4325580Z
+  - prefabGuid: 9ff1618150690403d8acdbbd3cdc9622
+    prefabPath: Assets/P_TestShrimp/P_TestShrimp_4.prefab
+    sourceGuid: 9cf997bfbf3b74148a796437e4b950b1
+    sourcePath: Assets/P_TestShrimp/TestShrimp.fbx
+    presetName: Bendy
+    planJson: '{"track":0,"presetName":"Bendy","convertMaterials":true,"extractEmbeddedMaterials":true,"fitScale":true,"scale":{"apply":false,"targetMeters":0.0,"axis":1,"measuredMeters":0.0,"fileScale":0.0,"confidence":0,"humanReference":""},"groundPivot":true,"upAxis":0,"collider":6,"emitPropPrefab":true,"category":4,"affectsGapFiller":true,"addRigidbody":false,"behavior":2,"bend":{"maxTiltAngle":22.0,"springStrength":55.0,"springDamping":7.0,"minDetectionRadius":0.15000000596046449,"eventOnStart":true,"boneRadius":0.41999998688697817,"colliderSpacing":0.009999999776482582,"jointSpring":5000000.0,"jointMaxForce":500.0,"archway":false},"fracture":{"pieces":12,"insideMaterial":{"instanceID":0},"capUvScale":1.0,"burstImpulse":2.0,"minImpactSpeed":2.0,"pieceLifetime":8.0},"plane":{"billboard":0,"heightMeters":1.0,"twoSided":true,"alphaClip":true},"audio":{"looping":false,"audibleRadius":8.0,"volume":1.0,"normalizeImportSettings":true},"shared":{"enabled":false,"familyName":"","shareCollider":false}}'
+    insideMaterialGuid: 
+    anchorPath: Anchor
+    motionPath: Anchor/Motion
+    visualPath: Anchor/Motion/Visual
+    version: 1
+    firstConvertedUtc: 2026-08-16T20:56:38.0459780Z
+    lastConvertedUtc: 2026-08-16T20:56:38.2509580Z
+  - prefabGuid: dd5acce6ada074a7b84788e53f325181
+    prefabPath: Assets/DreamPark/Textures/P_direction_map/P_direction_map.prefab
+    sourceGuid: b93b76b6fd36c443f89a0607643f97c4
+    sourcePath: Assets/DreamPark/Textures/direction_map.png
+    presetName: Texture Plane
+    planJson: '{"track":1,"presetName":"Texture Plane","convertMaterials":false,"extractEmbeddedMaterials":false,"fitScale":false,"scale":{"apply":false,"targetMeters":0.0,"axis":1,"measuredMeters":0.0,"fileScale":0.0,"confidence":0,"humanReference":""},"groundPivot":true,"upAxis":0,"collider":0,"emitPropPrefab":true,"category":0,"affectsGapFiller":true,"addRigidbody":false,"behavior":0,"bend":{"maxTiltAngle":22.0,"springStrength":55.0,"springDamping":7.0,"minDetectionRadius":0.15000000596046449,"eventOnStart":true,"boneRadius":0.41999998688697817,"colliderSpacing":0.009999999776482582,"jointSpring":5000000.0,"jointMaxForce":500.0,"archway":false},"fracture":{"pieces":12,"insideMaterial":{"instanceID":0},"capUvScale":1.0,"burstImpulse":2.0,"minImpactSpeed":2.0,"pieceLifetime":8.0},"plane":{"billboard":0,"heightMeters":1.0,"twoSided":true,"alphaClip":true},"audio":{"looping":false,"audibleRadius":8.0,"volume":1.0,"normalizeImportSettings":true},"shared":{"enabled":false,"familyName":"","shareCollider":false}}'
+    insideMaterialGuid: 
+    anchorPath: Anchor
+    motionPath: 
+    visualPath: Anchor/Visual
+    version: 1
+    firstConvertedUtc: 2026-08-16T21:03:30.4217920Z
+    lastConvertedUtc: 2026-08-16T21:03:30.4218530Z
