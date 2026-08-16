@@ -409,28 +409,121 @@ namespace DreamPark.ConvertReady
         }
 
         /// <summary>
-        /// Where extracted materials belong: the model's own content package if
-        /// it lives under Assets/Content, otherwise whichever package
-        /// ContentFolders picks. Keeping them inside the content folder is the
-        /// whole integration — ContentProcessor watches that tree.
-        ///
-        /// FolderOfAsset returns the first path SEGMENT after "Assets/Content/"
-        /// without checking that the segment is a directory, so a model dropped
-        /// straight into Assets/Content ("Assets/Content/tree.fbx") comes back
-        /// as "tree.fbx". Trusting that gives
-        /// "Assets/Content/tree.fbx/Materials", and EnsureFolder then either
-        /// fails outright (no extraction, pink prop) or creates a directory
-        /// whose name collides with the model file inside the very tree
-        /// ContentProcessor watches. Hence the IsValidFolder check.
+        /// Kit folder is P_{stem} next to the source, so it never shares a
+        /// stem with Foo.fbx. Prefab, materials and the original file all
+        /// land in that folder.
+        /// </summary>
+        public static string KitFolderFor(string assetPath)
+        {
+            if (string.IsNullOrEmpty(assetPath)) return null;
+            string normalized = assetPath.Replace('\\', '/');
+            string parent = (Path.GetDirectoryName(normalized) ?? string.Empty).Replace('\\', '/');
+            if (string.IsNullOrEmpty(parent)) return null;
+
+            string stem = SanitizeAssetName(Path.GetFileNameWithoutExtension(normalized), "Asset");
+            string kitName = stem.StartsWith("P_", StringComparison.Ordinal) ? stem : "P_" + stem;
+            string parentLeaf = Path.GetFileName(parent);
+            if (string.Equals(parentLeaf, kitName, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(parentLeaf, stem, StringComparison.OrdinalIgnoreCase))
+                return parent;
+            return parent + "/" + kitName;
+        }
+
+        /// <summary>
+        /// Move the source into its P_{stem} kit. Uses CreateFolder + MoveAsset
+        /// so the ModelImporter survives; a raw filesystem move turns the
+        /// FBX into a DefaultAsset and LoadAssetAtPath&lt;GameObject&gt; returns null.
+        /// </summary>
+        public static string GatherIntoAssetFolder(ref string assetPath, ConversionResult r)
+        {
+            if (string.IsNullOrEmpty(assetPath))
+            {
+                if (r != null) r.Failed("could not gather the asset — no source path");
+                return null;
+            }
+
+            string normalized = assetPath.Replace('\\', '/');
+            string folder = KitFolderFor(normalized);
+            if (string.IsNullOrEmpty(folder))
+            {
+                if (r != null) r.Failed("could not gather '" + assetPath + "' — it has no parent folder");
+                return null;
+            }
+
+            string fileName = Path.GetFileName(normalized);
+            string dest = folder + "/" + fileName;
+
+            if (string.Equals(normalized, dest, StringComparison.Ordinal))
+            {
+                if (LoadModel(normalized) == null)
+                {
+                    if (r != null) r.Failed("could not load '" + normalized + "' as a GameObject");
+                    return null;
+                }
+                assetPath = normalized;
+                if (r != null) r.sourcePath = normalized;
+                return folder;
+            }
+
+            if (!EnsureFolder(folder) || !CommitFolder(folder))
+            {
+                if (r != null) r.Failed("could not create the folder " + folder);
+                return null;
+            }
+
+            string err = AssetDatabase.MoveAsset(normalized, dest);
+            if (!string.IsNullOrEmpty(err))
+            {
+                if (r != null) r.Failed("could not move '" + fileName + "' into " + folder + " — " + err);
+                return null;
+            }
+            AssetDatabase.ImportAsset(dest, ImportAssetOptions.ForceSynchronousImport);
+            if (r != null) r.Added("gathered '" + fileName + "' into " + folder);
+
+            if (LoadModel(dest) == null)
+            {
+                if (r != null) r.Failed("could not load '" + dest + "' as a GameObject");
+                return null;
+            }
+
+            assetPath = dest;
+            if (r != null) r.sourcePath = dest;
+            return folder;
+        }
+
+        /// <summary>
+        /// FBX/GLB as a prefab-instantiable GameObject. Reimports through the
+        /// ModelImporter when a prior filesystem move left it as DefaultAsset.
+        /// </summary>
+        public static GameObject LoadModel(string assetPath)
+        {
+            if (string.IsNullOrEmpty(assetPath)) return null;
+
+            var go = AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+            if (go != null) return go;
+
+            var importer = AssetImporter.GetAtPath(assetPath) as ModelImporter;
+            if (importer != null)
+            {
+                importer.SaveAndReimport();
+                go = AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+                if (go != null) return go;
+            }
+
+            AssetDatabase.ImportAsset(assetPath,
+                ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
+            return AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+        }
+
+        /// <summary>
+        /// Materials dump next to the model, in the same per-asset folder
+        /// GatherIntoAssetFolder just made. No more {content}/Materials.
         /// </summary>
         public static string DefaultMaterialsFolder(string modelPath)
         {
-            string game = ContentFolders.FolderOfAsset(modelPath);
-            if (!string.IsNullOrEmpty(game)
-                && AssetDatabase.IsValidFolder(ContentFolders.Root + "/" + game))
-                return ContentFolders.Root + "/" + game + "/Materials";
-
-            return ContentFolders.AutoPickContentFolder() + "/Materials";
+            if (string.IsNullOrEmpty(modelPath)) return ContentFolders.Root;
+            string dir = (Path.GetDirectoryName(modelPath) ?? string.Empty).Replace('\\', '/');
+            return string.IsNullOrEmpty(dir) ? ContentFolders.Root : dir;
         }
 
         /// <summary>
@@ -483,13 +576,14 @@ namespace DreamPark.ConvertReady
                 return true;
             }
 
-            if (!EnsureFolder(destFolder))
+            if (!EnsureFolder(destFolder) || !CommitFolder(destFolder))
             {
                 r.Failed("could not create the materials folder '" + destFolder + "'");
                 return false;
             }
 
             var failures = new List<string>();
+            var extractedPaths = new List<string>();
 
             // Names we have already handed to ExtractAsset in THIS batch.
             // GenerateUniqueAssetPath cannot see them: inside
@@ -529,7 +623,11 @@ namespace DreamPark.ConvertReady
 
                     // ExtractAsset returns an ERROR STRING; empty means success.
                     string err = AssetDatabase.ExtractAsset(mat, newPath);
-                    if (string.IsNullOrEmpty(err)) extracted++;
+                    if (string.IsNullOrEmpty(err))
+                    {
+                        extracted++;
+                        extractedPaths.Add(newPath);
+                    }
                     else failures.Add(mat.name + ": " + err);
                 }
             }
@@ -542,7 +640,13 @@ namespace DreamPark.ConvertReady
             // Without WriteImportSettingsIfDirty the remap is only in memory and
             // the next reimport re-embeds everything.
             AssetDatabase.WriteImportSettingsIfDirty(modelPath);
-            AssetDatabase.ImportAsset(modelPath, ImportAssetOptions.ForceUpdate);
+            CommitFolder(destFolder);
+            for (int i = 0; i < extractedPaths.Count; i++)
+            {
+                AssetDatabase.ImportAsset(extractedPaths[i], ImportAssetOptions.ForceSynchronousImport);
+            }
+            AssetDatabase.ImportAsset(modelPath,
+                ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
 
             if (extracted > 0)
                 r.Extracted(extracted + " embedded material" + (extracted == 1 ? "" : "s") + " → " + destFolder);
@@ -555,37 +659,120 @@ namespace DreamPark.ConvertReady
 
         // ── Small utilities ─────────────────────────────────────────────
 
+        // Folder timing. Unity's AssetDatabase is not the filesystem.
+        // CreateFolder can return a GUID while IsValidFolder is still false
+        // this frame, and SaveAsPrefabAsset / MoveAsset then fail with
+        // "parent is not in the AssetDatabase". Every write into a kit
+        // folder goes through this sequence and no other:
+        //
+        //   1. CreateFolder, or ImportAsset if the folder is already on disk
+        //   2. ImportAsset(ForceSynchronousImport)
+        //   3. If still not valid: SaveAssets + Refresh(ForceSynchronousImport)
+        //   4. If still not valid: Start/StopAssetEditing to flush the queue,
+        //      then ImportAsset again
+        //   5. Retry the wait a few times. Only then write into the folder.
+        //
+        // A same-frame IsValidFolder miss is not a failure. Wait, then check
+        // again. FAILED only if the folder is still missing after the wait.
+
+        static string AbsoluteFromAsset(string assetPath)
+        {
+            if (string.IsNullOrEmpty(assetPath)) return null;
+            assetPath = assetPath.Replace('\\', '/').TrimEnd('/');
+            if (assetPath == "Assets") return Application.dataPath;
+            if (!assetPath.StartsWith("Assets/", StringComparison.Ordinal)) return null;
+            return Path.Combine(Application.dataPath, assetPath.Substring("Assets/".Length));
+        }
+
+        public static bool FolderExistsOnDisk(string assetPath)
+        {
+            string abs = AbsoluteFromAsset(assetPath);
+            return !string.IsNullOrEmpty(abs) && Directory.Exists(abs);
+        }
+
         /// <summary>
-        /// Creates <paramref name="assetFolderPath"/> and every missing parent.
-        /// AssetDatabase.CreateFolder only creates ONE level and returns an
-        /// empty GUID rather than throwing when the parent is missing, which is
-        /// how "Assets/Content/Game/Materials" silently fails to appear.
+        /// Import / refresh until the AssetDatabase has <paramref name="folder"/>.
+        /// Does not create it. Returns true only when IsValidFolder is true.
+        /// </summary>
+        public static bool CommitFolder(string folder)
+        {
+            if (string.IsNullOrEmpty(folder)) return false;
+            folder = folder.Replace('\\', '/').TrimEnd('/');
+            if (AssetDatabase.IsValidFolder(folder)) return true;
+
+            const int attempts = 8;
+            for (int i = 0; i < attempts; i++)
+            {
+                if (FolderExistsOnDisk(folder))
+                    AssetDatabase.ImportAsset(folder, ImportAssetOptions.ForceSynchronousImport);
+                else
+                    AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+
+                if (AssetDatabase.IsValidFolder(folder)) return true;
+
+                AssetDatabase.SaveAssets();
+                AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+                if (AssetDatabase.IsValidFolder(folder)) return true;
+
+                // Flush pending imports. Start+Stop with nothing queued is
+                // how Unity lands CreateFolder / ExtractAsset work that is
+                // still sitting in the edit batch.
+                AssetDatabase.StartAssetEditing();
+                AssetDatabase.StopAssetEditing();
+
+                if (FolderExistsOnDisk(folder))
+                    AssetDatabase.ImportAsset(folder, ImportAssetOptions.ForceSynchronousImport);
+                if (AssetDatabase.IsValidFolder(folder)) return true;
+            }
+
+            return AssetDatabase.IsValidFolder(folder);
+        }
+
+        /// <summary>
+        /// Creates <paramref name="assetFolderPath"/> and every missing parent,
+        /// then waits until the AssetDatabase has it. CreateFolder only makes
+        /// one level and returns an empty GUID when the parent is missing.
         /// </summary>
         public static bool EnsureFolder(string assetFolderPath)
         {
             if (string.IsNullOrEmpty(assetFolderPath)) return false;
 
-            string normalized = assetFolderPath.Replace('\\', '/').TrimEnd('/');
-            if (AssetDatabase.IsValidFolder(normalized)) return true;
-
-            string[] parts = normalized.Split('/');
-            if (parts.Length == 0 || !string.Equals(parts[0], "Assets", StringComparison.Ordinal))
+            string path = assetFolderPath.Replace('\\', '/').TrimEnd('/');
+            if (AssetDatabase.IsValidFolder(path)) return true;
+            if (!path.StartsWith("Assets/", StringComparison.Ordinal) && path != "Assets")
                 return false;
 
+            string[] parts = path.Split('/');
             string current = parts[0];
             for (int i = 1; i < parts.Length; i++)
             {
                 if (string.IsNullOrEmpty(parts[i])) continue;
-
                 string next = current + "/" + parts[i];
-                if (!AssetDatabase.IsValidFolder(next))
+                if (AssetDatabase.IsValidFolder(next))
                 {
-                    string guid = AssetDatabase.CreateFolder(current, parts[i]);
-                    if (string.IsNullOrEmpty(guid)) return false;
+                    current = next;
+                    continue;
                 }
+
+                if (FolderExistsOnDisk(next))
+                {
+                    if (!CommitFolder(next)) return false;
+                    current = next;
+                    continue;
+                }
+
+                string guid = AssetDatabase.CreateFolder(current, parts[i]);
+                if (string.IsNullOrEmpty(guid) && !FolderExistsOnDisk(next))
+                    return false;
+
+                // Created (GUID or already on disk). Wait until Unity has it.
+                // Disk-only is not enough — SaveAsPrefabAsset / MoveAsset
+                // still fail while IsValidFolder is false.
+                if (!CommitFolder(next)) return false;
                 current = next;
             }
-            return AssetDatabase.IsValidFolder(current);
+
+            return CommitFolder(path);
         }
 
         /// <summary>
@@ -618,6 +805,301 @@ namespace DreamPark.ConvertReady
         {
             if (string.IsNullOrEmpty(assetPath)) return string.Empty;
             return Path.GetExtension(assetPath);
+        }
+
+        static bool IsUnder(string assetPath, string folder)
+        {
+            if (string.IsNullOrEmpty(assetPath) || string.IsNullOrEmpty(folder)) return false;
+            assetPath = assetPath.Replace('\\', '/');
+            folder = folder.Replace('\\', '/').TrimEnd('/');
+            return assetPath.StartsWith(folder + "/", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// True only for a real file inside THIS project's Assets tree.
+        ///
+        /// THIS IS THE GUARD THAT KEEPS THE EDITOR ALIVE. A model with an
+        /// unassigned slot renders with Unity's Default-Material, and
+        /// AssetDatabase.GetAssetPath on that returns "Resources/unity_builtin_extra"
+        /// — a path with no file behind it. Hand that to CopyAsset (or to
+        /// anything else that stages a file) and Unity tries to copy it through
+        /// Temp/copyassets, fails, and puts up the NATIVE modal
+        ///
+        ///     "Copying file failed
+        ///      Copying Resources/unity_builtin_extra to Temp/copyassets/… :
+        ///      No such file or directory"    [Try Again] [Force Quit] [Cancel]
+        ///
+        /// which is not an exception we can catch — it is the editor going down
+        /// mid-import, taking the run and any unsaved scene with it.
+        ///
+        /// Assets under Packages/ are excluded for the second reason: they are
+        /// read-only and not ours to rewrite.
+        /// </summary>
+        public static bool IsWritableProjectAsset(string assetPath)
+        {
+            if (string.IsNullOrEmpty(assetPath)) return false;
+            assetPath = assetPath.Replace('\\', '/');
+            if (!assetPath.StartsWith("Assets/", StringComparison.Ordinal)) return false;
+            string abs = AbsoluteFromAsset(assetPath);
+            return !string.IsNullOrEmpty(abs) && File.Exists(abs);
+        }
+
+        /// <summary>
+        /// True when there is a real file behind <paramref name="assetPath"/>,
+        /// wherever it lives. This is the weaker of the two tests and it is the
+        /// one that matters for CopyAsset: a texture under Packages/ is a
+        /// perfectly good thing to duplicate into the kit — we only ever read
+        /// it — whereas a built-in's pseudo-path is the fatal dialog. Use
+        /// IsWritableProjectAsset instead before writing INTO an asset.
+        /// </summary>
+        public static bool IsCopyableAsset(string assetPath)
+        {
+            if (string.IsNullOrEmpty(assetPath)) return false;
+            assetPath = assetPath.Replace('\\', '/');
+            if (assetPath.StartsWith("Assets/", StringComparison.Ordinal))
+            {
+                string abs = AbsoluteFromAsset(assetPath);
+                return !string.IsNullOrEmpty(abs) && File.Exists(abs);
+            }
+            if (!assetPath.StartsWith("Packages/", StringComparison.Ordinal)) return false;
+            // Packages/ resolves through the package manager, not through
+            // Application.dataPath. AssetDatabase is the only thing that knows
+            // where it really is; a non-empty GUID means a real asset.
+            return !string.IsNullOrEmpty(AssetDatabase.AssetPathToGUID(assetPath));
+        }
+
+        /// <summary>
+        /// True when the folder exists and holds nothing at all — the
+        /// "a kit folder was created and then the run wrote nothing into it"
+        /// case. Never true for a folder with content, so a cleanup built on
+        /// this can't take a creator's work with it.
+        /// </summary>
+        public static bool IsEmptyFolder(string assetFolderPath)
+        {
+            string abs = AbsoluteFromAsset(assetFolderPath);
+            if (string.IsNullOrEmpty(abs) || !Directory.Exists(abs)) return false;
+            return Directory.GetFileSystemEntries(abs).Length == 0;
+        }
+
+        /// <summary>
+        /// Copy the model's materials and textures into the kit so the folder
+        /// is self-contained.
+        ///
+        /// Two rules, both learned the hard way:
+        ///
+        ///  1. NEVER TOUCH AN ASSET WE DO NOT OWN. Built-ins are the fatal
+        ///     dialog described on IsWritableProjectAsset. Vendor and Sample
+        ///     materials are the quieter version of the same mistake: the first
+        ///     draft called mat.SetTexture on the ORIGINAL material, so a pack
+        ///     material shared by forty models got permanently repointed at a
+        ///     texture buried inside one prop's kit — and converting the next
+        ///     model repointed it again, orphaning the first copy. Delete that
+        ///     kit later and forty unrelated prefabs go pink.
+        ///
+        ///  2. COPY FIRST, THEN RETARGET THE COPY, THEN REMAP THE MODEL. A copy
+        ///     nothing references is worse than no copy: the renderers still
+        ///     point outside the kit (so the folder is still not self-contained
+        ///     and OutsideContentFolderCheck still fires) and the bundle ships a
+        ///     duplicate nobody reads. The importer remap is what makes the
+        ///     copy the real one.
+        ///
+        /// Reimports the model when anything was remapped, so every object the
+        /// CALLER loaded from modelPath is destroyed by the time this returns.
+        /// Re-load after calling.
+        /// </summary>
+        public static void PackDependenciesIntoKit(string modelPath, string kitFolder, ConversionResult r)
+        {
+            if (string.IsNullOrEmpty(kitFolder)) return;
+            kitFolder = kitFolder.Replace('\\', '/').TrimEnd('/');
+            if (!EnsureFolder(kitFolder)) return;
+
+            var go = LoadModel(modelPath);
+            if (go == null) go = AssetDatabase.LoadAssetAtPath<GameObject>(modelPath);
+            if (go == null) return;
+
+            var importer = AssetImporter.GetAtPath(modelPath) as ModelImporter;
+
+            var materials = new HashSet<Material>();
+            foreach (var rend in go.GetComponentsInChildren<Renderer>(true))
+            {
+                if (rend == null) continue;
+                var mats = rend.sharedMaterials;
+                for (int i = 0; i < mats.Length; i++)
+                    if (mats[i] != null) materials.Add(mats[i]);
+            }
+
+            int textures = 0;
+            int matsCopied = 0;
+            int untouchable = 0;
+            int untouchableTextures = 0;
+            int orphaned = 0;
+            bool remapped = false;
+
+            foreach (Material mat in materials)
+            {
+                string matPath = AssetDatabase.GetAssetPath(mat);
+
+                // Rule 1. A built-in, or one still embedded in the FBX as a
+                // sub-asset: no file to copy and nothing we may write to.
+                // Skipping is the whole fix for the fatal dialog.
+                if (!IsCopyableAsset(matPath) || AssetDatabase.IsSubAsset(mat))
+                {
+                    untouchable++;
+                    continue;
+                }
+
+                // Rule 2. Work on the material the KIT owns: already inside the
+                // kit (ExtractEmbeddedMaterials put it there) means ours to
+                // retarget in place; outside means copy first.
+                Material target = mat;
+                if (!IsUnder(matPath, kitFolder))
+                {
+                    if (importer == null)
+                    {
+                        // No ModelImporter means no remap, which means any copy
+                        // we made would be an orphan. Say so instead.
+                        orphaned++;
+                        continue;
+                    }
+
+                    string matDest = AssetDatabase.GenerateUniqueAssetPath(
+                        kitFolder + "/" + Path.GetFileName(matPath));
+                    if (!AssetDatabase.CopyAsset(matPath, matDest))
+                    {
+                        if (r != null) r.Skipped("could not pack material " + Path.GetFileName(matPath));
+                        continue;
+                    }
+                    AssetDatabase.ImportAsset(matDest, ImportAssetOptions.ForceSynchronousImport);
+                    Material copy = AssetDatabase.LoadAssetAtPath<Material>(matDest);
+                    if (copy == null)
+                    {
+                        if (r != null) r.Skipped("could not pack material " + Path.GetFileName(matPath));
+                        continue;
+                    }
+
+                    // KEY THE REMAP OFF THE EXISTING MAP, not off the material's
+                    // name. SourceAssetIdentifier(Object) builds the key from
+                    // type + mat.name, but the importer's keys are the FBX's
+                    // INTERNAL material names. Those agree only when nothing was
+                    // ever renamed. An FBX already remapping slot "lambert1" to
+                    // a vendor "Rock_Grey.mat" would get a new entry keyed
+                    // "Rock_Grey" that matches no slot: AddRemap silently
+                    // no-ops, the old remap survives the reimport, the renderers
+                    // still point outside the kit, and the report claims the
+                    // opposite. Same for any extracted material whose filename
+                    // got uniquified ("Wood 1.mat" from FBX material "Wood").
+                    var id = new AssetImporter.SourceAssetIdentifier(mat);
+                    foreach (var entry in importer.GetExternalObjectMap())
+                    {
+                        if (entry.Value == mat) { id = entry.Key; break; }
+                    }
+                    importer.AddRemap(id, copy);
+                    remapped = true;
+                    target = copy;
+                    matsCopied++;
+                }
+
+                // Only write into a material this project owns. A package
+                // material copied above is now a kit-local copy and passes;
+                // one we decided to retarget in place is under Assets/ by
+                // construction.
+                if (!IsWritableProjectAsset(AssetDatabase.GetAssetPath(target))) continue;
+
+                string[] props;
+                try { props = target.GetTexturePropertyNames(); }
+                catch { continue; }
+
+                bool dirty = false;
+                for (int i = 0; i < props.Length; i++)
+                {
+                    Texture tex = target.GetTexture(props[i]);
+                    if (tex == null) continue;
+                    string texPath = AssetDatabase.GetAssetPath(tex);
+                    if (AssetDatabase.IsSubAsset(tex)) continue;
+                    if (!IsCopyableAsset(texPath)) { untouchableTextures++; continue; }
+                    if (IsUnder(texPath, kitFolder)) continue;
+
+                    string dest = AssetDatabase.GenerateUniqueAssetPath(
+                        kitFolder + "/" + Path.GetFileName(texPath));
+                    if (!AssetDatabase.CopyAsset(texPath, dest))
+                    {
+                        if (r != null) r.Skipped("could not pack texture " + Path.GetFileName(texPath));
+                        continue;
+                    }
+                    AssetDatabase.ImportAsset(dest, ImportAssetOptions.ForceSynchronousImport);
+                    Texture copy = AssetDatabase.LoadAssetAtPath<Texture>(dest);
+                    if (copy == null) continue;
+                    target.SetTexture(props[i], copy);
+                    dirty = true;
+                    textures++;
+                }
+
+                if (dirty)
+                {
+                    EditorUtility.SetDirty(target);
+                    AssetDatabase.SaveAssetIfDirty(target);
+                }
+            }
+
+            // The remap lives in the model's .meta (externalObjects). Without
+            // WriteImportSettingsIfDirty it is memory-only and the next
+            // reimport points the renderers back at the originals.
+            int stillOutside = 0;
+            if (remapped)
+            {
+                AssetDatabase.WriteImportSettingsIfDirty(modelPath);
+                AssetDatabase.ImportAsset(modelPath,
+                    ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
+
+                // CHECK, don't assume. AddRemap is silent about a key that
+                // matches no slot, so the only honest way to know whether the
+                // model now uses the kit's copies is to re-read the renderers.
+                // A report line claiming a self-contained kit that isn't one is
+                // worse than no line at all — it is the difference between the
+                // creator fixing this now and finding out at upload.
+                var after = AssetDatabase.LoadAssetAtPath<GameObject>(modelPath);
+                if (after != null)
+                {
+                    var seen = new HashSet<Material>();
+                    foreach (var rend in after.GetComponentsInChildren<Renderer>(true))
+                    {
+                        if (rend == null) continue;
+                        var mats = rend.sharedMaterials;
+                        for (int i = 0; i < mats.Length; i++)
+                        {
+                            Material m = mats[i];
+                            if (m == null || !seen.Add(m)) continue;
+                            string p = AssetDatabase.GetAssetPath(m);
+                            if (!IsCopyableAsset(p) || AssetDatabase.IsSubAsset(m)) continue;
+                            if (!IsUnder(p, kitFolder)) stillOutside++;
+                        }
+                    }
+                }
+            }
+
+            if (r == null) return;
+            if (textures > 0)
+                r.Added("packed " + textures + " texture" + (textures == 1 ? "" : "s") + " into " + kitFolder);
+            if (matsCopied > 0 && stillOutside == 0)
+                r.Added("packed " + matsCopied + " material" + (matsCopied == 1 ? "" : "s")
+                        + " into " + kitFolder + " and repointed the model at the copies");
+            if (stillOutside > 0)
+                r.Skipped(stillOutside + " material" + (stillOutside == 1 ? " is" : "s are")
+                    + " still referenced from outside " + kitFolder + " after the remap — the model's "
+                    + "internal material slot names do not match the material assets, so Unity ignored "
+                    + "the remap. Assign the copies in the model's Materials tab by hand, or the kit is "
+                    + "not self-contained and the upload's outside-content-folder check will say so.");
+            if (untouchable > 0)
+                r.Skipped(untouchable + " material" + (untouchable == 1 ? " is" : "s are")
+                    + " a Unity built-in or still embedded in the model — left alone; the kit does not "
+                    + "own them and copying a built-in is what takes the editor down");
+            if (untouchableTextures > 0)
+                r.Skipped(untouchableTextures + " texture" + (untouchableTextures == 1 ? " is" : "s are")
+                    + " a Unity built-in — left alone");
+            if (orphaned > 0)
+                r.Skipped(orphaned + " material" + (orphaned == 1 ? "" : "s") + " outside " + kitFolder
+                    + " could not be packed — this source has no ModelImporter to repoint, so a copy "
+                    + "would be a duplicate nothing references");
         }
     }
 }

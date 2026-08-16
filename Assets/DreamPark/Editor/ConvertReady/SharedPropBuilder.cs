@@ -402,6 +402,18 @@ namespace DreamPark.ConvertReady
             // that check explain the mess afterwards.
             if (!NamesAreDistinct(members, baseName, family)) return;
 
+            // WHERE THE FAMILY LIVES, decided before Stage 1 because the
+            // material extraction below has to target it.
+            //
+            // It used to pass DefaultMaterialsFolder(m.modelPath), which after
+            // the kit refactor returns THE MODEL'S OWN DIRECTORY. So a family
+            // built from Assets/RawFBX/*.fbx extracted its .mat files into
+            // Assets/RawFBX — outside Assets/Content, therefore outside the
+            // bundle — while every prefab went inside it. Result: variants that
+            // pass every check here and ship pink on device, with the missing
+            // materials sitting in a folder the uploader never looks at.
+            string prefabsFolder = PropPrefabEmitter.DestinationFolder(family);
+
             // ── Stage 1: materials, before a single prefab is written ────
             // Order is load-bearing: a failed extraction has to abort a member
             // BEFORE it is wired into a variant that points at read-only pink
@@ -420,8 +432,7 @@ namespace DreamPark.ConvertReady
                         // worse than a family one member short.
                         int extracted;
                         if (!AssetClassifier.ExtractEmbeddedMaterials(
-                                m.modelPath, AssetClassifier.DefaultMaterialsFolder(m.modelPath),
-                                m.result, out extracted))
+                                m.modelPath, prefabsFolder, m.result, out extracted))
                         {
                             m.materialsOk = false;
                             m.result.Skipped("dropped from the family: its materials could not be "
@@ -458,13 +469,10 @@ namespace DreamPark.ConvertReady
                 return;
             }
 
-            // DestinationFolder(null) rather than (family): Emit calls it again
-            // for the base and reports the "no game folder existed" line itself.
-            // Passing the result here would print that line twice.
-            string prefabsFolder = PropPrefabEmitter.DestinationFolder(null)
-                                 + "/" + PropPrefabEmitter.PrefabsFolderName;
-
-            if (!AssetClassifier.EnsureFolder(prefabsFolder))
+            // prefabsFolder was resolved above, before Stage 1, so the
+            // extracted materials and the prefabs cannot disagree. Emit()
+            // re-derives the same value from `family` for the base.
+            if (!AssetClassifier.EnsureFolder(prefabsFolder) || !AssetClassifier.CommitFolder(prefabsFolder))
             {
                 family.Failed("shared prop family: could not create the folder " + prefabsFolder);
                 return;
@@ -864,6 +872,7 @@ namespace DreamPark.ConvertReady
                                           visual.gameObject, plan, family, measurement);
 
                 PrefabUtility.SaveAsPrefabAsset(contents, basePath);
+                AssetDatabase.ImportAsset(basePath, ImportAssetOptions.ForceSynchronousImport);
             }
             finally
             {
@@ -1004,6 +1013,12 @@ namespace DreamPark.ConvertReady
                     return null;
                 }
 
+                if (!AssetClassifier.CommitFolder(prefabsFolder))
+                {
+                    r.Failed("variant: folder is not in the AssetDatabase: " + prefabsFolder);
+                    return null;
+                }
+
                 bool saved;
                 GameObject asset;
                 try
@@ -1018,9 +1033,21 @@ namespace DreamPark.ConvertReady
 
                 if (!saved || asset == null)
                 {
+                    AssetClassifier.CommitFolder(prefabsFolder);
+                    try { asset = PrefabUtility.SaveAsPrefabAsset(inst, path, out saved); }
+                    catch (Exception e)
+                    {
+                        r.Failed("variant: could not save " + path + " — " + e.Message);
+                        return null;
+                    }
+                }
+
+                if (!saved || asset == null)
+                {
                     r.Failed("variant: Unity refused to save " + path);
                     return null;
                 }
+                AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceSynchronousImport);
 
                 PrefabAssetType type = PrefabUtility.GetPrefabAssetType(asset);
                 if (type != PrefabAssetType.Variant)
@@ -1367,6 +1394,7 @@ namespace DreamPark.ConvertReady
                 }
 
                 PrefabUtility.SaveAsPrefabAsset(contents, basePath);
+                AssetDatabase.ImportAsset(basePath, ImportAssetOptions.ForceSynchronousImport);
 
                 family.Measured("collider: SHARED — one " + col.GetType().Name + " on the base, "
                     + FormatSize(union.size) + ", fitted to the union of all " + members.Count
@@ -1532,11 +1560,9 @@ namespace DreamPark.ConvertReady
         }
 
         /// <summary>
-        /// Load an asset this run just wrote. The executor runs inside
-        /// AssetDatabase.StartAssetEditing, where imports are batched, so a
-        /// freshly written asset can come back null on the first Load; a forced
-        /// synchronous import is the one lever available. Returns null when even
-        /// that fails, and the caller reports it — the alternative is
+        /// Load an asset this run just wrote. A freshly written prefab can
+        /// come back null on the first Load; ForceSynchronousImport is the
+        /// lever. Returns null when even that fails — the alternative is
         /// instantiating nothing and saving thirty flattened copies.
         /// </summary>
         private static GameObject LoadWritten(string assetPath)

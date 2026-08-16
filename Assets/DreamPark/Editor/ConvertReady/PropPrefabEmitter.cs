@@ -361,63 +361,32 @@ namespace DreamPark.ConvertReady
         }
 
         /// <summary>
-        /// The content folder this prop belongs in.
-        ///
-        /// THE SOURCE ASSET'S OWN PACKAGE WINS, exactly as
-        /// AssetClassifier.DefaultMaterialsFolder decides where extracted
-        /// materials go. The two have to agree. AutoPickContentFolder answers
-        /// "which folder is the creator's", which is a different question, and
-        /// it returns the FIRST user folder under Assets/Content: in a project
-        /// with GameA and GameB, converting Assets/Content/GameB/Models/Coin.fbx
-        /// writes the prop into GameA/Prefabs while its materials were just
-        /// extracted into GameB/Materials. ContentProcessor then stamps gameId
-        /// "GameA" from the path, so the prop ships in the wrong package with a
-        /// cross-package material dependency — and neither half looks wrong on
-        /// its own.
-        ///
-        /// Sample is the exception: it is ours, not the creator's, so a prop
-        /// converted from a Sample asset falls through to the creator's folder
-        /// rather than being stamped gameId "Sample".
-        ///
-        /// AutoPickContentFolder returns "Assets/Content" when the creator has
-        /// neither a named game folder nor the un-renamed placeholder. Writing
-        /// there would put the prop at Assets/Content/Prefabs/P_X.prefab, and
-        /// ContentProcessor derives gameId from the segment after
-        /// Assets/Content/ — so the prop would ship with gameId "Prefabs".
-        /// Fall back to the placeholder folder instead, which is what every
-        /// downstream rename nag and upload gate already compares against.
+        /// The folder this prop belongs in: r.kitFolder when the executor
+        /// prepared one, otherwise the source's parent. Pseudo-paths from
+        /// shared-prop / batch callers ("(shared prop)") fall back to the
+        /// placeholder game folder — never a leftover Materials or Prefabs sibling.
         /// </summary>
         public static string DestinationFolder(ConversionResult r)
         {
-            // FolderOfAsset returns the segment straight after Assets/Content/,
-            // which is empty for a source outside the content tree and for the
-            // pseudo-paths the shared-prop and batch callers pass ("(shared
-            // prop)"), so those degrade to AutoPickContentFolder. IsValidFolder
-            // covers the other edge: an asset sitting directly in
-            // Assets/Content yields its own FILE name from FolderOfAsset.
-            string own = r != null ? ContentFolders.FolderOfAsset(r.sourcePath) : string.Empty;
-            if (!string.IsNullOrEmpty(own)
-                && ContentFolders.IsUserContent(own)
-                && AssetDatabase.IsValidFolder(ContentFolders.Root + "/" + own))
+            if (r != null && !string.IsNullOrEmpty(r.kitFolder))
+                return r.kitFolder.Replace('\\', '/').TrimEnd('/');
+
+            string path = r != null ? r.sourcePath : null;
+            if (!string.IsNullOrEmpty(path) && path[0] != '(')
             {
-                return ContentFolders.Root + "/" + own;
+                string dir = (Path.GetDirectoryName(path) ?? string.Empty).Replace('\\', '/');
+                if (!string.IsNullOrEmpty(dir)) return dir;
             }
 
-            string folder = ContentFolders.AutoPickContentFolder();
-            if (string.IsNullOrEmpty(folder)) folder = ContentFolders.Root;
-            folder = folder.Replace('\\', '/').TrimEnd('/');
-
-            if (!string.Equals(folder, ContentFolders.Root, StringComparison.OrdinalIgnoreCase))
-                return folder;
-
             string game = ContentFolders.Sanitize(ContentFolders.GameFolderName());
-            if (string.IsNullOrEmpty(game)) game = ContentFolders.PlaceholderName;
+            if (string.IsNullOrEmpty(game)
+                || string.Equals(game, "Materials", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(game, PrefabsFolderName, StringComparison.OrdinalIgnoreCase))
+            {
+                game = ContentFolders.PlaceholderName;
+            }
 
-            string fallback = ContentFolders.Root + "/" + game;
-            Report(r, DecisionKind.Added,
-                "destination: no game folder existed — writing into " + fallback
-                + " (rename that folder to your game's name; it becomes the gameId)");
-            return fallback;
+            return ContentFolders.Root + "/" + game;
         }
 
         /// <summary>
@@ -442,7 +411,8 @@ namespace DreamPark.ConvertReady
             string candidate = desiredPath;
             for (int n = 2; n < 1000; n++)
             {
-                if (string.Equals(AssetDatabase.GenerateUniqueAssetPath(candidate), candidate, StringComparison.Ordinal))
+                if (string.Equals(AssetDatabase.GenerateUniqueAssetPath(candidate), candidate, StringComparison.Ordinal)
+                    && !PrefabStemTaken(candidate))
                 {
                     uniquified = !string.Equals(candidate, desiredPath, StringComparison.Ordinal);
                     return candidate;
@@ -455,6 +425,67 @@ namespace DreamPark.ConvertReady
             string last = AssetDatabase.GenerateUniqueAssetPath(desiredPath);
             uniquified = !string.Equals(last, desiredPath, StringComparison.Ordinal);
             return last;
+        }
+
+        /// <summary>
+        /// Is any OTHER prefab in the project already using this file stem?
+        ///
+        /// A free path is not a free NAME. Everything downstream keys off the
+        /// bare stem, not the folder: ContentProcessor's address, the preview
+        /// PNG, the PreviewMetadataStore key, and GameArea.resourceName — the
+        /// revenue-attribution key. While every prop landed in one shared
+        /// {content}/Prefabs folder the two questions had the same answer, so
+        /// GenerateUniqueAssetPath alone was enough. With one kit folder per
+        /// asset they came apart: Models/Coin.fbx and Props/Coin.fbx both
+        /// convert cleanly to their own P_Coin/P_Coin.prefab, neither
+        /// uniquifies, and the run reports that nothing was overwritten —
+        /// then DuplicateNamesCheck (Blocking) stops the upload with no clue
+        /// as to which run caused it.
+        /// </summary>
+        static bool PrefabStemTaken(string candidatePath)
+        {
+            string stem = Path.GetFileNameWithoutExtension(candidatePath);
+            if (string.IsNullOrEmpty(stem)) return false;
+
+            // SCOPE IT TO THIS CONTENT PACKAGE. The collision that matters is
+            // per-gameId: the address is "{gameId}/Props/…", the preview PNG
+            // lives in that package's Previews folder, and resourceName is read
+            // within it. A P_Rock in the Sample package, in the SDK's own
+            // vendored assets, or in another creator's package cannot collide
+            // with ours — and searching the whole project means the FIRST thing
+            // WarnIfKitCannotShip tells a creator to do (move the source out of
+            // ThirdPartyLocal and convert again) yields P_Rock_2, because the
+            // build-excluded copy they were told to abandon still holds the
+            // name. That suffix is permanent in the address and the revenue key.
+            string own = ContentFolders.FolderOfAsset(candidatePath);
+            string[] searchIn = string.IsNullOrEmpty(own)
+                ? null
+                : new string[] { ContentFolders.Root + "/" + own };
+
+            string[] guids = searchIn == null
+                ? AssetDatabase.FindAssets("\"" + stem + "\" t:Prefab")
+                : AssetDatabase.FindAssets("\"" + stem + "\" t:Prefab", searchIn);
+            if (guids == null) return false;
+
+            for (int i = 0; i < guids.Length; i++)
+            {
+                string other = AssetDatabase.GUIDToAssetPath(guids[i]);
+                if (string.IsNullOrEmpty(other)) continue;
+                if (string.Equals(other, candidatePath, StringComparison.Ordinal)) continue;
+
+                // t:Prefab also matches MODEL prefabs — the FBX itself. A source
+                // already named P_Rock.fbx would otherwise be reported as
+                // colliding with the prefab we are about to make from it.
+                if (!other.EndsWith(PrefabExtension, StringComparison.OrdinalIgnoreCase)) continue;
+
+                // Never ships, so it cannot collide with anything that does.
+                if (other.IndexOf("/ThirdPartyLocal/", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+
+                // The quoted filter is fuzzy, not exact — re-check the stem.
+                if (string.Equals(Path.GetFileNameWithoutExtension(other), stem, StringComparison.Ordinal))
+                    return true;
+            }
+            return false;
         }
 
         // ── Emit ────────────────────────────────────────────────────────
@@ -522,14 +553,13 @@ namespace DreamPark.ConvertReady
             ReportStructure(root, needsMotionNode, r);
 
             string folder = DestinationFolder(r);
-            string prefabsFolder = folder + "/" + PrefabsFolderName;
-            if (!AssetClassifier.EnsureFolder(prefabsFolder))
+            if (!AssetClassifier.EnsureFolder(folder) || !AssetClassifier.CommitFolder(folder))
             {
-                Report(r, DecisionKind.Failed, "prefab: could not create the folder " + prefabsFolder);
+                Report(r, DecisionKind.Failed, "prefab: could not create the folder " + folder);
                 return null;
             }
 
-            string desiredPath = prefabsFolder + "/" + PropAssetName(propName) + PrefabExtension;
+            string desiredPath = folder + "/" + PropAssetName(propName) + PrefabExtension;
             bool uniquified;
             string path = UniqueAssetPath(desiredPath, out uniquified);
             string stem = Path.GetFileNameWithoutExtension(path);
@@ -542,28 +572,21 @@ namespace DreamPark.ConvertReady
                     Path.GetFileNameWithoutExtension(desiredPath), stem));
             }
 
-            // The asset's file stem is what ContentProcessor turns into the
-            // address; a root object whose name disagrees with it is how a
-            // creator ends up searching the prop browser for the wrong string.
             if (!string.Equals(root.name, stem, StringComparison.Ordinal)) root.name = stem;
 
             bool saved;
-            GameObject asset = null;
-            try
+            GameObject asset = SavePrefab(root, path, out saved);
+            if (!saved || asset == null)
             {
-                asset = PrefabUtility.SaveAsPrefabAsset(root, path, out saved);
+                AssetClassifier.CommitFolder(folder);
+                asset = SavePrefab(root, path, out saved);
             }
-            catch (Exception e)
-            {
-                Report(r, DecisionKind.Failed, "prefab: could not save " + path + " — " + e.Message);
-                return null;
-            }
-
             if (!saved || asset == null)
             {
                 Report(r, DecisionKind.Failed, "prefab: Unity refused to save " + path);
                 return null;
             }
+            AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceSynchronousImport);
 
             r.outputPath = path;
             // Do not resurrect a run that already failed a stage; Failed sets
@@ -574,6 +597,21 @@ namespace DreamPark.ConvertReady
 
             RecordInManifest(path, plan, asset, r);
             return path;
+        }
+
+        static GameObject SavePrefab(GameObject root, string path, out bool saved)
+        {
+            saved = false;
+            try
+            {
+                return PrefabUtility.SaveAsPrefabAsset(root, path, out saved);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[DreamPark] SaveAsPrefabAsset " + path + " — " + e.Message);
+                saved = false;
+                return null;
+            }
         }
 
         // ── Root contract ───────────────────────────────────────────────

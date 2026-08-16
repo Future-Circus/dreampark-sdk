@@ -36,8 +36,8 @@
 //  3. THE VISIBLE FACE IS -Z, normals (0,0,-1), u increasing with +X. That
 //     is exactly Unity's built-in Quad and SpriteRenderer convention, so the
 //     texture reads left-to-right instead of mirrored and a creator's
-//     intuition transfers. DreamPark.Billboard is written against the same
-//     convention and points its forward AWAY from the head.
+//     intuition transfers. The generated billboard script is written
+//     against the same convention and points its forward AWAY from the head.
 //
 //  4. THE SOURCE TEXTURE IS SOMEBODY ELSE'S ASSET TOO. NormalizeTextureImport
 //     used to reason carefully about why textureType must not be changed — "a
@@ -63,10 +63,9 @@
 //     not in that object graph, so the mesh is dropped and the MeshFilter is
 //     left pointing at an external reference into a file that no longer holds
 //     it.
-//   • The whole Build runs inside ConvertReadyExecutor's StartAssetEditing /
-//     StopAssetEditing block, where AssetDatabase.SaveAssets() is a NO-OP. So
-//     LoadPrefabContents was reading a file from disk that did not yet contain
-//     the mesh.
+//   • An earlier draft wrapped the whole pipeline in StartAssetEditing,
+//     where SaveAssets is a no-op, so LoadPrefabContents read a file that
+//     did not yet contain the mesh. That wrap is gone; do not put it back.
 //
 //  Net effect: convert a PNG, come back after a domain reload, and MeshFilter
 //  reads None while the report says the mesh was saved as a sub-asset. So the
@@ -76,7 +75,7 @@
 //  MeshFilter really does point at a mesh living inside it.
 //
 //  WHAT MODE 1 COSTS: NOTHING. BillboardMode.None is the default and is the
-//  simplest path through the whole pipeline — no Billboard component, no
+//  simplest path through the whole pipeline — no billboard script, no
 //  Motion node, a plain box collider, useColliderBounds = true. Billboarding
 //  is an effect; a plane is the thing itself, and a plane that quietly turns
 //  to follow the player is surprising in a way that is hard to undo once it
@@ -90,6 +89,7 @@ using System.Globalization;
 using System.IO;
 using UnityEditor;
 using UnityEngine;
+using DreamPark.EditorTools.Shaders;
 
 namespace DreamPark.ConvertReady
 {
@@ -314,11 +314,12 @@ namespace DreamPark.ConvertReady
                                  + " needs a Motion node and the hierarchy has none");
                         return null;
                     }
-                    if (!AttachBillboard(motion.gameObject, plane.billboard, r)) return null;
+                    if (!AttachBillboard(motion.gameObject, PropPrefabEmitter.PropAssetName(propName),
+                                         plane.billboard, r)) return null;
                 }
                 else
                 {
-                    r.Added("plane: fixed facing (mode 1) — no Billboard component and no Motion node, "
+                    r.Added("plane: fixed facing (mode 1) — nothing turning it and no Motion node, "
                           + "which is the simplest and cheapest shape this pipeline emits");
                 }
 
@@ -390,7 +391,7 @@ namespace DreamPark.ConvertReady
                             + "if the park can walk around it.");
                 }
 
-                AttachGeneratedAssets(savedPath, mesh, texture, alphaClip, boxSize, r);
+                AttachGeneratedAssets(savedPath, mesh, texture, alphaClip, boxSize, r, hasAlpha);
                 return savedPath;
             }
             catch (Exception e)
@@ -539,7 +540,8 @@ namespace DreamPark.ConvertReady
         ///     property that was overwritten.
         /// </summary>
         public static Material CreatePlaneMaterial(string materialPath, Texture2D texture,
-                                                   bool alphaClip, ConversionResult r)
+                                                   bool alphaClip, ConversionResult r,
+                                                   bool sourceHasAlpha = false)
         {
             Shader shader = Shader.Find(UnlitShaderName);
             if (shader == null) shader = AssetDatabase.LoadAssetAtPath<Shader>(UnlitShaderAssetPath);
@@ -552,7 +554,7 @@ namespace DreamPark.ConvertReady
             }
 
             string folder = (Path.GetDirectoryName(materialPath) ?? string.Empty).Replace('\\', '/');
-            if (!AssetClassifier.EnsureFolder(folder))
+            if (!AssetClassifier.EnsureFolder(folder) || !AssetClassifier.CommitFolder(folder))
             {
                 Report(r, DecisionKind.Failed, "material: could not create the folder " + folder);
                 return null;
@@ -576,6 +578,7 @@ namespace DreamPark.ConvertReady
                 mat = new Material(shader);
                 mat.name = matName;
                 AssetDatabase.CreateAsset(mat, materialPath);
+                AssetDatabase.ImportAsset(materialPath, ImportAssetOptions.ForceSynchronousImport);
             }
 
             // The texture assignment is the one thing this call always owns —
@@ -585,14 +588,36 @@ namespace DreamPark.ConvertReady
             if (!keepTuning)
             {
                 if (mat.HasProperty(BaseColorProperty)) mat.SetColor(BaseColorProperty, Color.white);
-                ApplySurfaceMode(mat, alphaClip);
+                ApplySurfaceMode(mat, alphaClip, sourceHasAlpha);
             }
 
             EditorUtility.SetDirty(mat);
 
+            // Three surface modes, not two. Opaque-and-not-clipping is the one
+            // a DreamPark graph material may never ship in — see ApplySurfaceMode.
             string surface = alphaClip
                 ? "alpha clip (cut-out, opaque queue, no sort order to get wrong)"
-                : "opaque";
+                : sourceHasAlpha ? "transparent (blended)" : "opaque";
+
+            if (!keepTuning)
+            {
+                if (!alphaClip && sourceHasAlpha)
+                {
+                    Report(r, DecisionKind.Guessed,
+                        "surface: alpha clip is off but the texture HAS an alpha channel, so the plane was "
+                      + "made TRANSPARENT rather than opaque. Opaque-and-not-clipping is the one state the "
+                      + "upload blocks (opaque-alpha-clip) — an opaque surface that never discards is not "
+                      + "occluded on-headset, so it draws over hands and walls. Transparent sorts per-object "
+                      + "instead; tick Alpha clip if you would rather have a hard-edged cut-out.");
+                }
+                else if (!alphaClip)
+                {
+                    Report(r, DecisionKind.Added,
+                        "surface: opaque, with alpha clipping left switched ON. Same reason — an opaque "
+                      + "DreamPark material that never discards is not occluded — and with no alpha in the "
+                      + "source it discards nothing, so the plane looks identical.");
+                }
+            }
 
             if (!reused)
             {
@@ -603,7 +628,7 @@ namespace DreamPark.ConvertReady
             {
                 Report(r, DecisionKind.Skipped, string.Format(
                     "material: {0}.mat already existed on DreamPark-Unlit, so only its base texture was "
-                  + "rewritten — the tint (_baseColor), the alpha cutoff (_Cutoff) and the surface mode were "
+                  + "rewritten — the tint (_baseColor), the clip threshold and the surface mode were "
                   + "LEFT AS THEY WERE. That means this run's '{1}' setting is NOT reflected in it. Delete "
                   + "{2} and convert again if you want a clean material.",
                     matName, surface, materialPath));
@@ -612,7 +637,7 @@ namespace DreamPark.ConvertReady
             {
                 Report(r, DecisionKind.Guessed, string.Format(
                     "material: {0}.mat already existed on shader '{1}' and was moved onto DreamPark-Unlit — "
-                  + "its shader, base texture, tint (_baseColor), alpha cutoff (_Cutoff) and surface mode "
+                  + "its shader, base texture, tint (_baseColor), clip threshold and surface mode "
                   + "were all OVERWRITTEN, because a plane on another shader is not a plane. If that "
                   + "material was tuned for something else, it is at {2} and needs checking.",
                     matName, previousShaderName, materialPath));
@@ -635,7 +660,7 @@ namespace DreamPark.ConvertReady
         /// wrong, no per-pixel blend cost, and correct for the cut-out
         /// foliage/character case that motivates the whole track.
         /// </summary>
-        public static void ApplySurfaceMode(Material mat, bool alphaClip)
+        public static void ApplySurfaceMode(Material mat, bool alphaClip, bool sourceHasAlpha = false)
         {
             if (mat == null) return;
 
@@ -661,18 +686,49 @@ namespace DreamPark.ConvertReady
                 // which on Quest it always is.
                 if (mat.HasProperty("_AlphaToMask")) mat.SetFloat("_AlphaToMask", 1f);
             }
-            else
+            else if (sourceHasAlpha)
             {
-                if (mat.HasProperty("_Surface")) mat.SetFloat("_Surface", 0f);
+                // THE CREATOR TURNED CLIPPING OFF ON A TEXTURE THAT HAS ALPHA.
+                // They want soft edges, not a cut-out — so TRANSPARENT is the
+                // only state that gives them that AND ships. Opaque-and-not-
+                // clipping is the one combination a DreamPark graph material
+                // may not be in: PreUploadChecks/opaque-alpha-clip is BLOCKING,
+                // because an opaque surface that never discards is not occluded
+                // on-headset (the plane draws over the guest's hands and walls).
+                if (mat.HasProperty("_Surface")) mat.SetFloat("_Surface", 1f);      // 1 = Transparent
                 if (mat.HasProperty("_AlphaClip")) mat.SetFloat("_AlphaClip", 0f);
-                if (mat.HasProperty("_SrcBlend")) mat.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.One);
-                if (mat.HasProperty("_DstBlend")) mat.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.Zero);
-                if (mat.HasProperty("_ZWrite")) mat.SetFloat("_ZWrite", 1f);
+                if (mat.HasProperty("_SrcBlend")) mat.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                if (mat.HasProperty("_DstBlend")) mat.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                if (mat.HasProperty("_ZWrite")) mat.SetFloat("_ZWrite", 0f);
                 if (mat.HasProperty("_AlphaToMask")) mat.SetFloat("_AlphaToMask", 0f);
 
                 mat.DisableKeyword("_ALPHATEST_ON");
+                mat.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+                mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+            }
+            else
+            {
+                // No alpha in the source at all. Opaque — and clipping stays ON
+                // for the same occlusion rule as above. It costs nothing here:
+                // alpha is 1 everywhere, so nothing is below the threshold and
+                // the plane looks identical. Enforce is the project's canonical
+                // repair, so this stays right if the invariant ever moves; it
+                // also stops this branch fighting DreamParkMaterialPostprocessor,
+                // which repairs the same material on its next import.
+                //
+                // Queue is AlphaTest to match the deliberate clip branch — a
+                // material that clips belongs behind solid geometry either way,
+                // and leaving it at Geometry while clipping is on is the kind of
+                // half-state that reads as a bug six months from now.
+                if (mat.HasProperty("_Surface")) mat.SetFloat("_Surface", 0f);
+                if (mat.HasProperty("_SrcBlend")) mat.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.One);
+                if (mat.HasProperty("_DstBlend")) mat.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.Zero);
+                if (mat.HasProperty("_ZWrite")) mat.SetFloat("_ZWrite", 1f);
+
                 mat.DisableKeyword("_SURFACE_TYPE_TRANSPARENT");
-                mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Geometry;
+
+                DreamParkMaterialRules.Enforce(mat);
+                mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.AlphaTest;
             }
 
             // The graph itself declares Render Face = Front, and we emit real
@@ -966,29 +1022,42 @@ namespace DreamPark.ConvertReady
         }
 
         /// <summary>
-        /// Put the Billboard on the Motion node. Returns false when it could
-        /// not be added, in which case the caller must not emit: a prop in a
-        /// billboard mode with no Billboard component is a plane with a
+        /// Put the billboard script on the Motion node. Returns false when it
+        /// could not be written, in which case the caller must not emit: a prop
+        /// in a billboard mode with nothing turning it is a plane with a
         /// pointless extra transform and a collider sized for a rotation that
         /// never happens.
         /// </summary>
-        private static bool AttachBillboard(GameObject motionNode, BillboardMode mode, ConversionResult r)
+        private static bool AttachBillboard(GameObject motionNode, string propName,
+                                            BillboardMode mode, ConversionResult r)
         {
-            Billboard billboard = Componentizer.DoComponent<Billboard>(motionNode, true);
-            if (billboard == null)
+            // A Lua script in the prop's kit folder, not a C# component. The
+            // facing rule is four lines and every creator eventually wants to
+            // change it — clamp the turn, stop billboarding past a distance,
+            // fade the poster as it turns away — and a serialized enum on a
+            // component gives them nowhere to do that. The generated file does,
+            // and it ships over the air.
+            string path = LuaScriptEmitter.EmitBillboard(
+                motionNode, propName, mode != BillboardMode.Full, r);
+
+            if (string.IsNullOrEmpty(path))
             {
-                Report(r, DecisionKind.Failed, "could not add the Billboard component to the Motion node");
+                // The caller must not emit after a false: a prop in a billboard
+                // mode with nothing turning it is a plane with a pointless extra
+                // transform and a collider sized for a rotation that never
+                // happens. EmitBillboard has already said why in the report.
+                Report(r, DecisionKind.Failed,
+                    "could not write the billboard script for the Motion node");
                 return false;
             }
 
-            billboard.axis = mode == BillboardMode.Full ? BillboardAxis.Full : BillboardAxis.YOnly;
-
             Report(r, DecisionKind.Added, mode == BillboardMode.Full
-                ? "Billboard (full facing) on the Motion node — it resolves the player's head lazily through "
-                + "DreamParkLuaAPI.Head(), the same call behind dp.head(), because the player rig is a "
-                + "different addressable and there is nothing to serialize a reference to"
-                : "Billboard (yaw only) on the Motion node — yaw-only is right for anything standing on the "
-                + "floor; a full billboard tips as the player crouches and the base lifts off the ground");
+                ? "billboard (full facing) on the Motion node — the script resolves the guest's head "
+                + "lazily through dp.head(), because the player rig is a different addressable and "
+                + "there is nothing to serialize a reference to"
+                : "billboard (yaw only) on the Motion node — yaw-only is right for anything standing on "
+                + "the floor; a full billboard tips as the guest crouches and the base of the plane "
+                + "lifts off the ground");
             return true;
         }
 
@@ -1078,16 +1147,15 @@ namespace DreamPark.ConvertReady
         ///  2. Edit the LOADED PREFAB ASSET, not a LoadPrefabContents copy, and
         ///     save it with PrefabUtility.SavePrefabAsset. SaveAsPrefabAsset
         ///     would REPLACE the file from the preview-scene copy and drop the
-        ///     sub-asset we just added. No AssetDatabase.SaveAssets() here
-        ///     either: this whole run is inside the executor's
-        ///     StartAssetEditing block where it is a no-op, and the executor
-        ///     calls it once after StopAssetEditing.
+        ///     sub-asset we just added. Do not wrap this in StartAssetEditing —
+        ///     SavePrefabAsset and the kit folder both need the DB live.
         ///  3. Re-load and CHECK. This is the failure that has to be loud —
         ///     an invisible plane with a report line claiming the mesh was
         ///     saved is worse than an error.
         /// </summary>
         private static void AttachGeneratedAssets(string prefabPath, Mesh mesh, Texture2D texture,
-                                                  bool alphaClip, Vector3 boxSize, ConversionResult r)
+                                                  bool alphaClip, Vector3 boxSize, ConversionResult r,
+                                                  bool sourceHasAlpha)
         {
             string stem = Path.GetFileNameWithoutExtension(prefabPath);
 
@@ -1110,7 +1178,7 @@ namespace DreamPark.ConvertReady
 
             // ── 2. Material next to the prefab ─────────────────────────
             string materialPath = MaterialFolderFor(prefabPath) + "/" + MaterialPrefix + stem + ".mat";
-            Material material = CreatePlaneMaterial(materialPath, texture, alphaClip, r);
+            Material material = CreatePlaneMaterial(materialPath, texture, alphaClip, r, sourceHasAlpha);
 
             // ── 3. Wire both inside the saved prefab ───────────────────
             GameObject assetRoot = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
@@ -1159,6 +1227,7 @@ namespace DreamPark.ConvertReady
                         "Unity refused to save the mesh and material into " + prefabPath);
                     return;
                 }
+                AssetDatabase.ImportAsset(prefabPath, ImportAssetOptions.ForceSynchronousImport);
             }
             catch (Exception e)
             {
@@ -1226,23 +1295,12 @@ namespace DreamPark.ConvertReady
         }
 
         /// <summary>
-        /// {content}/Materials for a prefab saved at {content}/Prefabs/P_X.prefab.
-        /// Falls back to a Materials folder beside the prefab when it did not
-        /// land in a Prefabs folder, so a moved destination cannot scatter
-        /// materials into the content root.
+        /// Same folder as the prefab. The per-asset kit dumps everything together.
         /// </summary>
         private static string MaterialFolderFor(string prefabPath)
         {
             string dir = (Path.GetDirectoryName(prefabPath) ?? string.Empty).Replace('\\', '/');
-            if (string.IsNullOrEmpty(dir)) return ContentFolders.Root + "/" + MaterialsFolderName;
-
-            string leaf = Path.GetFileName(dir);
-            if (string.Equals(leaf, PropPrefabEmitter.PrefabsFolderName, StringComparison.OrdinalIgnoreCase))
-            {
-                string parent = (Path.GetDirectoryName(dir) ?? string.Empty).Replace('\\', '/');
-                if (!string.IsNullOrEmpty(parent)) return parent + "/" + MaterialsFolderName;
-            }
-            return dir + "/" + MaterialsFolderName;
+            return string.IsNullOrEmpty(dir) ? ContentFolders.Root : dir;
         }
 
         // ── Source dimensions ───────────────────────────────────────────

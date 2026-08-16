@@ -72,21 +72,20 @@
 //  shape behind it, so Collider.bounds reads back zeroed at the world
 //  origin, which drags the footprint's min corner to (0,0,0) and has
 //  GapFiller cut a floor hole stretching from the prop to the origin.
-//  Baked disabled, the pieces contribute nothing; DreamShatter enables
+//  Baked disabled, the pieces contribute nothing; the prop's generated
 //  them one at a time as it fires them, after it has detached the node.
 //
-//  DreamShatter also detaches the node on fire so the shards never drag
+//  Lua script also detaches the node on fire so the shards never drag
 //  the footprint around the floor with them.
 // ─────────────────────────────────────────────────────────────────────
 
 #if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
+using System.IO;
 using UnityEditor;
-using UnityEditor.Events;
 using UnityEditor.SceneManagement;
 using UnityEngine;
-using UnityEngine.Events;
 
 namespace DreamPark.ConvertReady
 {
@@ -834,7 +833,7 @@ namespace DreamPark.ConvertReady
         /// <summary>
         /// Bake the fracture into a prop prefab: an inactive "Shattered" node
         /// under Anchor, one Piece_NN per cell with a MeshRenderer, a convex
-        /// MeshCollider and a parked Rigidbody, plus the DreamShatter that
+        /// MeshCollider and a parked Rigidbody, plus the generated Lua script that
         /// fires them.
         ///
         /// <paramref name="root"/> must be prefab CONTENTS
@@ -1123,7 +1122,7 @@ namespace DreamPark.ConvertReady
                 // An enabled collider on an inactive object has no PhysX shape
                 // behind it either, so its .bounds reads back zeroed at the
                 // world origin and GapFiller cuts the floor from the prop all
-                // the way to (0,0,0). DreamShatter enables them as it fires.
+                // the way to (0,0,0). The generated script enables them as it fires.
                 collider.enabled = false;
 
                 Rigidbody body = Componentizer.DoComponent<Rigidbody>(piece, true);
@@ -1134,7 +1133,7 @@ namespace DreamPark.ConvertReady
                 // Parked, not merely inactive. The Shattered node is inactive
                 // so nothing simulates yet, but a body that wakes up the
                 // instant the node is enabled would drop the shards on the
-                // floor before DreamShatter has aimed them.
+                // floor before the generated script has aimed them.
                 body.isKinematic = true;
                 body.useGravity = true;
                 totalMass += mass;
@@ -1153,40 +1152,49 @@ namespace DreamPark.ConvertReady
             result.pieceDrawCalls = drawCalls;
             result.totalMassKg = totalMass;
 
-            // ── The component that fires it ──
-            DreamShatter shatter = Componentizer.DoComponent<DreamShatter>(anchor, true);
-            shatter.intactVisual = visual;
-            shatter.shatteredRoot = shattered;
-            shatter.burstImpulse = plan.fracture.burstImpulse;
-            shatter.pieceLifetime = plan.fracture.pieceLifetime;
-            EditorUtility.SetDirty(shatter);
+            // ── The script that fires it ──
+            //
+            // A Lua script in the prop's own kit folder, under the prop's own
+            // name, not a C# component. The previous shape ended here with a
+            // configured C# component and nothing else: a creator who wanted
+            // the prop to score, play a sound or tell the attraction when it
+            // broke had nowhere to put that, and the only trigger route was an
+            // Interactable that nothing in the SDK adds any more — so a
+            // Shatterable convert produced a prop that could not break at all.
+            //
+            // The generated script owns both halves: it detects the impact
+            // (closing speed + optional tag) and it runs the sequence, with
+            // every load-bearing rule from the bake written out beside the line
+            // that depends on it.
+            string luaPath = LuaScriptEmitter.EmitShatter(
+                anchor, visual, shattered, root != null ? root.name : anchor.name, plan, r);
 
             Report(r, DecisionKind.Added, "fracture: " + pieces.Count + " Voronoi piece(s) under "
                 + anchor.name + "/" + ShatteredNodeName + " (inactive), each with a parked Rigidbody and "
                 + "a convex MeshCollider that is baked DISABLED — an enabled one would join "
-                + "PropTemplate's footprint even on an inactive node, and DreamShatter turns them on as "
-                + "it fires; meshes saved as sub-assets of the prefab");
+                + "PropTemplate's footprint even on an inactive node, and the prop's script turns them "
+                + "on as it fires; meshes saved as sub-assets of the prefab");
 
-            // DreamShatter lives on the ANCHOR, not on the root: the root
-            // carries PropTemplate and nothing else, and the anchor is the node
-            // that owns this prop's colliders and never rotates. That does put
-            // it on a different object from the Interactable (which Stage 6
-            // puts on the root, with the Rigidbody, because Unity routes
-            // collision messages there), so the wiring between the two is done
-            // below rather than left as an inspector drag the report only hints
-            // at.
-            bool wired = TryWireInteractable(root, anchor, shatter, r);
-
-            Report(r, DecisionKind.Added, "DreamShatter on '" + anchor.name + "' — burst "
-                + plan.fracture.burstImpulse.ToString("0.##") + " N·s, "
-                + (plan.fracture.pieceLifetime > 0f
-                    ? "pieces despawn after " + plan.fracture.pieceLifetime.ToString("0.#") + " s"
-                    : "pieces never despawn (lifetime 0)")
-                + (wired
-                    ? ". Fired by this prop's Interactable when the player touches it (see the line above)."
-                    : ". Nothing fires it yet: wire an Interactable, an EasyEvent or a Lua call to "
-                      + "Shatter() — the component is on '" + anchor.name + "', one level below the "
-                      + "prop root, so drag THAT object into the event slot."));
+            // The script lives on the ANCHOR, not on the root. The anchor owns
+            // this prop's colliders and never rotates — and, decisively,
+            // LuaMessageRelays.Bind adds its collision relay to the
+            // LuaBehaviour's OWN GameObject with no ancestor walk. Unity
+            // delivers OnCollisionEnter to the collider's GameObject and to the
+            // GameObject of that collider's attached Rigidbody, so the anchor
+            // (which always has the collider) receives whether or not the plan
+            // asked for a body. On the root, a prop converted without a
+            // Rigidbody would never hear a single hit.
+            if (!string.IsNullOrEmpty(luaPath))
+            {
+                Report(r, DecisionKind.Added, "shatter: fired by '" + Path.GetFileName(luaPath)
+                    + "' on '" + anchor.name + "' — burst "
+                    + plan.fracture.burstImpulse.ToString("0.##") + " N·s above "
+                    + plan.fracture.minImpactSpeed.ToString("0.##") + " m/s closing speed, "
+                    + (plan.fracture.pieceLifetime > 0f
+                        ? "pieces despawn after " + plan.fracture.pieceLifetime.ToString("0.#") + " s"
+                        : "pieces never despawn (lifetime 0)")
+                    + ". Open that file to change what breaking it does.");
+            }
 
             // Absolute numbers, not ratios. "3× the triangles" means nothing
             // standing in a venue; "36 draw calls and 12 rigidbodies" does.
@@ -1223,11 +1231,15 @@ namespace DreamPark.ConvertReady
                         : ""));
             }
 
-            if (plan.addRigidbody && root.GetComponent<Rigidbody>() == null)
+            if (plan.addRigidbody
+                && root.GetComponentInChildren<Rigidbody>(true) == null)
             {
-                // Stage 6 owns the intact prop's body (BehaviorPackBuilder puts
-                // it on the root). If the executor branched straight here it
-                // never ran, and the prop cannot be knocked into anything.
+                // Stage 6 owns the intact prop's body, and it puts it on the
+                // ANCHOR — nothing the converter emits owns the prop root's
+                // transform, because the park loader places that. Searching
+                // children rather than the root is what makes this check
+                // survive that move; on the root it would fire on every
+                // Shatterable convert and say the opposite of the truth.
                 Report(r, DecisionKind.Skipped, "fracture: the plan asks for a Rigidbody on the intact "
                     + "prop and there is none — run BehaviorPackBuilder.Apply before the fracture bake");
             }
@@ -1546,87 +1558,6 @@ namespace DreamPark.ConvertReady
                     if (rends[i] != null) excluded.Remove(rends[i]);
             }
             return excluded;
-        }
-
-        // ── Wiring ──────────────────────────────────────────────────────
-
-        /// <summary>
-        /// Point an Interactable already on this prop at Shatter(), so the
-        /// emitted prop actually breaks when the player touches it.
-        ///
-        /// The two halves of Shatterable sit on different GameObjects on
-        /// purpose — Interactable on the root with the Rigidbody (Unity routes
-        /// collision messages to the body's object), DreamShatter on the anchor
-        /// (the root carries PropTemplate and nothing else) — and a
-        /// cross-object UnityEvent is a manual inspector drag that a creator
-        /// has no reason to guess at. So it is done here when there is
-        /// something to wire.
-        ///
-        /// Nothing is ADDED by this: the Shatter pack does not create an
-        /// Interactable, and inventing one would silently change what the
-        /// preset emits. It returns false and the caller says so in the report.
-        /// </summary>
-        static bool TryWireInteractable(GameObject root, GameObject anchor, DreamShatter shatter,
-                                        ConversionResult r)
-        {
-            if (root == null || shatter == null) return false;
-
-            Interactable interactable = root.GetComponent<Interactable>();
-            if (interactable == null && anchor != null && anchor != root)
-                interactable = anchor.GetComponent<Interactable>();
-            if (interactable == null) return false;
-
-            Interactable.InteractionFilter[] filters = interactable.interactionFilters;
-            if (filters == null || filters.Length == 0)
-            {
-                Report(r, DecisionKind.Skipped, "fracture: '" + interactable.name + "' has an Interactable "
-                    + "with no InteractionFilter, so there is no event to fire Shatter() from");
-                return false;
-            }
-
-            UnityEventBase target = null;
-            for (int i = 0; i < filters.Length && target == null; i++)
-            {
-                if (filters[i] != null) target = filters[i].onInteractionEnter;
-            }
-            if (target == null)
-            {
-                // The three UnityEvent<CollisionWrapper> fields are materialised
-                // by Unity's serializer, so an Interactable added during THIS
-                // session — before the prefab has been saved and reloaded — is
-                // still holding nulls and cannot be wired yet.
-                Report(r, DecisionKind.Skipped, "fracture: the Interactable on '" + interactable.name
-                    + "' has no onInteractionEnter event to bind yet — drag '" + shatter.name
-                    + "' into it and pick DreamShatter.Shatter()");
-                return false;
-            }
-
-            // Idempotent: a re-bake keeps the same DreamShatter component, so
-            // without this check every run stacks another identical listener
-            // and one touch fires Shatter() four times.
-            for (int i = 0; i < target.GetPersistentEventCount(); i++)
-            {
-                if (target.GetPersistentTarget(i) == shatter
-                    && target.GetPersistentMethodName(i) == "Shatter")
-                {
-                    return true;
-                }
-            }
-
-            // Void, not dynamic: the event carries a CollisionWrapper and
-            // Shatter() takes no arguments, which is exactly what a void
-            // persistent call is for. Shatter(Vector3) would aim the burst at
-            // the contact point, but no UnityEvent<CollisionWrapper> can bind
-            // it — that one is for Lua and for hand-written callers.
-            UnityAction call = shatter.Shatter;
-            UnityEventTools.AddVoidPersistentListener(target, call);
-            EditorUtility.SetDirty(interactable);
-
-            Report(r, DecisionKind.Added, "fracture: the Interactable on '" + interactable.name
-                + "' now fires DreamShatter.Shatter() on '" + shatter.name
-                + "' (first filter's onInteractionEnter). The burst is centred on the prop rather than "
-                + "on the contact point — call Shatter(Vector3) from Lua if you need the strike point.");
-            return true;
         }
 
         // ── Prefab plumbing ─────────────────────────────────────────────

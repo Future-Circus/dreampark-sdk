@@ -213,10 +213,11 @@ namespace DreamPark.ConvertReady
             var created = CreateInstance<ConvertReadyManifest>();
             try
             {
-                if (!AssetClassifier.EnsureFolder(FolderPath))
+                if (!AssetClassifier.EnsureFolder(FolderPath) || !AssetClassifier.CommitFolder(FolderPath))
                     throw new Exception("could not create " + FolderPath);
 
                 AssetDatabase.CreateAsset(created, AssetPath);
+                AssetDatabase.ImportAsset(AssetPath, ImportAssetOptions.ForceSynchronousImport);
                 AssetDatabase.SaveAssets();
                 return created;
             }
@@ -252,7 +253,7 @@ namespace DreamPark.ConvertReady
         {
             try
             {
-                if (!AssetClassifier.EnsureFolder(FolderPath))
+                if (!AssetClassifier.EnsureFolder(FolderPath) || !AssetClassifier.CommitFolder(FolderPath))
                     throw new Exception("could not create " + FolderPath);
 
                 // GenerateUniqueAssetPath in case something already occupies

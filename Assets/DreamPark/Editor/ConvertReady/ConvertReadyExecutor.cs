@@ -74,31 +74,23 @@ namespace DreamPark.ConvertReady
 
             try
             {
-                AssetDatabase.StartAssetEditing();
-                try
+                // Do NOT wrap this pipeline in StartAssetEditing. CreateFolder
+                // and SaveAsPrefabAsset need the AssetDatabase live; batched
+                // edits make IsValidFolder false and the prefab save refuse
+                // until StopAssetEditing, which is after we already failed.
+                if (plan.shared.enabled && plan.track == ConvertTrack.Mesh)
                 {
-                    // Shared Prop is a different shape: one base plus N variants
-                    // from N models, so it owns the whole selection rather than
-                    // running per-asset.
-                    if (plan.shared.enabled && plan.track == ConvertTrack.Mesh)
-                    {
-                        RunSharedFamily(assetPaths, plan, report);
-                    }
-                    else
-                    {
-                        for (int i = 0; i < assetPaths.Count; i++)
-                        {
-                            string path = assetPaths[i];
-                            EditorUtility.DisplayProgressBar(UndoGroupName,
-                                Path.GetFileName(path), (float)i / assetPaths.Count);
-                            report.results.Add(RunOne(path, plan));
-                        }
-                    }
+                    RunSharedFamily(assetPaths, plan, report);
                 }
-                finally
+                else
                 {
-                    AssetDatabase.StopAssetEditing();
-                    EditorUtility.ClearProgressBar();
+                    for (int i = 0; i < assetPaths.Count; i++)
+                    {
+                        string path = assetPaths[i];
+                        EditorUtility.DisplayProgressBar(UndoGroupName,
+                            Path.GetFileName(path), (float)i / assetPaths.Count);
+                        report.results.Add(RunOne(path, plan));
+                    }
                 }
 
                 AssetDatabase.SaveAssets();
@@ -117,6 +109,12 @@ namespace DreamPark.ConvertReady
             }
             finally
             {
+                // In the finally, not at the end of the try. DisplayProgressBar
+                // is sticky and modal: one throw out of RunOne with the bar up
+                // leaves the editor unusable until some other tool happens to
+                // clear it, and the exception path above is exactly where that
+                // happens.
+                EditorUtility.ClearProgressBar();
                 Undo.CollapseUndoOperations(undoGroup);
             }
 
@@ -139,18 +137,152 @@ namespace DreamPark.ConvertReady
             switch (track)
             {
                 case ConvertTrack.Texture:
+                    if (!PrepareKit(ref assetPath, r)) return r;
                     r.outputPath = TexturePlaneBuilder.Build(assetPath, plan, r);
                     Track(r.outputPath);
+                    // Only gather the source in once something was actually
+                    // written. Moving a creator's PNG into a new folder and
+                    // then reporting FAILED is the worst of both.
+                    if (string.IsNullOrEmpty(r.outputPath)) DiscardEmptyKit(r);
+                    else FinishKit(ref assetPath, r);
                     return r;
 
                 case ConvertTrack.Audio:
+                    if (!PrepareKit(ref assetPath, r)) return r;
                     r.outputPath = AudioEmitterBuilder.Build(assetPath, plan, r);
                     Track(r.outputPath);
+                    if (string.IsNullOrEmpty(r.outputPath)) DiscardEmptyKit(r);
+                    else FinishKit(ref assetPath, r);
                     return r;
 
                 default:
-                    return RunMesh(assetPath, plan, r);
+                    ConversionResult mesh = RunMesh(assetPath, plan, r);
+                    if (string.IsNullOrEmpty(mesh.outputPath)) DiscardEmptyKit(mesh);
+                    return mesh;
             }
+        }
+
+        /// <summary>
+        /// PrepareKit creates P_{stem} before anything can fail, so a cancelled
+        /// scale dialog or a refused prefab save leaves an empty folder sitting
+        /// next to the creator's asset. Take it back — but only when it is
+        /// genuinely empty, so a re-run over an existing kit can never delete
+        /// work.
+        /// </summary>
+        static void DiscardEmptyKit(ConversionResult r)
+        {
+            if (r == null || string.IsNullOrEmpty(r.kitFolder)) return;
+            if (!AssetClassifier.IsEmptyFolder(r.kitFolder)) return;
+            AssetDatabase.DeleteAsset(r.kitFolder);
+            r.kitFolder = null;
+        }
+
+        static bool PrepareKit(ref string assetPath, ConversionResult r)
+        {
+            string kit = AssetClassifier.KitFolderFor(assetPath);
+            if (string.IsNullOrEmpty(kit))
+            {
+                r.Failed("could not decide a kit folder for '" + assetPath + "'");
+                return false;
+            }
+            if (!AssetClassifier.EnsureFolder(kit) || !AssetClassifier.CommitFolder(kit))
+            {
+                r.Failed("could not create the folder " + kit);
+                return false;
+            }
+            r.kitFolder = kit;
+            WarnIfKitCannotShip(kit, r);
+            return true;
+        }
+
+        /// <summary>
+        /// The kit is built next to the source, wherever that is — which means
+        /// it can land somewhere ContentProcessor never looks, and NOTHING
+        /// downstream says so.
+        ///
+        /// Assets/TestShrimp.fbx converts to Assets/P_TestShrimp/. That prefab
+        /// gets no gameId, no address, no label, is in no bundle and does not
+        /// appear in the uploader — and every line of the report is green.
+        /// OutsideContentFolderCheck cannot catch it either: that scans prefabs
+        /// INSIDE a content folder for outside dependencies, and this one is not
+        /// inside one. Same story for ThirdPartyLocal/ (excluded from builds,
+        /// and the default landing spot for an imported pack) and for Sample
+        /// (ours, not shippable). A source loose in Assets/Content is the other
+        /// direction: it ships, with gameId "P_Coin".
+        ///
+        /// The convert still runs — moving a creator's files somewhere else
+        /// without being asked is its own kind of rude — but it says so
+        /// plainly, once, with the fix in the line.
+        /// </summary>
+        static void WarnIfKitCannotShip(string kit, ConversionResult r)
+        {
+            if (r == null || string.IsNullOrEmpty(kit)) return;
+            kit = kit.Replace('\\', '/');
+
+            string root = ContentFolders.Root;
+            string game = ContentFolders.Sanitize(ContentFolders.GameFolderName());
+            if (string.IsNullOrEmpty(game)) game = ContentFolders.PlaceholderName;
+            string suggestion = " Move the source under " + root + "/" + game
+                              + "/ and convert again if you want it to ship.";
+
+            if (!kit.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                r.Skipped("destination: " + kit + " is outside " + root
+                    + ", so this prop will NOT be stamped with a gameId, will not get an address or a "
+                    + "label, will not be in any bundle and will not appear in the uploader." + suggestion);
+                return;
+            }
+
+            if (kit.IndexOf("/ThirdPartyLocal/", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                r.Skipped("destination: " + kit + " is under ThirdPartyLocal, which ContentProcessor "
+                    + "excludes from builds, so this prop will never ship." + suggestion);
+                return;
+            }
+
+            string own = ContentFolders.FolderOfAsset(kit);
+            if (string.IsNullOrEmpty(own)
+                || string.Equals(root + "/" + own, kit, StringComparison.OrdinalIgnoreCase))
+            {
+                // The segment straight after Assets/Content/ IS the kit folder,
+                // i.e. the source sat loose in the content root. ContentProcessor
+                // derives gameId from that segment, so this prop would ship as
+                // gameId "P_Whatever".
+                r.Skipped("destination: " + kit + " sits directly in " + root
+                    + ", so ContentProcessor would read the gameId as '" + own
+                    + "' — the kit folder's own name." + suggestion);
+                return;
+            }
+
+            if (ContentFolders.IsSample(own))
+            {
+                r.Skipped("destination: " + kit + " is inside the Sample package, which is ours rather "
+                    + "than yours and cannot be published." + suggestion);
+            }
+        }
+
+        static void FinishKit(ref string assetPath, ConversionResult r)
+        {
+            if (string.IsNullOrEmpty(r.kitFolder) || string.IsNullOrEmpty(assetPath)) return;
+            string dest = r.kitFolder + "/" + Path.GetFileName(assetPath);
+            if (string.Equals(assetPath.Replace('\\', '/'), dest, StringComparison.Ordinal)) return;
+
+            if (!AssetClassifier.CommitFolder(r.kitFolder))
+            {
+                r.Skipped("source left at " + assetPath + " — kit folder is not in the AssetDatabase");
+                return;
+            }
+
+            string err = AssetDatabase.MoveAsset(assetPath, dest);
+            if (!string.IsNullOrEmpty(err))
+            {
+                r.Skipped("source left at " + assetPath + " — " + err);
+                return;
+            }
+            AssetDatabase.ImportAsset(dest, ImportAssetOptions.ForceSynchronousImport);
+            r.Added("gathered '" + Path.GetFileName(assetPath) + "' into " + r.kitFolder);
+            assetPath = dest;
+            r.sourcePath = dest;
         }
 
         private static ConversionResult RunMesh(string assetPath, ConversionPlan plan, ConversionResult r)
@@ -158,12 +290,23 @@ namespace DreamPark.ConvertReady
             string propName = AssetClassifier.SanitizeAssetName(
                 Path.GetFileNameWithoutExtension(assetPath));
 
+            // Load from the ORIGINAL path. Moving first is how the FBX
+            // stopped being a GameObject and the convert died after gather.
+            var source = AssetClassifier.LoadModel(assetPath);
+            if (source == null)
+            {
+                r.Failed("could not load '" + assetPath + "' as a GameObject");
+                return r;
+            }
+
+            if (!PrepareKit(ref assetPath, r)) return r;
+
             // ── Stage 1: materials ──
             if (plan.convertMaterials)
             {
                 if (plan.extractEmbeddedMaterials && AssetClassifier.HasEmbeddedMaterials(assetPath))
                 {
-                    string dest = AssetClassifier.DefaultMaterialsFolder(assetPath);
+                    string dest = r.kitFolder;
                     int extracted;
                     if (!AssetClassifier.ExtractEmbeddedMaterials(assetPath, dest, r, out extracted))
                     {
@@ -177,14 +320,41 @@ namespace DreamPark.ConvertReady
                         return r;
                     }
                 }
+                // PACK FIRST, CONVERT SECOND. Both orders "work"; only this one
+                // is correct.
+                //
+                // ConvertMaterialsOn rewrites the shader on whatever material
+                // the renderers currently point at, in memory, and leaves it
+                // dirty until the batch-wide SaveAssets at the end of Run.
+                // Converting first meant (a) the vendor/Sample original got its
+                // shader swapped — the same "we rewrote an asset we don't own"
+                // bug the texture retarget had, and forty unrelated prefabs
+                // change with it — and (b) CopyAsset duplicates the file ON
+                // DISK, so the copy that packing then remaps the model onto
+                // carried the OLD shader. The prop shipped unconverted while
+                // the report said otherwise.
+                //
+                // Packing first makes the kit copies, points the model at them,
+                // and only then converts — so conversion lands on the copies
+                // the prop actually uses and the originals are never touched.
+                AssetClassifier.PackDependenciesIntoKit(assetPath, r.kitFolder, r);
                 ConvertMaterialsOn(assetPath, r);
-            }
 
-            var source = AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
-            if (source == null)
-            {
-                r.Failed("could not load '" + assetPath + "' as a GameObject");
-                return r;
+                // RE-LOAD. Stage 1 reimports the model twice over —
+                // ExtractEmbeddedMaterials ends in ForceUpdate, and packing
+                // remaps materials and imports again — and a reimport DESTROYS
+                // every UnityEngine.Object previously loaded from that path.
+                // The `source` above is a fake-null reference from here on:
+                // IsSkinned silently reads false (a skinned model then takes
+                // the one-transform EasyBend path) and InstantiatePrefab
+                // returns null or throws, which escapes RunOne and abandons
+                // every remaining asset in the batch.
+                source = AssetClassifier.LoadModel(assetPath);
+                if (source == null)
+                {
+                    r.Failed("could not re-load '" + assetPath + "' after the material stage");
+                    return r;
+                }
             }
 
             // Build the canonical hierarchy in memory. The Motion node exists
@@ -264,6 +434,7 @@ namespace DreamPark.ConvertReady
                 ApplyBehaviorInPrefab(outPath, plan, r, fit.measurement);
 
                 RecordInManifest(outPath, plan);
+                FinishKit(ref assetPath, r);
                 return r;
             }
             finally
@@ -472,6 +643,7 @@ namespace DreamPark.ConvertReady
                 }
 
                 PrefabUtility.SaveAsPrefabAsset(contents, prefabPath);
+                AssetDatabase.ImportAsset(prefabPath, ImportAssetOptions.ForceSynchronousImport);
             }
             finally
             {

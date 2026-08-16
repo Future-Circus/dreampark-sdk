@@ -52,24 +52,40 @@
 //      Motion-only guard is dead code and lets the walk reach straight into
 //      the source model's own colliders and a previous run's jiggle bones.
 //
-//  RESOLVED HERE — the spec's open question "where does the Rigidbody go".
-//  It goes on the ROOT. PropTemplate.SurfaceHeight and the footprint math
-//  read the root transform, so a Rigidbody on Anchor would let physics
-//  carry the collider away while the footprint stayed behind on the floor
-//  where the prop was placed. Colliders on child objects attach to the
-//  nearest ancestor Rigidbody, so the fitted Anchor collider is picked up
-//  for free.
+//  THE RULE THAT COVERS ALL OF THE ABOVE: NOTHING THIS FILE EMITS OWNS THE
+//  PROP ROOT'S TRANSFORM. Point 1 is the special case everyone hits first;
+//  the Rigidbody is the same bug wearing a different hat.
 //
-//  AND ITS COROLLARY — where the Interactable goes depends on that body.
-//  Unity delivers OnCollision*/OnTrigger* to the collider's GameObject and
-//  to the GameObject of that collider's ATTACHED Rigidbody. The collider is
-//  on Anchor, or on a "Collision" child of it. With a Rigidbody on the root,
-//  those colliders attach to it and the messages reach the root; with no
-//  Rigidbody anywhere, attachedRigidbody is null and the messages reach the
-//  COLLIDER's own GameObject and nothing else. So an Interactable pinned to
-//  the root of a body-less prop is a dead component that inspects perfectly.
-//  The host is chosen from plan.addRigidbody and from where the fitted
-//  collider actually landed, and the report says which node got it and why.
+//  The park loader places the root. A Rigidbody there hands that transform
+//  to PhysX on the first live frame, so a prop settles, slides or topples
+//  away from the spot the park authored — and the park data still says it
+//  is where it was put. It also drags the prop's floor footprint with it:
+//  GapFiller and FloorCutout consume PropTemplate's footprint, so a thrown
+//  vase carries its hole in the floor around the room. (VoronoiFracture
+//  detaches its shards for exactly this reason; a body on the root is the
+//  same failure without the detach.)
+//
+//  SO THE BODY GOES ON THE ANCHOR. The root stays where the park put it and
+//  the physics moves what is under it. Three things fall out for free:
+//   • The fitted collider is already on Anchor, so it attaches to this body
+//     rather than to an ancestor's.
+//   • Unity delivers OnCollision*/OnTrigger* to the collider's GameObject
+//     AND to the GameObject of its attached Rigidbody — both are Anchor, so
+//     the messages land in one place whether or not the plan asked for a
+//     body at all. The generated Lua script is on Anchor for that reason
+//     (LuaMessageRelays.Bind adds its relay to the scripted object only,
+//     with no ancestor walk), and the two decisions now agree instead of
+//     depending on plan.addRigidbody.
+//   • A prop converted by an earlier version has its body on the root; that
+//     one is removed rather than left to nest, because a nested body's local
+//     pose fights its parent's motion.
+//
+//  THE COST, STATED: PropTemplate.SurfaceHeight and the footprint math read
+//  the ROOT transform, so for a prop that has been thrown they describe
+//  where it was placed rather than where it now is. That is the right way
+//  round — a hole in the floor that stays put beats one that follows a
+//  vase across the room — but it does mean the footprint of an in-flight
+//  prop is stale, by design.
 //
 //  WHAT THIS FILE DELIBERATELY DOES NOT DO: add EasyAudio. The spec offers
 //  a contact sound as a Custom-only extra, and ConversionPlan carries no
@@ -82,7 +98,6 @@
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
-using UnityEngine.Events;
 
 namespace DreamPark.ConvertReady
 {
@@ -136,6 +151,10 @@ namespace DreamPark.ConvertReady
         /// reads as "the player can touch this".
         public const string InteractiveLayerName = "Item";
         public const string PlayerLayerName = "Player";
+
+        // DreamPark Extensions clamps throwables to these on release.
+        public const float ThrowableLinearDamping = 0.2f;
+        public const float ThrowableAngularDamping = 0.2f;
 
         // ── Result ──────────────────────────────────────────────────────
 
@@ -261,20 +280,17 @@ namespace DreamPark.ConvertReady
             // lives in one place regardless of which preset asked for it.
             if (plan.addRigidbody)
             {
-                ApplyRigidbody(root, plan, measurement, anchorScale, ref result, r);
+                ApplyRigidbody(root, anchor, plan, measurement, anchorScale, ref result, r);
             }
             else
             {
                 // Componentizer removes when shouldExist is false, so a
                 // re-run with the flag cleared takes the body back off
-                // instead of leaving the old one behind.
-                Rigidbody stale = root.GetComponent<Rigidbody>();
-                if (stale != null)
-                {
-                    Componentizer.DoComponent<Rigidbody>(root, false);
-                    Report(r, DecisionKind.Skipped,
-                        "Rigidbody — the plan does not ask for one; removed the one left by a previous run");
-                }
+                // instead of leaving the old one behind. Both nodes: the
+                // body used to be written to the root, so a prop converted
+                // by an earlier version has one there.
+                StripRigidbody(root, r);
+                if (anchor != root) StripRigidbody(anchor, r);
             }
 
             // ── The pack ────────────────────────────────────────────────
@@ -290,8 +306,8 @@ namespace DreamPark.ConvertReady
 
                 case BehaviorPack.Shatter:
                     // The fracture bake is the Shatter stage's job — it owns
-                    // the piece meshes, the sub-assets and the DreamShatter
-                    // component. Stage 6's only contribution is the body the
+                    // the piece meshes, the sub-assets and the generated Lua
+                    // script. Stage 6's only contribution is the body the
                     // intact prop needs before it breaks, which was added
                     // above from plan.addRigidbody.
                     //
@@ -316,106 +332,75 @@ namespace DreamPark.ConvertReady
         static void ApplyInteractive(GameObject root, GameObject anchor, GameObject motion, GameObject visual,
                                      ConversionPlan plan, ref BehaviorResult result, ConversionResult r)
         {
-            // WHERE the Interactable goes is decided by the Rigidbody, not by
-            // taste. Unity delivers OnCollision*/OnTrigger* to the collider's
-            // GameObject AND to the GameObject of that collider's attached
-            // Rigidbody. The collider is on Anchor:
-            //   plan.addRigidbody  → the body is on the root, Anchor's collider
-            //                        attaches to it, the root receives.
-            //   no Rigidbody       → attachedRigidbody is null and only the
-            //                        COLLIDER's own GameObject receives — an
-            //                        Interactable on the root is then a
-            //                        component that can never fire, from the
-            //                        player rig or from anything else.
-            GameObject host = plan.addRigidbody
-                ? root
-                : StaticCallbackHost(root, anchor, motion, visual, r);
+            // Interactive is a physics pack plus a SCRIPT: Rigidbody (mass +
+            // damping), the fitted collider, and a Lua file in the prop's kit
+            // folder that detects a hit and reports it.
+            //
+            // Not an Interactable. That component's whole surface is a
+            // serialized filter array wired through UnityEvents — it does not
+            // diff, does not grep, and the only way to find out what a prop
+            // does is to click through an inspector. The generated script says
+            // the same thing in six lines of readable Lua, with the speed gate
+            // and the tag gate visible, and it is somewhere the creator can
+            // type the next line of their game.
+            result.interactableAdded = false;
 
-            Interactable interactable = Componentizer.DoComponent<Interactable>(host, true);
-            result.interactableAdded = interactable != null;
-
-            if (interactable == null)
-            {
-                result.error = "Interactable could not be added to '" + host.name + "'";
-                Report(r, DecisionKind.Failed, result.error);
-                return;
-            }
-
-            // A re-run with plan.addRigidbody flipped moves the host, so an
-            // Interactable can be left behind on the other node. An empty one
-            // is a re-run artifact and comes off; a wired one is an afternoon
-            // of inspector work and is reported instead of stomped.
-            GameObject[] strays = new GameObject[] { root, anchor };
-            for (int i = 0; i < strays.Length; i++)
-            {
-                GameObject stray = strays[i];
-                if (stray == null || stray == host) continue;
-
-                Interactable old = stray.GetComponent<Interactable>();
-                if (old == null) continue;
-
-                int wired = old.interactionFilters != null ? old.interactionFilters.Length : 0;
-                if (wired == 0)
-                {
-                    Componentizer.DoComponent<Interactable>(stray, false);
-                    Report(r, DecisionKind.Skipped,
-                        "Interactable on '" + stray.name + "' — removed an empty one left there by a previous run; "
-                        + "with this plan's Rigidbody setting only '" + host.name + "' receives collision messages");
-                }
-                else
-                {
-                    Report(r, DecisionKind.Skipped,
-                        "'" + stray.name + "' also carries an Interactable with " + wired + " wired filter(s). It was left "
-                        + "alone rather than stomped, but with this plan's Rigidbody setting only '" + host.name
-                        + "' receives collision messages — re-wire those filters there, or delete that component.");
-                }
-            }
-
-            // Seed ONE filter, and only when there is nothing there. A re-run
-            // must never stomp events a creator has wired — that is a whole
-            // afternoon of inspector work living in a serialized array.
-            if (interactable.interactionFilters == null || interactable.interactionFilters.Length == 0)
-            {
-                Interactable.InteractionFilter filter = new Interactable.InteractionFilter();
-                filter.layers = new string[] { PlayerLayerName };
-                filter.tags = new string[0];
-
-                // Constructed, not left to the serializer. Interactable.Awake
-                // does filter.onInteractionStay.GetPersistentEventCount() with
-                // no null check (Interactable.cs:226), so a null field is an
-                // NRE per filter for anything that reaches Awake before a
-                // prefab round-trip — which is exactly the live-scene path this
-                // file supports (see IsUndoable/RegisterUndo).
-                filter.onInteractionEnter = new UnityEvent<CollisionWrapper>();
-                filter.onInteractionStay = new UnityEvent<CollisionWrapper>();
-                filter.onInteractionExit = new UnityEvent<CollisionWrapper>();
-
-                interactable.interactionFilters = new Interactable.InteractionFilter[] { filter };
-                result.interactionFilterSeeded = true;
-
-                EditorUtility.SetDirty(interactable);
-                Report(r, DecisionKind.Added,
-                    "Interactable on '" + host.name + "' — one example InteractionFilter wired to the '"
-                    + PlayerLayerName + "' layer, so the inspector opens on something readable rather than an empty array");
-            }
-            else
-            {
-                Report(r, DecisionKind.Skipped,
-                    "Interactable filters — '" + host.name + "' already has "
-                    + interactable.interactionFilters.Length + "; left untouched");
-            }
+            ReportStrayInteractables(root, anchor, motion, visual, r);
 
             if (!plan.addRigidbody)
             {
-                Report(r, DecisionKind.Skipped, string.Format(
-                    "Rigidbody — the plan does not ask for one, so the fitted collider is STATIC and its attachedRigidbody is "
-                    + "null. Unity then delivers OnCollision*/OnTrigger* to the collider's own GameObject only, which is why "
-                    + "the Interactable was put on '{0}' rather than on the root '{1}'. Player contact still works (the player "
-                    + "rig carries the moving body); prop-vs-prop contact needs a Rigidbody on one of the two props.",
-                    host.name, root.name));
+                Report(r, DecisionKind.Skipped,
+                    "Interactive without a Rigidbody is just the fitted collider — turn on addRigidbody for a throwable");
             }
 
+            // On the anchor, not the root: LuaMessageRelays.Bind adds its
+            // collision relay to the LuaBehaviour's own GameObject with no
+            // ancestor walk, and Unity routes OnCollisionEnter to the
+            // collider's GameObject and to that collider's attached body. The
+            // anchor always has the collider; the root only has a body when
+            // plan.addRigidbody is set. Anchor is the host that hears a hit
+            // either way.
+            LuaScriptEmitter.EmitInteractive(anchor, root != null ? root.name : anchor.name, plan, r);
+
             ApplyCollisionLayer(root, anchor, motion, visual, InteractiveLayerName, ref result, r);
+        }
+
+        /// <summary>
+        /// REPORT, DO NOT DELETE.
+        ///
+        /// The first version of this removed any Interactable whose filter
+        /// array was empty, on all four nodes, on every Interactive convert —
+        /// on the theory that an empty one is a re-run artifact. It is not. A
+        /// freshly added Interactable has an empty array by definition, so the
+        /// component a creator dropped on their prop five seconds ago (or
+        /// drives entirely from Lua, which needs no serialized filters) looks
+        /// identical to leftover junk and got silently deleted. The one case
+        /// the deletion was aimed at — a prop converted by an older version of
+        /// this tool — carries a seeded filter and so takes the other branch
+        /// anyway, which is to say the delete only ever fired on the case it
+        /// was supposed to protect.
+        ///
+        /// Converting must never remove a component it did not add. Say what
+        /// is there and let the creator decide.
+        /// </summary>
+        static void ReportStrayInteractables(GameObject root, GameObject anchor, GameObject motion,
+                                             GameObject visual, ConversionResult r)
+        {
+            GameObject[] nodes = new GameObject[] { root, anchor, motion, visual };
+            for (int i = 0; i < nodes.Length; i++)
+            {
+                GameObject node = nodes[i];
+                if (node == null) continue;
+                Interactable old = node.GetComponent<Interactable>();
+                if (old == null) continue;
+
+                int wired = old.interactionFilters != null ? old.interactionFilters.Length : 0;
+                Report(r, DecisionKind.Skipped,
+                    "'" + node.name + "' carries an Interactable with " + wired + " wired filter(s) — "
+                    + "left exactly as it is. Interactive no longer adds that script (it is gameplay, "
+                    + "not convert output), so if this one came from an older run and you do not want "
+                    + "it, remove it by hand.");
+            }
         }
 
         /// <summary>
@@ -474,22 +459,50 @@ namespace DreamPark.ConvertReady
             return anchor;
         }
 
-        static void ApplyRigidbody(GameObject root, ConversionPlan plan,
+        static void StripRigidbody(GameObject go, ConversionResult r)
+        {
+            if (go == null || go.GetComponent<Rigidbody>() == null) return;
+            Componentizer.DoComponent<Rigidbody>(go, false);
+            Report(r, DecisionKind.Skipped,
+                "Rigidbody on '" + go.name + "' — the plan does not ask for one; removed");
+        }
+
+        /// <summary>
+        /// The body goes on the ANCHOR. Nothing the converter emits owns the
+        /// prop ROOT's transform — see the header.
+        /// </summary>
+        static void ApplyRigidbody(GameObject root, GameObject anchor, ConversionPlan plan,
                                    ColliderFitter.MeshMeasurement m, float anchorScale,
                                    ref BehaviorResult result, ConversionResult r)
         {
+            GameObject host = anchor != null ? anchor : root;
+
+            // A prop converted by an earlier version has its body on the root,
+            // where physics drives the transform the park loader placed. Two
+            // bodies would also nest, and a nested body's local pose fights
+            // its parent's motion — so the old one comes off rather than
+            // being left as a second, invisible simulation.
+            if (host != root && root.GetComponent<Rigidbody>() != null)
+            {
+                Componentizer.DoComponent<Rigidbody>(root, false);
+                Report(r, DecisionKind.Skipped, "Rigidbody on the root '" + root.name
+                    + "' — removed and re-created on '" + host.name + "'. A body on the root drives the "
+                    + "transform the park loader placed, so the prop drifts off its authored spot; on the "
+                    + "anchor the root stays put and the physics moves what is under it.");
+            }
+
             // Read the PREVIOUS state before Componentizer hands the body
             // back: converting an existing .prefab often finds one already
             // there, and the two fields that silently make the prop immovable
             // are exactly the two nothing used to write.
-            Rigidbody existing = root.GetComponent<Rigidbody>();
+            Rigidbody existing = host.GetComponent<Rigidbody>();
             bool wasKinematic = existing != null && existing.isKinematic;
             bool wasConstrained = existing != null && existing.constraints != RigidbodyConstraints.None;
 
-            Rigidbody rb = Componentizer.DoComponent<Rigidbody>(root, true);
+            Rigidbody rb = Componentizer.DoComponent<Rigidbody>(host, true);
             if (rb == null)
             {
-                result.error = "Rigidbody could not be added to '" + root.name + "'";
+                result.error = "Rigidbody could not be added to '" + host.name + "'";
                 Report(r, DecisionKind.Failed, result.error);
                 return;
             }
@@ -498,6 +511,11 @@ namespace DreamPark.ConvertReady
             float mass = EstimateMassKg(m, anchorScale, out basis);
             rb.mass = mass;
             rb.useGravity = true;
+            // Match DreamPark's throwable clamp (Extensions sets both to 0.2
+            // on release). Unity's defaults (0 / 0.05) leave a thrown prop
+            // sliding and spinning forever.
+            rb.linearDamping = ThrowableLinearDamping;
+            rb.angularDamping = ThrowableAngularDamping;
 
             // Write the WHOLE state the converter owns, not just the fields
             // that differ from Unity's defaults on a fresh component. A body
@@ -533,7 +551,8 @@ namespace DreamPark.ConvertReady
             result.massKg = mass;
 
             Report(r, DecisionKind.Added, string.Format(
-                "Rigidbody on '{0}', {1:0.##} kg — {2}{3}", root.name, mass, basis, ccd));
+                "Rigidbody on '{0}', {1:0.##} kg, damping {2:0.##}/{3:0.##} — {4}{5}",
+                host.name, mass, ThrowableLinearDamping, ThrowableAngularDamping, basis, ccd));
 
             // Never silent: the creator authored one of these by hand, or
             // inherited it from the source prefab, and the prop's behaviour
@@ -661,95 +680,67 @@ namespace DreamPark.ConvertReady
                 return;
             }
 
-            EasyBend eb = Componentizer.DoComponent<EasyBend>(motion, true);
-            if (eb == null)
+            // A previous run may have left the C# component here.
+            if (motion.GetComponent<EasyBend>() != null)
             {
-                result.error = "EasyBend could not be added to '" + motion.name + "'";
-                Report(r, DecisionKind.Failed, result.error);
-                return;
+                Componentizer.DoComponent<EasyBend>(motion, false);
+                Report(r, DecisionKind.Skipped, "EasyBend on '" + motion.name
+                    + "' — removed; the bend is a Lua script in this prop's own folder now, "
+                    + "so you can change what leaning means instead of only how far it leans");
             }
 
-            // ── Override 1: eventOnStart ────────────────────────────────
-            // EasyEvent.Start fires OnEvent only when this is set, and
-            // EasyBend.Update early-returns while onlyWhileEnabled &&
-            // !isEnabled. Left at the shipped false, a converted prop with
-            // nothing wired to it never bends at all, and looks like it is
-            // simply not working.
-            eb.eventOnStart = bend.eventOnStart;
-            eb.onlyWhileEnabled = true;
-
-            // ── Override 2: detectionMask ───────────────────────────────
-            string maskNames, missingLayers;
-            int mask = LayerMaskFor(new string[] { PlayerLayerName, InteractiveLayerName },
-                                    out maskNames, out missingLayers);
-            if (mask != 0)
-            {
-                eb.detectionMask = mask;
-            }
-
-            // ── Override 3: detectionRadius ─────────────────────────────
+            // ── detectionRadius ─────────────────────────────────────────
+            // EasyBend ships 0.75 m: a metre-wide trigger around a 5 cm coin.
             string radiusBasis;
             float radius = DetectionRadiusFor(m, bend, anchorScale, out radiusBasis);
-            eb.detectionRadius = radius;
 
+            // ── detectionOffset ─────────────────────────────────────────
             // Centre the query on the prop's own middle rather than on the
             // Motion node's origin, which after Stage 3a sits on the FLOOR.
             // A sphere centred at the base is half underground: it misses a
             // hand reaching for the top of a tall prop, and it is centred on
             // the one surface the prop is guaranteed to be touching.
-            eb.detectionOrigin = null;
-            eb.detectionOffset = m.ok && anchor != null
+            Vector3 offset = m.ok && anchor != null
                 ? motion.transform.InverseTransformPoint(anchor.transform.TransformPoint(m.bounds.center))
                 : Vector3.zero;
 
-            // Left as shipped, deliberately: HandTracker, HeadTracker,
-            // BodyTracker and FeetTracker all carry a Rigidbody, so the
-            // player rig is detected — and the flag filters out static
-            // scenery for free, which is half the reason the mask above
-            // matters less than it would otherwise.
-            eb.requireRigidbody = true;
-            eb.ignoreTriggers = true;
+            string luaPath = LuaScriptEmitter.EmitBend(motion, root != null ? root.name : motion.name,
+                                                       radius, offset, bend, r);
+            if (string.IsNullOrEmpty(luaPath))
+            {
+                result.error = "Bendy: the bend script could not be written, so nothing bends this prop";
+                Report(r, DecisionKind.Failed, result.error);
+                return;
+            }
 
-            eb.maxTiltAngle = bend.maxTiltAngle;
-            eb.springStrength = bend.springStrength;
-            eb.springDamping = bend.springDamping;
-
-            EditorUtility.SetDirty(eb);
             result.bendApplied = true;
             result.detectionRadius = radius;
 
             Report(r, DecisionKind.Added, string.Format(
-                "EasyBend on '{0}' — tilt {1:0.#}°, spring {2:0.#}, damping {3:0.#}",
-                motion.name, eb.maxTiltAngle, eb.springStrength, eb.springDamping));
+                "bend on '{0}' — tilt {1:0.#}\u00b0, spring {2:0.#}, damping {3:0.#}",
+                motion.name, bend.maxTiltAngle, bend.springStrength, bend.springDamping));
 
-            // Every overridden default, named, with the failure it prevents.
+            // detectionMask is ~0 — EVERY layer — and that is deliberate.
+            // EasyBend's shipped ~0 was a problem only because a wall or a
+            // floor never moves out of range, so the prop leans over and
+            // stays leaned. requireRigidbody is what actually solves that:
+            // static geometry has no body, so it is filtered whatever layer
+            // it is on. Masking by layer instead would mean a thrown prop or
+            // a creature on some other layer could not push this one, and
+            // that restriction is invisible until someone wonders why.
             Report(r, DecisionKind.Added,
-                "EasyBend.eventOnStart = true (ships false — Update early-returns forever until something fires OnEvent, "
-                + "so the prop would never bend)");
-
-            if (mask != 0)
-            {
-                Report(r, DecisionKind.Added, string.Format(
-                    "EasyBend.detectionMask = {0} (ships ~0 — the prop would bend away from the floor and the walls "
-                    + "permanently, because a wall never moves out of range){1}",
-                    maskNames,
-                    string.IsNullOrEmpty(missingLayers) ? "" : "; layer(s) " + missingLayers + " are missing from this project and were left out"));
-            }
-            else
-            {
-                Report(r, DecisionKind.Skipped, string.Format(
-                    "EasyBend.detectionMask — neither '{0}' nor '{1}' exists in this project's TagManager, so the mask was "
-                    + "left at its shipped ~0. The prop will bend away from static geometry it is standing next to. "
-                    + "Add those layers and re-run.", PlayerLayerName, InteractiveLayerName));
-            }
+                "bend.detectionMask = every layer, with requireRigidbody on — the Rigidbody test is what "
+                + "keeps static walls and floors from leaning the prop over permanently, and it does it "
+                + "without ruling out anything else that moves. The script also always accepts the player, "
+                + "so the bend does not depend on whether the hand rig carries a body.");
 
             // MEASURED only when something was actually measured. With !m.ok
             // the radius is BendSettings.minDetectionRadius — a constant — and
             // filing a fallback constant as MEASURED is precisely what that
             // vocabulary exists to prevent (ConvertReadyPlan, DecisionKind).
             Report(r, m.ok ? DecisionKind.Measured : DecisionKind.Guessed, string.Format(
-                "EasyBend.detectionRadius = {0:0.###} m (ships 0.75 — a metre-wide trigger around a 5 cm prop): {1}",
-                radius, radiusBasis));
+                "bend.detectionRadius = {0:0.###} m (EasyBend shipped 0.75 — a metre-wide trigger around a "
+                + "5 cm prop): {1}", radius, radiusBasis));
 
             WarnSelfBend(root, anchor, plan, r);
         }
@@ -809,7 +800,7 @@ namespace DreamPark.ConvertReady
         /// So the prop's own collider is never recognised as self. It is
         /// normally filtered out anyway: it has no Rigidbody (requireRigidbody)
         /// and it is not on Player or Item (detectionMask). Put a Rigidbody on
-        /// the root AND the prop on Item, and both filters stop applying — the
+        /// the anchor AND the prop on Item, and both filters stop applying — the
         /// prop then bends away from itself, at full weight, forever.
         /// </summary>
         static void WarnSelfBend(GameObject root, GameObject anchor, ConversionPlan plan, ConversionResult r)

@@ -793,6 +793,7 @@ namespace DreamPark.ConvertReady
                 prop.footprintOffsetMeters = Vector2.zero;
 
                 PrefabUtility.SaveAsPrefabAsset(contents, prefabPath);
+                AssetDatabase.ImportAsset(prefabPath, ImportAssetOptions.ForceSynchronousImport);
 
                 Report(r, DecisionKind.Measured, string.Format(CultureInfo.InvariantCulture,
                     "footprint: {0:0.##} × {0:0.##} m — an emitter is a point, not a room",

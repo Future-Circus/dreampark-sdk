@@ -173,6 +173,13 @@ namespace DreamPark.ConvertReady
         public float capUvScale = 1f;
         /// Impulse applied radially from the contact point when it shatters.
         public float burstImpulse = 2f;
+        /// Minimum CLOSING speed, in m/s, before a hit breaks it — the
+        /// relativeVelocity of the collision, not the prop's own speed, so a
+        /// thrown object hitting a stationary prop still counts. Without a
+        /// threshold a shatterable breaks when the player brushes past it or
+        /// when another prop leans on it, which reads as the prop falling
+        /// apart on its own rather than as the player smashing it.
+        public float minImpactSpeed = 2f;
         /// Seconds before pieces fade and despawn. 0 = never.
         public float pieceLifetime = 8f;
     }
@@ -274,6 +281,15 @@ namespace DreamPark.ConvertReady
             {
                 presetName = "Bendy",
                 addRigidbody = false,          // the bend owns the transform, not physics
+                // No collider by default. The lean is driven by an
+                // OverlapSphere around the prop, not by contact with it, so a
+                // bendy prop needs nothing of its own to work — and a fitted
+                // collider on something that spends its life rotating is a
+                // footprint that spins, a physics cost nobody asked for, and
+                // one more thing the OverlapSphere has to filter back out.
+                // Set it to Auto on the Custom sheet if the prop also has to
+                // be grabbable or block movement.
+                collider = ColliderChoice.None,
                 behavior = BehaviorPack.Bendy,
                 category = PropCategory.Decoration,
             };
@@ -404,6 +420,7 @@ namespace DreamPark.ConvertReady
     public sealed class ConversionResult
     {
         public string sourcePath;
+        public string kitFolder;             // P_{name} next to the source; outputs land here
         public string outputPath;            // null when nothing was written
         public bool ok;
         public string error;
