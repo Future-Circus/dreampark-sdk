@@ -254,6 +254,62 @@ namespace DreamPark.EditorTools
                 if (lum > 0f) src.SetFloat("_emissionStrength", lum);
             }
 
+
+            // ── Alpha clipping ────────────────────────────────────────────
+            //
+            // Without this the conversion produces a material that is opaque, has a
+            // shader with full Meta occlusion wiring, passes MetaOcclusionCheck — and
+            // is not occluded on a headset.
+            //
+            // The reason is the shader swap above. `src.shader = dpShader` carries
+            // over every same-named float AND the material's existing keyword set. A
+            // URP Lit source that was not clipping arrives with _AlphaClip = 0, so the
+            // graph's own default of 1 never applies. A Standard/asset-pack source has
+            // no _AlphaClip at all, so it picks up the default of 1 — but _ALPHATEST_ON
+            // stays off, which is the keyword that actually selects the clipping
+            // variant. Both land broken; the second one lands broken while the
+            // inspector shows the toggle ON.
+            //
+            // DreamParkMaterialRules is the single definition of the rule (Opaque ⇒
+            // clipping, Transparent ⇒ author's call) and owns resyncing the keyword,
+            // _AlphaToMask, the RenderType tag and the render queue through URP.
+            //
+            // Guarded because MaterialConverter.cs compiles under DREAMPARKCORE and
+            // the rules class, like the rest of MaterialConversion, does not.
+#if !DREAMPARKCORE
+            // Carry the source threshold across when there was one. A source that was
+            // cutting out at 0.9 keeps cutting out at 0.9; a source with no threshold
+            // keeps the graph default of 0.5 rather than landing on 0, which would
+            // clip nothing and make the whole thing a no-op.
+            //
+            // The destination property is `_alphaClipping`, not `_Cutoff` — a Shader
+            // Graph has no _Cutoff unless someone exposes one, and DreamPark-Unlit
+            // does not expose a threshold at all. HasProperty covers both.
+            // EXACT lookups only — deliberately not TryResolveFloat. That helper falls
+            // back to substring matching in both directions, so the alias
+            // "_AlphaClipThreshold" happily matches a source "_AlphaClip" and hands
+            // back 0 or 1 as if it were a threshold. A threshold of 1 against
+            // `Alpha = baseTex.a * (_opacity * Occlusion)` discards every pixel whose
+            // alpha is not exactly 1, i.e. the object vanishes on device. Clamped for
+            // the same reason: a source "_Cutout" of 50 is not a threshold.
+            if (src.HasProperty(Shaders.DreamParkMaterialRules.ThresholdProp))
+            {
+                foreach (var alias in new[] { "_Cutoff", "_AlphaCutoff", "_Cutout", "_AlphaClipThreshold", "_alphaClipping" })
+                {
+                    if (!capturedFloats.TryGetValue(alias, out float srcCutoff)) continue;
+                    if (srcCutoff <= 0f) continue;
+                    src.SetFloat(Shaders.DreamParkMaterialRules.ThresholdProp, Mathf.Clamp01(srcCutoff));
+                    break;
+                }
+            }
+
+            // Enforce first (Opaque only), then resync unconditionally so a source
+            // that WAS transparent does not keep a stale _ALPHATEST_ON dragged in
+            // with the old keyword set.
+            Shaders.DreamParkMaterialRules.Enforce(src);
+            Shaders.DreamParkMaterialRules.SyncSurfaceState(src);
+#endif
+
             EditorUtility.SetDirty(src);
             Debug.Log($"[MaterialConverter] ✓ '{src.name}' converted from '{srcShaderName}' → DreamPark-UniversalShader (textures: {texHits})");
             return true;
@@ -332,6 +388,62 @@ namespace DreamPark.EditorTools
                 float lum = emCol.maxColorComponent;
                 if (lum > 0f) src.SetFloat("_emissionStrength", lum);
             }
+
+
+            // ── Alpha clipping ────────────────────────────────────────────
+            //
+            // Without this the conversion produces a material that is opaque, has a
+            // shader with full Meta occlusion wiring, passes MetaOcclusionCheck — and
+            // is not occluded on a headset.
+            //
+            // The reason is the shader swap above. `src.shader = dpShader` carries
+            // over every same-named float AND the material's existing keyword set. A
+            // URP Lit source that was not clipping arrives with _AlphaClip = 0, so the
+            // graph's own default of 1 never applies. A Standard/asset-pack source has
+            // no _AlphaClip at all, so it picks up the default of 1 — but _ALPHATEST_ON
+            // stays off, which is the keyword that actually selects the clipping
+            // variant. Both land broken; the second one lands broken while the
+            // inspector shows the toggle ON.
+            //
+            // DreamParkMaterialRules is the single definition of the rule (Opaque ⇒
+            // clipping, Transparent ⇒ author's call) and owns resyncing the keyword,
+            // _AlphaToMask, the RenderType tag and the render queue through URP.
+            //
+            // Guarded because MaterialConverter.cs compiles under DREAMPARKCORE and
+            // the rules class, like the rest of MaterialConversion, does not.
+#if !DREAMPARKCORE
+            // Carry the source threshold across when there was one. A source that was
+            // cutting out at 0.9 keeps cutting out at 0.9; a source with no threshold
+            // keeps the graph default of 0.5 rather than landing on 0, which would
+            // clip nothing and make the whole thing a no-op.
+            //
+            // The destination property is `_alphaClipping`, not `_Cutoff` — a Shader
+            // Graph has no _Cutoff unless someone exposes one, and DreamPark-Unlit
+            // does not expose a threshold at all. HasProperty covers both.
+            // EXACT lookups only — deliberately not TryResolveFloat. That helper falls
+            // back to substring matching in both directions, so the alias
+            // "_AlphaClipThreshold" happily matches a source "_AlphaClip" and hands
+            // back 0 or 1 as if it were a threshold. A threshold of 1 against
+            // `Alpha = baseTex.a * (_opacity * Occlusion)` discards every pixel whose
+            // alpha is not exactly 1, i.e. the object vanishes on device. Clamped for
+            // the same reason: a source "_Cutout" of 50 is not a threshold.
+            if (src.HasProperty(Shaders.DreamParkMaterialRules.ThresholdProp))
+            {
+                foreach (var alias in new[] { "_Cutoff", "_AlphaCutoff", "_Cutout", "_AlphaClipThreshold", "_alphaClipping" })
+                {
+                    if (!capturedFloats.TryGetValue(alias, out float srcCutoff)) continue;
+                    if (srcCutoff <= 0f) continue;
+                    src.SetFloat(Shaders.DreamParkMaterialRules.ThresholdProp, Mathf.Clamp01(srcCutoff));
+                    break;
+                }
+            }
+
+            // Enforce first (Opaque only), then resync unconditionally so a source
+            // that WAS transparent does not keep a stale _ALPHATEST_ON dragged in
+            // with the old keyword set.
+            Shaders.DreamParkMaterialRules.Enforce(src);
+            Shaders.DreamParkMaterialRules.SyncSurfaceState(src);
+#endif
 
             EditorUtility.SetDirty(src);
             Debug.Log($"[MaterialConverter] ✓ '{src.name}' converted from '{srcShaderName}' → DreamPark-Unlit");

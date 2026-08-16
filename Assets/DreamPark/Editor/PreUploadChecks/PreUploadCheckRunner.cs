@@ -30,8 +30,22 @@ namespace DreamPark.PreUploadChecks
                     new Checks.DuplicateNamesCheck(),
                     new Checks.SunLightCheck(),
                     new Checks.MetaOcclusionCheck(),
+
+                    // MetaOcclusionCheck's blind spot: the shader HAS occlusion, the
+                    // material throws it away. Sits directly after it because they
+                    // read as one problem and this is the half that is trivially
+                    // fixable.
+                    new Checks.OpaqueAlphaClipCheck(),
                     new Checks.SceneOverridesCheck(),
                     new Checks.OutsideContentFolderCheck(),
+
+                    // Warning, so it sorts after the blocking checks above. It
+                    // catches a PropTemplate/GameArea whose resourceName has
+                    // drifted from its own computed address — most commonly
+                    // because someone hit "Revert All" on a prefab VARIANT,
+                    // which silently repoints that variant's revenue at its
+                    // base prefab's key. Nothing errors; it looks like a tidy-up.
+                    new Checks.ResourceNameAddressCheck(),
                 };
             }
         }

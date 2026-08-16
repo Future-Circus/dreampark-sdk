@@ -752,7 +752,11 @@ namespace DreamPark {
             {
                 contentName = EditorGUILayout.TextField("Name", contentName);
                 EditorGUILayout.LabelField("Description");
-                contentDescription = EditorGUILayout.TextArea(contentDescription, GUILayout.MinHeight(52));
+                contentDescription = EditorGUILayout.TextArea(
+                    contentDescription,
+                    WrappedTextAreaStyle,
+                    GUILayout.MinHeight(52),
+                    GUILayout.ExpandWidth(true));
                 logoTexture = (Texture2D)EditorGUILayout.ObjectField("Logo", logoTexture, typeof(Texture2D), false);
                 if (isLoadingMetadata)
                 {
@@ -853,6 +857,30 @@ namespace DreamPark {
         {
             EditorGUILayout.EndFoldoutHeaderGroup();
             GUILayout.EndVertical();
+        }
+
+        // EditorGUILayout.TextArea() without an explicit style falls back to
+        // EditorStyles.textField, which has wordWrap = false. A non-wrapping
+        // control reports its min layout width as the full pixel width of its
+        // text, so one long description line forces the whole window wider —
+        // and because the window's width feeds back into the layout next
+        // frame, it just keeps growing. Wrapping fixes the root cause: a
+        // wrapping style's min width is a single character, so the control
+        // fills the available width instead of demanding more.
+        private static GUIStyle wrappedTextAreaStyle;
+        private static GUIStyle WrappedTextAreaStyle
+        {
+            get
+            {
+                if (wrappedTextAreaStyle == null)
+                {
+                    wrappedTextAreaStyle = new GUIStyle(EditorStyles.textArea)
+                    {
+                        wordWrap = true
+                    };
+                }
+                return wrappedTextAreaStyle;
+            }
         }
 
         private void DrawLaunchActions(bool sdkOutOfDate)
