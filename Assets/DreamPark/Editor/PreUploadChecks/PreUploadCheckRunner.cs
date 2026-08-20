@@ -36,6 +36,15 @@ namespace DreamPark.PreUploadChecks
                     // read as one problem and this is the half that is trivially
                     // fixable.
                     new Checks.OpaqueAlphaClipCheck(),
+                    // Physics/audio/particle/animation components left on an
+                    // attraction or prop ROOT. The loader never registers a
+                    // template root with the optimizer — it recurses into the
+                    // children so the root's template, GameArea and Build Mode
+                    // handle keep working — so anything sitting there is never
+                    // parked, culled or silenced, in build mode or play mode.
+                    // Invisible in the Editor, which registers nothing with the
+                    // optimizer at all; only wrong on a headset.
+                    new Checks.RootComponentsCheck(),
                     new Checks.SceneOverridesCheck(),
                     new Checks.OutsideContentFolderCheck(),
                     new Checks.NetBudgetInvariantCheck(),

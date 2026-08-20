@@ -2160,6 +2160,11 @@ namespace DreamPark.API
 
             Debug.Log($"[ContentAPI] GetAppContent - contentId: {contentId}, beta: {betaMode}, url: {url}");
             DreamParkAPI.GET(url, AuthAPI.GetAPIKey(), (success, response) => {
+                // 404 is ambiguous (banned / no platform / never existed). Presence
+                // is the only safe gate — never prune on this 404 alone.
+                if (!success && response != null && response.statusCode == 404) {
+                    _ = GhostContentPruner.ConsiderAfterFailedPackAsync(contentId);
+                }
                 callback?.Invoke(success, response);
             });
         }

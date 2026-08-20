@@ -76,7 +76,7 @@ namespace DreamPark.ConvertReady
     }
 
     /// <summary>
-    /// Mirrors DreamPark.EditorTools.PrefabScaler.Axis so this file does not
+    /// Mirrors PrefabScaler.Axis so this file does not
     /// have to reference the editor-tools assembly to declare a plan. The
     /// executor maps it across at the call site.
     /// </summary>
