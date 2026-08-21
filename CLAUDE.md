@@ -135,6 +135,15 @@ Mismatch symptom: `[NetRegistry] Event for UNREGISTERED NetId` on the receiver; 
 - Messages sent before the link comes up are **queued** (64 deep, 5 s TTL, drained inside the budget) rather than dropped, so a join handshake survives the second or two discovery takes. That fixes delivery, not timing: if your handshake opens a listen window at `start()`, use `dp.on_connected(fn)` — one-shot, fires immediately if already connected — or the window closes against an empty roster.
 - `onnet` receives the FULL wire JSON `{"type":"...","payload":{"netId":N,...}}` — use the global `json_parse(payload)` and read `t.payload.<field>`.
 - The relay never echoes your own message back: apply changes locally when sending (optimistic apply).
+
+**Coordinates are park-local, never world.** Each headset has its own XR origin. Parks and attractions are QR-anchored in an arbitrary park-local space that *does* agree across devices. `dp.head().position`, `self.transform.position`, and `Camera.main` are **world**. If you put those numbers on the wire, two players will see an aligned park and offset people — the arena was synced, the poses were not.
+
+- After `onready()`, `LevelAnchor` parents the Player to **itself** (`localPosition` zero). The shared frame is `ParkAnchor` (park document), then `PortalAnchor` (QR), then `LevelAnchor`. `dp.park()` walks to that. Do not use `player.parent` — that is the LevelAnchor, and two levels disagree.
+- Send: `dp.head_park()` (pos, fwd) or `dp.to_park(worldPos)` / `dp.to_park_dir(worldFwd)`. Receive: parent the remote visual to `dp.park()` and set `localPosition`, or `dp.from_park(localPos)` back to this headset's world.
+- Same rule for hands, projectiles, AI proxies, markers. Hits that are victim-authoritative on a local body can stay local; anything *drawn* on another headset must be park-local.
+- Do this in `onready()`, never `awake()` — the rig is not parented yet in `awake()`.
+- Full write-up: `MULTIPLAYER.md` §2 "Coordinates are park-local".
+
 - One owner per networked visual property: never mix a MaterialPropertyBlock writer (e.g. TestNetObject) and a `renderer.material` writer (Lua) on the same object — the MPB silently masks material changes.
 
 **Debugging**: tick `Verbose Net Logs` on DreamBoxClient (or set `NetLog.Verbose = true`) → per-beacon discovery, `RECV` previews, relay fan-out, NetId registrations. Always-on warnings and their meanings: `UNREGISTERED NetId` = id mismatch between builds; `NO subscribers` = receiving script missing on that client's object; `Ignoring peer beacon` = channel/park/protocol-version filter (reason included). Healthy session signature: one side `→ Hosting`, other `→ ClientPeer`, host shows `Peer connected … (2/16)` — a host stuck at 1/16 is broadcasting to nobody.
@@ -191,7 +200,11 @@ a gap in Core, not a skill issue.
 ```lua
 dp.is_player(other)          -- is this collider the player? (rig-aware)
 dp.player()                  -- the player rig GameObject, or nil
-dp.head()                    -- the head/camera Transform, or nil
+dp.head()                    -- the head/camera Transform, or nil (WORLD)
+dp.park()                    -- ParkAnchor (then PortalAnchor / LevelAnchor), or nil
+dp.to_park(pos) / dp.from_park(pos)   -- world <-> park-local
+dp.to_park_dir(dir) / dp.from_park_dir(dir)  -- facing only (normalized)
+dp.head_park()               -- pos, fwd in park-local, or nil
 dp.scope(go)                 -- that object's script scope (any of its scripts)
 dp.attraction(self.gameObject)       -- the containing attraction's ScriptScope
 dp.attraction_root(self.gameObject)  -- its root GameObject

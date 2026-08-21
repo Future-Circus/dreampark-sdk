@@ -88,6 +88,135 @@ namespace DreamPark
             return cam != null ? cam.transform : null;
         }
 
+
+        // ── dp.park() / dp.to_park() / dp.from_park() / dp.head_park() ─
+        //
+        // REPLACES: InverseTransformPoint against a hand-walked Player.parent
+        // in every networked script. Each headset has its own XR origin;
+        // parks are QR-anchored in a shared park-local space. dp.head() and
+        // transform.position are WORLD. Streaming those numbers is the
+        // "room lines up, the other player is two metres off" bug.
+        //
+        // Runtime tree (types live in dreampark-core, not this assembly):
+        //   ParkAnchor          <- park-document origin (shared across portals)
+        //     PortalAnchor      <- QR frame
+        //       SubLevelRoot    <- identity
+        //         LevelAnchor   <- LevelAnchor.LoadLevel parents Player here
+        //           Player
+        //
+        // Player.parent is the LevelAnchor, NOT the park. Two headsets that
+        // claimed different levels (or portals) disagree in LevelAnchor space.
+        // Walk by type NAME so the SDK does not take a compile dep on core.
+        // Prefer ParkAnchor, then PortalAnchor, then LevelAnchor, then parent.
+        // Nil in Editor Play with no anchors — to_park / from_park are identity.
+        // Do not call from awake(): the rig is not parented yet.
+        static Transform PlayerRoot(GameObject go)
+        {
+            if (go == null) return null;
+            var t = go.transform;
+            var cursor = t;
+            for (int hops = 0; hops < 8 && cursor != null; hops++)
+            {
+                if (cursor.name == "Player") return cursor;
+                cursor = cursor.parent;
+            }
+            return t;
+        }
+
+        static bool HasTypeNamed(Transform t, string typeName)
+        {
+            if (t == null) return false;
+            var comps = t.GetComponents<Component>();
+            for (int i = 0; i < comps.Length; i++)
+            {
+                if (comps[i] != null && comps[i].GetType().Name == typeName)
+                    return true;
+            }
+            return false;
+        }
+
+        static Transform ParkFrame(Transform start)
+        {
+            if (start == null) return null;
+            Transform park = null, portal = null, level = null;
+            var t = start;
+            for (int hops = 0; hops < 16 && t != null; hops++)
+            {
+                if (park == null && HasTypeNamed(t, "ParkAnchor")) park = t;
+                if (portal == null && HasTypeNamed(t, "PortalAnchor")) portal = t;
+                if (level == null && HasTypeNamed(t, "LevelAnchor")) level = t;
+                t = t.parent;
+            }
+            if (park != null) return park;
+            if (portal != null) return portal;
+            if (level != null) return level;
+            return start.parent;
+        }
+
+        public static Transform Park()
+        {
+            var frame = ParkFrame(PlayerRoot(Player()));
+            if (frame != null) return frame;
+            if (PlayerRig.instances == null) return null;
+            foreach (var kv in PlayerRig.instances)
+            {
+                if (kv.Value == null) continue;
+                frame = ParkFrame(PlayerRoot(kv.Value.gameObject));
+                if (frame != null) return frame;
+            }
+            return null;
+        }
+
+        public static Vector3 ToPark(Vector3 world)
+        {
+            var park = Park();
+            return park != null ? park.InverseTransformPoint(world) : world;
+        }
+
+        public static Vector3 FromPark(Vector3 local)
+        {
+            var park = Park();
+            return park != null ? park.TransformPoint(local) : local;
+        }
+
+        public static Vector3 ToParkDir(Vector3 worldDir)
+        {
+            var park = Park();
+            if (park == null) return worldDir;
+            var d = park.InverseTransformDirection(worldDir);
+            return d.sqrMagnitude > 0.0001f ? d.normalized : d;
+        }
+
+        public static Vector3 FromParkDir(Vector3 localDir)
+        {
+            var park = Park();
+            if (park == null) return localDir;
+            var d = park.TransformDirection(localDir);
+            return d.sqrMagnitude > 0.0001f ? d.normalized : d;
+        }
+
+        // Park-local head pose as primitives (no custom type, no codegen).
+        // Lua wrapper returns position, forward. Nil if the head is not up.
+        public static LuaTable HeadPark()
+        {
+            var head = Head();
+            if (head == null) return null;
+            var env = LuaBehaviour.GetLuaEnv();
+            if (env == null) return null;
+            var t = env.NewTable();
+            var pos = ToPark(head.position);
+            var fwd = ToParkDir(head.forward);
+            // Primitives only — Vector3 on LuaTable.Set is not a pattern
+            // this file uses (see Relay/Session). Lua builds the Vector3s.
+            t.Set("x", pos.x);
+            t.Set("y", pos.y);
+            t.Set("z", pos.z);
+            t.Set("fx", fwd.x);
+            t.Set("fy", fwd.y);
+            t.Set("fz", fwd.z);
+            return t;
+        }
+
         // ── dp.attraction(gameObject) ────────────────────────────────
         //
         // REPLACES, in shipped content:
@@ -368,6 +497,12 @@ namespace DreamPark
                 env.Global.Set("dp_is_player_go",     new Func<GameObject, bool>(IsPlayerObject));
                 env.Global.Set("dp_player",           new Func<GameObject>(Player));
                 env.Global.Set("dp_head",             new Func<Transform>(Head));
+                env.Global.Set("dp_park",             new Func<Transform>(Park));
+                env.Global.Set("dp_to_park",          new Func<Vector3, Vector3>(ToPark));
+                env.Global.Set("dp_from_park",        new Func<Vector3, Vector3>(FromPark));
+                env.Global.Set("dp_to_park_dir",      new Func<Vector3, Vector3>(ToParkDir));
+                env.Global.Set("dp_from_park_dir",    new Func<Vector3, Vector3>(FromParkDir));
+                env.Global.Set("dp_head_park",        new Func<LuaTable>(HeadPark));
                 env.Global.Set("dp_scope",            new Func<GameObject, LuaTable>(Scope));
                 env.Global.Set("dp_attraction_scope", new Func<GameObject, LuaTable>(AttractionScope));
                 env.Global.Set("dp_attraction_root",  new Func<GameObject, GameObject>(AttractionRoot));
@@ -394,6 +529,23 @@ dp.is_player   = function(x)  if x == nil then return false end
                               return ok2 and r2 or false end
 dp.player      = function()   return dp_player() end
 dp.head        = function()   return dp_head() end
+
+-- Park-local space. Each headset has its own XR origin; the park is the
+-- shared frame. dp.head() / transform.position are WORLD. Use these on
+-- the wire. Identity (world) when there is no park parent (Editor Play).
+-- after onready(), not awake() — the rig is not parented yet in awake().
+dp.park        = function()   return dp_park() end
+dp.to_park     = function(p)  if p == nil then return nil end return dp_to_park(p) end
+dp.from_park   = function(p)  if p == nil then return nil end return dp_from_park(p) end
+dp.to_park_dir = function(d)  if d == nil then return nil end return dp_to_park_dir(d) end
+dp.from_park_dir = function(d) if d == nil then return nil end return dp_from_park_dir(d) end
+-- returns position, forward (Vector3, park-local), or nil
+dp.head_park   = function()
+    local t = dp_head_park()
+    if t == nil then return nil end
+    local V = CS.UnityEngine.Vector3
+    return V(t.x, t.y, t.z), V(t.fx, t.fy, t.fz)
+end
 dp.scope       = function(go) return dp_scope(go) end
 dp.attraction  = function(go) return dp_attraction_scope(go) end
 dp.attraction_root = function(go) return dp_attraction_root(go) end

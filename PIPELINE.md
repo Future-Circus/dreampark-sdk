@@ -26,7 +26,7 @@ Anything more elaborate must be expressed by combining these three.
 4. Categorize each prop by `PropCategory`: `Generic`, `Coin`, `Block`, `Hazard`, `Decoration`, or `Custom`.
 5. Sketch every **interaction** and force it into one of the three sanctioned patterns: space trigger, broad collision, or item-based. If you cannot, redesign — do not invent a fourth.
 6. List **state variables** (score, lives, timer, current wave). Decide which live as a global `LuaBehaviour` on the `Player.prefab` vs. local on individual props.
-7. Identify **multiplayer surface**: which props need `NetId` (synchronized state) and which are local-only.
+7. Identify **multiplayer surface**: which props need `NetId` (synchronized state) and which are local-only. Stream peer poses in **park-local**, never world (`dp.head().position` is world — see `MULTIPLAYER.md` §2).
 8. Pick **art direction**: stylized PBR vs. unlit cartoon vs. mixed. Default URP setup with `Assets/DreamPark/Materials/Occlusion.mat` provides the passthrough-cutout floor — your assets must read against real-world lighting.
 9. Draft a **scene-flow diagram**: starting attraction, transitions between attractions, end state.
 10. Write a **risk list**: anything that needs prototyping before content production (novel collision shape, IK character, custom shader).
