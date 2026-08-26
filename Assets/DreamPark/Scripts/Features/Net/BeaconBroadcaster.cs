@@ -51,7 +51,8 @@ namespace DreamPark
             AdvertisedHost = NetPlatform.GetLocalIPv4();
             if (string.IsNullOrEmpty(AdvertisedHost))
             {
-                Debug.LogWarning("[Beacon] No LAN IPv4 found — cannot advertise (Wi-Fi down or AP-isolated?).");
+                Debug.LogWarning("[Beacon] No LAN IPv4 found — cannot advertise (Wi-Fi down or AP-isolated?). " +
+                                 $"Interfaces seen: {NetPlatform.DescribeCandidates()}");
                 return false;
             }
 
@@ -70,7 +71,13 @@ namespace DreamPark
             _nextIpRefreshTime = Time.unscaledTime + IpRefreshSeconds;
             IsRunning = true;
 
-            Debug.Log($"[Beacon] Advertising {AdvertisedHost}:{_port} as peer host {_hostId}.");
+            // Every joining peer is told to connect to exactly this address, so
+            // print the runners-up too. An advertised IP on the wrong interface
+            // is invisible from the host's own side — it can always reach itself
+            // — and costs an afternoon of packet capture from the other side.
+            // One line at host time turns that into a glance.
+            Debug.Log($"[Beacon] Advertising {AdvertisedHost}:{_port} as peer host {_hostId}. " +
+                      $"Candidates: {NetPlatform.DescribeCandidates()}");
             return true;
         }
 
@@ -88,7 +95,14 @@ namespace DreamPark
             {
                 _nextIpRefreshTime = now + IpRefreshSeconds;
                 var ip = NetPlatform.GetLocalIPv4();
-                if (!string.IsNullOrEmpty(ip)) AdvertisedHost = ip;
+                if (!string.IsNullOrEmpty(ip) && ip != AdvertisedHost)
+                {
+                    // Clients already connected keep their socket; only joiners
+                    // read the beacon. Say it out loud either way — an address
+                    // that changes under a live session is worth knowing about.
+                    Debug.Log($"[Beacon] Advertised address changed {AdvertisedHost} → {ip}.");
+                    AdvertisedHost = ip;
+                }
             }
 
             Seq++;
