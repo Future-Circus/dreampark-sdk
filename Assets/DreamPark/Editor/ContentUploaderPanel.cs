@@ -773,8 +773,7 @@ namespace DreamPark {
 
             if (BeginSectionBox(ref foldContentOverview, SectionContentOverviewPrefKey, "Content Overview", "d_SceneViewFx"))
             {
-                DrawBundlingStrategySection();
-                GUILayout.Space(6);
+                DrawLegacyBundlingNotice();
                 DrawContentPreviewSection();
                 EndSectionBox();
             }
@@ -2762,9 +2761,9 @@ namespace DreamPark {
                 return false;
             }
 
-            // Gate at the entry point so a stale popup (e.g. user toggled
-            // Smart off in the main panel while the popup was open) can't
-            // sneak through with a strategy-incompatible mode. Failed-Only
+            // Gate at the entry point so a stale popup (e.g. someone took the
+            // Troubleshooting Legacy escape hatch while the popup was open)
+            // can't sneak through with a strategy-incompatible mode. Failed-Only
             // overrides the mode entirely, so the Smart-requirement check
             // doesn't apply to it.
             if (!failedOnly
@@ -2773,8 +2772,9 @@ namespace DreamPark {
             {
                 EditorUtility.DisplayDialog(
                     "Upload mode requires Smart bundling",
-                    $"{UploadModePrefs.ShortLabel(mode)} requires the Smart bundling strategy. " +
-                    "Switch to Smart in the Bundling section before trying this mode, or pick " +
+                    $"{UploadModePrefs.ShortLabel(mode)} requires the Smart bundling strategy, " +
+                    "and this machine is on deprecated Legacy bundling. Turn Legacy off via " +
+                    "DreamPark \u25b8 Troubleshooting \u25b8 Use Legacy Bundling (deprecated), or pick " +
                     "Upload All / Upload Patch.",
                     "OK");
                 return false;
@@ -3320,46 +3320,27 @@ namespace DreamPark {
         }
 
         // ── Bundling strategy ────────────────────────────────────────────
-        // Lets the user pick how assets are partitioned into bundles. The
-        // toggle is persisted in EditorPrefs (see BundlingStrategyPrefs);
-        // ContentProcessor reads the current value when it (re)organizes
-        // addressable groups.
-        private void DrawBundlingStrategySection()
+        // There is no picker here any more. Smart (dependency-aware) bundling
+        // is the default and the only strategy the shipping path expects; see
+        // BundlingStrategy.cs for why Legacy is deprecated and how the
+        // one-time migration moves existing machines across.
+        //
+        // All that survives is a notice for the rare machine still on Legacy
+        // — someone who took the Troubleshooting escape hatch, or whose
+        // migration hasn't run yet. Without it, Legacy is invisible from the
+        // panel while quietly forcing every upload to ship everything, which
+        // is exactly the confusion this change exists to end.
+        private void DrawLegacyBundlingNotice()
         {
-            EditorGUILayout.LabelField("Bundling", EditorStyles.boldLabel);
+            if (BundlingStrategyPrefs.Current != BundlingStrategy.Legacy) return;
 
-            var current = BundlingStrategyPrefs.Current;
-            var values = (BundlingStrategy[])System.Enum.GetValues(typeof(BundlingStrategy));
-            var labels = values.Select(v => BundlingStrategyPrefs.Label(v)).ToArray();
-            int currentIdx = System.Array.IndexOf(values, current);
-            if (currentIdx < 0) currentIdx = 0;
-
-            int newIdx = EditorGUILayout.Popup("Strategy", currentIdx, labels);
-            if (newIdx != currentIdx)
-            {
-                var picked = values[newIdx];
-                if (picked == BundlingStrategy.Smart)
-                {
-                    bool ok = EditorUtility.DisplayDialog(
-                        "Switch to Smart bundling?",
-                        "Smart (dependency-aware) bundling re-partitions addressable groups so " +
-                        "that single-asset edits invalidate single bundles instead of folder-" +
-                        "level bundles. The first build after switching will look like a full " +
-                        "re-upload because every asset moves to a new group.\n\n" +
-                        "This feature is experimental. You can switch back to Legacy at any time.",
-                        "Switch to Smart", "Cancel");
-                    if (!ok) return;
-                }
-                BundlingStrategyPrefs.Current = picked;
-                Debug.Log($"[ContentUploader] Bundling strategy → {picked}");
-            }
-
-            if (current == BundlingStrategy.Smart)
-            {
-                EditorGUILayout.HelpBox(
-                    "Smart bundling is experimental. Verify the next upload behaves correctly before relying on it.",
-                    MessageType.Info);
-            }
+            EditorGUILayout.HelpBox(
+                "Legacy bundling is active (deprecated). Every upload from this machine is a full " +
+                "re-upload — the Upload Scope picker won't appear, and Patch / Code-only uploads are " +
+                "unavailable. Turn it off via DreamPark \u25b8 Troubleshooting \u25b8 Use Legacy " +
+                "Bundling (deprecated).",
+                MessageType.Warning);
+            GUILayout.Space(6);
         }
 
         // Re-walks ServerData/ for the currently-enabled platforms and rebuilds
