@@ -83,6 +83,43 @@ These names are the canonical constants (`MaterialConverter/MaterialPlan.cs:182-
 - Related gotcha that bites shader work: never mix a `MaterialPropertyBlock` writer and a `renderer.material` writer on the same object (see Multiplayer) — the MPB silently masks material changes.
 
 
+## Particle effects — always Unity's built-in ParticleSystem
+**Every particle effect ships as a Unity `ParticleSystem` component.** Not VFX Graph, not
+a marketplace particle framework, not a custom mesh/shader/animated-quad trick, not
+runtime-spawned billboard pooling of your own. If the effect is particles, it is a
+`ParticleSystem` under the attraction prefab, authored in the prefab, enabled, with its
+material on `DreamPark/Particles` (see Materials & Shaders).
+
+This is a correctness requirement, not a taste call — three SDK systems are built on the
+component and only on the component:
+
+- **The Lua surface.** `UnityEngine.ParticleSystem` and `ParticleSystemRenderer` have AOT
+  XLua wrappers in `Gen/`; `UnityEngine.VFX.VisualEffect` does not. A VFX Graph driven
+  from Lua works in the Editor (Mono reflects) and dies on device (IL2CPP cannot), and no
+  content re-upload fixes it — it needs an app rebuild and a store release. See The Lua
+  surface gate.
+- **Occlusion.** `DreamPark/Particles` carries the Meta environment-depth integration. A
+  VFX Graph output or a custom particle shader draws on top of the guest's hands,
+  furniture and walls, and looks perfect everywhere except a headset in passthrough.
+- **OptimizedAF.** `LevelObjectManager` disables and re-plays distant particle systems by
+  walking `GetComponentsInChildren<ParticleSystem>(true)` and restoring per-system play
+  state. Anything that isn't a `ParticleSystem` is invisible to that budget and runs at
+  full cost across the whole park. Mark systems that must always run with
+  `OptimizedAFIgnore`.
+
+Practical notes:
+
+- Nested systems are fine and are handled individually — the manager keeps one settings
+  entry per system in a flat array.
+- Drive them from Lua with the ordinary component API (`sparkle:Play()`,
+  `:Stop(false, ParticleSystemStopBehavior.StopEmittingAndClear)`), injected via
+  `LuaBehaviour` — don't reimplement emission in Lua update loops.
+- Author the system in the prefab rather than spawning it in `start()` (see the
+  authored-state rule) — a one-shot burst can still start stopped and be played from code.
+- Imported particle packs: run `DreamPark → Optimization → Material Optimizer...` first.
+  Expect `ParticleSystemRenderer` Custom Vertex Streams to be reset — that's the fix, not
+  a regression.
+
 ## The attraction prefab IS the attraction (authored-state rule)
 
 **Every environmental prop, character and interactable that belongs to an attraction
@@ -145,6 +182,7 @@ Rules & gotchas:
 - Modify Assets/DreamPark/ files without syncing back to dreampark-core.
 - Use keyboard controls or virtual cameras as an interaction pattern. This is VR — hands and physical presence are the input.
 - **Author gameplay with EasyEvent components. EasyEvent is DEPRECATED** — see below. All code functionality goes in Lua via `LuaBehaviour`, with no exceptions worth taking.
+- Build a particle effect with anything other than a Unity `ParticleSystem` component — no VFX Graph, no marketplace particle frameworks, no hand-rolled billboard systems (see Particle effects).
 - Ship a material on any shader other than the three DreamPark shaders, unless that shader integrates Meta occlusion itself (see Materials & Shaders).
 - Ship a material set to Surface Type = Opaque with Alpha Clipping off, or "fix" a material by turning Alpha Clipping off to get soft edges — switch to Transparent instead (see Materials & Shaders).
 - Upload with an empty Name/Description, or with unresolved pre-upload findings (see Shipping).
@@ -206,7 +244,7 @@ below. Both are further down this file.
 2. On first editor open, the setup popup renames YOUR_GAME_HERE to the game name (e.g., CoinCollector). (There is no new-park.sh — the popup is the rename mechanism.)
 3. Creator adds game content, Lua scripts, and prefabs to Assets/Content/{GameName}/.
 4. All gameplay logic is Lua via LuaBehaviour. Not "Lua-first" — Lua. C# in `Assets/Content/` should be interop shims and nothing else, and EasyEvent components are deprecated (see above).
-5. Built Addressable prefabs are deployed to DreamPark servers via DreamPark → Content Uploader: fill the panel's **Name** and **Description** fields (the launch window shows them read-only, and an empty Name blocks the upload), clear the pre-upload checks (see Shipping below), hit **Compile & Upload**, then **Start · All** in the launch window. One attraction at a time or a whole park's worth; each upload publishes the attractions catalog automatically and is immediately playable in the iOS app with Experimental Mode on. Uploads are full re-uploads unless the experimental Smart bundling strategy is on, which is what unlocks the Patch and Code-only modes.
+5. Built Addressable prefabs are deployed to DreamPark servers via DreamPark → Content Uploader: fill the panel's **Name** and **Description** fields (the launch window shows them read-only, and an empty Name blocks the upload), clear the pre-upload checks (see Shipping below), hit **Compile & Upload**, then **Start · All** in the launch window. One attraction at a time or a whole park's worth; each upload publishes the attractions catalog automatically and is immediately playable in the iOS app with Experimental Mode on. The launch window's **Upload Scope** picker selects All / Patch / Code-only; the first release for a content ID is locked to All, and Patch is the default choice after that. Smart (dependency-aware) bundling is the default strategy as of Aug 2026 and is what makes the partial modes work — Legacy is deprecated, hidden behind `DreamPark → Troubleshooting → Use Legacy Bundling`, and forces a full re-upload when active.
 6. Sign-in (`DreamPark → Sign In`) is passwordless as of July 2026 — email + 6-digit OTP, and `/auth/otp/verify` get-or-creates the account, so there is no separate sign-up path and no password to reset.
 
 ## Shipping: the Content Uploader (`DreamPark → Content Uploader`)
@@ -263,6 +301,15 @@ Mismatch symptom: `[NetRegistry] Event for UNREGISTERED NetId` on the receiver; 
 - Messages sent before the link comes up are **queued** (64 deep, 5 s TTL, drained inside the budget) rather than dropped, so a join handshake survives the second or two discovery takes. That fixes delivery, not timing: if your handshake opens a listen window at `start()`, use `dp.on_connected(fn)` — one-shot, fires immediately if already connected — or the window closes against an empty roster.
 - `onnet` receives the FULL wire JSON `{"type":"...","payload":{"netId":N,...}}` — use the global `json_parse(payload)` and read `t.payload.<field>`.
 - The relay never echoes your own message back: apply changes locally when sending (optimistic apply).
+
+**Coordinates are park-local, never world.** Each headset has its own XR origin. Parks and attractions are QR-anchored in an arbitrary park-local space that *does* agree across devices. `dp.head().position`, `self.transform.position`, and `Camera.main` are **world**. If you put those numbers on the wire, two players will see an aligned park and offset people — the arena was synced, the poses were not.
+
+- After `onready()`, the player rig is parented to the park (`LevelAnchor` sets `player.parent` = park, `localPosition` zero). That parent is the space you send in.
+- Send: `park.InverseTransformPoint(worldPos)` and `park.InverseTransformDirection(worldFwd)` (normalize). Receive: parent the remote visual to the park and set `localPosition` / `localRotation`, or `park.TransformPoint` back to this headset's world.
+- Same rule for hands, projectiles, AI proxies, markers. Hits that are victim-authoritative on a local body can stay local; anything *drawn* on another headset must be park-local.
+- Do this in `onready()`, never `awake()` — the rig is not parented yet in `awake()`.
+- Full write-up: `MULTIPLAYER.md` §2 "Coordinates are park-local".
+
 - One owner per networked visual property: never mix a MaterialPropertyBlock writer (e.g. TestNetObject) and a `renderer.material` writer (Lua) on the same object — the MPB silently masks material changes.
 
 **Debugging**: tick `Verbose Net Logs` on DreamBoxClient (or set `NetLog.Verbose = true`) → per-beacon discovery, `RECV` previews, relay fan-out, NetId registrations. Always-on warnings and their meanings: `UNREGISTERED NetId` = id mismatch between builds; `NO subscribers` = receiving script missing on that client's object; `Ignoring peer beacon` = channel/park/protocol-version filter (reason included). Healthy session signature: one side `→ Hosting`, other `→ ClientPeer`, host shows `Peer connected … (2/16)` — a host stuck at 1/16 is broadcasting to nobody.
