@@ -99,7 +99,32 @@ public class LevelTemplateEditor : Editor {
         [ShowIf("_isCustom")] public Vector2 customSize = new Vector2(10f, 10f);
         public Vector2 defaultAnchorPosition;
         public bool generateFloor = true;
+        [Tooltip("LEGACY. The rig's DepthMaskCeiling plane replaces per-attraction ceilings, " +
+                 "and DepthMaskCeiling.AllowTemplateCeilings gates this whatever it is set to.")]
         public bool generateCeiling = true;
+
+        /// <summary>
+        /// Extra metres of depth-mask ceiling on every side, beyond the attraction's own
+        /// footprint. The mask only helps where it covers, and authored content routinely
+        /// leans, swings or spills past the footprint it was sized against, so the ceiling
+        /// is deliberately larger than the attraction.
+        ///
+        /// A CONSTANT RATHER THAN A SERIALIZED FIELD, and that is the whole point. The path
+        /// it feeds is gated off by DepthMaskCeiling.AllowTemplateCeilings, so no author can
+        /// reach this number — but a public field is still written into every attraction
+        /// prefab the moment ContentProcessor re-saves one, which re-bundles the entire
+        /// catalog to carry a value nothing reads. Tune here if the legacy path is revived.
+        /// </summary>
+        private const float CeilingPadding = 3f;
+
+        /// <summary>
+        /// Height of the depth-mask ceiling above the attraction origin. LOWER IS STRONGER:
+        /// it lowers the distance at which real geometry stops occluding. Content height is
+        /// irrelevant — the mask edits the real-world depth map, not the content.
+        /// A constant for the same reason as CeilingPadding above.
+        /// </summary>
+        private const float CeilingHeight = 2.4f;
+
         [HideInInspector] public GameObject runtimePlane;
         [HideInInspector] public GameObject runtimeCeiling;
         [SerializeField, HideInInspector]
@@ -128,7 +153,9 @@ public class LevelTemplateEditor : Editor {
         void Start()
         {
             if (generateFloor) GenerateFloorWithHoles();
-            if (generateCeiling) GenerateDepthCeiling();
+            // The unified overhead plane on the rig replaces this. Off unless the legacy
+            // master switch is deliberately flipped — see DepthMaskCeiling.
+            if (generateCeiling && DepthMaskCeiling.AllowTemplateCeilings) GenerateDepthCeiling();
             SetFloorVisibilityForMode(isBuildMode);
             NotifyLevelTemplateChanged();
         }
@@ -145,53 +172,41 @@ public class LevelTemplateEditor : Editor {
             NotifyLevelTemplateChanged();
         } 
 
+        /// <summary>
+        /// Rebuild the attraction's depth-mask ceiling. Public so a tool or a script that
+        /// resizes or re-fills an attraction at runtime can re-fit the mask to it.
+        /// </summary>
+        public void RegenerateCeiling() {
+            if (generateCeiling && DepthMaskCeiling.AllowTemplateCeilings) GenerateDepthCeiling();
+        }
+
+        /// <summary>
+        /// The horizontal quad handed to Meta's environment-depth mask, which switches
+        /// OFF depth occlusion over the attraction so its content is not eaten by the
+        /// depth of the real room behind it. See DepthCeiling for what the object is.
+        ///
+        /// Sized to the attraction footprint PLUS CeilingPadding on every side, because
+        /// the mask only does anything where it actually covers and authored content
+        /// routinely leans or spills past the footprint it was sized against.
+        ///
+        /// LEGACY PATH. The single head-anchored plane on the rig replaces this; see
+        /// DepthMaskCeiling for why a patchwork of small ceilings is the wrong shape for
+        /// the flicker this trick exists to kill. Runs only when that plane is absent.
+        /// </summary>
         private void GenerateDepthCeiling() {
+            // Feeds a runtime manager, and Destroy() is illegal in edit mode — the public
+            // RegenerateCeiling entry point makes that reachable from tooling.
+            if (!Application.isPlaying) return;
+
             if (runtimeCeiling != null) Destroy(runtimeCeiling);
+            runtimeCeiling = null;
 
             Vector2 dims = _isCustom ? GameLevelDimensions.GetDimensionsInMeters(new Vector2(customSize.x, customSize.y)) : GameLevelDimensions.GetDimensionsInMeters(size);
-            float width = dims.x;
-            float height = dims.y;
+            float pad = Mathf.Max(0f, CeilingPadding);
+            float width = dims.x + pad * 2f;
+            float height = dims.y + pad * 2f;
 
-            runtimeCeiling = new GameObject("LevelCeiling");
-            runtimeCeiling.transform.localPosition = new Vector3(0, 2.4f, 0);
-            runtimeCeiling.layer = LayerMask.NameToLayer("Triggers");
-            runtimeCeiling.transform.SetParent(transform, false);
-            runtimeCeiling.AddComponent<OptimizedAFIgnore>();
-
-            MeshFilter mf = runtimeCeiling.AddComponent<MeshFilter>();
-            runtimeCeiling.AddComponent<MeshRenderer>().enabled = false;
-
-            Mesh mesh = new Mesh();
-
-            Vector3[] vertices = new Vector3[4] {
-                new Vector3(-width/2f, 0, -height/2f),
-                new Vector3(-width/2f, 0,  height/2f),
-                new Vector3( width/2f, 0,  height/2f),
-                new Vector3( width/2f, 0, -height/2f)
-            };
-
-            // Flip normals by reversing the winding order
-            int[] triangles = new int[6] {
-                0, 2, 1,
-                0, 3, 2
-            };
-
-            Vector2[] uv = new Vector2[4] {
-                new Vector2(0,0),
-                new Vector2(0,1),
-                new Vector2(1,1),
-                new Vector2(1,0)
-            };
-
-            mesh.vertices = vertices;
-            mesh.triangles = triangles;
-            mesh.uv = uv;
-            mesh.RecalculateNormals();
-
-            mf.sharedMesh = mesh;
-            var depthMask = runtimeCeiling.AddComponent<DepthMask>();
-            depthMask.myMeshFilters.Add(mf);
-            depthMask._someOffsetFloatValue = 0.6f;
+            runtimeCeiling = DepthCeiling.Create(transform, "LevelCeiling", width, height, new Vector3(0f, CeilingHeight, 0f));
         }
 
         /// <summary>
