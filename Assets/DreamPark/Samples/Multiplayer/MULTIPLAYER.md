@@ -38,6 +38,47 @@ Most of this document is about that choice.
 | 3 | **60 messages / peer / second, then silent drops** — enforced by `PeerRelayServer`; the DreamBox kiosk does not rate limit at all | `PeerRelayServer.MaxMessagesPerPeerPerSecond`; `Tools/DreamBoxServer/` | Budget across the *whole headset*, not per script, and always against `dp.relay().budget` (the floor) — never `cap`, which changes with whoever is hosting. |
 | 4 | **ReliableOrdered only, one channel** | `DreamBoxClient.Send` | A lost packet head-of-line blocks everything behind it. Prefer absolute values over deltas. |
 | 5 | **Numbers arrive as float32** | `LuaBehaviour.JsonObjectToLuaTable` uses `JSONObject.floatValue` | Integers are exact only below 2²⁴ (16,777,216). Identity belongs in a string. |
+| 6 | **Unity world space is per headset** — `PortalAnchor` syncs the park to the QR code and leaves each headset's world origin wherever it booted | `PortalAnchor.SyncLegacyWorld`, `ParkRoot.cs` | Never put a world-space position on the wire. You mostly can't get this wrong any more — see below. |
+
+### What the SDK now does so you don't have to
+
+Three things used to make up most of every multiplayer game's netcode, and
+all three are SDK-side now:
+
+**Player presence — `dp.peers()`.** Every headset already streams its head
+and both hands: park-local, dead-banded, rate-limited, smoothed on arrival.
+No game sends player positions, ever. Every remote player also gets a
+floating **name tag** by default (their profile name, or a stable
+`Guest XXXX` — `RemoteNameTag.cs`), so a park full of single-player games
+already feels inhabited; `p.name` is the same string in Lua.
+
+```lua
+for _, p in ipairs(dp.peers()) do
+    -- p.head / p.left / p.right / p.hand are Transforms in THIS
+    -- headset's world; p.state is whatever they dp.set_state()d.
+    look_at(p.head.position)
+end
+```
+
+`dp.me()` is your stable id, `dp.peer(id)` one player,
+`dp.set_state{ team = 'red', tint = my_color }` broadcasts a small state
+bag (resent to late joiners), `dp.on_peer_join / dp.on_peer_leave` are the
+edges. Presence costs the game's budget nothing — it is the SDK's spend.
+
+**The remote body — `RemoteRig`.** Put a child named `RemoteRig` in your
+`Player.prefab`; whatever is inside it is what other players see of you.
+Children named `Head`, `LeftHand`, `RightHand`, `Hand` (= active hand)
+follow that player's tracked body automatically. Lua scripts inside it run
+only on the clones other headsets build, with `peer_id` injected — feed it
+to `dp.peer(peer_id)` and tint/animate from their state. No components, no
+roles, no ownership anywhere. LaserTag's marker + blaster are exactly this.
+
+**The typed wire — `net_send(kind, table)` / `onmessage(kind, payload)`.**
+Send a Lua table instead of a JSON string: every `Vector3` goes out as a
+park-local point (`dp.dir(v)` for directions, `Quaternion`, `Transform`
+poses and `Color` too) and arrives as Unity values in the receiver's
+world. `A_MP_LaserSpawn` fires this way. Strings still work everywhere —
+every old script keeps running.
 
 ---
 
@@ -527,6 +568,8 @@ gameplay hitch.
 - [ ] Props have no NetId; they call the manager through a Script Injection
 - [ ] Every message identifies its sender (`u`)
 - [ ] Non-idempotent effects carry `(uid, seq)` and are deduped
+- [ ] Player positions come from `dp.peers()` — the game never streams them
+- [ ] The remote body lives in `Player.prefab/RemoteRig`, not in spawn code
 - [ ] State is absolute, and merges with `max()` or last-writer-per-cell
 - [ ] Continuous streams are rate-limited, dead-banded, quantized, coalesced
 - [ ] Everything draws from one send budget under 60/s
@@ -544,7 +587,7 @@ gameplay hitch.
 |---|---|
 | The reusable primitives | `Scripts/mp_kit.lua.txt` |
 | Concurrent scoring | `Scripts/mp_buttonmash.lua.txt` |
-| Cheap pose streaming | `Scripts/mp_tracker.lua.txt` |
+| Player presence, read not sent | `Scripts/mp_tracker.lua.txt` |
 | A shared timeline | `Scripts/mp_clock.lua.txt` |
 | Effects | `Scripts/mp_particles.lua.txt` |
 | Spawns + lag compensation | `Scripts/mp_laser.lua.txt` |

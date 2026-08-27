@@ -156,7 +156,7 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
 #endif
     }
 
-    static LuaTable JsonParseToLuaTable(string json)
+    internal static LuaTable JsonParseToLuaTable(string json)
     {
         var obj = new JSONObject(json);
         return JsonObjectToLuaTable(obj);
@@ -392,6 +392,16 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
         }
 
         scriptScopeTable.Set("self", this);
+
+        // peer_id: inside a cloned RemoteRig (another player's remote
+        // representation on this headset, RemoteRig.cs) it is that player's
+        // id — feed it to dp.peer(peer_id) for their anchors and state.
+        // Everywhere else it stays nil, so `if peer_id then` reads as
+        // 'am I running on a remote clone?'.
+        {
+            var remote = GetComponentInParent<DreamPark.RemoteRig>(true);
+            if (remote != null) scriptScopeTable.Set("peer_id", remote.peerId ?? "");
+        }
         InjectAll();
         InjectCollections();
 
@@ -458,6 +468,49 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
                 }
                 client.SendToNetId(netId.Id, eventType, payload);
             }));
+
+            // Typed form: net_send(kind, table). A table body is serialized by
+            // dp.pack — every Vector3 as a park-local POINT, dp.dir(v) as a
+            // direction, Quaternion/Transform as park-local rotation/pose — so
+            // a creator never formats JSON and never learns that Unity world
+            // space is per headset (see ParkRoot.cs). A string body is passed
+            // through untouched, so every existing script keeps working.
+            luaEnv.DoString(
+                "local __raw = net_send\n" +
+                "net_send = function(kind, body)\n" +
+                "    if type(body) == 'table' and dp ~= nil and dp.pack ~= nil then body = dp.pack(body) end\n" +
+                "    return __raw(kind, body)\n" +
+                "end",
+                "net_send.typed", scriptScopeTable);
+        }
+
+        // onmessage(kind, payload): the typed counterpart of onnet. The payload
+        // is a Lua table whose park-local wire values (see dp.pack) have already
+        // been turned back into Unity values in THIS headset's world by
+        // dp.unpack. Wired through a Lua trampoline with onnet's own signature,
+        // so no new delegate shape crosses the XLua bridge (IL2CPP-safe). A
+        // script may define both; onnet still gets the raw string.
+        Action<string> luaOnMessage = null;
+        if (netId != null) {
+            try {
+                var probe = luaEnv.DoString("return type(onmessage) == 'function'", "onmessage.probe", scriptScopeTable);
+                if (probe != null && probe.Length > 0 && probe[0] is bool hasOnMessage && hasOnMessage) {
+                    luaEnv.DoString(
+                        "function __dp_onnet_typed(raw)\n" +
+                        "    local ok, t = pcall(json_parse, raw)\n" +
+                        "    if not ok or t == nil then return end\n" +
+                        "    local payload = t.payload\n" +
+                        "    if dp ~= nil and dp.unpack ~= nil then payload = dp.unpack(payload) end\n" +
+                        "    local ok2, err = pcall(onmessage, t.type, payload, t)\n" +
+                        "    if not ok2 then print('[LuaBehaviour] onmessage threw: ' .. tostring(err)) end\n" +
+                        "end",
+                        "onmessage.trampoline", scriptScopeTable);
+                    scriptScopeTable.Get("__dp_onnet_typed", out luaOnMessage);
+                }
+            }
+            catch (Exception e) {
+                Debug.LogWarning($"[LuaBehaviour] '{luaScript.name}' on '{gameObject.name}': onmessage wiring failed: {e.Message}");
+            }
         }
 
         // Auto-wire NetId AFTER awake() has run — in a finally, so a throwing
@@ -487,6 +540,8 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
         finally {
             if (luaOnNet != null && netId != null)
                 netId.OnNetEvent += luaOnNet;
+            if (luaOnMessage != null && netId != null)
+                netId.OnNetEvent += luaOnMessage;
         }
     }
 
