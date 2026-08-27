@@ -304,8 +304,8 @@ Mismatch symptom: `[NetRegistry] Event for UNREGISTERED NetId` on the receiver; 
 
 **Coordinates are park-local, never world.** Each headset has its own XR origin. Parks and attractions are QR-anchored in an arbitrary park-local space that *does* agree across devices. `dp.head().position`, `self.transform.position`, and `Camera.main` are **world**. If you put those numbers on the wire, two players will see an aligned park and offset people — the arena was synced, the poses were not.
 
-- After `onready()`, the player rig is parented to the park (`LevelAnchor` sets `player.parent` = park, `localPosition` zero). That parent is the space you send in.
-- Send: `park.InverseTransformPoint(worldPos)` and `park.InverseTransformDirection(worldFwd)` (normalize). Receive: parent the remote visual to the park and set `localPosition` / `localRotation`, or `park.TransformPoint` back to this headset's world.
+- After `onready()`, `LevelAnchor` parents the Player to **itself** (`localPosition` zero). The shared frame is `ParkAnchor` (park document), then `PortalAnchor` (QR), then `LevelAnchor`. `dp.park()` walks to that. Do not use `player.parent` — that is the LevelAnchor, and two levels disagree.
+- Send: `dp.head_park()` (pos, fwd) or `dp.to_park(worldPos)` / `dp.to_park_dir(worldFwd)`. Receive: parent the remote visual to `dp.park()` and set `localPosition`, or `dp.from_park(localPos)` back to this headset's world.
 - Same rule for hands, projectiles, AI proxies, markers. Hits that are victim-authoritative on a local body can stay local; anything *drawn* on another headset must be park-local.
 - Do this in `onready()`, never `awake()` — the rig is not parented yet in `awake()`.
 - Full write-up: `MULTIPLAYER.md` §2 "Coordinates are park-local".
@@ -366,7 +366,11 @@ a gap in Core, not a skill issue.
 ```lua
 dp.is_player(other)          -- is this collider the player? (rig-aware)
 dp.player()                  -- the player rig GameObject, or nil
-dp.head()                    -- the head/camera Transform, or nil
+dp.head()                    -- the head/camera Transform, or nil (WORLD)
+dp.park()                    -- ParkAnchor (then PortalAnchor / LevelAnchor), or nil
+dp.to_park(pos) / dp.from_park(pos)   -- world <-> park-local
+dp.to_park_dir(dir) / dp.from_park_dir(dir)  -- facing only (normalized)
+dp.head_park()               -- pos, fwd in park-local, or nil
 dp.scope(go)                 -- that object's script scope (any of its scripts)
 dp.attraction(self.gameObject)       -- the containing attraction's ScriptScope
 dp.attraction_root(self.gameObject)  -- its root GameObject

@@ -90,26 +90,26 @@ and `Camera.main.transform` are **world** — they include that headset's XR
 origin. Streaming those numbers is the classic "the room lines up, the other
 player is two metres off" bug.
 
-**Send park-local. Apply park-local.**
+**Send park-local. Apply park-local.** Use the SDK helpers — do not
+hand-roll `InverseTransformPoint` against `Player.parent`.
 
 ```lua
--- after onready(): the player rig is parented to the park
--- LevelAnchor does player.parent = park, localPosition = 0
-local park = player.transform.parent
-local world = dp.head().position
-local localPos = park:InverseTransformPoint(world)
-local localFwd = park:InverseTransformDirection(dp.head().forward)
+-- after onready(): dp.park() is ParkAnchor (shared park frame),
+-- not player.parent (that is the LevelAnchor)
+local pos, fwd = dp.head_park()          -- nil until the head exists
+-- or: local pos = dp.to_park(someWorldPos)
 -- net_send those x,y,z / fx,fy,fz
 ```
 
-On receive, parent the remote visual to the same park and set `localPosition`
-(plus a hover offset if you want). Or `park:TransformPoint(localPos)` if you
-must write a world pose on this headset. Same rule for hands, bolts, AI
-proxies, nametags. Victim-authoritative hits against *your own* body can stay
-in world; anything you *draw for a peer* cannot.
+On receive, parent the remote visual to `dp.park()` and set `localPosition`
+(plus a hover offset if you want). Or `dp.from_park(localPos)` if you must
+write a world pose on this headset. Same rule for hands, bolts, AI proxies,
+nametags. Victim-authoritative hits against *your own* body can stay in
+world; anything you *draw for a peer* cannot.
 
 `awake()` is too early — the rig is not parented or stamped yet. Do this in
-`onready()`.
+`onready()`. Editor Play with no park parent: `to_park` / `from_park` are
+identity (world), so desk Play still works.
 
 ---
 
