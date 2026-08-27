@@ -956,6 +956,11 @@ public class DreamBoxClient : MonoBehaviour
         {
             Debug.Log("[DreamBox] Score update received");
         }
+        else if (json.Contains("\"type\":\"pp\"") || json.Contains("\"type\":\"pp_bye\""))
+        {
+            // Player presence (PlayerPresence.cs) — consumed through OnGlobalEvent above,
+            // at pose rate, so it must not land in the log.
+        }
         else if (json.Contains("\"type\":\"block_break\""))
         {
             Debug.Log("[DreamBox] Block break received");
