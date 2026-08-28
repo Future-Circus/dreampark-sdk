@@ -315,14 +315,53 @@ namespace DreamPark
             return _tracker;
         }
 
-        // The same anchor dp.hand() returns (the OVRHand's parent), and the same
-        // notion of "tracked" HandTracker uses to show or hide what is in the
-        // hand. Without an OVRHand (Simulator, SDK test scene) an active anchor
+        // The hand pose source: the OVRCameraRig hand anchors, resolved by
+        // name exactly the way HandTracker resolves its own for the client.
+        // The OVRHand's parent is NOT a pose source: in hand-tracking rigs
+        // the OVRHand can sit under a static container while the anchor
+        // tracks, which put remote blasters at the rig origin while name
+        // tags (head = Camera.main) were right.
+        static Transform _sceneAnchorL, _sceneAnchorR;
+        static Transform SceneHandAnchor(string side)
+        {
+            // Explicit branches: a destroyed Transform is Unity fake-null,
+            // caught by the == overload, so a scene reload re-resolves.
+            if (side == "left")
+            {
+                if (_sceneAnchorL == null)
+                {
+                    var g = GameObject.Find("LeftHandAnchor");
+                    _sceneAnchorL = g != null ? g.transform : null;
+                }
+                return _sceneAnchorL;
+            }
+            if (_sceneAnchorR == null)
+            {
+                var g = GameObject.Find("RightHandAnchor");
+                _sceneAnchorR = g != null ? g.transform : null;
+            }
+            return _sceneAnchorR;
+        }
+
+        // PHYSICAL truth only, on purpose: presence is the game-independent
+        // body bus. Head = Camera.main, hands = the OVRCameraRig hand
+        // anchors — the transforms OVR itself drives, one set per headset,
+        // alive with no game rig at all. Player rigs are per game and load
+        // dynamically (there can be ten of them): sampling a rig node here
+        // would couple every player's broadcast to whichever game they are
+        // wearing. Rig-side presentation (hand choice, flipVisual, model
+        // offsets) belongs to each game's rig locally and to its RemoteRig
+        // subtree remotely — both are pure functions of this same physical
+        // stream, and p.active_hand plus the tracked flags carry what a
+        // RemoteRig needs to reproduce the client-side choices.
+        // "tracked" comes from the worn rig's OVRHand refs when there is
+        // one; without any (Simulator, SDK test scene) an active anchor
         // counts as tracked.
         Transform HandAnchor(string side, out bool tracked)
         {
             tracked = false;
-            var anchor = DreamParkLuaAPI.Hand(side);
+            var anchor = SceneHandAnchor(side);
+            if (anchor == null) anchor = DreamParkLuaAPI.Hand(side);   // Simulator / odd-rig fallback
             if (anchor == null) return null;
             var tracker = RigTracker();
             OVRHand hand = tracker != null ? (side == "left" ? tracker.leftHand : tracker.rightHand) : null;
