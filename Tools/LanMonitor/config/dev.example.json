@@ -1,0 +1,51 @@
+{
+  // DreamPark LAN Monitor — developer config.
+  // Loaded automatically with --dev, or from the Unity Editor menu.
+  // Copy to dev.json and edit; every value here is already the default,
+  // so the monitor runs fine with no config file at all.
+
+  // UDP port dream-pub beacons are broadcast on. Matches DiscoveryListener.
+  // The monitor only ever RECEIVES on this port — it has no send path.
+  "discoveryPort": 7700,
+
+  // Auto-attach to this park and follow it across host re-elections.
+  // Leave empty to pick a session by hand in the panel. Overridable at
+  // runtime from the panel's Pin field, and at launch with --park <id>.
+  "parkId": "",
+
+  // Restrict auto-attach to one discovery channel: "prod" (core builds) or
+  // "sdk" (creator projects). Empty = either. DreamBox kiosk beacons carry no
+  // channel and are never auto-attached anyway (they carry no parkId either).
+  "channel": "",
+
+  // A session with no beacon for this long stops being an auto-attach
+  // candidate and greys out in the panel. Beacons are 1 Hz, so this is six
+  // missed in a row. Note this NEVER drops a connected session — the
+  // connection is liveness ground truth, per the LAN-PeerHost spec.
+  "sessionStaleSeconds": 6,
+
+  // Ring-buffer depth for the live panel feed. The JSONL capture is unbounded.
+  "maxEvents": 2000,
+
+  // Event loop poll cadence.
+  "pollIntervalMs": 15,
+
+  // Echo every observed message to stdout — shows up in the Unity console
+  // when launched from the menu. Noisy at real message rates.
+  "debug": false,
+
+  // Append every observed message to a timestamped .jsonl, so a session can
+  // be captured once and picked apart afterwards with jq.
+  "capture": {
+    "enabled": true,
+    "directory": "captures"
+  },
+
+  // Browser panel. 7781 sits one above the dev relay's 7780, so both panels
+  // can be open at the same time.
+  "webPanel": {
+    "enabled": true,
+    "port": 7781,
+    "bindAddress": "127.0.0.1"
+  }
+}

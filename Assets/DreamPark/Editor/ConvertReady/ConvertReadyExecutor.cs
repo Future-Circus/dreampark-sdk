@@ -693,12 +693,12 @@ namespace DreamPark.ConvertReady
                 {
                     if (m == null || !seen.Add(m.GetInstanceID())) continue;
 
-                    if (DreamPark.EditorTools.MaterialConverter.IsParticleMaterial(m))
+                    if (MaterialConverter.IsParticleMaterial(m))
                     {
-                        if (DreamPark.EditorTools.MaterialConverter.HasExoticParticleFeature(m)) { exotic++; continue; }
-                        if (DreamPark.EditorTools.MaterialConverter.ConvertParticleMaterial(m)) particle++;
+                        if (MaterialConverter.HasExoticParticleFeature(m)) { exotic++; continue; }
+                        if (MaterialConverter.ConvertParticleMaterial(m)) particle++;
                     }
-                    else if (DreamPark.EditorTools.MaterialConverter.ConvertMaterial(m))
+                    else if (MaterialConverter.ConvertMaterial(m))
                     {
                         opaque++;
                     }

@@ -45,6 +45,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: e1c4cd0e3c2194dc794b14b758a27a98, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  anchorOverride: {fileID: 0}
+  overrideYOffset: 0
   yOffset: -0.4
 --- !u!114 &7957659326902552638
 MonoBehaviour:

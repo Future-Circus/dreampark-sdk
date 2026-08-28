@@ -4,6 +4,13 @@ namespace DreamPark
     using Defective.JSON;
     using UnityEngine;
 
+    /// <summary>
+    /// FROZEN. Serialized by integer value into every prop prefab and read back
+    /// into the addressable address — see the comment on PropTemplate.category
+    /// for the full reasoning. Do not add, remove, rename or REORDER members:
+    /// a reorder re-categorizes every existing prop and therefore renames it.
+    /// New categories go in the portal taxonomy, not here.
+    /// </summary>
     public enum PropCategory
     {
         Generic,
@@ -25,6 +32,45 @@ namespace DreamPark
 
         [ReadOnly] public string gameId;
         [ReadOnly] public string resourceName;
+
+        /// <summary>
+        /// FROZEN — read by the build pipeline, no longer set by the author.
+        ///
+        /// This value is baked into the prefab's addressable ADDRESS:
+        /// ContentProcessor builds "{gameId}/Props/{category}/{filename}" and
+        /// stamps that same string onto GameArea.resourceName and
+        /// PropTemplate.resourceName — the key the backend joins on for the
+        /// attractions catalog, downloads, views, collected rows and revenue
+        /// attribution. So changing a prop's category does not re-tag it: it
+        /// RENAMES the asset, and every row of that prop's history stays behind
+        /// under the old address. That is a silent data-loss bug wearing an
+        /// edit's clothes, which is why the field is greyed out rather than
+        /// merely discouraged.
+        ///
+        /// Categories now live in the developer portal's Attractions tab, and
+        /// are assigned per attraction AFTER upload against the server-owned
+        /// taxonomy in DreamPark-Web/lib/attractionCategories.js — a flat list
+        /// of ~130 slugs with derived groupings, which can grow and be
+        /// re-grouped without touching a single prefab. A serialized enum in
+        /// the SDK can do none of that: extending it needs an SDK release, and
+        /// re-pointing an existing value is the rename above.
+        ///
+        /// The field is kept, with its six members in their original order,
+        /// precisely BECAUSE it is frozen. Existing prefabs keep whatever value
+        /// they already serialize, so every existing address stays
+        /// byte-identical and there is no migration; new props take the Generic
+        /// default and land at "{gameId}/Props/Generic/{name}", stable forever.
+        /// Deleting the enum, reordering its members (Unity serializes enums by
+        /// integer value, so a reorder silently re-categorizes and therefore
+        /// renames every existing prop), or renaming the field would each
+        /// orphan shipped content.
+        ///
+        /// Do not surface this in the inspector, and do not add a category
+        /// field to LevelTemplate or AttractionTemplate — an attraction's
+        /// category is portal state and always has been.
+        /// </summary>
+        [ReadOnly]
+        [Tooltip("Frozen. Baked into this prefab's addressable address, so changing it would rename the asset and orphan its catalog history. Set an attraction's category in the developer portal's Attractions tab after upload.")]
         public PropCategory category = PropCategory.Generic;
         [Tooltip("If enabled, this prop contributes footprint + height data to GapFiller.")]
         public bool affectsGapFiller = true;
@@ -261,6 +307,168 @@ namespace DreamPark
             {
                 gameId = resourceName.Substring(0, slashIndex);
             }
+        }
+
+        /// <summary>
+        /// The footprint published for a prop the SDK cannot measure, in METERS.
+        /// Mirrored server-side (DreamPark-Web lib/poiScale.js PROP_FALLBACK_M) so an
+        /// unmeasured prop draws at the same size whether its catalog row was never
+        /// published or was published from geometry we could not read. It is also the
+        /// serialized default of customFootprintMeters below, which is what makes the
+        /// two agree by construction rather than by someone remembering to.
+        /// </summary>
+        public const float DefaultFootprintMeters = 1f;
+
+        /// <summary>
+        /// The prop's footprint in METERS (x = width, y = length), measured in its own
+        /// local frame — the publishable twin of LevelTemplate.DimensionsInFeet. Read by
+        /// the Content Uploader and pushed to the attractions catalog
+        /// (POST /api/content/{id}/attractions/dimensions, converted to feet on the
+        /// wire), where it drives RELATIVE marker scale on the 2D park maps.
+        ///
+        /// NOT AN OPERATOR-FACING MEASUREMENT, and that distinction is the whole reason
+        /// this can exist. The July 2026 call was that props stay out of the dimensions
+        /// UI because a bounds-derived number misleads an operator reading "this is
+        /// 2 x 3 ft" — an attraction's GameLevelSize is authored, a prop's extent is
+        /// inferred, and printing them in the same typeface claims a confidence the
+        /// second one has not earned. That call still stands: nothing here is rendered
+        /// as a measurement, and the server refuses to stamp a size-reference tag on a
+        /// prop row. Relative scale asks a strictly weaker question — is this bigger
+        /// than that — and an inferred extent answers it honestly.
+        ///
+        /// SCENE-INDEPENDENT BY CONSTRUCTION. Collider.bounds is a world-space AABB and
+        /// only means anything for an INSTANTIATED object, while the uploader reads
+        /// prefab assets straight off disk via AssetDatabase.LoadAssetAtPath and never
+        /// instantiates them. Reading .bounds there returns zero, which would quietly
+        /// publish every prop in the project at the fallback size and look like the
+        /// feature working. So this walks collider SHAPE data through matrix math
+        /// instead, which is serialized asset state and valid with no scene at all.
+        /// </summary>
+        public Vector2 FootprintMeters
+        {
+            get
+            {
+                if (useColliderBounds && TryMeasureLocalColliderFootprint(out Vector2 measured))
+                    return SanitizeFootprint(measured);
+
+                // Manual mode, or nothing measurable — the serialized value, whose
+                // default is DefaultFootprintMeters square.
+                return SanitizeFootprint(customFootprintMeters);
+            }
+        }
+
+        /// <summary>
+        /// Guarantees a positive, finite footprint. A zero, negative or NaN axis is not
+        /// a small prop, it is an unusable answer, and shipping it would divide through
+        /// the scale curve on the server.
+        /// </summary>
+        private static Vector2 SanitizeFootprint(Vector2 footprint)
+        {
+            float x = (float.IsNaN(footprint.x) || float.IsInfinity(footprint.x) || footprint.x <= 0f)
+                ? DefaultFootprintMeters : footprint.x;
+            float y = (float.IsNaN(footprint.y) || float.IsInfinity(footprint.y) || footprint.y <= 0f)
+                ? DefaultFootprintMeters : footprint.y;
+            return new Vector2(x, y);
+        }
+
+        /// <summary>
+        /// Axis-aligned extent of every enabled collider, expressed in this prop's
+        /// ORIENTED frame — the root's position and rotation removed, its SCALE kept.
+        /// Scale is deliberately retained: a prop authored at 1 m and shipped on a root
+        /// scaled to 3 occupies three metres of somebody's living room, and the map is
+        /// drawing the room.
+        ///
+        /// (The gizmo path above uses InverseTransformPoint, which divides root scale
+        /// out — correct there, because it transforms straight back out again and the
+        /// round trip cancels. This one does not round-trip, so it must not.)
+        /// </summary>
+        private bool TryMeasureLocalColliderFootprint(out Vector2 footprintMeters)
+        {
+            footprintMeters = Vector2.zero;
+
+            var colliders = GetComponentsInChildren<Collider>(true);
+            if (colliders == null || colliders.Length == 0)
+                return false;
+
+            Matrix4x4 worldToProp = Matrix4x4.TRS(transform.position, transform.rotation, Vector3.one).inverse;
+            float minX = float.MaxValue, maxX = float.MinValue;
+            float minZ = float.MaxValue, maxZ = float.MinValue;
+            bool measured = false;
+
+            for (int i = 0; i < colliders.Length; i++)
+            {
+                var collider = colliders[i];
+                if (collider == null || !collider.enabled)
+                    continue;
+                if (!TryGetLocalShapeBounds(collider, out Bounds shape))
+                    continue;
+
+                Matrix4x4 shapeToProp = worldToProp * collider.transform.localToWorldMatrix;
+                Vector3 c = shape.center;
+                Vector3 e = shape.extents;
+
+                for (int sx = -1; sx <= 1; sx += 2)
+                    for (int sy = -1; sy <= 1; sy += 2)
+                        for (int sz = -1; sz <= 1; sz += 2)
+                        {
+                            Vector3 corner = shapeToProp.MultiplyPoint3x4(
+                                new Vector3(c.x + e.x * sx, c.y + e.y * sy, c.z + e.z * sz));
+                            if (float.IsNaN(corner.x) || float.IsNaN(corner.z))
+                                continue;
+                            minX = Mathf.Min(minX, corner.x);
+                            maxX = Mathf.Max(maxX, corner.x);
+                            minZ = Mathf.Min(minZ, corner.z);
+                            maxZ = Mathf.Max(maxZ, corner.z);
+                            measured = true;
+                        }
+            }
+
+            if (!measured)
+                return false;
+
+            footprintMeters = new Vector2(maxX - minX, maxZ - minZ);
+            return footprintMeters.x > 0f && footprintMeters.y > 0f;
+        }
+
+        /// <summary>
+        /// A collider's shape in its OWN local space, from serialized fields only.
+        /// Every case here is asset data that survives with no scene loaded; a collider
+        /// type not listed is skipped rather than guessed at, and a prop made entirely
+        /// of skipped colliders falls back to customFootprintMeters.
+        /// </summary>
+        private static bool TryGetLocalShapeBounds(Collider collider, out Bounds bounds)
+        {
+            bounds = default;
+
+            if (collider is BoxCollider box)
+            {
+                bounds = new Bounds(box.center, box.size);
+                return true;
+            }
+            if (collider is SphereCollider sphere)
+            {
+                bounds = new Bounds(sphere.center, Vector3.one * (sphere.radius * 2f));
+                return true;
+            }
+            if (collider is CapsuleCollider capsule)
+            {
+                float diameter = capsule.radius * 2f;
+                float height = Mathf.Max(capsule.height, diameter);
+                Vector3 size = capsule.direction == 0 ? new Vector3(height, diameter, diameter)
+                             : capsule.direction == 1 ? new Vector3(diameter, height, diameter)
+                             : new Vector3(diameter, diameter, height);
+                bounds = new Bounds(capsule.center, size);
+                return true;
+            }
+            if (collider is MeshCollider mesh)
+            {
+                if (mesh.sharedMesh == null)
+                    return false;
+                bounds = mesh.sharedMesh.bounds;
+                return true;
+            }
+
+            return false;
         }
 
         public bool TryGetWorldFootprint(out Vector2[] worldFootprint, out float surfaceHeight)

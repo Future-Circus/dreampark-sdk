@@ -773,8 +773,7 @@ namespace DreamPark {
 
             if (BeginSectionBox(ref foldContentOverview, SectionContentOverviewPrefKey, "Content Overview", "d_SceneViewFx"))
             {
-                DrawBundlingStrategySection();
-                GUILayout.Space(6);
+                DrawLegacyBundlingNotice();
                 DrawContentPreviewSection();
                 EndSectionBox();
             }
@@ -796,11 +795,27 @@ namespace DreamPark {
                     MessageType.Error);
                 if (GUILayout.Button("Update SDK Now", GUILayout.Height(28)))
                 {
-                    UpdateAvailablePopup.Show(
-                        SDKVersion.Current,
-                        SDKUpdateChecker.LatestVersion,
-                        SDKUpdateChecker.BuildReleaseNotesSince(SDKVersion.Current),
-                        SDKUpdateChecker.LatestDownloadUrl);
+                    // Route through the same manual-check path as
+                    // DreamPark ▸ Check for SDK Updates instead of calling
+                    // UpdateAvailablePopup.Show ourselves.
+                    //
+                    // This panel is a pure READER of SDKUpdateChecker's cache,
+                    // and that cache is written once per domain generation by
+                    // the [InitializeOnLoad] check at editor load / login. So
+                    // LatestDownloadUrl here is as old as the Unity session.
+                    // The manifest's downloadUrl is a signed storage link that
+                    // UpdateAvailablePopup GETs with no Authorization header —
+                    // once the signature expires the download comes back 400.
+                    // That is why the identical popup worked from the menu item
+                    // (CheckForUpdateManual re-fetches the manifest immediately
+                    // before showing it) and 400'd from here.
+                    //
+                    // CheckForUpdateManual re-fetches the manifest, calls
+                    // SDKVersion.Reload(), bypasses skip/remind state and then
+                    // shows the popup with a seconds-old URL. It also fixes the
+                    // stale LatestVersion this warning renders when a release
+                    // ships mid-session.
+                    SDKUpdateChecker.CheckForUpdateManual();
                 }
                 GUILayout.Space(6);
             }
@@ -1258,7 +1273,6 @@ namespace DreamPark {
         {
             public string name;
             public string resourceName;
-            public string category;
             public byte[] previewBytes;
         }
 
@@ -1409,10 +1423,15 @@ namespace DreamPark {
 
                 if (r.previewBytes == null || r.previewBytes.Length == 0) { missing++; continue; }
 
+                // resourceName is the ONLY parameter the endpoint reads (it looks
+                // the row up by slug and attaches the image; it never creates one).
+                // `name` and `category` used to ride along here and were never
+                // read on either side — and category is now portal state, assigned
+                // after upload against the server-owned taxonomy, so sending the
+                // SDK's frozen PropTemplate.category would have been actively
+                // misleading had anything started reading it.
                 string endpoint = "/api/content/" + Uri.EscapeDataString(idForUpload) + "/attractions/preview"
-                    + "?resourceName=" + Uri.EscapeDataString(r.resourceName)
-                    + "&name=" + Uri.EscapeDataString(r.name)
-                    + "&category=" + Uri.EscapeDataString(r.category);
+                    + "?resourceName=" + Uri.EscapeDataString(r.resourceName);
 
                 UploadContentData image = new UploadContentData(r.name + ".png", r.previewBytes);
                 image.mimeType = "image/png";
@@ -1475,7 +1494,6 @@ namespace DreamPark {
                 LevelTemplate level = prefab.GetComponent<LevelTemplate>();
                 PropTemplate prop = prefab.GetComponent<PropTemplate>();
                 if (level == null && prop == null) continue; // attractions + props only, never the player rig
-                string category = prop != null ? prop.category.ToString().ToLowerInvariant() : "attraction";
 
                 // resourceName must match the backend catalog key exactly: the asset
                 // path with the leading "Assets/" and the file extension stripped
@@ -1492,22 +1510,31 @@ namespace DreamPark {
                 {
                     name = name,
                     resourceName = resourceName,
-                    category = category,
                     previewBytes = ReadPreviewBytes(previewsFolder, name),
                 });
             }
             return list;
         }
 
-        // ── Update Attraction Dimensions ─────────────────────────────
-        // Collects every attraction's authored footprint (LevelTemplate
-        // size/customSize — FEET, custom-aware) and pushes the batch to the
-        // backend catalog in ONE request (POST /api/content/:id/attractions/
-        // dimensions). Attach-only server-side, exactly like previews: rows
-        // are created by the commit-time catalog sync; this only fills them
-        // in. The size-reference tag ("fits a Basketball Court") is derived
-        // server-side from the same ladder as AttractionSizeReference — the
-        // SDK copy exists for inspector display and log summaries.
+        // ── Update Dimensions ────────────────────────────────────────
+        // Collects every PLACEABLE's footprint — attractions from LevelTemplate
+        // size/customSize (authored, FEET, custom-aware) and props from
+        // PropTemplate.FootprintMeters (measured, converted) — and pushes the
+        // batch to the backend catalog in ONE request
+        // (POST /api/content/:id/attractions/dimensions; props share the
+        // endpoint because they share the collection —
+        // content/{id}/attractions/{slug} holds attraction, prop AND level
+        // rows). Attach-only server-side, exactly like previews: rows are
+        // created by the commit-time catalog sync; this only fills them in.
+        //
+        // THE TWO KINDS ARE NOT INTERCHANGEABLE and the wire does not pretend
+        // they are. An attraction's footprint is authored and is shown to
+        // operators as a measurement; a prop's is inferred from collider
+        // geometry and exists only to answer "is this bigger than that" for
+        // relative marker scale on the 2D park maps. The server keeps them
+        // apart by refusing to stamp a size-reference tag on a prop row —
+        // which is also why props are not logged with one below. See the
+        // FootprintMeters docblock in PropTemplate for the longer version.
         //
         // Runs: silently after every successful upload (auto-push), from the
         // panel's Troubleshooting section, and from DreamPark →
@@ -1518,6 +1545,10 @@ namespace DreamPark {
             public string resourceName;
             public float widthFt;
             public float lengthFt;
+            // Suppresses the size-reference tag in logs. The server makes the
+            // same call independently off the row's own kind — this flag is a
+            // console nicety, never the authority.
+            public bool isProp;
         }
 
         // Backend catalog key derivation, shared with the preview walk: the
@@ -1533,10 +1564,21 @@ namespace DreamPark {
             return resourceName;
         }
 
-        // Attractions only (LevelTemplate/AttractionTemplate roots) — props
-        // have no authored footprint, and bounds-derived numbers would
-        // mislead operators (product call, July 2026).
-        private static List<DimensionUploadRoot> CollectAttractionDimensionRoots(string idForUpload)
+        // Feet per metre — the SDK's own constant, matching
+        // GameLevelDimensions.GetDimensionsInMeters' 0.3048 the other way
+        // round. FEET is the wire unit for this endpoint (the server's
+        // attractionSizes.normalizeDimensions takes widthFt/lengthFt), so a
+        // prop measured in metres converts HERE rather than teaching the
+        // endpoint a second unit — one unit on the wire, one place to be
+        // wrong.
+        private const float FeetPerMeter = 1f / 0.3048f;
+
+        // Every placeable with a readable footprint: LevelTemplate roots
+        // (attractions and legacy levels) plus PropTemplate roots. A prefab
+        // carrying BOTH is a LevelTemplate first — PropTemplate suppresses
+        // itself under a template parent anyway, and the address namespace
+        // that the catalog keys on is /Levels/.
+        private static List<DimensionUploadRoot> CollectDimensionRoots(string idForUpload)
         {
             List<DimensionUploadRoot> list = new List<DimensionUploadRoot>();
             string contentRoot = "Assets/Content/" + idForUpload;
@@ -1552,18 +1594,44 @@ namespace DreamPark {
                 GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
                 if (prefab == null) continue;
 
-                LevelTemplate level = prefab.GetComponent<LevelTemplate>();
-                if (level == null) continue;
+                float widthFt;
+                float lengthFt;
+                bool isProp;
 
-                Vector2 feet = level.DimensionsInFeet;
-                if (!(feet.x > 0f) || !(feet.y > 0f)) continue; // unset custom size etc.
+                LevelTemplate level = prefab.GetComponent<LevelTemplate>();
+                if (level != null)
+                {
+                    Vector2 feet = level.DimensionsInFeet;
+                    if (!(feet.x > 0f) || !(feet.y > 0f)) continue; // unset custom size etc.
+                    widthFt = feet.x;
+                    lengthFt = feet.y;
+                    isProp = false;
+                }
+                else
+                {
+                    PropTemplate prop = prefab.GetComponent<PropTemplate>();
+                    if (prop == null) continue;
+
+                    // Always positive — FootprintMeters sanitizes to the 1 m
+                    // fallback rather than returning something unusable, so a
+                    // prop is never silently dropped from the batch. A prop
+                    // missing from the catalog is indistinguishable from one
+                    // whose developer has not re-uploaded yet, and the map
+                    // would draw both at the fallback size regardless; sending
+                    // the row makes the state legible in the response summary.
+                    Vector2 meters = prop.FootprintMeters;
+                    widthFt = meters.x * FeetPerMeter;
+                    lengthFt = meters.y * FeetPerMeter;
+                    isProp = true;
+                }
 
                 list.Add(new DimensionUploadRoot
                 {
                     name = Path.GetFileNameWithoutExtension(path),
                     resourceName = ResourceNameForAssetPath(path),
-                    widthFt = feet.x,
-                    lengthFt = feet.y,
+                    widthFt = widthFt,
+                    lengthFt = lengthFt,
+                    isProp = isProp,
                 });
             }
             return list;
@@ -1583,11 +1651,11 @@ namespace DreamPark {
                 yield break;
             }
 
-            List<DimensionUploadRoot> roots = CollectAttractionDimensionRoots(idForUpload);
+            List<DimensionUploadRoot> roots = CollectDimensionRoots(idForUpload);
             if (roots.Count == 0)
             {
                 if (interactive)
-                    EditorUtility.DisplayDialog("No attractions", "No attractions with dimensions were found under Assets/Content/" + idForUpload + ".", "OK");
+                    EditorUtility.DisplayDialog("Nothing to measure", "No attractions or props with a footprint were found under Assets/Content/" + idForUpload + ".", "OK");
                 else
                     Debug.Log("[Dimensions] auto-push: nothing to send for " + idForUpload + ".");
                 yield break;
@@ -1603,9 +1671,22 @@ namespace DreamPark {
                 row.AddField("widthFt", r.widthFt);
                 row.AddField("lengthFt", r.lengthFt);
                 arr.Add(row);
-                var reference = AttractionSizeReference.Compute(r.widthFt, r.lengthFt);
-                Debug.Log("[Dimensions] " + r.name + ": " + r.widthFt.ToString("0.#") + " × " + r.lengthFt.ToString("0.#")
-                    + " ft" + (reference != null ? " (fits a " + reference.Value.label + ")" : ""));
+                // The size-reference ladder bottoms out at a 4 x 4 ft phone booth,
+                // so EVERY prop would tag "fits a Phone Booth" — a line that reads
+                // like a measurement and carries no information. Props log their
+                // metres instead, which is the unit they were authored in.
+                if (r.isProp)
+                {
+                    Debug.Log("[Dimensions] " + r.name + " (prop): "
+                        + (r.widthFt / FeetPerMeter).ToString("0.##") + " × "
+                        + (r.lengthFt / FeetPerMeter).ToString("0.##") + " m");
+                }
+                else
+                {
+                    var reference = AttractionSizeReference.Compute(r.widthFt, r.lengthFt);
+                    Debug.Log("[Dimensions] " + r.name + ": " + r.widthFt.ToString("0.#") + " × " + r.lengthFt.ToString("0.#")
+                        + " ft" + (reference != null ? " (fits a " + reference.Value.label + ")" : ""));
+                }
             }
             payload.AddField("attractions", arr);
 
@@ -1625,7 +1706,7 @@ namespace DreamPark {
             {
                 int updated = result != null && result.GetField("updated") != null ? result.GetField("updated").intValue : roots.Count;
                 int skipped = result != null && result.GetField("skipped") != null ? result.GetField("skipped").intValue : 0;
-                string summary = updated + " attraction dimension" + (updated == 1 ? "" : "s") + " updated" +
+                string summary = updated + " footprint" + (updated == 1 ? "" : "s") + " updated" +
                     (skipped > 0 ? ", " + skipped + " not in the catalog yet (upload a build first)" : "") + ".";
                 if (interactive) EditorUtility.DisplayDialog("Dimensions uploaded", summary, "OK");
                 else Debug.Log("[Dimensions] auto-push: " + summary);
@@ -2680,9 +2761,9 @@ namespace DreamPark {
                 return false;
             }
 
-            // Gate at the entry point so a stale popup (e.g. user toggled
-            // Smart off in the main panel while the popup was open) can't
-            // sneak through with a strategy-incompatible mode. Failed-Only
+            // Gate at the entry point so a stale popup (e.g. someone took the
+            // Troubleshooting Legacy escape hatch while the popup was open)
+            // can't sneak through with a strategy-incompatible mode. Failed-Only
             // overrides the mode entirely, so the Smart-requirement check
             // doesn't apply to it.
             if (!failedOnly
@@ -2691,8 +2772,9 @@ namespace DreamPark {
             {
                 EditorUtility.DisplayDialog(
                     "Upload mode requires Smart bundling",
-                    $"{UploadModePrefs.ShortLabel(mode)} requires the Smart bundling strategy. " +
-                    "Switch to Smart in the Bundling section before trying this mode, or pick " +
+                    $"{UploadModePrefs.ShortLabel(mode)} requires the Smart bundling strategy, " +
+                    "and this machine is on deprecated Legacy bundling. Turn Legacy off via " +
+                    "DreamPark \u25b8 Troubleshooting \u25b8 Use Legacy Bundling (deprecated), or pick " +
                     "Upload All / Upload Patch.",
                     "OK");
                 return false;
@@ -3238,46 +3320,27 @@ namespace DreamPark {
         }
 
         // ── Bundling strategy ────────────────────────────────────────────
-        // Lets the user pick how assets are partitioned into bundles. The
-        // toggle is persisted in EditorPrefs (see BundlingStrategyPrefs);
-        // ContentProcessor reads the current value when it (re)organizes
-        // addressable groups.
-        private void DrawBundlingStrategySection()
+        // There is no picker here any more. Smart (dependency-aware) bundling
+        // is the default and the only strategy the shipping path expects; see
+        // BundlingStrategy.cs for why Legacy is deprecated and how the
+        // one-time migration moves existing machines across.
+        //
+        // All that survives is a notice for the rare machine still on Legacy
+        // — someone who took the Troubleshooting escape hatch, or whose
+        // migration hasn't run yet. Without it, Legacy is invisible from the
+        // panel while quietly forcing every upload to ship everything, which
+        // is exactly the confusion this change exists to end.
+        private void DrawLegacyBundlingNotice()
         {
-            EditorGUILayout.LabelField("Bundling", EditorStyles.boldLabel);
+            if (BundlingStrategyPrefs.Current != BundlingStrategy.Legacy) return;
 
-            var current = BundlingStrategyPrefs.Current;
-            var values = (BundlingStrategy[])System.Enum.GetValues(typeof(BundlingStrategy));
-            var labels = values.Select(v => BundlingStrategyPrefs.Label(v)).ToArray();
-            int currentIdx = System.Array.IndexOf(values, current);
-            if (currentIdx < 0) currentIdx = 0;
-
-            int newIdx = EditorGUILayout.Popup("Strategy", currentIdx, labels);
-            if (newIdx != currentIdx)
-            {
-                var picked = values[newIdx];
-                if (picked == BundlingStrategy.Smart)
-                {
-                    bool ok = EditorUtility.DisplayDialog(
-                        "Switch to Smart bundling?",
-                        "Smart (dependency-aware) bundling re-partitions addressable groups so " +
-                        "that single-asset edits invalidate single bundles instead of folder-" +
-                        "level bundles. The first build after switching will look like a full " +
-                        "re-upload because every asset moves to a new group.\n\n" +
-                        "This feature is experimental. You can switch back to Legacy at any time.",
-                        "Switch to Smart", "Cancel");
-                    if (!ok) return;
-                }
-                BundlingStrategyPrefs.Current = picked;
-                Debug.Log($"[ContentUploader] Bundling strategy → {picked}");
-            }
-
-            if (current == BundlingStrategy.Smart)
-            {
-                EditorGUILayout.HelpBox(
-                    "Smart bundling is experimental. Verify the next upload behaves correctly before relying on it.",
-                    MessageType.Info);
-            }
+            EditorGUILayout.HelpBox(
+                "Legacy bundling is active (deprecated). Every upload from this machine is a full " +
+                "re-upload — the Upload Scope picker won't appear, and Patch / Code-only uploads are " +
+                "unavailable. Turn it off via DreamPark \u25b8 Troubleshooting \u25b8 Use Legacy " +
+                "Bundling (deprecated).",
+                MessageType.Warning);
+            GUILayout.Space(6);
         }
 
         // Re-walks ServerData/ for the currently-enabled platforms and rebuilds

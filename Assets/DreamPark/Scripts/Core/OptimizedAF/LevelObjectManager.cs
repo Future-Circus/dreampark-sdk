@@ -244,11 +244,38 @@ namespace DreamPark.ParkBuilder {
             public bool enabled;
             private bool parked = false;
             private bool firstPark = true;
+            // Its own flag, NOT folded into `parked`. `parked` keeps its exact
+            // meaning (and its firstPark interaction); `posed` records only that
+            // the last park froze a representative frame instead of clearing the
+            // system, so the restore path knows it is holding a stale simulation
+            // it has to throw away rather than resume.
+            private bool posed = false;
+
+            // Ceiling on the pose simulation. Simulate() is a synchronous catch-up
+            // of the entire system, so an emitter with a long startLifetime would
+            // otherwise stall the frame the creator enters build mode on.
+            private const float MaxPoseSeconds = 5f;
 
             public ParticleSystemSettings(ParticleSystem particleSystem) {
                 this.particleSystem = particleSystem;
                 enabled = particleSystem.isPlaying || particleSystem.main.playOnAwake;
             }
+
+            // Build mode is a STAGING view, not a paused game. An attraction's
+            // ambient VFX — torch fire, waterfall mist, fog — is frequently the
+            // thing that makes the space read at all, and clearing it leaves the
+            // creator arranging an empty room. A frozen representative frame is
+            // strictly better. A frozen EXPLOSION hanging in mid-air is not: a
+            // one-shot posed mid-burst looks like a bug, so those still clear.
+            //
+            // NOTE: gating on main.prewarm was considered and REJECTED. Prewarm is
+            // off by default, is only legal on looping systems, and essentially no
+            // creator sets it — the predicate would pose almost nothing. It is read
+            // below for one thing only: picking the simulate duration.
+            private bool ShouldPose =>
+                   particleSystem.gameObject.activeInHierarchy
+                && particleSystem.main.playOnAwake   // starts itself; nothing else has to fire it
+                && particleSystem.main.loop;         // persistent effect, not a one-shot
 
             public bool Toggle(bool enabled) {
                 if (particleSystem == null || particleSystem.IsDestroyed()) {
@@ -256,6 +283,17 @@ namespace DreamPark.ParkBuilder {
                 }
                 if (enabled) {
                     if (parked) {
+                        // A posed system is RESTARTED, never resumed. Play() after
+                        // Simulate() continues from the simulated state, so the first
+                        // second of gameplay would render a snapshot frozen back when
+                        // the creator was still arranging the park. Same rule the Dream
+                        // Sequence transition is written around: StopEmittingAndClear
+                        // before Play(), because a looping system that thinks it is
+                        // already playing makes Play() a no-op.
+                        if (posed) {
+                            particleSystem.Stop(false, ParticleSystemStopBehavior.StopEmittingAndClear);
+                            posed = false;
+                        }
                         if (this.enabled) particleSystem.Play();
                         parked = false;
                     }
@@ -266,14 +304,39 @@ namespace DreamPark.ParkBuilder {
                         // playOnAwake that once. After that isPlaying is the truth,
                         // which is what lets a system the game STARTED survive a cull
                         // and a one-shot burst that already finished stay finished.
+                        //
+                        // isPaused is read alongside it because a POSED system is
+                        // paused, and isPlaying is false while it is. Without that
+                        // term, a system posed for build mode and re-read on a later
+                        // park records enabled=false and never plays again — particles
+                        // that work the first time you enter build mode and never after.
                         this.enabled = firstPark
-                            ? (particleSystem.isPlaying || particleSystem.main.playOnAwake)
-                            : particleSystem.isPlaying;
+                            ? (particleSystem.isPlaying || particleSystem.isPaused || particleSystem.main.playOnAwake)
+                            : (particleSystem.isPlaying || particleSystem.isPaused);
                         firstPark = false;
                         parked = true;
                     }
-                    particleSystem.Stop();
-                    particleSystem.Clear();
+                    if (LevelObjectManager.BuildModeParked && ShouldPose) {
+                        var m = particleSystem.main;
+                        float t = m.prewarm ? m.duration                                  // match Unity's own prewarm semantics
+                                            : Mathf.Min(m.duration, m.startLifetime.constantMax);
+                        // withChildren MUST be false. The LevelObject constructor builds
+                        // a FLAT GetComponentsInChildren<ParticleSystem>(true) array with
+                        // one ParticleSystemSettings per system, so every nested system
+                        // gets its own Toggle. The Stop()/Play() calls around this default
+                        // to withChildren:true, which is redundant-but-idempotent — a
+                        // second Stop changes nothing. Simulate is NOT idempotent: a
+                        // system nested three deep would be simulated four times and drift
+                        // out of phase with the parent it is supposed to match.
+                        particleSystem.Simulate(Mathf.Clamp(t, 0.05f, MaxPoseSeconds), false, true, true);
+                        // Simulate() leaves the system PAUSED: particles stay on screen,
+                        // nothing advances.
+                        posed = true;
+                    } else {
+                        particleSystem.Stop();
+                        particleSystem.Clear();
+                        posed = false;
+                    }
                 }
                 return true;
             }
@@ -629,7 +692,15 @@ namespace DreamPark.ParkBuilder {
                     }
                 }
             }
-            if (settings != null && settings.controlParticles) {
+            // Particles group with ANIMATORS (behaviour), not with renderers
+            // (visibility). The renderer clause above is deliberate — you must still
+            // SEE the park while arranging it — and this one was copy-pasted into the
+            // same shape, which made particles the one thing build mode never stopped:
+            // `settings` is non-null from exactly one caller (OptimizedAF.RunOptimizedFrame),
+            // OptimizedAF.FixedUpdate hard-returns while build mode is active, and every
+            // build-mode park therefore arrives here through Disable()/ForceDisable() —
+            // i.e. Enable(false, null, 0), which this clause skipped.
+            if (settings == null || settings.controlParticles) {
                 foreach (var particleSystem in particleSystems) {
                     bool success = particleSystem.Toggle(enabled);
                     if (!success) {
@@ -823,6 +894,26 @@ namespace DreamPark.ParkBuilder {
             Interlocked.Exchange(ref _parkLockDeadlineTicks, DateTime.MaxValue.Ticks);
             _parkLockOverrunLogged = false;
         }
+
+        /// <summary>
+        /// True while the park is in BUILD MODE — the creator is arranging it, not
+        /// playing it. Set by NativeInterfaceManager.ApplyRuntimeMode on both edges.
+        ///
+        /// Read by ParticleSystemSettings, and by nothing else: it is what lets the
+        /// parking transition POSE a persistent effect instead of clearing it, so a
+        /// staged park keeps its torch fire and its waterfall mist.
+        ///
+        /// Distinct from <see cref="objectsEnabled"/>, which is ALSO false during an
+        /// ordinary park load — the two must not be conflated. Posing on every park
+        /// load would pay a Simulate() per system for nothing, on the one code path
+        /// where the frame budget is already gone.
+        ///
+        /// A plain static with a public setter on purpose: nothing needs an edge, so
+        /// there is no change event to keep in sync with the state (the mistake the
+        /// objectsEnabled comment above documents).
+        /// </summary>
+        public static bool BuildModeParked { get; set; }
+
         public static LevelObjectManager Instance;
         public bool gatherChildren = false;
         [HideInInspector] public List<LevelObject> levelObjects = new();
