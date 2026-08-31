@@ -24,12 +24,20 @@ namespace DreamPark
     /// <summary>
     /// Which side of a prop's footprint mounts flush against a real wall — a
     /// torch, a sign, a portal window. A prop only ever needs ONE side (unlike
-    /// AttractionTemplate.WallSide's combinable 4), and it is always along the
-    /// prop's local X axis (Right/Left), matching the same right/forward
-    /// convention TryGetManualFootprint and TryGetColliderFootprint already use.
-    /// A plain (non-[Flags]) enum keeps "no wall" and "one wall" the only
-    /// representable states — there is no Forward/Back option to pick by
-    /// mistake.
+    /// LevelTemplate's 4 combinable wall bools), along the prop's local X axis
+    /// (Right/Left) per the original spec, matching the right/forward
+    /// convention TryGetManualFootprint and TryGetColliderFootprint already
+    /// use. A plain (non-[Flags]) enum keeps "no wall" and "one wall" the only
+    /// representable states.
+    ///
+    /// WIRE FORMAT UNDER DISCUSSION (2026-08-31, Scan Layout group): Mesh's
+    /// GENERATE_LAYOUT solver proposes props publish a fixed "-z" (wall
+    /// BEHIND the prop, prop facing +Z into the room) instead of a
+    /// left/right choice, to match PlaceOnWalls' existing facing convention
+    /// directly. That is a real X-vs-Z axis question, not just a wire-format
+    /// rename, so this enum and PublishedWallSideToken below are left as
+    /// originally specified until it's resolved — see that method for the
+    /// one-line flip once it is.
     /// </summary>
     public enum PropWallSide
     {
@@ -114,31 +122,26 @@ namespace DreamPark
         public float SurfaceHeight => transform.position.y + _calibratedYOffset;
 
         /// <summary>
-        /// Minimum wall height this SDK will ever ask for, in meters (10 ft).
-        /// Matched by AttractionTemplate's own constant of the same value — kept
-        /// separate because the two components don't otherwise share internals.
+        /// The wall height this prop needs, in meters: the 10 ft default, or
+        /// taller if the prop's own content reaches higher — never shorter.
+        /// Delegates to WallHeightMeasurement (collider-shape based, safe on a
+        /// disk-loaded prefab asset) rather than Renderer.bounds — see that
+        /// class's docblock, which is this exact component's own
+        /// FootprintMeters reasoning applied to Y instead of X/Z. Floor
+        /// reference is SurfaceHeight, not transform.position.y, so a
+        /// calibrated prop measures from its real floor.
         /// </summary>
-        private const float DefaultWallHeightMeters = 3.048f;
+        public float GetWallHeightMeters() => WallHeightMeasurement.GetWallHeightMeters(transform, SurfaceHeight);
 
         /// <summary>
-        /// The wall height this prop needs, in meters: the 10 ft default, or
-        /// taller if the prop's own content reaches higher — never shorter, for
-        /// the same reason as AttractionTemplate.GetWallHeightMeters.
+        /// This prop's wall side as a wire axis token ("+x"/"-x"), or "" if
+        /// wallSide is None. Kept as a single conversion point so the pending
+        /// X-vs-Z resolution (see PropWallSide's docblock) is a one-line change
+        /// here rather than a hunt through every caller.
         /// </summary>
-        public float GetWallHeightMeters()
-        {
-            float contentHeight = 0f;
-            var renderers = GetComponentsInChildren<Renderer>(true);
-            float floorY = SurfaceHeight;
-            for (int i = 0; i < renderers.Length; i++)
-            {
-                var r = renderers[i];
-                if (r == null) continue;
-                float top = r.bounds.max.y - floorY;
-                if (top > contentHeight) contentHeight = top;
-            }
-            return Mathf.Max(DefaultWallHeightMeters, contentHeight);
-        }
+        public string PublishedWallSideToken =>
+            wallSide == PropWallSide.Right ? "+x" :
+            wallSide == PropWallSide.Left ? "-x" : "";
 
         public static void NotifyPropTemplateChanged()
         {
@@ -484,7 +487,10 @@ namespace DreamPark
         /// type not listed is skipped rather than guessed at, and a prop made entirely
         /// of skipped colliders falls back to customFootprintMeters.
         /// </summary>
-        private static bool TryGetLocalShapeBounds(Collider collider, out Bounds bounds)
+        // internal rather than private: WallHeightMeasurement (shared by
+        // LevelTemplate's wall gizmo) reuses this exact shape-reading logic
+        // rather than duplicating the Box/Sphere/Capsule/Mesh switch.
+        internal static bool TryGetLocalShapeBounds(Collider collider, out Bounds bounds)
         {
             bounds = default;
 

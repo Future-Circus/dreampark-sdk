@@ -141,6 +141,40 @@ public class LevelTemplateEditor : Editor {
         [HideInInspector] public int gridY;
         [HideInInspector] public JSONObject floorData;
         public Material floorMaterial;
+
+        [Tooltip("This attraction needs a real wall behind its FORWARD edge (local +Z) — e.g. a portal window or a wall-mounted sign. Published with the attraction's dimensions so layout/AI tools can place it against a real wall.")]
+        public bool wallFront = false;
+        [Tooltip("...its BACK edge (local -Z).")]
+        public bool wallBack = false;
+        [Tooltip("...its RIGHT edge (local +X).")]
+        public bool wallRight = false;
+        [Tooltip("...its LEFT edge (local -X).")]
+        public bool wallLeft = false;
+        [Tooltip("Draw the required wall(s) as a gizmo plane, 10ft tall by default and taller if this attraction's own content reaches higher.")]
+        public bool showWallGizmos = true;
+
+        /// <summary>
+        /// Wire format for the dimensions upload's "walls" field: comma-joined
+        /// axis tokens in this attraction's own local frame ("+z,-x"), empty
+        /// when no side is toggled. Any combination is valid — two adjacent
+        /// sides describe a corner, two opposite sides describe a through-wall
+        /// (e.g. a portal). Kept here rather than in the uploader so the token
+        /// spelling has exactly one source.
+        /// </summary>
+        public string WallsWireValue
+        {
+            get
+            {
+                var sides = new List<string>(4);
+                if (wallFront) sides.Add("+z");
+                if (wallBack) sides.Add("-z");
+                if (wallRight) sides.Add("+x");
+                if (wallLeft) sides.Add("-x");
+                return string.Join(",", sides);
+            }
+        }
+
+        private bool HasAnyWall => wallFront || wallBack || wallRight || wallLeft;
         #if UNITY_EDITOR
         public void OnValidate()
         {
@@ -832,8 +866,57 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
             unlitMat.SetPass(0);
             Gizmos.DrawMesh(humanMesh, bodyPosition);
             Graphics.DrawMeshNow(quadMesh, matrix);
+
+            // Gated on HasAnyWall (not just showWallGizmos) so the
+            // GetComponentsInChildren<Collider> walk inside
+            // GetWallHeightMeters only runs for attractions that actually
+            // declare a wall — the common no-wall case costs one bool check,
+            // not the per-frame tax PropTemplate's own footprint gizmo was
+            // moved off OnDrawGizmos for.
+            if (showWallGizmos && HasAnyWall)
+            {
+                DrawWallGizmos(dimensions);
+            }
+
             Gizmos.matrix = oldMatrix;
         }
+
+        private static readonly Color WallGizmoColor = new Color(0.1f, 0.6f, 1f, 1f);
+        private static readonly Color WallGizmoFill = new Color(0.1f, 0.6f, 1f, 0.15f);
+
+        // Called with Gizmos.matrix already set to transform.localToWorldMatrix
+        // by the caller (OnDrawGizmos) — dimensions is local X = width, Y =
+        // length in meters, the same frame the floor rectangle above is drawn
+        // in.
+        private void DrawWallGizmos(Vector2 dimensions)
+        {
+            float height = GetWallHeightMeters();
+
+            DrawWallIfSet(wallFront, new Vector3(0f, height * 0.5f, dimensions.y * 0.5f), new Vector3(dimensions.x, height, 0.05f));
+            DrawWallIfSet(wallBack, new Vector3(0f, height * 0.5f, -dimensions.y * 0.5f), new Vector3(dimensions.x, height, 0.05f));
+            DrawWallIfSet(wallRight, new Vector3(dimensions.x * 0.5f, height * 0.5f, 0f), new Vector3(0.05f, height, dimensions.y));
+            DrawWallIfSet(wallLeft, new Vector3(-dimensions.x * 0.5f, height * 0.5f, 0f), new Vector3(0.05f, height, dimensions.y));
+        }
+
+        private static void DrawWallIfSet(bool set, Vector3 center, Vector3 size)
+        {
+            if (!set) return;
+            Gizmos.color = WallGizmoFill;
+            Gizmos.DrawCube(center, size);
+            Gizmos.color = WallGizmoColor;
+            Gizmos.DrawWireCube(center, size);
+        }
+
+        /// <summary>
+        /// The wall height this attraction needs, in meters: the 10 ft
+        /// default, or taller if the attraction's own content reaches higher
+        /// (e.g. a tall portal frame) — never shorter. See
+        /// WallHeightMeasurement for why this is collider-shape based rather
+        /// than Renderer.bounds, which is also what makes it safe for the
+        /// Content Uploader to call on a disk-loaded prefab asset (it does
+        /// not, today, but could).
+        /// </summary>
+        public float GetWallHeightMeters() => WallHeightMeasurement.GetWallHeightMeters(transform, transform.position.y);
     #endif
     }
 }
