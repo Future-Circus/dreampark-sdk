@@ -1760,10 +1760,20 @@ namespace DreamPark {
             {
                 int updated = result != null && result.GetField("updated") != null ? result.GetField("updated").intValue : roots.Count;
                 int skipped = result != null && result.GetField("skipped") != null ? result.GetField("skipped").intValue : 0;
+                // Non-zero only if the SDK and server disagree about the wall
+                // token vocabulary — the one failure mode of a two-vocabulary
+                // field, and otherwise silent everywhere (the row still
+                // uploads, just with the offending side quietly gone). Surfaced
+                // rather than logged-only so it's not missed in the common
+                // (interactive) path.
+                int droppedWallSides = result != null && result.GetField("droppedWallSides") != null ? result.GetField("droppedWallSides").intValue : 0;
                 string summary = updated + " footprint" + (updated == 1 ? "" : "s") + " updated" +
-                    (skipped > 0 ? ", " + skipped + " not in the catalog yet (upload a build first)" : "") + ".";
+                    (skipped > 0 ? ", " + skipped + " not in the catalog yet (upload a build first)" : "") +
+                    (droppedWallSides > 0 ? ", " + droppedWallSides + " wall side" + (droppedWallSides == 1 ? "" : "s") + " rejected by the server (vocabulary mismatch — check for an SDK/backend version skew)" : "") + ".";
                 if (interactive) EditorUtility.DisplayDialog("Dimensions uploaded", summary, "OK");
                 else Debug.Log("[Dimensions] auto-push: " + summary);
+                if (droppedWallSides > 0)
+                    Debug.LogWarning("[Dimensions] " + droppedWallSides + " wall side(s) were rejected by the server — the SDK and backend disagree on the wall token vocabulary.");
             }
             else
             {
