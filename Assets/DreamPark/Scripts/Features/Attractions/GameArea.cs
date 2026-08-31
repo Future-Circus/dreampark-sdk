@@ -171,6 +171,27 @@ namespace DreamPark {
         }
 
         void Update () {
+            // Build mode is a STAGING view: the operator is arranging a park, not
+            // playing it, and there is no player whose presence this should track. The
+            // zone we test is a 100 m tall Y slab (unpaddedHalfExtents.y = 50) against
+            // Camera.main, so the build camera is inside essentially every zone at once
+            // — and a zone entered here is not a harmless no-op. Enter() raises
+            // OnContentZoneChanged, which AdventureLedger turns into game_started /
+            // attraction_discovered rows on the guest's visit, and which revenue
+            // attribution counts playtime against. Arranging a park must not bill it.
+            //
+            // Exit() rather than a bare return, deliberately: it clears currentGameArea
+            // and raises OnContentZoneChanged(this, null), so the ledger and attribution
+            // get a clean zone EXIT at the moment build mode starts. A zone left stuck
+            // open for the whole build session is worse than one extra exit event — the
+            // event is idempotent downstream, the open zone accrues playtime.
+            if (ParkBuilder.LevelObjectManager.BuildModeParked) {
+                if (isPlaying) {
+                    Exit();
+                }
+                return;
+            }
+
             var cam = MainCamera;
             if (!cam)
                 return;

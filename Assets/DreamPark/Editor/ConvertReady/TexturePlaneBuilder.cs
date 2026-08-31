@@ -89,7 +89,9 @@ using System.Globalization;
 using System.IO;
 using UnityEditor;
 using UnityEngine;
+#if !DREAMPARKCORE
 using DreamPark.EditorTools.Shaders;
+#endif
 
 namespace DreamPark.ConvertReady
 {
@@ -727,7 +729,9 @@ namespace DreamPark.ConvertReady
 
                 mat.DisableKeyword("_SURFACE_TYPE_TRANSPARENT");
 
+#if !DREAMPARKCORE
                 DreamParkMaterialRules.Enforce(mat);
+#endif
                 mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.AlphaTest;
             }
 

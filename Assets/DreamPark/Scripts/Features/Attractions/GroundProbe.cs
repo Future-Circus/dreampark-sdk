@@ -38,6 +38,20 @@
 //  §5.3): two passes over two separate masks, never one merged mask, so
 //  standing in the room always outranks remembering it.
 //
+//  THREE MASKS NOW, STILL NEVER MERGED (Ground-Conform-Algorithm-Spec §5):
+//      live mesh  ->  floor prior  ->  live plane estimate
+//  The third is the non-LiDAR path: ARKit planes turned into colliders on
+//  the ARMeshEstimate layer. It is ranked LAST on purpose. A plane
+//  estimate is ONE EXTRAPOLATED QUAD — ARKit floor planes reach under
+//  furniture and occasionally straight through walls — while a prior cell
+//  is a percentile over many real observations with an observation
+//  threshold behind it. "Live beats memory" holds where live is MEASURED;
+//  an extrapolation is not a measurement.
+//
+//  estimateMask defaults to 0, so a LiDAR device that never populates the
+//  layer skips the extra casts entirely through the mask.value == 0 guards
+//  and behaves byte-for-byte as it did before this parameter existed.
+//
 //  DOWN THEN UP. Ground is normally below the sample point, so the
 //  downward pass runs first and short-circuits. The upward pass only
 //  matters when a sample point starts beneath the mesh — a rematerialised
@@ -51,9 +65,50 @@ namespace DreamPark
 
     public static class GroundProbe
     {
-        /// Minimum upward component of a surface normal for it to count as
-        /// "floor". 0.5 ~= 60 degrees from vertical: accepts ramps and graded
-        /// terrain, rejects walls, ceilings and table undersides.
+        /// <summary>
+        /// Raised by whatever is currently producing live ground geometry, when
+        /// that geometry changes enough to be worth re-conforming against.
+        ///
+        /// WHY THE EVENT LIVES HERE. CalibrateLevel drives its continuous
+        /// Scan-mode conform off ARMeshManager.meshesChanged — an event that
+        /// never fires on a device with no LiDAR, so the plane-derived path
+        /// would have nothing driving it. The obvious fix is for CalibrateLevel
+        /// to subscribe to the plane producer directly, but that would give the
+        /// SDK a compile-time edge to project-side code.
+        ///
+        /// So the signal is declared here and RAISED from the project, exactly
+        /// like CalibrateLevel.allowUnanchoredCalibration is written from the
+        /// project. The SDK stays ignorant of who produces its ground.
+        /// </summary>
+        public static event System.Action GroundGeometryChanged;
+
+        /// Project-side producers call this after changing ground geometry.
+        /// A throwing subscriber must not take down the producer's rebuild
+        /// loop, so it is swallowed and logged.
+        public static void NotifyGroundGeometryChanged()
+        {
+            try { GroundGeometryChanged?.Invoke(); }
+            catch (System.Exception e) {
+                Debug.LogWarning("[GroundProbe] GroundGeometryChanged subscriber threw: " + e.Message);
+            }
+        }
+
+        /// Minimum upward component of a surface normal for a hit to be
+        /// CONSIDERED as floor.
+        ///
+        /// 0.5 = a surface tilted up to 60 degrees FROM HORIZONTAL — a 173%
+        /// grade, steeper than anything walkable. (The old wording here read
+        /// "60 degrees from vertical", which is true of the NORMAL but scans
+        /// as being about the surface, i.e. half as steep. It has already
+        /// misled one design discussion.)
+        ///
+        /// DELIBERATELY LOOSE, AND NOT THE SLOPE LIMIT. This is a coarse,
+        /// noise-tolerant sieve: on rough ground a genuinely 30-degree grass
+        /// slope throws plenty of individual triangles reading 50-60, so
+        /// tightening it to match real walkable slope rejects real terrain in
+        /// patches. The honest "how steep may ground be" number belongs on the
+        /// FITTED surface downstream, where per-triangle noise has been
+        /// averaged out — see Ground-Conform-Algorithm-Spec.md §1.1b.
         public const float MinFloorNormalY = 0.5f;
 
         /// Hard ceiling on how far a probe will ever reach. Bounds the cost of
@@ -124,7 +179,8 @@ namespace DreamPark
             LayerMask liveMask,
             LayerMask priorMask,
             float minAbove,
-            float minBelow)
+            float minBelow,
+            LayerMask estimateMask = default)
         {
             float planeY = worldFootprint.center.y;
             float foundMinY = float.PositiveInfinity;
@@ -147,6 +203,9 @@ namespace DreamPark
                 AccumulateFloorHits(probes[i], liveMask, ref foundMinY, ref foundMaxY);
                 if (priorMask.value != 0) {
                     AccumulateFloorHits(probes[i], priorMask, ref foundMinY, ref foundMaxY);
+                }
+                if (estimateMask.value != 0) {
+                    AccumulateFloorHits(probes[i], estimateMask, ref foundMinY, ref foundMaxY);
                 }
             }
 
@@ -190,11 +249,36 @@ namespace DreamPark
         /// each direction. Returns the NEAREST floor-like surface, skipping
         /// walls, ceilings and table undersides on the way.
         /// </summary>
+        /// <summary>
+        /// Two-mask overload, preserved for source compatibility.
+        ///
+        /// THIS EXISTS BECAUSE GroundProbe IS SHIPPED SDK. Adding estimateMask
+        /// as a required parameter before `out hit` broke every existing
+        /// caller — including DreamPark/Editor/ParkSimulator/ParkSimPark.cs
+        /// inside this repo, and potentially park content nobody here can
+        /// recompile. A ground probe with no plane estimate is a perfectly
+        /// coherent request (the editor simulator makes it twice), so it stays
+        /// expressible rather than becoming a compile error.
+        ///
+        /// MeasureSpan took an optional trailing parameter instead and needed
+        /// no twin; an optional argument cannot follow `out`, hence the split.
+        /// </summary>
         public static bool TryFindGround(
             Vector3 samplePoint,
             Span span,
             LayerMask liveMask,
             LayerMask priorMask,
+            out RaycastHit hit)
+        {
+            return TryFindGround(samplePoint, span, liveMask, priorMask, (LayerMask)0, out hit);
+        }
+
+        public static bool TryFindGround(
+            Vector3 samplePoint,
+            Span span,
+            LayerMask liveMask,
+            LayerMask priorMask,
+            LayerMask estimateMask,
             out RaycastHit hit)
         {
             // DOWNWARD. The common case, so it runs first and short-circuits.
@@ -204,6 +288,8 @@ namespace DreamPark
             if (TryFloorHit(new Ray(topOrigin, Vector3.down), downLength, liveMask, out hit)) return true;
             if (priorMask.value != 0
                 && TryFloorHit(new Ray(topOrigin, Vector3.down), downLength, priorMask, out hit)) return true;
+            if (estimateMask.value != 0
+                && TryFloorHit(new Ray(topOrigin, Vector3.down), downLength, estimateMask, out hit)) return true;
 
             // UPWARD. Only reachable when the sample point started beneath the
             // surface. Costs one extra pair of empty casts where it does not
@@ -216,6 +302,8 @@ namespace DreamPark
                 if (TryFloorHit(new Ray(bottomOrigin, Vector3.up), upLength, liveMask, out hit)) return true;
                 if (priorMask.value != 0
                     && TryFloorHit(new Ray(bottomOrigin, Vector3.up), upLength, priorMask, out hit)) return true;
+                if (estimateMask.value != 0
+                    && TryFloorHit(new Ray(bottomOrigin, Vector3.up), upLength, estimateMask, out hit)) return true;
             }
 
             hit = default(RaycastHit);

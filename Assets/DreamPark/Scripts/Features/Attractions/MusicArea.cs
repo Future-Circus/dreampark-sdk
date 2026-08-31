@@ -97,6 +97,26 @@ namespace DreamPark
         }
         void Update()
         {
+            // Build mode is a STAGING view: the operator is arranging a park, not
+            // playing it, and there is no player whose presence this should track.
+            // The footprint we test is a 100 m tall Y slab (halfExtents.y = 50) tested
+            // against Camera.main, so the build camera — which hovers above the park to
+            // see it — is inside essentially every music area at once. Without this gate
+            // the park sings at you the entire time you are arranging it, and the
+            // highest-priority area wins a contest nobody entered.
+            //
+            // This is also the one place that can stop a PARKED source from resurrecting
+            // itself: the repair below (audioSource.enabled = true) runs before any
+            // presence test, so a MusicArea whose AudioSource was disabled by the
+            // optimizer would re-enable it and Enter() on the following frame.
+            if (ParkBuilder.LevelObjectManager.BuildModeParked)
+            {
+                if (isPlaying || isActive)
+                {
+                    StandDown();
+                }
+                return;
+            }
             if (isPlaying && !audioSource.isPlaying)
             {
                 currentMusicArea = null;
@@ -180,6 +200,46 @@ namespace DreamPark
                 isPlaying = false;
             }
         }
+        /// <summary>
+        /// Return this area to its pre-entry state — no fade, no coroutine, no event —
+        /// so that whatever comes next re-enters through the ordinary <see cref="Enter"/>
+        /// path instead of inheriting half-torn-down state.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately <see cref="AudioSource.Stop"/> and NOT the 1 s
+        /// <c>PauseWithFadeOut</c> that <see cref="Exit"/> uses. A fade is a coroutine
+        /// running on this MonoBehaviour, and every caller of StandDown is a moment when
+        /// the park is being frozen or torn down around it: entering build mode parks
+        /// the world, and OnDisable may be scene teardown, where the coroutine is killed
+        /// mid-fade and leaves the source audible-but-orphaned with isPlaying already
+        /// false. An audible hard cut the instant you tap Build is the intended
+        /// behaviour — a deterministic cut beats a fade that may or may not survive the
+        /// frame.
+        ///
+        /// Idempotent and safe from OnDisable in edit mode: every field is guarded, and
+        /// audioSource is null whenever musicTrack was unset (Awake disables the
+        /// component and returns before creating the emitter).
+        /// </remarks>
+        private void StandDown()
+        {
+            if (isActive)
+            {
+                activeMusicAreas--;
+                isActive = false;
+            }
+            if (isPlaying)
+            {
+                if (audioSource != null)
+                {
+                    audioSource.Stop();
+                }
+                if (currentMusicArea == this)
+                {
+                    currentMusicArea = null;
+                }
+                isPlaying = false;
+            }
+        }
         public void SwapAudioClip(AudioClip newClip, float time = 0.5f)
         {
             if (audioSource == null || newClip == null)
@@ -237,6 +297,16 @@ namespace DreamPark
             return Mathf.Abs(x) <= halfExtents.x &&
                 Mathf.Abs(y) <= halfExtents.y &&
                 Mathf.Abs(z) <= halfExtents.z;
+        }
+        // Anything that disables a MusicArea used to leak the shared state it had
+        // claimed: activeMusicAreas stayed incremented and currentMusicArea kept
+        // pointing at an area that no longer Updates, so it could never Exit() itself
+        // and every other area was blocked by a priority contest against a ghost. The
+        // count is a static, so the leak outlives the object. GameArea already stands
+        // itself down in OnDisable for exactly this reason; match it.
+        void OnDisable()
+        {
+            StandDown();
         }
         void OnDestroy()
         {

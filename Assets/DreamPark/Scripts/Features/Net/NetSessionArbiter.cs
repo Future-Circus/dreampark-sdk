@@ -129,6 +129,25 @@ namespace DreamPark
         const float BeaconRecordTtl = 5f;
         const float BlacklistSeconds = 5f;
 
+        /// <summary>
+        /// Failed joins in a row before we stop treating a host as joinable.
+        /// Two, not one: a single miss is a blip and yielding is cheap. A second
+        /// consecutive miss means the path to that host is broken rather than
+        /// busy, and continuing to yield to it costs us the entire session.
+        /// </summary>
+        const int UnreachableAfterFailures = 2;
+
+        /// <summary>
+        /// How long an unreachable verdict stands. Long enough to break the
+        /// yield → fail → re-host cycle, short enough that a host which comes
+        /// back (Wi-Fi roam, app resume, a developer fixing their VPN) gets
+        /// another chance without anyone restarting anything.
+        /// </summary>
+        const float JoinFailureMemorySeconds = 60f;
+
+        /// <summary>Cadence of the "two hosts in one park" warning.</summary>
+        const float SplitBrainReportSeconds = 10f;
+
         DreamBoxClient _client;
         DiscoveryListener _discovery;
         PeerRelayServer _relay;
@@ -151,8 +170,28 @@ namespace DreamPark
         float _stateEnteredAt;
         string _sessionKey;
 
+        // Addresses to try for the host we are currently joining, in order:
+        // the one its beacon advertised, then the one its beacon actually came
+        // from. See DiscoveryListener.BeaconInfo.sourceHost for why the second
+        // is worth more than the first when they disagree.
+        readonly List<string> _joinAddresses = new();
+        int _joinAddressIndex;
+        DiscoveryListener.BeaconInfo _joinBeacon;
+        bool _joinLanded;          // this join reached Connected at least once
+
+        // hostId -> consecutive failed joins and when the last one was. A host
+        // we cannot reach must stop winning elections, or the deterministic
+        // tie-break hands the room to a device nobody can talk to.
+        readonly Dictionary<string, JoinFailure> _joinFailures = new();
+        struct JoinFailure { public int count; public float lastAt; }
+
+        float _nextSplitBrainReportAt;
+
         // One "ignored beacon" log per hostId+reason — visibility without spam.
         readonly HashSet<string> _ignoredLogged = new();
+
+        // One "refused to yield" log per hostId — same reasoning.
+        readonly HashSet<string> _yieldRefusedLogged = new();
 
         void LogIgnoredOnce(string hostId, string reason)
         {
@@ -315,6 +354,14 @@ namespace DreamPark
             //  - linkDead  — client's reconnect ladder exhausted
             //  - beaconStale && !connected — host stopped beaconing AND we lost the link
             bool connected = _client.ConnectionState == DreamBoxClient.State.Connected;
+            if (connected && !_joinLanded)
+            {
+                // The join worked. Forgive the host's history so a device that
+                // was unreachable for a while isn't held against it forever.
+                _joinLanded = true;
+                ClearJoinFailures(CurrentHostId);
+            }
+
             bool beaconStale = !IsPeerHostAlive(CurrentHostId);
             bool joinHung = !connected && Time.unscaledTime - _joinStartedAt > joinTimeoutSeconds
                          && _client.ConnectionState == DreamBoxClient.State.Connecting;
@@ -323,6 +370,15 @@ namespace DreamPark
             if (joinHung || linkDead || (beaconStale && !connected && linkDead)
                 || (beaconStale && _client.ConnectionState == DreamBoxClient.State.Reconnecting))
             {
+                // We never got in at all — before writing this host off, try the
+                // other address we have for it. Any of the failure paths above
+                // qualifies: what matters is that this join never landed, not
+                // which flavour of not-landing the client reported. Only once
+                // every candidate has failed is the host itself the problem.
+                if (!_joinLanded && TryNextJoinAddress())
+                    return;
+
+                if (!_joinLanded) RecordJoinFailure(CurrentHostId);
                 if (beaconStale || joinHung) Blacklist(CurrentHostId);
                 BeginReelection(deadHostId: CurrentHostId);
             }
@@ -342,6 +398,27 @@ namespace DreamPark
 
             // Deterministic tie-break: if another peer host with a lower hostId
             // is beaconing, we yield and join them. (They ignore ours.)
+            // Note the two questions being asked here. The first is "does anyone
+            // outrank me at all", unreachable hosts included, purely so we can
+            // name the thing in the log. The second is "who should I actually
+            // hand the room to", which only reachable hosts can answer.
+            //
+            // Yielding to a host we cannot reach tears down a working relay in
+            // exchange for nothing: the join times out, re-election puts us back
+            // in the chair, the next beacon starts it over. From outside that
+            // loop looks exactly like "two hosts in the same park, neither
+            // talking to the other" — which is the bug this guard exists for.
+            // Sorting lower wins an election; it does not make a host joinable.
+            var outranking = BestPeerHost(includeUnreachable: true);
+            if (outranking.HasValue && IsUnreachable(outranking.Value.info.hostId))
+            {
+                string id = outranking.Value.info.hostId;
+                if (_yieldRefusedLogged.Add(id))
+                    Debug.LogWarning($"[Arbiter] Not yielding to {id} despite its lower hostId — we have failed to " +
+                                     "reach it repeatedly. Staying host so this park keeps a joinable session. " +
+                                     "Expect two hosts on this LAN until that device is reachable again.");
+            }
+
             var rival = BestPeerHost();
             if (rival.HasValue && string.CompareOrdinal(rival.Value.info.hostId, HostId) < 0)
             {
@@ -349,7 +426,43 @@ namespace DreamPark
                 var target = rival.Value.info;
                 StopHosting(announce: false);
                 Join(target, SessionState.ClientPeer);
+                return;
             }
+
+            ReportSplitBrain();
+        }
+
+        /// <summary>
+        /// Two peer hosts in one park is always a bug — the ladder exists to
+        /// collapse them. It is also completely silent from inside either one:
+        /// each sees a healthy relay, a connected client, and its own traffic
+        /// flowing. Say it out loud on a slow cadence, with the reason, so the
+        /// next person to hit this reads it in the console instead of inferring
+        /// it from a LAN capture.
+        /// </summary>
+        void ReportSplitBrain()
+        {
+            if (Time.unscaledTime < _nextSplitBrainReportAt) return;
+
+            int live = 0;
+            string detail = null;
+            foreach (var kv in _peerHosts)
+            {
+                if (!IsPeerHostAlive(kv.Key)) continue;
+                live++;
+                string why = IsUnreachable(kv.Key) ? "unreachable"
+                           : string.CompareOrdinal(kv.Key, HostId) < 0 ? "lower hostId — should have taken over"
+                           : "higher hostId — should be yielding to us";
+                detail = detail == null ? $"{kv.Key} @ {kv.Value.info.host} ({why})"
+                                        : detail + $", {kv.Key} @ {kv.Value.info.host} ({why})";
+            }
+
+            _nextSplitBrainReportAt = Time.unscaledTime + SplitBrainReportSeconds;
+            if (live == 0) return;
+
+            Debug.LogWarning($"[Arbiter] Hosting park '{parkId}' alongside {live} other live peer host(s) on this " +
+                             $"LAN: {detail}. One of us should have yielded — players on the two hosts cannot see " +
+                             "each other.");
         }
 
         void BeginReelection(string deadHostId)
@@ -362,7 +475,8 @@ namespace DreamPark
             var candidates = new List<string>();
             if (CanHost) candidates.Add(HostId);
             foreach (var kv in _peerHosts)
-                if (kv.Key != deadHostId && !IsBlacklisted(kv.Key) && IsPeerHostAlive(kv.Key))
+                if (kv.Key != deadHostId && !IsBlacklisted(kv.Key) && IsPeerHostAlive(kv.Key)
+                    && !IsUnreachable(kv.Key))   // ranking behind a host we can't join is ranking behind nobody
                     candidates.Add(kv.Key);
             candidates.Sort(StringComparer.Ordinal);
 
@@ -404,10 +518,113 @@ namespace DreamPark
         {
             CurrentHostId = string.IsNullOrEmpty(info.hostId) ? info.dreamboxId : info.hostId;
             HostAdvertisedCap = info.msgCap;
-            _joinStartedAt = Time.unscaledTime;
-            _client.Connect(info.host, info.port, string.IsNullOrEmpty(info.key) ? null : info.key);
+            _joinBeacon = info;
+            _joinLanded = false;
+
+            // Normally the beacon's advertised address and the address it was
+            // sent from are the same string and there is one candidate. When
+            // they differ, take the one we observed over the one we were told:
+            // the source address is where a packet demonstrably just came from,
+            // over a path that demonstrably works, while the advertised address
+            // is the host's guess at which of its own interfaces we can see —
+            // and a host cannot check that guess, because it can always reach
+            // itself. The relay binds 0.0.0.0, so it answers on either.
+            //
+            // The advertised address stays as the fallback rather than being
+            // dropped: a venue could deliberately front a relay on an address
+            // it does not broadcast from, and that setup should still work.
+            _joinAddresses.Clear();
+            bool mismatch = !string.IsNullOrEmpty(info.sourceHost)
+                            && !string.IsNullOrEmpty(info.host)
+                            && info.sourceHost != info.host;
+
+            if (mismatch)
+            {
+                _joinAddresses.Add(info.sourceHost);
+                _joinAddresses.Add(info.host);
+                Debug.LogWarning(
+                    $"[Arbiter] Host {CurrentHostId} advertises {info.host} but its beacon arrived from " +
+                    $"{info.sourceHost} — joining {info.sourceHost}, which we know reaches it. If {info.host} " +
+                    "is a VPN or virtual adapter on that machine, fix the interface pick there: headsets on " +
+                    "the real Wi-Fi cannot route to it, and every one of them will fail this join first.");
+            }
+            else
+            {
+                if (!string.IsNullOrEmpty(info.host)) _joinAddresses.Add(info.host);
+                else if (!string.IsNullOrEmpty(info.sourceHost)) _joinAddresses.Add(info.sourceHost);
+            }
+
+            if (_joinAddresses.Count == 0)
+            {
+                Debug.LogWarning($"[Arbiter] Beacon from {CurrentHostId} carries no usable address — ignoring.");
+                RecordJoinFailure(CurrentHostId);
+                BeginReelection(deadHostId: CurrentHostId);
+                return;
+            }
+
+            _joinAddressIndex = 0;
+            ConnectToJoinCandidate();
             SetState(asState);
         }
+
+        void ConnectToJoinCandidate()
+        {
+            _joinStartedAt = Time.unscaledTime;
+            string addr = _joinAddresses[_joinAddressIndex];
+            _client.Connect(addr, _joinBeacon.port,
+                            string.IsNullOrEmpty(_joinBeacon.key) ? null : _joinBeacon.key);
+        }
+
+        /// <summary>
+        /// Move to the next candidate address for the host we're joining.
+        /// Returns false when we've tried them all — that's when the host counts
+        /// as a failure, not on the first address that didn't answer.
+        /// </summary>
+        bool TryNextJoinAddress()
+        {
+            if (_joinAddressIndex + 1 >= _joinAddresses.Count) return false;
+
+            string failed = _joinAddresses[_joinAddressIndex];
+            _joinAddressIndex++;
+            string next = _joinAddresses[_joinAddressIndex];
+            Debug.LogWarning($"[Arbiter] {failed}:{_joinBeacon.port} did not answer for host {CurrentHostId} — " +
+                             $"retrying at {next}.");
+
+            _client.Disconnect();
+            ConnectToJoinCandidate();
+            return true;
+        }
+
+        void RecordJoinFailure(string hostId)
+        {
+            if (string.IsNullOrEmpty(hostId)) return;
+            _joinFailures.TryGetValue(hostId, out var f);
+            f.count++;
+            f.lastAt = Time.unscaledTime;
+            _joinFailures[hostId] = f;
+
+            if (f.count == UnreachableAfterFailures)
+                Debug.LogWarning($"[Arbiter] Host {hostId} has failed {f.count} joins in a row — treating it as " +
+                                 $"unreachable for {JoinFailureMemorySeconds:0}s. We will not yield the room to it " +
+                                 "while that stands, so that at least one host on this LAN is joinable.");
+        }
+
+        void ClearJoinFailures(string hostId)
+        {
+            if (string.IsNullOrEmpty(hostId)) return;
+            _joinFailures.Remove(hostId);
+            _yieldRefusedLogged.Remove(hostId);
+        }
+
+        /// <summary>
+        /// A host we've repeatedly failed to reach. It may be beaconing happily
+        /// — beacons are broadcast and travel fine across a boundary that unicast
+        /// does not — so "I can hear it" is not evidence that we can join it.
+        /// </summary>
+        bool IsUnreachable(string hostId) =>
+            hostId != null
+            && _joinFailures.TryGetValue(hostId, out var f)
+            && f.count >= UnreachableAfterFailures;
 
         void StartHosting()
         {
@@ -425,6 +642,12 @@ namespace DreamPark
             if (!_beacon.Start(HostId, parkId, _relay.Port, _sessionKey, Channel))
             {
                 // No LAN IP (Wi-Fi down / AP isolation). Solo play, retry later.
+                // Say so: a host that cannot beacon is invisible to every other
+                // device and to the LAN Monitor, and from the outside that is
+                // indistinguishable from the app not running at all.
+                Debug.LogWarning("[Arbiter] Relay is up but the beacon could not start — no LAN address to " +
+                                 "advertise. Nobody can discover this session; falling back to searching. " +
+                                 $"Interfaces: {NetPlatform.DescribeCandidates()}");
                 _relay.Stop(); _relay = null; _beacon = null;
                 BeginSearching();
                 return;
@@ -569,14 +792,38 @@ namespace DreamPark
             foreach (var kv in _blacklist)
                 if (now > kv.Value) (drop ??= new List<string>()).Add(kv.Key);
             if (drop != null) foreach (var k in drop) _blacklist.Remove(k);
+
+            // An unreachable verdict has to expire, or a host that recovers can
+            // never win an election again for the life of the app.
+            drop = null;
+            foreach (var kv in _joinFailures)
+                if (now - kv.Value.lastAt > JoinFailureMemorySeconds) (drop ??= new List<string>()).Add(kv.Key);
+            if (drop != null)
+                foreach (var k in drop)
+                {
+                    _joinFailures.Remove(k);
+                    _yieldRefusedLogged.Remove(k);
+                    Debug.Log($"[Arbiter] Giving host {k} another chance (unreachable verdict expired).");
+                }
         }
 
-        BeaconRecord? BestPeerHost()
+        /// <summary>
+        /// Lowest live hostId — the one everyone converges on.
+        ///
+        /// Hosts we have repeatedly failed to join are excluded by default:
+        /// every caller but one is asking "who should I join", and the answer
+        /// must not be a device we already know we cannot reach. TickHosting
+        /// passes <paramref name="includeUnreachable"/> because it is asking a
+        /// different question — "is someone out there who outranks me" — and it
+        /// wants to say so in the log before declining to yield.
+        /// </summary>
+        BeaconRecord? BestPeerHost(bool includeUnreachable = false)
         {
             BeaconRecord? best = null;
             foreach (var kv in _peerHosts)
             {
                 if (!IsPeerHostAlive(kv.Key)) continue;
+                if (!includeUnreachable && IsUnreachable(kv.Key)) continue;
                 if (best == null || string.CompareOrdinal(kv.Value.info.hostId, best.Value.info.hostId) < 0)
                     best = kv.Value;
             }
@@ -596,10 +843,21 @@ namespace DreamPark
         bool ChannelMatches(string beaconChannel) =>
             (string.IsNullOrEmpty(beaconChannel) ? "prod" : beaconChannel) == Channel;
 
+        /// <summary>
+        /// Ignore a host's beacons for a while. The window grows with each
+        /// consecutive failure: a flat 5 s is shorter than the 10 s join
+        /// timeout, so a host we cannot reach used to come back off the
+        /// blacklist before we had finished failing to reach it — a retry loop
+        /// that never widened and never gave up.
+        /// </summary>
         void Blacklist(string hostId)
         {
             if (string.IsNullOrEmpty(hostId)) return;
-            _blacklist[hostId] = Time.unscaledTime + BlacklistSeconds;
+
+            _joinFailures.TryGetValue(hostId, out var f);
+            float window = Mathf.Min(BlacklistSeconds * Mathf.Pow(2f, Mathf.Max(0, f.count - 1)), 60f);
+
+            _blacklist[hostId] = Time.unscaledTime + window;
             _peerHosts.Remove(hostId);
         }
 

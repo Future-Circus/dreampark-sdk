@@ -34,6 +34,7 @@ ExportedObj/
 .consulo/
 *.csproj
 !Tools/DreamBoxServer/DreamBoxRelay.csproj
+!Tools/LanMonitor/LanMonitor.csproj
 *.unityproj
 *.sln
 *.suo

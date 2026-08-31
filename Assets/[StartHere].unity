@@ -3547,6 +3547,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: e1c4cd0e3c2194dc794b14b758a27a98, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  anchorOverride: {fileID: 0}
+  overrideYOffset: 0
   yOffset: -0.4
 --- !u!1 &2102556146
 GameObject:
@@ -3839,6 +3841,10 @@ PrefabInstance:
     - target: {fileID: 6910875961546822376, guid: 9fef9800a47514811adbf916c8d1442f, type: 3}
       propertyPath: m_Name
       value: Attraction
+      objectReference: {fileID: 0}
+    - target: {fileID: 6910875961546822376, guid: 9fef9800a47514811adbf916c8d1442f, type: 3}
+      propertyPath: m_IsActive
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 9215415555977935129, guid: 9fef9800a47514811adbf916c8d1442f, type: 3}
       propertyPath: showGridGizmo

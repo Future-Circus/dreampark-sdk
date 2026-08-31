@@ -1132,12 +1132,13 @@ namespace DreamPark {
                 Debug.Log($"🏷 Addressables: {moved} moved/created, {labeled} labeled for '{gameId}'.");
 
             // ── Bundling strategy ────────────────────────────────────────
-            // After the Legacy folder-based grouping has finished assigning
-            // every content asset to a "{gameId}-{folder}" group, optionally
-            // re-partition into dependency-aware bundles. Legacy is the
-            // default and runs alone; Smart is an opt-in pass that re-slices
-            // those groups so a one-asset edit invalidates one small bundle
-            // instead of a folder-level one. See BundlingStrategy.cs.
+            // After the folder-based grouping has finished assigning every
+            // content asset to a "{gameId}-{folder}" group, re-partition into
+            // dependency-aware bundles. Smart is the DEFAULT (Aug 2026) and is
+            // this pass; it re-slices those groups so a one-asset edit
+            // invalidates one small bundle instead of a folder-level one. The
+            // folder grouping above is what deprecated Legacy leaves behind
+            // when the pass is skipped. See BundlingStrategy.cs.
             //
             // Only run the Smart pass on full updates (specificPaths == null),
             // not on incremental file-change passes — Smart needs the full
@@ -1148,7 +1149,7 @@ namespace DreamPark {
             if (specificPaths == null && BundlingStrategyPrefs.Current == BundlingStrategy.Smart)
             {
                 var result = SmartBundleGrouper.ApplyDependencyAwareGrouping(settings, gameId);
-                Debug.Log($"📦 Smart bundling [experimental] for '{gameId}': " +
+                Debug.Log($"📦 Smart bundling for '{gameId}': " +
                           $"{result.rootBundles} root bundles, {result.runtimeAssets} runtime assets, " +
                           $"+{result.groupsCreated}/-{result.groupsRemoved} groups, " +
                           $"{result.orphanFilesRemoved} orphan files cleaned.");

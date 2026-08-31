@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DreamPark LAN Monitor</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #181b22;
+    --panel-2: #1f2430;
+    --border: #2a3040;
+    --text: #e6e9ef;
+    --muted: #8a94a7;
+    --accent: #6ea8ff;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --bad: #f87171;
+    --mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    flex: 0 0 auto;
+  }
+  header h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: .2px; white-space: nowrap; }
+  .status { color: var(--muted); font-size: 13px; font-family: var(--mono); flex: 1 1 240px; min-width: 0; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; margin-right: 7px; vertical-align: middle; }
+  .dot.live { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+  .dot.wait { background: var(--warn); }
+  .dot.off  { background: var(--bad); }
+
+  .controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  input[type=text] {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 6px 9px; font-family: var(--mono); font-size: 12px; min-width: 150px;
+  }
+  input[type=text]:focus { outline: none; border-color: var(--accent); }
+  button {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 6px 11px; font-size: 12px; cursor: pointer; white-space: nowrap;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #0f1115; font-weight: 600; }
+  button.primary:hover { color: #0f1115; opacity: .9; }
+  button.on { border-color: var(--warn); color: var(--warn); }
+
+  main { flex: 1 1 auto; display: flex; min-height: 0; }
+
+  aside {
+    width: 340px; flex: 0 0 340px; border-right: 1px solid var(--border);
+    overflow-y: auto; padding: 16px; background: var(--panel);
+  }
+  aside h2, .feed h2 {
+    margin: 0 0 10px 0; font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .8px; color: var(--muted);
+  }
+
+  .session {
+    border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+    margin-bottom: 10px; background: var(--panel-2); cursor: pointer;
+  }
+  .session:hover { border-color: var(--accent); }
+  .session.attached { border-color: var(--ok); box-shadow: 0 0 0 1px rgba(74,222,128,.25) inset; cursor: default; }
+  .session.stale { opacity: .5; }
+  .session .row1 { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .session .id { font-family: var(--mono); font-size: 12px; color: var(--text); }
+  .session .meta { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 5px; line-height: 1.55; word-break: break-all; }
+  .tag {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .5px; padding: 2px 6px;
+    border-radius: 4px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap;
+  }
+  .tag.peer { color: var(--accent); border-color: var(--accent); }
+  .tag.dreambox { color: var(--warn); border-color: var(--warn); }
+
+  .session .mismatch {
+    color: var(--warn); border: 1px solid var(--warn); border-radius: 4px;
+    padding: 5px 7px; margin-bottom: 6px; line-height: 1.5;
+  }
+
+  .note { font-size: 12px; color: var(--muted); line-height: 1.6; }
+  .note.warn { color: var(--warn); }
+
+  details { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
+  summary {
+    cursor: pointer; font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .8px; color: var(--muted); list-style: none;
+  }
+  summary::-webkit-details-marker { display: none; }
+  summary::before { content: "▸ "; }
+  details[open] summary::before { content: "▾ "; }
+  summary:hover { color: var(--accent); }
+
+  .feed { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; padding: 16px 16px 0 16px; }
+  .feedhead { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  .feedhead h2 { margin: 0; }
+  .spacer { flex: 1 1 auto; }
+  .count { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+  .tablewrap { flex: 1 1 auto; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+  table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12px; }
+  thead th {
+    position: sticky; top: 0; background: var(--panel-2); z-index: 1;
+    text-align: left; padding: 8px 10px; font-weight: 600; color: var(--muted);
+    font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
+    border-bottom: 1px solid var(--border);
+  }
+  tbody td { padding: 5px 10px; border-bottom: 1px solid rgba(42,48,64,.5); vertical-align: top; }
+  tbody tr.ev { cursor: pointer; }
+  tbody tr.ev:hover { background: rgba(110,168,255,.06); }
+  .c-time { color: var(--muted); white-space: nowrap; width: 96px; }
+  .c-type { color: var(--accent); white-space: nowrap; width: 170px; }
+  .c-net  { color: var(--text); white-space: nowrap; width: 110px; }
+  .c-u    { color: var(--ok); white-space: nowrap; width: 110px; max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
+  .c-body { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 0; }
+  .c-size { color: var(--muted); text-align: right; white-space: nowrap; width: 70px; }
+  .unparsed { color: var(--bad); }
+  .dim { color: var(--muted); }
+  tr.rawrow td { background: #12141a; }
+  pre.raw { margin: 0; padding: 8px 10px; white-space: pre-wrap; word-break: break-all; color: var(--text); font-size: 11.5px; line-height: 1.5; }
+
+  .empty { padding: 40px 20px; text-align: center; color: var(--muted); font-size: 13px; line-height: 1.7; }
+
+  footer {
+    flex: 0 0 auto; padding: 8px 20px; border-top: 1px solid var(--border);
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    display: flex; gap: 18px; flex-wrap: wrap;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>DreamPark LAN Monitor</h1>
+  <div class="status"><span id="dot" class="dot"></span><span id="statusText">connecting to monitor…</span></div>
+  <div class="controls">
+    <input type="text" id="parkInput" placeholder="parkId to follow" spellcheck="false">
+    <button class="primary" id="pinBtn">Pin</button>
+    <button id="detachBtn">Detach</button>
+    <input type="text" id="filterInput" placeholder="filter type / netId / text" spellcheck="false">
+    <button id="pauseBtn">Pause</button>
+    <button id="clearBtn">Clear</button>
+  </div>
+</header>
+
+<main>
+  <aside>
+    <h2>Sessions on this LAN</h2>
+    <div id="sessions"></div>
+    <div id="discoveryNote"></div>
+
+    <details id="manualBox">
+      <summary>Attach by hand</summary>
+      <div class="note" style="margin:10px 0">
+        For a LAN that drops UDP broadcast, or when another process on this
+        machine already holds :7700. The hosting headset logs its own address,
+        port and session key.
+      </div>
+      <input type="text" id="mHost" placeholder="host e.g. 192.168.1.42" spellcheck="false" style="width:100%;margin-bottom:6px">
+      <input type="text" id="mPort" placeholder="port (7777)" spellcheck="false" style="width:100%;margin-bottom:6px">
+      <input type="text" id="mKey" placeholder="session key" spellcheck="false" style="width:100%;margin-bottom:8px">
+      <button id="mGo" style="width:100%">Attach</button>
+    </details>
+  </aside>
+
+  <section class="feed">
+    <div class="feedhead">
+      <h2>Observed traffic</h2>
+      <span class="spacer"></span>
+      <span class="count" id="feedCount"></span>
+    </div>
+    <div class="tablewrap" id="tableWrap">
+      <table>
+        <thead>
+          <tr>
+            <th class="c-time">Time</th>
+            <th class="c-type">Type</th>
+            <th class="c-net">netId</th>
+            <th class="c-u">u</th>
+            <th class="c-body">Payload</th>
+            <th class="c-size">Bytes</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div class="empty" id="empty">
+        Nothing observed yet.<br>
+        Pin a parkId above, or click a session on the left to attach.
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <span id="fObserved">observed: 0</span>
+  <span id="fBytes">bytes: 0</span>
+  <span id="fPing"></span>
+  <span id="fCapture"></span>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  var lastId = 0;
+  var paused = false;
+  var filter = "";
+  var MAX_ROWS = 1500;
+  var rowsEl = document.getElementById("rows");
+  var wrapEl = document.getElementById("tableWrap");
+  var emptyEl = document.getElementById("empty");
+  var totalShown = 0;
+
+  // ── helpers ──────────────────────────────────────────────────────
+  function el(id) { return document.getElementById(id); }
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function fmtTime(ms) {
+    var d = new Date(ms);
+    function p(n, w) { return String(n).padStart(w || 2, "0"); }
+    return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds()) + "." + p(d.getMilliseconds(), 3);
+  }
+
+  function fmtBytes(n) {
+    if (n < 1024) return n + " B";
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+    return (n / 1048576).toFixed(2) + " MB";
+  }
+
+  function fmtAge(ms) {
+    if (ms < 1500) return "just now";
+    if (ms < 60000) return Math.round(ms / 1000) + "s ago";
+    return Math.round(ms / 60000) + "m ago";
+  }
+
+  function prettyJson(text) {
+    try { return JSON.stringify(JSON.parse(text), null, 2); }
+    catch (e) { return text; }
+  }
+
+  // The payload minus the two fields that already have their own columns, so
+  // the inline preview carries the part of the message you can't see yet.
+  function bodyPreview(e) {
+    if (!e.parsed) return e.raw;
+    try {
+      var p = JSON.parse(e.raw).payload;
+      if (p == null || typeof p !== "object") return "";
+      var copy = {};
+      Object.keys(p).forEach(function (k) {
+        if (k !== "netId" && k !== "u") copy[k] = p[k];
+      });
+      if (!Object.keys(copy).length) return "";
+      return JSON.stringify(copy);
+    } catch (err) { return ""; }
+  }
+
+  // ── status + sessions ────────────────────────────────────────────
+  function renderState(s) {
+    var dot = el("dot"), txt = el("statusText");
+    dot.className = "dot " + (s.connected ? "live" : (s.state === "connecting" ? "wait" : (s.state === "rejected" || s.state === "failed" ? "off" : "wait")));
+    txt.textContent = s.statusMessage || s.state;
+
+    if (document.activeElement !== el("parkInput")) {
+      el("parkInput").value = s.pinnedParkId || "";
+    }
+
+    el("fObserved").textContent = "observed: " + s.messagesObserved;
+    el("fBytes").textContent = "bytes: " + fmtBytes(s.bytesObserved);
+    el("fPing").textContent = s.connected ? "ping: " + s.ping + " ms" : "";
+    el("fCapture").textContent = s.capturePath ? "capture: " + s.capturePath : "capture: off";
+
+    renderSessions(s);
+
+    var note = el("discoveryNote");
+    if (s.discoveryError) {
+      note.innerHTML = '<div class="note warn">' + esc(s.discoveryError) + "</div>";
+    } else if (!s.sessions.length) {
+      note.innerHTML = '<div class="note">No dream-pub beacons heard yet.<br><br>' +
+        "Sessions appear here within a second or two of a headset hosting. If nothing " +
+        "shows up, check that this machine is on the same subnet as the headsets and that " +
+        "the network does not isolate clients from each other.</div>";
+    } else {
+      note.innerHTML = "";
+    }
+  }
+
+  function renderSessions(s) {
+    var host = el("sessions");
+    var html = "";
+
+    s.sessions.forEach(function (x) {
+      var cls = "session" + (x.attached ? " attached" : "") + (x.live ? "" : " stale");
+      html += '<div class="' + cls + '" data-session="' + esc(x.sessionId) + '">';
+      html += '<div class="row1"><span class="id">' + esc(x.sessionId) + "</span>";
+      html += '<span class="tag ' + esc(x.hostType) + '">' + esc(x.hostType) + "</span></div>";
+      html += '<div class="meta">';
+      if (x.addressMismatch) {
+        // The most expensive failure this tool can surface, and the one it used
+        // to hide: a beacon advertising an address that is not the one it was
+        // sent from. Everything downstream looks healthy — host beaconing, park
+        // matching, relay up — and no headset can reach it, because they are all
+        // dialling an interface that does not route to them.
+        html += '<div class="mismatch">⚠ advertises ' + esc(x.host) +
+                ", beacons arrive from " + esc(x.sourceAddress) +
+                "<br>Headsets are told to connect to " + esc(x.host) +
+                ". If that is a VPN or virtual adapter on the host machine, they cannot get there.</div>";
+      }
+      html += "parkId: " + (x.parkId ? esc(x.parkId) : '<span class="dim">(none — kiosk)</span>');
+      if (x.sourceAddress && !x.addressMismatch) html += "<br>from: " + esc(x.sourceAddress);
+      if (x.hostId) html += "<br>hostId: " + esc(x.hostId);
+      if (x.dreamboxId) html += "<br>dreamboxId: " + esc(x.dreamboxId);
+      html += "<br>ch: " + (x.channel ? esc(x.channel) : '<span class="dim">(none)</span>');
+      html += " · v" + x.protocolVersion;
+      html += " · cap: " + (x.msgCap ? x.msgCap + "/s" : '<span class="dim">none</span>');
+      html += "<br>beacons: " + x.beaconCount + " · seen " + esc(fmtAge(x.ageMs));
+      if (x.attached) html += '<br><span style="color:var(--ok)">▸ observing</span>';
+      else if (x.live) html += '<br><span style="color:var(--accent)">click to attach</span>';
+      else html += '<br><span class="dim">stale — no recent beacon</span>';
+      html += "</div></div>";
+    });
+
+    host.innerHTML = html;
+
+    Array.prototype.forEach.call(host.querySelectorAll(".session"), function (node) {
+      if (node.classList.contains("attached")) return;
+      node.addEventListener("click", function () {
+        post("/api/attach?session=" + encodeURIComponent(node.dataset.session));
+      });
+    });
+  }
+
+  // ── event feed ───────────────────────────────────────────────────
+  function matchesFilter(e) {
+    if (!filter) return true;
+    var hay = (e.type + " " + (e.netId == null ? "" : e.netId) + " " + (e.u || "") + " " + e.raw).toLowerCase();
+    return hay.indexOf(filter) !== -1;
+  }
+
+  function appendEvents(list) {
+    // Stick to the bottom only if the user is already there — scrolling up to
+    // read something must not be yanked away by the next message.
+    var atBottom = wrapEl.scrollHeight - wrapEl.scrollTop - wrapEl.clientHeight < 40;
+    var added = 0;
+
+    list.forEach(function (e) {
+      if (!matchesFilter(e)) return;
+
+      var tr = document.createElement("tr");
+      tr.className = "ev";
+      tr.innerHTML =
+        '<td class="c-time">' + fmtTime(e.tMs) + "</td>" +
+        '<td class="c-type">' + (e.parsed ? esc(e.type || "—") : '<span class="unparsed">not JSON</span>') + "</td>" +
+        '<td class="c-net">' + (e.netId == null ? '<span class="dim">—</span>' : esc(e.netId)) + "</td>" +
+        '<td class="c-u">' + (e.u == null ? '<span class="dim">—</span>' : esc(e.u)) + "</td>" +
+        '<td class="c-body">' + esc(bodyPreview(e)) + "</td>" +
+        '<td class="c-size">' + e.bytes + "</td>";
+
+      var raw = document.createElement("tr");
+      raw.className = "rawrow";
+      raw.style.display = "none";
+      raw.innerHTML = '<td colspan="6"><pre class="raw">' + esc(prettyJson(e.raw)) + "</pre></td>";
+
+      tr.addEventListener("click", function () {
+        raw.style.display = raw.style.display === "none" ? "" : "none";
+      });
+
+      rowsEl.appendChild(tr);
+      rowsEl.appendChild(raw);
+      added++;
+      totalShown++;
+    });
+
+    while (rowsEl.children.length > MAX_ROWS * 2) {
+      rowsEl.removeChild(rowsEl.firstChild);
+      rowsEl.removeChild(rowsEl.firstChild);
+    }
+
+    if (added) {
+      emptyEl.style.display = "none";
+      el("feedCount").textContent = totalShown + " shown" + (filter ? " (filtered)" : "");
+      if (atBottom) wrapEl.scrollTop = wrapEl.scrollHeight;
+    }
+  }
+
+  // ── polling ──────────────────────────────────────────────────────
+  function post(url) {
+    return fetch(url, { method: "POST" }).catch(function () {});
+  }
+
+  function pollState() {
+    fetch("/api/state")
+      .then(function (r) { return r.json(); })
+      .then(renderState)
+      .catch(function () {
+        el("dot").className = "dot off";
+        el("statusText").textContent = "monitor process not responding — did it stop?";
+      });
+  }
+
+  function pollEvents() {
+    if (paused) return;
+    fetch("/api/events?since=" + lastId)
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.events && d.events.length) {
+          lastId = d.events[d.events.length - 1].id;
+          appendEvents(d.events);
+        }
+      })
+      .catch(function () {});
+  }
+
+  // ── controls ─────────────────────────────────────────────────────
+  el("pinBtn").addEventListener("click", function () {
+    post("/api/pin?parkId=" + encodeURIComponent(el("parkInput").value.trim())).then(pollState);
+  });
+
+  el("parkInput").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") el("pinBtn").click();
+  });
+
+  el("detachBtn").addEventListener("click", function () {
+    post("/api/detach").then(pollState);
+  });
+
+  el("pauseBtn").addEventListener("click", function () {
+    paused = !paused;
+    var b = el("pauseBtn");
+    b.textContent = paused ? "Resume" : "Pause";
+    b.className = paused ? "on" : "";
+    // The ring buffer keeps filling while paused; resuming replays whatever
+    // is still in it rather than silently skipping the gap.
+  });
+
+  el("clearBtn").addEventListener("click", function () {
+    rowsEl.innerHTML = "";
+    totalShown = 0;
+    emptyEl.style.display = "";
+    el("feedCount").textContent = "";
+    post("/api/clear");
+  });
+
+  el("mGo").addEventListener("click", function () {
+    var host = el("mHost").value.trim();
+    var port = el("mPort").value.trim() || "7777";
+    var key = el("mKey").value.trim();
+    if (!host) { el("mHost").focus(); return; }
+    post("/api/attach-direct?host=" + encodeURIComponent(host) +
+         "&port=" + encodeURIComponent(port) +
+         "&key=" + encodeURIComponent(key)).then(pollState);
+  });
+
+  el("filterInput").addEventListener("input", function () {
+    filter = el("filterInput").value.trim().toLowerCase();
+    el("feedCount").textContent = totalShown + " shown" + (filter ? " (filtered)" : "");
+  });
+
+  pollState();
+  pollEvents();
+  setInterval(pollState, 1000);
+  setInterval(pollEvents, 400);
+})();
+</script>
+</body>
+</html>

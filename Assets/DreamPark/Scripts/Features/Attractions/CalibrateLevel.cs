@@ -19,6 +19,13 @@ namespace DreamPark {
         /// SEPARATE mask from arMeshLayer, not merged into it, so the conform
         /// can try live mesh first and fall back — live always beats memory.
         private LayerMask arMeshPriorLayer = -1;
+        /// Live ARKit planes rematerialized as colliders on a device with no
+        /// LiDAR (Non-LiDAR-Scan-Compatibility-Spec §5). A THIRD separate mask
+        /// for the same reason the prior is separate: GroundProbe ranks them
+        /// live mesh -> prior -> estimate, and merging throws the ranking away.
+        /// Ranked last because a plane is one extrapolated quad while a prior
+        /// cell is a percentile over many observations.
+        private LayerMask arMeshEstimateLayer = -1;
 
         /// Set by the project-side FloorPriorManager when a floor prior has been
         /// rematerialized with trustworthy geometry; cleared on park switch and
@@ -81,6 +88,8 @@ namespace DreamPark {
                 arMeshLayer = LayerMask.GetMask("ARMesh");
             if (arMeshPriorLayer == -1)
                 arMeshPriorLayer = LayerMask.GetMask(FloorPriorLayerName);
+            if (arMeshEstimateLayer == -1)
+                arMeshEstimateLayer = LayerMask.GetMask(PlaneEstimateLayerName);
 
             if (levelTemplate == null)
                 levelTemplate = GetComponentInParent<LevelTemplate>();
@@ -247,7 +256,8 @@ namespace DreamPark {
             // calibrates today cannot stop calibrating because of this.
             Bounds footprint = ComputeWorldFootprint(verts);
             GroundProbe.Span span = GroundProbe.MeasureSpan(
-                footprint, arMeshLayer, arMeshPriorLayer, minRaycastAbove, minRaycastBelow);
+                footprint, arMeshLayer, arMeshPriorLayer, minRaycastAbove, minRaycastBelow,
+                arMeshEstimateLayer);
 
             // Which vertices actually found ground. A vertex that MISSES keeps
             // its authored height, and that is the problem this array exists to
@@ -258,7 +268,8 @@ namespace DreamPark {
             {
                 Vector3 worldPos = transform.TransformPoint(verts[i]);
 
-                if (GroundProbe.TryFindGround(worldPos, span, arMeshLayer, arMeshPriorLayer, out RaycastHit hit))
+                if (GroundProbe.TryFindGround(worldPos, span, arMeshLayer, arMeshPriorLayer,
+                                              arMeshEstimateLayer, out RaycastHit hit))
                 {
                     float targetY = hit.point.y;
                     float newY = targetY;
@@ -882,16 +893,38 @@ namespace DreamPark {
         /// prior builder.
         private const string FloorPriorLayerName = "ARMeshPrior";
 
+        /// Must match ARPlaneScanSurfaces.LayerName. Named here rather than
+        /// referenced, for the same reason as FloorPriorLayerName above: the
+        /// SDK keeps no compile-time edge to the project-side producer.
+        private const string PlaneEstimateLayerName = "ARMeshEstimate";
+
         void OnEnable()
         {
             if (arMeshManager != null)
                 arMeshManager.meshesChanged += OnMeshesChanged;
+            // The non-LiDAR twin. meshesChanged never fires on a device with no
+            // depth sensor, so without this the continuous Scan-mode conform has
+            // nothing driving it and the floor would only update on the
+            // updateInterval poll. Raised project-side; the SDK does not learn
+            // what produced the geometry.
+            GroundProbe.GroundGeometryChanged += OnGroundGeometryChanged;
         }
 
         void OnDisable()
         {
             if (arMeshManager != null)
                 arMeshManager.meshesChanged -= OnMeshesChanged;
+            GroundProbe.GroundGeometryChanged -= OnGroundGeometryChanged;
+        }
+
+        private void OnGroundGeometryChanged()
+        {
+            // SAME GUARD AS OnMeshesChanged, and for the same reason: ground
+            // geometry also exists in AR build mode (placement raycasts), and
+            // re-conforming there would silently move every placed floor.
+            // Floors change only at sanctioned moments.
+            if (!isCalibrating) return;
+            ConformGridToSurface();
         }
 
         private void OnMeshesChanged(ARMeshesChangedEventArgs args)

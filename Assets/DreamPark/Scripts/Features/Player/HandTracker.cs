@@ -84,11 +84,18 @@ public class HandTracker : MonoBehaviour
             return;
         }
 
-        OVRHand[] hands = FindObjectsByType<OVRHand>(FindObjectsSortMode.InstanceID);
-        if (hands.Length >= 2)
+        // Bind by GetHand(), never by InstanceID order — that assignment
+        // swapped left/right whenever the right hand happened to sort first,
+        // and in the editor this method runs every frame.
+        if (leftHand == null || rightHand == null)
         {
-            leftHand = hands[0];
-            rightHand = hands[1];
+            OVRHand[] hands = FindObjectsByType<OVRHand>(FindObjectsSortMode.None);
+            foreach (OVRHand hand in hands)
+            {
+                if (hand == null) continue;
+                if (hand.GetHand() == OVRPlugin.Hand.HandLeft) leftHand = hand;
+                else if (hand.GetHand() == OVRPlugin.Hand.HandRight) rightHand = hand;
+            }
         }
         ChooseHand();
     }
@@ -112,15 +119,46 @@ public class HandTracker : MonoBehaviour
                 }
                 break;
             case HandPreference.Both:
-                if (leftHand != null && leftHand.IsTracked)
+                // Stick to the hand we already have while it is still
+                // tracked. The old path always took left if left.IsTracked,
+                // so a right-hand lock was stolen the moment the left hand
+                // appeared and could never come back.
                 {
-                    activeHandAnchor = leftAnchor;
-                    activeHand = leftHand;
-                }
-                else if (rightHand != null && rightHand.IsTracked)
-                {
-                    activeHandAnchor = rightAnchor;
-                    activeHand = rightHand;
+                    bool leftTracked = leftHand != null && leftHand.IsTracked;
+                    bool rightTracked = rightHand != null && rightHand.IsTracked;
+                    bool currentTracked =
+                        (activeHand == leftHand && leftTracked) ||
+                        (activeHand == rightHand && rightTracked);
+
+                    if (currentTracked)
+                        break;
+
+                    if (rightTracked && !leftTracked)
+                    {
+                        activeHand = rightHand;
+                        activeHandAnchor = rightAnchor;
+                    }
+                    else if (leftTracked && !rightTracked)
+                    {
+                        activeHand = leftHand;
+                        activeHandAnchor = leftAnchor;
+                    }
+                    else if (leftTracked && rightTracked)
+                    {
+                        // First lock, both already up. Keep a previous
+                        // assignment if we have one; otherwise do not
+                        // default to left.
+                        if (activeHand == leftHand || activeHandAnchor == leftAnchor)
+                        {
+                            activeHand = leftHand;
+                            activeHandAnchor = leftAnchor;
+                        }
+                        else
+                        {
+                            activeHand = rightHand;
+                            activeHandAnchor = rightAnchor;
+                        }
+                    }
                 }
                 break;
         }

@@ -8,8 +8,17 @@ namespace DreamPark {
         public static Dictionary<string, PlayerRig> instances;
         public static PlayerRig Instance;
         [ReadOnly] public string gameId;
+        /// <summary>The rig's RemoteRig child: what other players see of this player (RemoteRig.cs). Hidden here; cloned per peer by PlayerPresence.</summary>
+        [System.NonSerialized] public Transform remoteRigTemplate;
 
         void Awake() {
+            // Hide the RemoteRig template before anything inside it can run:
+            // the parent's Awake beats its children's, so scripts in the
+            // template only ever boot on the clones other headsets build.
+            remoteRigTemplate = RemoteRig.FindTemplate(transform);
+            if (remoteRigTemplate != null && remoteRigTemplate.gameObject.activeSelf) {
+                remoteRigTemplate.gameObject.SetActive(false);
+            }
             if (instances == null) {
                 instances = new Dictionary<string, PlayerRig>();
             }

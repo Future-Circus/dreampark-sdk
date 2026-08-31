@@ -1527,12 +1527,12 @@ namespace DreamPark.ConvertReady
                 {
                     if (mat == null || !seen.Add(mat.GetInstanceID())) continue;
 
-                    if (DreamPark.EditorTools.MaterialConverter.IsParticleMaterial(mat))
+                    if (MaterialConverter.IsParticleMaterial(mat))
                     {
-                        if (DreamPark.EditorTools.MaterialConverter.HasExoticParticleFeature(mat)) { exotic++; continue; }
-                        if (DreamPark.EditorTools.MaterialConverter.ConvertParticleMaterial(mat)) particle++;
+                        if (MaterialConverter.HasExoticParticleFeature(mat)) { exotic++; continue; }
+                        if (MaterialConverter.ConvertParticleMaterial(mat)) particle++;
                     }
-                    else if (DreamPark.EditorTools.MaterialConverter.ConvertMaterial(mat))
+                    else if (MaterialConverter.ConvertMaterial(mat))
                     {
                         opaque++;
                     }

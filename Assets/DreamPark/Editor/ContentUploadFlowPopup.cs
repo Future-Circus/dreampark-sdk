@@ -48,8 +48,8 @@ namespace DreamPark
             if (owner != null) owner.ResetCompletionStateForNextRun();
 
             // First uploads must use Upload All — Patch needs a baseline and
-            // Code/Previews-only need prior-version bundles to fall back to,
-            // neither of which exist when v1 is the first thing this contentId
+            // Code-only needs prior-version bundles to fall back to, neither
+            // of which exist when v1 is the first thing this contentId
             // has ever shipped. Override the saved pref for this run only so
             // the user's normal default isn't trampled.
             UploadMode initialMode = IsFirstUpload(owner) ? UploadMode.All : UploadModePrefs.Current;
@@ -237,8 +237,8 @@ namespace DreamPark
         // yet (or we haven't loaded that metadata yet, in which case we
         // err on the cautious side — All is still the safe option). Used
         // to lock the upload mode to All for the first release, since
-        // Patch needs a saved baseline and Code/Previews-only need prior-
-        // version bundles to fall back to.
+        // Patch needs a saved baseline and Code-only needs prior-version
+        // bundles to fall back to.
         private static bool IsFirstUpload(ContentUploaderPanel owner)
         {
             if (owner == null) return true;
@@ -261,9 +261,10 @@ namespace DreamPark
         //     options will become available later) but locks to All.
         private void DrawUploadModeCard()
         {
-            // Legacy — every upload is a full re-upload by definition.
-            // Skip the whole card so the popup stays focused on what the
-            // user actually controls in this configuration.
+            // Legacy (deprecated) — every upload is a full re-upload by
+            // definition, so skip the whole card. Reaching here now means the
+            // machine took the Troubleshooting escape hatch; the panel shows a
+            // standing warning in that state (DrawLegacyBundlingNotice).
             if (BundlingStrategyPrefs.Current != BundlingStrategy.Smart)
             {
                 // Keep uploadMode aligned with what the engine will actually
@@ -288,7 +289,7 @@ namespace DreamPark
             GUILayout.BeginVertical(EditorStyles.helpBox);
             GUILayout.Label("Upload Scope", EditorStyles.boldLabel);
             EditorGUILayout.LabelField(
-                "Pick what this run pushes to the server. Code-only requires a prior published version to patch against.",
+                "Pick what this run pushes to the server. Patch and Code-only both need a prior published version to patch against.",
                 EditorStyles.wordWrappedMiniLabel);
 
             var values = (UploadMode[])System.Enum.GetValues(typeof(UploadMode));
@@ -317,8 +318,8 @@ namespace DreamPark
             {
                 EditorGUILayout.HelpBox(
                     "First release for this content — Upload All is the only valid mode because " +
-                    "there's no prior version yet to patch against. Patch, Code-only, and " +
-                    "Previews-only will be available starting with your second upload.",
+                    "there's no prior version yet to patch against. Patch and Code-only become " +
+                    "available starting with your second upload.",
                     MessageType.Info);
             }
 
@@ -330,7 +331,7 @@ namespace DreamPark
             {
                 EditorGUILayout.HelpBox(
                     "Reupload uses the current ServerData/ output as-is. If the existing build " +
-                    "wasn't produced by Smart bundling, the Code/Previews bundles won't be there " +
+                    "wasn't produced by Smart bundling, the Code bundle won't be there " +
                     "and the upload will be empty. Compile & Upload is the safer route for " +
                     $"{UploadModePrefs.ShortLabel(uploadMode)}.",
                     MessageType.Info);
