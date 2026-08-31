@@ -44,6 +44,9 @@ namespace DreamPark
         /// <summary>Their display name (ProfileAPI on their headset), or "" until it arrives — the name tag falls back to Guest + id.</summary>
         public string displayName = "";
 
+        /// <summary>Their avatar URL (ProfileAPI.AvatarUrl on their headset), or "" until it arrives, or forever if they have none — content decides what "no avatar" looks like.</summary>
+        public string avatarUrl = "";
+
         /// <summary>The clone of this player's RemoteRig, or null while no local rig exists for their game (or their prefab has no RemoteRig).</summary>
         public GameObject rig;
         string _builtForGame;      // game the last build was for (null = never built)
@@ -83,7 +86,7 @@ namespace DreamPark
         /// <summary>Feed a received pose (park-local). Null pose = that hand is not tracked right now.</summary>
         public void Receive(int sequence, string game, Vector3? headPos, Quaternion? headRot,
                             Vector3? leftPos, Quaternion? leftRot, Vector3? rightPos, Quaternion? rightRot,
-                            string active, string state, string name = null)
+                            string active, string state, string name = null, string avatar = null)
         {
             // ReliableOrdered cannot reorder, but a peer that restarted resets
             // its counter; accept anything that is not a duplicate of what we
@@ -102,6 +105,7 @@ namespace DreamPark
             if (rightPos.HasValue) { _rp = rightPos.Value; _rq = rightRot ?? _rq; rightTracked = true; } else rightTracked = false;
             if (!string.IsNullOrEmpty(active)) activeHand = active;
             if (!string.IsNullOrEmpty(name)) displayName = name;
+            if (!string.IsNullOrEmpty(avatar)) avatarUrl = avatar;
             if (state != null && state != stateJson) stateJson = state;
         }
 
@@ -135,6 +139,7 @@ namespace DreamPark
             }
             _view.Set("game",          gameId ?? "");
             _view.Set("name",          displayName ?? "");
+            _view.Set("avatar",        avatarUrl ?? "");
             _view.Set("hand",          ActiveHandTransform);
             _view.Set("active_hand",   activeHand);
             _view.Set("left_tracked",  leftTracked);
