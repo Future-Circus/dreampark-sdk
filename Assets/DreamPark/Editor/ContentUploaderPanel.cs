@@ -4,6 +4,7 @@ using UnityEngine;
 using System.IO;
 using DreamPark.API;
 using DreamPark.Editor;
+using DreamPark.Badges;
 using System;
 using UnityEditor.AddressableAssets;
 using UnityEditor.AddressableAssets.Build;
@@ -124,10 +125,12 @@ namespace DreamPark {
         private const string ParkAssetsAttractionsPrefKey = "DreamPark.ContentUploader.Fold.ParkAssets.Attractions";
         private const string ParkAssetsPropsPrefKey       = "DreamPark.ContentUploader.Fold.ParkAssets.Props";
         private const string ParkAssetsPlayerPrefKey      = "DreamPark.ContentUploader.Fold.ParkAssets.Player";
+        private const string ParkAssetsBadgesPrefKey      = "DreamPark.ContentUploader.Fold.ParkAssets.Badges";
         private bool parkAssetsFold = true;
         private bool foldAttractions = true;
         private bool foldProps = true;
         private bool foldPlayer = true;
+        private bool foldBadges = true;
 
         private List<string> contentIdOptions = new List<string>();
         private int contentIdIndex = 0;
@@ -226,6 +229,28 @@ namespace DreamPark {
         private List<ContentRootEntry> contentRoots = new List<ContentRootEntry>();
         private string contentRootsContentId;
         private bool contentRootsDirty;
+
+        // ── Badges ──────────────────────────────────────────────────────
+        // The badge cards this content package defines. Unlike contentRoots,
+        // this list is NOT purely derived from the project: it is the local
+        // draft (BadgeStore, .badges.json) merged with whatever BadgeLuaScanner
+        // finds in the developer's own Lua. Ids that came from Lua are locked;
+        // titles, descriptions and icons are always the developer's to type.
+        private List<BadgeStore.Entry> badges = new List<BadgeStore.Entry>();
+        private string badgesContentId;
+        private BadgeLuaScanner.Result badgeScan;
+        // Set when a field is edited; flushed to .badges.json on the next
+        // Layout pass rather than on every keystroke.
+        private bool badgesDirty;
+        private bool isPushingBadges;
+        // Structural mutations (adding or removing a card) are QUEUED, never
+        // applied mid-frame. IMGUI hands out control ids by draw order, so a
+        // list that gained or lost an element between the Layout and Repaint
+        // passes shifts the id stream and every text field after the edit point
+        // starts eating the wrong keystrokes. Same reason preUploadBadges is
+        // swapped only at Layout.
+        private bool badgeAddRequested;
+        private int badgeRemoveIndex = -1;
 
         // Per-frame snapshot of the pre-upload findings, keyed by asset path (which is
         // what ContentRootEntry carries — the GUID is discarded during the scan).
@@ -327,6 +352,7 @@ namespace DreamPark {
             FetchContentUsers();
             RefreshPatchEstimate();
             RefreshContentRoots();
+            RefreshBadges();
             RebuildPreUploadBadges();
             ScheduleAdvisoryPreUploadScan();
         }
@@ -337,6 +363,7 @@ namespace DreamPark {
             foldAttractions = EditorPrefs.GetBool(ParkAssetsAttractionsPrefKey, true);
             foldProps       = EditorPrefs.GetBool(ParkAssetsPropsPrefKey,       true);
             foldPlayer      = EditorPrefs.GetBool(ParkAssetsPlayerPrefKey,      true);
+            foldBadges      = EditorPrefs.GetBool(ParkAssetsBadgesPrefKey,      true);
         }
 
         private void LoadSectionFoldoutPrefs()
@@ -551,6 +578,15 @@ namespace DreamPark {
                 preUploadBadgesPending = null;
             }
 
+            // Same rule for the badge list: add/remove only ever happens between
+            // frames, so Layout and Repaint always agree on how many cards (and
+            // therefore how many control ids) the grid draws.
+            if (Event.current.type == EventType.Layout)
+            {
+                ApplyQueuedBadgeMutations();
+                FlushBadgeDraft();
+            }
+
             // Auth gate: if logged out, the rest of the panel is hidden behind a
             // single Login CTA. Authentication itself happens in AuthPopup.
             if (!AuthAPI.isLoggedIn)
@@ -632,6 +668,7 @@ namespace DreamPark {
                 FetchContentUsers();
                 RefreshPatchEstimate();
                 RefreshContentRoots();
+                RefreshBadges();
             }
 
             // Deferred refresh: the projectChanged callback only sets a
@@ -642,6 +679,12 @@ namespace DreamPark {
             if ((contentRootsDirty || contentRootsContentId != contentId) && !isUploading)
             {
                 RefreshContentRoots();
+
+                // Badges ride the same debounce: a new .lua.txt, a changed @var
+                // default, or a badgeId typed into a LuaBehaviour's Inspector all
+                // arrive as projectChanged, and all three change what the scan
+                // should find.
+                RefreshBadges();
 
                 // Piggyback: this block already fires exactly when the root set
                 // changed (content-id switch, projectChanged, preview save) and is
@@ -3662,9 +3705,10 @@ namespace DreamPark {
                 }
             }
 
-            string summary = contentRoots.Count == 0
+            string badgeSummary = badges.Count > 0 ? $"  ·  {badges.Count} badge(s)" : "";
+            string summary = (contentRoots.Count == 0 && badges.Count == 0)
                 ? "Park Assets (none)"
-                : $"Park Assets  ·  {attractionCount} attraction(s)  ·  {propCount} prop(s)  ·  {playerCount} player";
+                : $"Park Assets  ·  {attractionCount} attraction(s)  ·  {propCount} prop(s)  ·  {playerCount} player{badgeSummary}";
 
             // Manual rect layout so we can pin a small refresh-glyph button
             // to the top-right of the foldout header. EditorStyles.foldoutHeader
@@ -3712,19 +3756,30 @@ namespace DreamPark {
                     $"You haven't created any Attractions or Props yet. Add a prefab to Assets/Content/{contentId}/ " +
                     "with a LevelTemplate, AttractionTemplate, or PropTemplate component before uploading.",
                     MessageType.Warning);
-                return;
             }
-
-            if (!HasShippableContent())
+            else
             {
-                EditorGUILayout.HelpBox(
-                    "This content folder has no Attractions or Props. Uploading is disabled until you add at least one.",
-                    MessageType.Warning);
+                if (!HasShippableContent())
+                {
+                    EditorGUILayout.HelpBox(
+                        "This content folder has no Attractions or Props. Uploading is disabled until you add at least one.",
+                        MessageType.Warning);
+                }
+
+                DrawContentGroup("Attractions", ContentRootKind.Attraction, ref foldAttractions, ParkAssetsAttractionsPrefKey);
+                DrawContentGroup("Props",       ContentRootKind.Prop,       ref foldProps,       ParkAssetsPropsPrefKey);
+                DrawContentGroup("Player",      ContentRootKind.Player,     ref foldPlayer,      ParkAssetsPlayerPrefKey);
             }
 
-            DrawContentGroup("Attractions", ContentRootKind.Attraction, ref foldAttractions, ParkAssetsAttractionsPrefKey);
-            DrawContentGroup("Props",       ContentRootKind.Prop,       ref foldProps,       ParkAssetsPropsPrefKey);
-            DrawContentGroup("Player",      ContentRootKind.Player,     ref foldPlayer,      ParkAssetsPlayerPrefKey);
+            // Badges are data records, not prefabs, so they are not in
+            // contentRoots — and they must draw even when the package has no
+            // prefabs at all. Defining the badges before the attraction that
+            // awards them is a legitimate order to work in, and returning early
+            // above (which is what this section used to do) would have hidden
+            // the section from exactly the developer starting from scratch.
+            DrawBadgesGroup();
+
+            if (contentRoots.Count == 0) return;
 
             // Keep repainting until every root has its full AssetPreview
             // resolved. Relying on AssetPreview.IsLoadingAssetPreviews()
@@ -3789,6 +3844,324 @@ namespace DreamPark {
                 GUILayout.Space(CardSpacing);
             }
             EditorGUI.indentLevel--;
+        }
+
+        // ── Badges ──────────────────────────────────────────────────────
+        //
+        // Same chrome as the Attraction/Prop/Player groups — an EditorPrefs-
+        // backed foldout over a wrapping card grid — but backed by
+        // BadgeStore.Entry rather than by contentRoots, because a badge is a
+        // data record (id / title / description / icon), not a prefab. Trying to
+        // push it through ContentRootKind would have meant inventing a fake
+        // "root" with no asset behind it.
+        //
+        // The cards are WIDER than the prefab cards on purpose: a prefab card is
+        // a thumbnail plus a name, a badge card is three editable fields, and at
+        // the 110px prefab width the id field would be too narrow to read the id
+        // it is supposed to be preventing you from mistyping.
+        private const float BadgeCardWidth = 320f;
+        private const float BadgeCardHeight = 90f;
+        private const float BadgeIconSize = 64f;
+
+        private void RefreshBadges()
+        {
+            // Never lose a half-typed title to a background project change.
+            FlushBadgeDraft();
+
+            badgesContentId = contentId;
+            badgeAddRequested = false;
+            badgeRemoveIndex = -1;
+            badgesDirty = false;
+            badgeScan = null;
+
+            if (string.IsNullOrEmpty(contentId))
+            {
+                badges = new List<BadgeStore.Entry>();
+                return;
+            }
+
+            try
+            {
+                badgeScan = BadgeLuaScanner.Scan(contentId);
+                badges = BadgeStore.Merge(BadgeStore.Load(contentId), badgeScan.discoveries);
+            }
+            catch (Exception e)
+            {
+                // A scan failure must not cost the developer their saved draft —
+                // the draft is the part with hand-typed titles in it.
+                Debug.LogWarning("[Badges] Lua scan failed: " + e.Message);
+                badges = BadgeStore.Load(contentId);
+            }
+        }
+
+        private void ApplyQueuedBadgeMutations()
+        {
+            if (badgeAddRequested)
+            {
+                badgeAddRequested = false;
+                badges.Add(new BadgeStore.Entry());
+                badgesDirty = true;
+                Repaint();
+            }
+
+            if (badgeRemoveIndex >= 0)
+            {
+                if (badgeRemoveIndex < badges.Count) badges.RemoveAt(badgeRemoveIndex);
+                badgeRemoveIndex = -1;
+                badgesDirty = true;
+                Repaint();
+            }
+        }
+
+        // Writes .badges.json for whichever content the list currently belongs
+        // to — badgesContentId, NOT contentId. They differ for exactly one frame
+        // when the developer changes the dropdown, and saving to the new id there
+        // would copy the old package's badges into the new one.
+        private void FlushBadgeDraft()
+        {
+            if (!badgesDirty) return;
+            badgesDirty = false;
+            if (string.IsNullOrEmpty(badgesContentId)) return;
+            BadgeStore.Save(badgesContentId, badges);
+        }
+
+        private void DrawBadgesGroup()
+        {
+            GUILayout.Space(4);
+
+            bool newFold = EditorGUILayout.Foldout(foldBadges, $"Badges ({badges.Count})", true);
+            if (newFold != foldBadges)
+            {
+                foldBadges = newFold;
+                EditorPrefs.SetBool(ParkAssetsBadgesPrefKey, foldBadges);
+            }
+            if (!foldBadges) return;
+
+            EditorGUI.indentLevel++;
+
+            if (badges.Count == 0)
+            {
+                GUILayout.BeginHorizontal();
+                GUILayout.Space(EditorGUI.indentLevel * 12f);
+                EditorGUILayout.HelpBox(
+                    "No badges yet. Call dp.profile.awardBadge(\"some_id\") from your Lua and it appears here " +
+                    "automatically with the ID filled in — or press Add Badge to define one by hand.",
+                    MessageType.Info);
+                GUILayout.EndHorizontal();
+            }
+            else
+            {
+                float panelWidth = Mathf.Max(position.width - 24f, BadgeCardWidth);
+                int perRow = Mathf.Max(1, Mathf.FloorToInt((panelWidth + CardSpacing) / (BadgeCardWidth + CardSpacing)));
+
+                for (int i = 0; i < badges.Count; i += perRow)
+                {
+                    GUILayout.BeginHorizontal();
+                    GUILayout.Space(EditorGUI.indentLevel * 12f);
+                    for (int j = 0; j < perRow && i + j < badges.Count; j++)
+                    {
+                        DrawBadgeCard(badges[i + j], i + j);
+                        if (j < perRow - 1) GUILayout.Space(CardSpacing);
+                    }
+                    GUILayout.FlexibleSpace();
+                    GUILayout.EndHorizontal();
+                    GUILayout.Space(CardSpacing);
+                }
+            }
+
+            // What the scan could NOT work out. Reported rather than swallowed:
+            // a badge id built by concatenation or handed through a helper is
+            // invisible to a text scan, and a developer who sees nothing appear
+            // would reasonably conclude the feature is broken rather than that
+            // their id is out of reach.
+            if (badgeScan != null && badgeScan.unresolved.Count > 0)
+            {
+                GUILayout.BeginHorizontal();
+                GUILayout.Space(EditorGUI.indentLevel * 12f);
+                var names = badgeScan.unresolved
+                    .Take(4)
+                    .Select(u => $"{Path.GetFileName(u.scriptPath)}: {u.expression}")
+                    .ToArray();
+                EditorGUILayout.HelpBox(
+                    "Some badge calls name an ID this scan can't read (it isn't a literal or an @var), "
+                        + "so you'll need to add those by hand:\n  "
+                        + string.Join("\n  ", names)
+                        + (badgeScan.unresolved.Count > names.Length
+                            ? $"\n  ...and {badgeScan.unresolved.Count - names.Length} more"
+                            : ""),
+                    MessageType.Info);
+                GUILayout.EndHorizontal();
+            }
+
+            GUILayout.Space(2);
+            GUILayout.BeginHorizontal();
+            GUILayout.Space(EditorGUI.indentLevel * 12f);
+
+            if (GUILayout.Button(new GUIContent("Add Badge",
+                    "Define a badge that isn't referenced from Lua yet. You can type its ID."),
+                    GUILayout.Width(100), GUILayout.Height(22)))
+            {
+                badgeAddRequested = true;   // applied on the next Layout pass
+            }
+
+            if (GUILayout.Button(new GUIContent("Rescan Lua",
+                    "Re-read this content folder's .lua/.lua.txt files and prefabs for badge IDs."),
+                    GUILayout.Width(100), GUILayout.Height(22)))
+            {
+                RefreshBadges();
+            }
+
+            GUILayout.FlexibleSpace();
+
+            // The push is deliberately available WITHOUT a full Compile & Upload.
+            // Badge text is metadata on the backend, not bundle content, so
+            // making a developer pay a multi-minute build to fix a typo in a
+            // badge description would be the same mistake the logo re-upload
+            // button exists to undo.
+            using (new EditorGUI.DisabledScope(isPushingBadges || UploadsBlocked
+                                               || string.IsNullOrEmpty(contentId) || badges.Count == 0))
+            {
+                if (GUILayout.Button(new GUIContent(
+                        isPushingBadges ? "Pushing..." : "Push Badges to Portal",
+                        "Saves every badge above to your developer portal (POST /admin/content/:id/badges/save). "
+                            + "No build required."),
+                        GUILayout.Width(160), GUILayout.Height(22)))
+                {
+                    PushBadges(interactive: true);
+                }
+            }
+            GUILayout.EndHorizontal();
+
+            EditorGUI.indentLevel--;
+        }
+
+        private void DrawBadgeCard(BadgeStore.Entry entry, int index)
+        {
+            Rect card = GUILayoutUtility.GetRect(BadgeCardWidth, BadgeCardHeight,
+                GUILayout.Width(BadgeCardWidth), GUILayout.Height(BadgeCardHeight));
+
+            EditorGUI.DrawRect(card, new Color(0f, 0f, 0f, 0.18f));
+
+            // EditorGUI.* with an explicit Rect still offsets prefix labels by
+            // the ambient indent level, which would push these fields off the
+            // right edge of a card that is already exactly as wide as it needs
+            // to be. The grid rows do their own indenting with GUILayout.Space.
+            int prevIndent = EditorGUI.indentLevel;
+            EditorGUI.indentLevel = 0;
+            float prevLabelWidth = EditorGUIUtility.labelWidth;
+            EditorGUIUtility.labelWidth = 34f;
+
+            var iconRect = new Rect(card.x + 6f, card.y + 6f, BadgeIconSize, BadgeIconSize);
+            float fx = card.x + 6f + BadgeIconSize + 8f;
+            float fw = card.xMax - fx - 6f;
+
+            EditorGUI.BeginChangeCheck();
+
+            var icon = (Texture2D)EditorGUI.ObjectField(
+                iconRect,
+                string.IsNullOrEmpty(entry.iconAssetPath)
+                    ? null
+                    : AssetDatabase.LoadAssetAtPath<Texture2D>(entry.iconAssetPath),
+                typeof(Texture2D), false);
+
+            var titleRect = new Rect(fx, card.y + 6f, fw, 18f);
+            var idRect    = new Rect(fx, card.y + 28f, fw, 18f);
+            var descRect  = new Rect(fx, card.y + 50f, fw, 18f);
+
+            string newTitle = EditorGUI.TextField(titleRect, "Title", entry.name ?? "");
+
+            // A locked id is drawn, not hidden: the developer needs to SEE the
+            // string their Lua passes so they can confirm it's the badge they
+            // meant. Disabled-and-visible reads as "this came from your code";
+            // an empty or absent field would read as a bug.
+            string newId;
+            using (new EditorGUI.DisabledScope(entry.IdLocked))
+            {
+                newId = EditorGUI.TextField(
+                    idRect,
+                    new GUIContent("ID", entry.IdLocked
+                        ? entry.discoveredIn + "\n\nThis ID comes from your Lua, so it can't be edited here — "
+                          + "change it in the script and it updates on the next scan."
+                        : "The ID your Lua passes to dp.profile.awardBadge(). Letters, numbers, _ and - only."),
+                    entry.badgeId ?? "");
+            }
+
+            string newDesc = EditorGUI.TextField(descRect, "Desc", entry.description ?? "");
+
+            if (EditorGUI.EndChangeCheck())
+            {
+                entry.name = newTitle;
+                entry.description = newDesc;
+                // Ignore any write to a locked field. DisabledScope already stops
+                // the keyboard, but a scripted or accidental change must not be
+                // able to break the id/Lua correspondence either.
+                if (!entry.IdLocked) entry.badgeId = newId;
+                entry.iconAssetPath = icon != null ? AssetDatabase.GetAssetPath(icon) : "";
+                badgesDirty = true;
+            }
+
+            var sourceRect = new Rect(fx, card.y + 70f, fw - 56f, 14f);
+            GUI.Label(sourceRect,
+                new GUIContent(
+                    entry.IdLocked ? "● From your Lua" : "○ Added by hand",
+                    entry.IdLocked ? entry.discoveredIn : "Not referenced from Lua in this content folder."),
+                EditorStyles.miniLabel);
+
+            // Removing a discovered badge would be a lie: the next scan puts it
+            // straight back, because the reason it is here is a line of the
+            // developer's own code. Delete the call, then rescan.
+            var removeRect = new Rect(card.xMax - 56f, card.y + 69f, 50f, 16f);
+            using (new EditorGUI.DisabledScope(entry.IdLocked))
+            {
+                if (GUI.Button(removeRect,
+                        new GUIContent("Remove", entry.IdLocked
+                            ? "This badge is referenced from your Lua. Remove the call and rescan."
+                            : "Remove this badge card. (It is not deleted from the developer portal.)"),
+                        EditorStyles.miniButton))
+                {
+                    badgeRemoveIndex = index;   // applied on the next Layout pass
+                }
+            }
+
+            EditorGUIUtility.labelWidth = prevLabelWidth;
+            EditorGUI.indentLevel = prevIndent;
+        }
+
+        private void PushBadges(bool interactive)
+        {
+            if (string.IsNullOrEmpty(contentId) || isPushingBadges) return;
+
+            // Save the draft first so what lands on the backend and what is in
+            // .badges.json can never disagree about what was pushed.
+            badgesDirty = true;
+            FlushBadgeDraft();
+
+            isPushingBadges = true;
+            var snapshot = new List<BadgeStore.Entry>(badges);
+            BadgeUploader.UploadAll(contentId, snapshot, interactive, report =>
+            {
+                isPushingBadges = false;
+                Repaint();
+            });
+        }
+
+        // Fire-and-forget push that rides the normal upload flow, exactly like
+        // UploadLogoImage: it must never fail or delay a content upload, because
+        // the bundles are the release and the badge text is metadata that can be
+        // re-pushed from the panel in one click.
+        private void PushBadgesSilently(string idForUpload)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(idForUpload)) return;
+                var toPush = BadgeStore.Load(idForUpload);
+                if (toPush == null || toPush.Count == 0) return;
+                BadgeUploader.UploadAll(idForUpload, toPush, interactive: false);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[Badges] upload skipped: " + e.Message);
+            }
         }
 
         // 5 seconds is more than enough for any prefab Unity intends to
@@ -5452,6 +5825,11 @@ namespace DreamPark {
                             // fails the upload — repair via Troubleshooting).
                             try { UploadLogoImage(contentId, interactive: false); }
                             catch (Exception e) { Debug.LogWarning("[Logo] upload skipped: " + e.Message); }
+                            // Badges ride alongside the logo, and for the same
+                            // reason: they are backend metadata on the content
+                            // doc, not bundle payload, so this is the moment the
+                            // doc is known to exist and to be ours.
+                            PushBadgesSilently(contentId);
                             continueAfterSchemaSync();
                         });
                         return;
@@ -5482,6 +5860,11 @@ namespace DreamPark {
                                 // land on the backend too (fire-and-forget).
                                 try { UploadLogoImage(contentId, interactive: false); }
                                 catch (Exception e) { Debug.LogWarning("[Logo] upload skipped: " + e.Message); }
+                                // First upload: the content doc has just been
+                                // created, so this is the earliest point at which
+                                // /admin/content/:id/badges/save can authorize us
+                                // as its owner. Pushing any earlier 403s.
+                                PushBadgesSilently(contentId);
                                 SetUploadStatus(
                                     "Creating release record",
                                     "Project created. Moving straight into the first release build.",
