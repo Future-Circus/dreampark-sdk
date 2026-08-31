@@ -1598,6 +1598,12 @@ namespace DreamPark {
             // SpaceMapPacker) parses this to auto-route items into its wall
             // pass instead of needing them pre-sorted by the caller.
             public string walls = "";
+            // Feet, only meaningful when walls is non-empty. 0 means "not
+            // applicable" (no wall declared) rather than "authored zero
+            // height" — omitted from the wire entirely in that case (see the
+            // AddField below) so the server's own 10ft default stays in
+            // control rather than a sentinel value trying to mean two things.
+            public float wallHeightFt;
         }
 
         // Backend catalog key derivation, shared with the preview walk: the
@@ -1647,6 +1653,7 @@ namespace DreamPark {
                 float lengthFt;
                 bool isProp;
                 string walls;
+                float wallHeightFt = 0f;
 
                 LevelTemplate level = prefab.GetComponent<LevelTemplate>();
                 if (level != null)
@@ -1657,6 +1664,7 @@ namespace DreamPark {
                     lengthFt = feet.y;
                     isProp = false;
                     walls = level.WallsWireValue;
+                    if (!string.IsNullOrEmpty(walls)) wallHeightFt = level.GetWallHeightMeters() * FeetPerMeter;
                 }
                 else
                 {
@@ -1675,6 +1683,7 @@ namespace DreamPark {
                     lengthFt = meters.y * FeetPerMeter;
                     isProp = true;
                     walls = prop.PublishedWallSideToken;
+                    if (!string.IsNullOrEmpty(walls)) wallHeightFt = prop.GetWallHeightMeters() * FeetPerMeter;
                 }
 
                 list.Add(new DimensionUploadRoot
@@ -1682,6 +1691,7 @@ namespace DreamPark {
                     name = Path.GetFileNameWithoutExtension(path),
                     resourceName = ResourceNameForAssetPath(path),
                     widthFt = widthFt,
+                    wallHeightFt = wallHeightFt,
                     lengthFt = lengthFt,
                     isProp = isProp,
                     walls = walls,
@@ -1724,6 +1734,10 @@ namespace DreamPark {
                 row.AddField("widthFt", r.widthFt);
                 row.AddField("lengthFt", r.lengthFt);
                 row.AddField("walls", r.walls);
+                // Omitted (not zero) when there's no wall to measure, so the
+                // server's own 10ft default stays in control — see the field's
+                // own comment on DimensionUploadRoot.
+                if (r.wallHeightFt > 0f) row.AddField("wallHeightFt", r.wallHeightFt);
                 arr.Add(row);
                 // The size-reference ladder bottoms out at a 4 x 4 ft phone booth,
                 // so EVERY prop would tag "fits a Phone Booth" — a line that reads
