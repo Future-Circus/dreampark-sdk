@@ -27,8 +27,9 @@ namespace DreamPark
     ///
     /// Wire: type "pp", no netId (a session-level event), payload
     ///   {"i":id,"g":gameId,"n":seq,"h":[x,y,z,qx,qy,qz,qw],"l":[...],"r":[...],
-    ///    "a":"l"|"r","nm":"display name","s":{state}}   — l / r absent when
-    ///    that hand is not tracked; nm and s ride the periodic state resend.
+    ///    "a":"l"|"r","nm":"display name","av":"avatar url","s":{state}}   —
+    ///    l / r absent when that hand is not tracked; nm, av and s ride the
+    ///    periodic state resend.
     ///
     /// Self-creating (RuntimeInitializeOnLoadMethod); nothing to put in a scene.
     /// Does nothing until a DreamBoxClient is connected.
@@ -238,6 +239,7 @@ namespace DreamPark
             if (stateDue)
             {
                 sb.Append(",\"nm\":\"").Append(Escape(LocalDisplayName())).Append('\"');
+                sb.Append(",\"av\":\"").Append(Escape(LocalAvatarUrl())).Append('\"');
                 sb.Append(",\"s\":").Append(_stateJson);
                 _stateDirty = false;
                 _lastStateSent = now;
@@ -293,6 +295,29 @@ namespace DreamPark
                 _cachedName = n;
             }
             return _cachedName ?? "";
+        }
+
+        // Same poll-and-cache shape as LocalDisplayName() — ProfileAPI.AvatarUrl
+        // resolves whenever the account binding lands, so this is checked on
+        // the same 5s cadence rather than subscribed. No length fallback like
+        // FallbackName: an unbound/anonymous headset simply has no avatar, and
+        // RemoteNameTag / any avatar renderer already has to handle "" as
+        // "show a default." Capped defensively at 200 chars — real CDN avatar
+        // URLs are far shorter, and this rides the same shared 16 KB/message
+        // relay budget as everything else PlayerPresence sends.
+        static string _cachedAvatarUrl;
+        static float _nextAvatarCheck;
+        static string LocalAvatarUrl()
+        {
+            if (_cachedAvatarUrl == null || Time.realtimeSinceStartup >= _nextAvatarCheck)
+            {
+                _nextAvatarCheck = Time.realtimeSinceStartup + 5f;
+                string u = null;
+                try { u = API.ProfileAPI.AvatarUrl; } catch (Exception) { u = null; }
+                if (u != null && u.Length > 200) u = u.Substring(0, 200);
+                _cachedAvatarUrl = u ?? "";
+            }
+            return _cachedAvatarUrl ?? "";
         }
 
         /// <summary>The game whose rig this headset is wearing right now, or "" between zones.</summary>
@@ -410,11 +435,12 @@ namespace DreamPark
                 var sf = p.GetField("s");
                 string state = sf != null && sf.type == JSONObject.Type.Object ? sf.Print() : null;
                 string name = p.GetField("nm")?.stringValue;
+                string avatarUrl = p.GetField("av")?.stringValue;
 
                 ReadPose(p.GetField("h"), out var hp, out var hq);
                 ReadPose(p.GetField("l"), out var lp, out var lq);
                 ReadPose(p.GetField("r"), out var rp, out var rq);
-                peer.Receive(seq, game, hp, hq, lp, lq, rp, rq, active, state, name);
+                peer.Receive(seq, game, hp, hq, lp, lq, rp, rq, active, state, name, avatarUrl);
             }
             catch (Exception e)
             {
