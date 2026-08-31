@@ -1592,6 +1592,18 @@ namespace DreamPark {
             // same call independently off the row's own kind — this flag is a
             // console nicety, never the authority.
             public bool isProp;
+            // LevelTemplate.WallsWireValue / PropTemplate.PublishedWallSideToken
+            // — comma-joined axis tokens ("+z,-x") in the prefab's own local
+            // frame, "" when no side is toggled. GENERATE_LAYOUT (dreampark-core
+            // SpaceMapPacker) parses this to auto-route items into its wall
+            // pass instead of needing them pre-sorted by the caller.
+            public string walls = "";
+            // Feet, only meaningful when walls is non-empty. 0 means "not
+            // applicable" (no wall declared) rather than "authored zero
+            // height" — omitted from the wire entirely in that case (see the
+            // AddField below) so the server's own 10ft default stays in
+            // control rather than a sentinel value trying to mean two things.
+            public float wallHeightFt;
         }
 
         // Backend catalog key derivation, shared with the preview walk: the
@@ -1640,6 +1652,8 @@ namespace DreamPark {
                 float widthFt;
                 float lengthFt;
                 bool isProp;
+                string walls;
+                float wallHeightFt = 0f;
 
                 LevelTemplate level = prefab.GetComponent<LevelTemplate>();
                 if (level != null)
@@ -1649,6 +1663,8 @@ namespace DreamPark {
                     widthFt = feet.x;
                     lengthFt = feet.y;
                     isProp = false;
+                    walls = level.WallsWireValue;
+                    if (!string.IsNullOrEmpty(walls)) wallHeightFt = level.GetWallHeightMeters() * FeetPerMeter;
                 }
                 else
                 {
@@ -1666,6 +1682,8 @@ namespace DreamPark {
                     widthFt = meters.x * FeetPerMeter;
                     lengthFt = meters.y * FeetPerMeter;
                     isProp = true;
+                    walls = prop.PublishedWallSideToken;
+                    if (!string.IsNullOrEmpty(walls)) wallHeightFt = prop.GetWallHeightMeters() * FeetPerMeter;
                 }
 
                 list.Add(new DimensionUploadRoot
@@ -1673,8 +1691,10 @@ namespace DreamPark {
                     name = Path.GetFileNameWithoutExtension(path),
                     resourceName = ResourceNameForAssetPath(path),
                     widthFt = widthFt,
+                    wallHeightFt = wallHeightFt,
                     lengthFt = lengthFt,
                     isProp = isProp,
+                    walls = walls,
                 });
             }
             return list;
@@ -1713,6 +1733,11 @@ namespace DreamPark {
                 row.AddField("resourceName", r.resourceName);
                 row.AddField("widthFt", r.widthFt);
                 row.AddField("lengthFt", r.lengthFt);
+                row.AddField("walls", r.walls);
+                // Omitted (not zero) when there's no wall to measure, so the
+                // server's own 10ft default stays in control — see the field's
+                // own comment on DimensionUploadRoot.
+                if (r.wallHeightFt > 0f) row.AddField("wallHeightFt", r.wallHeightFt);
                 arr.Add(row);
                 // The size-reference ladder bottoms out at a 4 x 4 ft phone booth,
                 // so EVERY prop would tag "fits a Phone Booth" — a line that reads
@@ -1749,10 +1774,20 @@ namespace DreamPark {
             {
                 int updated = result != null && result.GetField("updated") != null ? result.GetField("updated").intValue : roots.Count;
                 int skipped = result != null && result.GetField("skipped") != null ? result.GetField("skipped").intValue : 0;
+                // Non-zero only if the SDK and server disagree about the wall
+                // token vocabulary — the one failure mode of a two-vocabulary
+                // field, and otherwise silent everywhere (the row still
+                // uploads, just with the offending side quietly gone). Surfaced
+                // rather than logged-only so it's not missed in the common
+                // (interactive) path.
+                int droppedWallSides = result != null && result.GetField("droppedWallSides") != null ? result.GetField("droppedWallSides").intValue : 0;
                 string summary = updated + " footprint" + (updated == 1 ? "" : "s") + " updated" +
-                    (skipped > 0 ? ", " + skipped + " not in the catalog yet (upload a build first)" : "") + ".";
+                    (skipped > 0 ? ", " + skipped + " not in the catalog yet (upload a build first)" : "") +
+                    (droppedWallSides > 0 ? ", " + droppedWallSides + " wall side" + (droppedWallSides == 1 ? "" : "s") + " rejected by the server (vocabulary mismatch — check for an SDK/backend version skew)" : "") + ".";
                 if (interactive) EditorUtility.DisplayDialog("Dimensions uploaded", summary, "OK");
                 else Debug.Log("[Dimensions] auto-push: " + summary);
+                if (droppedWallSides > 0)
+                    Debug.LogWarning("[Dimensions] " + droppedWallSides + " wall side(s) were rejected by the server — the SDK and backend disagree on the wall token vocabulary.");
             }
             else
             {
