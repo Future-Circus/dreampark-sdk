@@ -21,12 +21,16 @@ namespace DreamPark
             try
             {
                 var local = TagLayerSchemaSyncUtility.ReadLocalTagManager();
+#if DREAMPARKCORE
                 if (IsCoreProject())
                 {
                     PublishCoreSchema(local);
                 }
                 else
+#endif
                 {
+                    // SDK builds always take the download-only path; core publish
+                    // is compiled out (see PublishCoreSchema / ContentAPI guards).
                     SyncContentSchema(local);
                 }
             }
@@ -37,6 +41,7 @@ namespace DreamPark
             }
         }
 
+#if DREAMPARKCORE
         private static void PublishCoreSchema(TagLayerSchemaSyncUtility.TagLayerSnapshot local)
         {
             string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
@@ -60,21 +65,16 @@ namespace DreamPark
                 EditorUtility.DisplayDialog("Schema Published", $"Canonical schema published (v{version}).", "OK");
             });
         }
+#endif
 
+        // Delegates to ContentFolders so the SDK gives ONE answer to "which
+        // folder is the creator's game". This used to take subdirs[0] — the
+        // first subfolder of Assets/Content — which the bundled Sample project
+        // wins on alphabetical order, making the game prefix "Sample". See
+        // ContentFolders.cs.
         private static string GetGameFolderName()
         {
-            string[] possibleContentPaths = Directory.GetDirectories("Assets", "Content", SearchOption.AllDirectories);
-            foreach (string contentPath in possibleContentPaths)
-            {
-                var subdirs = Directory.GetDirectories(contentPath);
-                if (subdirs.Length > 0)
-                {
-                    string folderName = Path.GetFileName(subdirs[0]);
-                    if (!string.IsNullOrEmpty(folderName))
-                        return folderName;
-                }
-            }
-            return "YOUR_GAME_HERE";
+            return ContentFolders.GameFolderName();
         }
 
         public static string GetGamePrefix()

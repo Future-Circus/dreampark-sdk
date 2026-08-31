@@ -35,21 +35,26 @@ namespace DreamPark
     //   4. For deps with refCount > 1, move them to "{contentId}-Shared".
     //   5. Addressable entries that aren't roots and aren't picked up as deps
     //      (e.g. AudioClips referenced only by Lua via address strings) stay
-    //      in a "{contentId}-Misc" bundle so they're still loadable by name.
+    //      in a "{contentId}-Runtime" bundle so they're still loadable by name.
     //   6. Bundle naming uses a stable group name; Addressables' AppendHash
     //      contributes the content hash. Two builds with identical content
     //      produce identical bundle filenames.
     //
-    // Status: EXPERIMENTAL. Run behind the BundlingStrategy.Smart toggle. The
-    // first build after switching to Smart will look like a full re-upload
-    // because every asset moves to a new group.
+    // Status: DEFAULT as of August 2026 (BundlingStrategy.Smart). Legacy
+    // folder-based grouping is deprecated and reachable only via
+    // DreamPark > Troubleshooting > Use Legacy Bundling (deprecated). The
+    // first build on a machine that just moved to Smart will look like a full
+    // re-upload because every asset moves to a new group — that is a one-off.
     //
-    // Open edge cases worth validating before flipping default:
+    // Edge cases this partitioning deliberately accepts. They were open
+    // questions while Smart was opt-in and are listed here as the behaviour
+    // to expect, not as unfinished work — but they are the first places to
+    // look if a creator reports surprising bundle churn:
     //   - Materials shared by many props: should land in Shared (typically a
     //     few hundred KB total). Verify by running and inspecting groups.
     //   - Shaders: will be heavily shared, will land in Shared. Same.
     //   - Lua-referenced audio: not picked up by GetDependencies (Lua isn't
-    //     a Unity dep). Will land in Misc. That's correct semantically; Misc
+    //     a Unity dep). Will land in Runtime. That's correct semantically; Runtime
     //     becomes a single bundle that updates whenever any of its members
     //     change. Acceptable for audio that genuinely is loaded by name.
     //   - Scripts (.cs): excluded from dep walking — they ship via a separate
@@ -59,19 +64,73 @@ namespace DreamPark
     public static class SmartBundleGrouper
     {
         private const string GroupPrefix = "Bundle";  // gives "{contentId}-Bundle-{root}"
-        private const string MiscSuffix = "Misc";
+        private const string RuntimeSuffix = "Runtime";
+        private const string PreviewsSuffix = "Previews";
+        private const string CodeSuffix = "Code";
+        private const string SharedFoundationSuffix = "Shared-Foundation";
+
+        // Path prefixes whose referenced contents get promoted into the
+        // shared foundation bundle. Without this promotion, Unity's
+        // Addressables build pulls SDK shaders, URP shaders, and similar
+        // shared infra into EVERY consumer bundle as implicit deps —
+        // 50+ duplicate copies of the same shader across the build,
+        // which the Addressables Analyze report flagged as the top
+        // source of duplicate dependencies (~300 entries).
+        //
+        // Promoting these to a single shared group makes them explicit
+        // addressable entries; Unity then packs them into one foundation
+        // bundle and consumer bundles reference it via the runtime
+        // dep graph. Net effect: one extra small bundle per session,
+        // hundreds of MB shaved across the bundle set.
+        //
+        // Scope rationale:
+        //   - Assets/DreamPark/ — SDK assets that every park reuses
+        //     (shaders, materials, helper prefabs, default textures).
+        //   - Packages/com.unity.render-pipelines.universal/ — URP
+        //     shaders / shadergraphs referenced indirectly by content
+        //     materials.
+        //   - Packages/com.unity.render-pipelines.core/ — URP fallback /
+        //     resource shaders (FallbackShader.shader etc). The universal
+        //     pipeline depends on core's render-pipeline-resources, and
+        //     content materials transitively reference them.
+        //   - Packages/com.unity.shadergraph/ — ShaderGraph runtime
+        //     shaders (Hidden/* fallbacks). Same transitive-dep story
+        //     as core.
+        // ThirdParty content lives under Assets/Content/{gameId}/ThirdParty/
+        // and is intentionally NOT promoted — vendor packs are per-park
+        // content, not shared infra.
+        private static readonly string[] FoundationPathPrefixes = new[]
+        {
+            "Assets/DreamPark/",
+            "Packages/com.unity.render-pipelines.universal/",
+            "Packages/com.unity.render-pipelines.core/",
+            "Packages/com.unity.shadergraph/",
+        };
 
         // Extensions checked when pairing a preview with its prefab/scene by name.
         // GenerateAllLevelPreviews writes .png today; .jpg / .jpeg are accepted
         // defensively in case anyone hand-drops a different format.
         private static readonly string[] PreviewExtensions = new[] { ".png", ".jpg", ".jpeg" };
 
+        // Suffix used to identify game Lua scripts. Path.GetExtension would
+        // return just ".txt", so we match the full compound suffix instead.
+        private const string LuaScriptSuffix = ".lua.txt";
+
+        // Public so callers (e.g. the upload-mode filter in ContentUploaderPanel)
+        // can identify which built bundles belong to the Code / Previews groups
+        // from filename alone — Addressables' AppendHash naming embeds the
+        // lowercased group name in the resulting bundle filename.
+        public static string CodeGroupName(string gameId) => $"{gameId}-{CodeSuffix}";
+        public static string PreviewsGroupName(string gameId) => $"{gameId}-{PreviewsSuffix}";
+        public static string SharedFoundationGroupName(string gameId) => $"{gameId}-{SharedFoundationSuffix}";
+
         public struct Result
         {
             public int rootBundles;
-            public int miscAssets;
+            public int runtimeAssets;
             public int groupsCreated;
             public int groupsRemoved;
+            public int orphanFilesRemoved;
         }
 
         public static Result ApplyDependencyAwareGrouping(
@@ -99,9 +158,26 @@ namespace DreamPark
 
             if (contentEntries.Count == 0) return result;
 
+            // 1b. Promote SDK + URP package deps to a shared foundation bundle
+            //     BEFORE the rest of the grouper runs. Without this, those
+            //     assets stay as implicit deps that Unity inlines into every
+            //     consumer bundle, producing the ~300 duplicate-dep report
+            //     the Addressables Analyze window flags. Promoting them to
+            //     explicit addressable entries packs them into one shared
+            //     bundle that consumers reference at runtime.
+            //
+            //     Running first matters: subsequent steps walk content deps
+            //     and route them into root bundles. Foundation-scoped paths
+            //     live outside Assets/Content/{gameId}/ so the content-scope
+            //     filter in step 6 already excludes them — but having them
+            //     in an explicit group beforehand means Unity's bundle
+            //     builder sees them as owned by the foundation bundle and
+            //     doesn't re-inline them as implicit deps anywhere else.
+            PromoteFoundationDepsToSharedGroup(settings, gameId, ref result);
+
             // 2. Pick roots. A "root" is an addressable that players load by
             //    address: prefabs and scenes. Everything else either gets
-            //    pulled in as a dep or lands in Misc.
+            //    pulled in as a dep or lands in Runtime.
             var allEntryPaths = contentEntries
                 .Select(e => AssetDatabase.GUIDToAssetPath(e.guid))
                 .Where(p => !string.IsNullOrEmpty(p))
@@ -121,11 +197,29 @@ namespace DreamPark
             // genuinely deserves its own bundle (large independent unit),
             // we can re-add a smarter promotion rule (e.g. "promote only if
             // the prefab carries N+ unique non-prefab deps").
+            // Root ordering matters for shared-dep ownership. Earlier-iterated
+            // roots get first claim on a shared dep, and "claimed" sticks for
+            // the rest of the pass. So we sort by *root type priority* first,
+            // alphabetical as a tiebreak.
+            //
+            // Priority order: Prop (smallest, most reusable) → Level/Attraction
+            // → PlayerRig (largest, most universal). When a texture is used by
+            // both an attraction and a prop that lives inside it, the prop wins
+            // ownership. The attraction loads the prop's bundle (and the
+            // texture along with it) via the runtime dep chain.
+            //
+            // Why this matters: claiming-by-smaller-unit minimizes the blast
+            // radius of asset changes. Edit a wood texture → only the small
+            // prop bundle re-uploads. Edit an attraction-unique mesh → only
+            // the attraction bundle re-uploads. Add a new attraction that
+            // shares props with existing ones → no existing bundles reshuffle,
+            // because the props already own those shared deps.
             var rootPaths = contentEntries
                 .Select(e => AssetDatabase.GUIDToAssetPath(e.guid))
                 .Where(IsUserFacingRoot)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(p => RootPriority(p))                              // smaller types claim first
+                .ThenBy(p => p, StringComparer.OrdinalIgnoreCase)           // alphabetical tiebreak
                 .ToList();
 
             // Roots get their own bundles unconditionally. We track them as
@@ -159,11 +253,30 @@ namespace DreamPark
             var refCount = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             var directDepsCache = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
 
+            // Scope dep ownership to assets within this content title's folder.
+            // We deliberately walk deps that aren't yet addressable (the old
+            // `allEntryPaths.Contains(d)` filter was too narrow — it meant a
+            // material/mesh/texture under Assets/Content/{gameId}/ that wasn't
+            // already in an addressable group was invisible to ownership
+            // assignment, so Unity's bundle builder would silently pack it
+            // into whichever bundle it built first — typically an attraction,
+            // alphabetically first — instead of the prop that actually owns
+            // it. Result was 4 KB prop bundles with all their texture/material
+            // content drained into the host attraction. By promoting any
+            // in-content-folder dep to an explicit entry in its owning root's
+            // group, we tell Unity exactly which bundle should contain it.
+            //
+            // The contentFolderPrefix scope keeps us from accidentally
+            // promoting SDK-shared assets (Assets/DreamPark/...), Unity
+            // built-ins, or package assets into per-content bundles — those
+            // stay as implicit deps Unity handles separately.
+            string contentFolderPrefix = $"Assets/Content/{gameId}/";
+
             foreach (var rootPath in rootPaths)
             {
                 var deps = CollectExclusiveDeps(rootPath, rootSet, directDepsCache)
                     .Where(d => !ShouldSkipAsDep(d))
-                    .Where(d => allEntryPaths.Contains(d))
+                    .Where(d => d.StartsWith(contentFolderPrefix, StringComparison.OrdinalIgnoreCase))
                     .Where(d => !string.Equals(d, rootPath, StringComparison.OrdinalIgnoreCase))
                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
@@ -172,22 +285,51 @@ namespace DreamPark
                     refCount[d] = refCount.TryGetValue(d, out var c) ? c + 1 : 1;
             }
 
-            // 4. Create or reuse the Misc group. Note: there's no Shared
-            //    group anymore — when an asset is referenced by multiple
-            //    roots, we pack it with the first-alphabetical root that
-            //    uses it instead of stranding it in a generic Shared bundle.
-            //    That root's bundle becomes the "hub" for that family of
-            //    assets, and Addressables auto-loads it whenever a peer
-            //    root needs the shared content.
-            var miscGroup = GetOrCreateGroup(settings, $"{gameId}-{MiscSuffix}", out bool miscCreated);
-            ConfigureBundleSchema(settings, miscGroup);
-            if (miscCreated) result.groupsCreated++;
+            // 4. Create or reuse the special managed groups:
+            //    - Previews: lightweight PNG/JPG screenshots for browser UI
+            //    - Code:     game Lua scripts (.lua.txt under Assets/Content/{gameId}/)
+            //    - Runtime:     addressables that aren't roots or walked deps
+            //  Code lives outside the root bundles so iterating on Lua ships a
+            //  few KB, not the parent prefab bundle the LuaBehaviour reference
+            //  happens to point at.
+            //  Previews are grouped but NOT BUILT (July 2026) — see
+            //  ExcludeRetiredArtGroupsFromBuild. The group survives so the
+            //  entries/addresses stay put and the decision is one flag away
+            //  from reversible.
+            var previewGroup = GetOrCreateGroup(settings, $"{gameId}-{PreviewsSuffix}", out bool previewCreated);
+            ConfigureBundleSchema(settings, previewGroup);
+            SetIncludeInBuild(previewGroup, false);
+            if (previewCreated) result.groupsCreated++;
 
-            // 5. Pre-create every root's bundle group and move just the root
-            //    asset into it. Deps come in step 6 below.
-            //    rootPaths is already sorted alphabetically, so iteration order
-            //    is deterministic and stable across builds.
+            var codeGroup = GetOrCreateGroup(settings, $"{gameId}-{CodeSuffix}", out bool codeCreated);
+            ConfigureBundleSchema(settings, codeGroup);
+            if (codeCreated) result.groupsCreated++;
+
+            var runtimeGroup = GetOrCreateGroup(settings, $"{gameId}-{RuntimeSuffix}", out bool runtimeCreated);
+            ConfigureBundleSchema(settings, runtimeGroup);
+            if (runtimeCreated) result.groupsCreated++;
+
+            // 5. Pre-create every root's Logic group AND a parallel "-Content"
+            //    group. The Logic group holds the root prefab itself and any
+            //    other prefab/.asset deps that carry user MonoBehaviour or
+            //    ScriptableObject serialization. The Content group holds the
+            //    heavy presentation stuff — materials, meshes, textures, audio,
+            //    animations, plus any pure-visual sub-prefabs that don't carry
+            //    user scripts.
+            //
+            //    Why split: a C# script edit that touches serializable shape
+            //    rewrites the bytes of every prefab containing a MonoBehaviour
+            //    of that class. Without the split, that change drags the whole
+            //    100+ MB attraction bundle along with it. With the split, only
+            //    the (small) Logic bundle re-uploads; the (heavy) Content
+            //    bundle stays byte-identical.
+            //
+            //    The suffix is "-Content" rather than "-Assets" because Unity's
+            //    AppendHash naming style already adds "_assets_all" to bundle
+            //    filenames, and "-Assets" would produce ugly
+            //    "*-assets_assets_all_<hash>.bundle" paths.
             var rootGroups = new Dictionary<string, AddressableAssetGroup>(StringComparer.OrdinalIgnoreCase);
+            var rootAssetsGroups = new Dictionary<string, AddressableAssetGroup>(StringComparer.OrdinalIgnoreCase);
             foreach (var rootPath in rootPaths)
             {
                 string groupName = rootGroupNames[rootPath];
@@ -197,72 +339,164 @@ namespace DreamPark
                 result.rootBundles++;
                 rootGroups[rootPath] = rootGroup;
                 MoveEntryToGroup(settings, rootPath, rootGroup);
+
+                // Parallel Content group. Empty for now — populated in step 6
+                // with this root's heavy / non-script deps. The empty-group
+                // prune at the end of this pass will drop it if no content
+                // actually lands here (e.g. a script-only prefab with no
+                // material/mesh deps).
+                string contentGroupName = $"{groupName}-Content";
+                var contentGroup = GetOrCreateGroup(settings, contentGroupName, out bool contentCreated);
+                ConfigureBundleSchema(settings, contentGroup);
+                if (contentCreated) result.groupsCreated++;
+                rootAssetsGroups[rootPath] = contentGroup;
             }
 
-            // 6. Determine ownership of every non-root dep and move it into
-            //    that root's bundle. Rule: each non-root dep is owned by the
-            //    first-alphabetical root whose exclusiveDeps contain it.
-            //    (rootPaths is already alphabetically sorted, so iterating
-            //    in order means the first encounter wins.)
-            //    This consolidates skeleton-themed content into a single
-            //    "skeleton hub" bundle (e.g. Bundle-P_Skeleton), instead of
-            //    splintering it into Shared + per-TLR thin bundles. Players
-            //    loading any peer that references that content auto-pull
-            //    the hub bundle through Addressables' dep chain.
+            // 6. Determine ownership of every non-root dep and route it into
+            //    either the root's Logic bundle (prefabs with user
+            //    MonoBehaviours, or .asset ScriptableObjects — anything whose
+            //    bytes shift when scripts change shape) or the root's
+            //    -Content bundle (everything else: materials, meshes,
+            //    textures, audio, animations, plus pure-visual sub-prefabs).
+            //
+            //    Ownership rule: the first-iterated root whose exclusiveDeps
+            //    contain the dep wins. rootPaths is sorted by priority (props
+            //    before attractions before players), so a texture used by both
+            //    a prop and the attraction containing it ends up in the prop's
+            //    bundle. The attraction loads it via the runtime dep chain.
+            //    This is the "smaller unit claims it" rule from the design.
             foreach (var rootPath in rootPaths)
             {
                 if (!depGraph.TryGetValue(rootPath, out var deps)) continue;
                 var rootGroup = rootGroups[rootPath];
+                var assetsGroup = rootAssetsGroups[rootPath];
 
                 foreach (var dep in deps)
                 {
                     if (rootSet.Contains(dep)) continue;     // other roots own their own subtree
                     // First-encountered root wins. MoveEntryToGroup is a no-op
                     // when the entry is already in the target group, but we
-                    // also want to skip if it's already in *some* root group
-                    // (assigned by an earlier-alphabetical root's pass).
+                    // also want to skip if it's already in *some* Bundle-*
+                    // group (assigned by an earlier-priority root's pass —
+                    // either its Logic or its Assets bundle).
                     var existing = settings.FindAssetEntry(AssetDatabase.AssetPathToGUID(dep));
                     if (existing != null && existing.parentGroup != null
                         && existing.parentGroup.Name.StartsWith($"{gameId}-{GroupPrefix}-", StringComparison.Ordinal))
                     {
-                        continue; // already claimed by an earlier root
+                        continue; // already claimed by an earlier root (logic or assets)
                     }
-                    MoveEntryToGroup(settings, dep, rootGroup);
+                    // Route via IsLogicAsset: script-bearing prefabs and .asset
+                    // ScriptableObjects → Logic bundle. Everything else →
+                    // -Content bundle. The small-Logic / heavy-Content split is
+                    // what makes script-only edits ship tiny patches.
+                    var target = IsLogicAsset(dep) ? rootGroup : assetsGroup;
+                    MoveEntryToGroup(settings, dep, target);
                 }
 
-                // Co-pack the matching preview, if any. Convention:
-                //   Assets/Content/{gameId}/Previews/{rootName}.{png|jpg|jpeg}
-                // belongs with the prefab named {rootName}.prefab. Previews
-                // aren't picked up by GetDependencies — the prefab doesn't
-                // reference its own preview — so without this rule they'd
-                // all land in Misc and a single prop edit would invalidate
-                // every preview's bundle. Pairing by name mirrors how
-                // ContentProcessor / GenerateAllLevelPreviews already pair
-                // previews to prefabs at write time.
-                string rootBaseName = Path.GetFileNameWithoutExtension(rootPath);
-                string previewFolder = $"Assets/Content/{gameId}/Previews/";
-                foreach (var previewExt in PreviewExtensions)
+            }
+
+            // 6.5. Merge tiny Logic/Content pairs back into a single bundle.
+            //
+            // The Logic/Content split is only useful when the Content side is
+            // heavy enough that isolating it from script-edit churn meaningfully
+            // shrinks patches. For a small prop whose total content is under
+            // ~10 MB (e.g., a basic decorative prefab with one mesh + one
+            // material), splitting produces two near-empty bundles and bloats
+            // the bundle count for zero patch-size benefit. Merge them.
+            //
+            // The merge target is the Logic group (the un-suffixed name), so
+            // the consolidated bundle keeps the natural Bundle-{root} name.
+            // The Content group is emptied out and gets swept by the empty-
+            // group prune in step 9.
+            const long kTinyRootMergeBytes = 10L * 1024 * 1024;
+            foreach (var rootPath in rootPaths)
+            {
+                var logicGroup = rootGroups[rootPath];
+                var contentGroup = rootAssetsGroups[rootPath];
+                long totalBytes = SumGroupEntryBytes(logicGroup) + SumGroupEntryBytes(contentGroup);
+                if (totalBytes > kTinyRootMergeBytes) continue;
+
+                // Move every Content entry into the Logic group. The content
+                // group will be empty after this loop; step 9's empty-group
+                // prune removes it.
+                foreach (var entry in contentGroup.entries.ToList())
                 {
-                    string previewPath = previewFolder + rootBaseName + previewExt;
-                    if (allEntryPaths.Contains(previewPath))
-                    {
-                        MoveEntryToGroup(settings, previewPath, rootGroup);
-                    }
+                    string p = AssetDatabase.GUIDToAssetPath(entry.guid);
+                    if (string.IsNullOrEmpty(p)) continue;
+                    MoveEntryToGroup(settings, p, logicGroup);
                 }
             }
 
-            // 7. Stragglers: any addressable still sitting in a Legacy
+            // 7. Move all preview images into the dedicated preview bundle.
+            //    Convention:
+            //      Assets/Content/{gameId}/Previews/{rootName}.{png|jpg|jpeg}
+            //    Mirrors the preview-generator output. The group is excluded
+            //    from the build (July 2026), so this keeps the PNGs corralled
+            //    in one place rather than letting them scatter into gameplay
+            //    bundles as folder-group stragglers.
+            string previewFolderPrefix = $"Assets/Content/{gameId}/Previews/";
+            foreach (string previewPath in allEntryPaths
+                .Where(path => path.StartsWith(previewFolderPrefix, StringComparison.OrdinalIgnoreCase)
+                    && PreviewExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            {
+                MoveEntryToGroup(settings, previewPath, previewGroup);
+            }
+
+            // 7b. Move all game Lua scripts into the dedicated code bundle.
+            //     Convention: every *.lua.txt under Assets/Content/{gameId}/
+            //     is treated as game code, regardless of subfolder. Lua text
+            //     assets are normally pulled into a prefab's bundle as a
+            //     dep of LuaBehaviour.luaScript; promoting them to their
+            //     own addressable entries in a dedicated Code group lets
+            //     code-only patches ship a few-KB Lua bundle without
+            //     re-uploading the parent prefab bundles. Prefab references
+            //     resolve by GUID so moving the TextAsset doesn't break
+            //     LuaBehaviour wiring at runtime.
+            //
+            //     Scope is intentionally restricted to Assets/Content/{gameId}/
+            //     so SDK-shipped Lua under ThirdParty/XLua/Resources/ (engine
+            //     scripts, tutorial samples) doesn't get yanked into game
+            //     content.
+            string contentRoot = $"Assets/Content/{gameId}";
+            string[] luaGuids = AssetDatabase.IsValidFolder(contentRoot)
+                ? AssetDatabase.FindAssets("t:TextAsset", new[] { contentRoot })
+                : Array.Empty<string>();
+            foreach (string luaGuid in luaGuids)
+            {
+                string luaPath = AssetDatabase.GUIDToAssetPath(luaGuid);
+                if (string.IsNullOrEmpty(luaPath)) continue;
+                if (!luaPath.EndsWith(LuaScriptSuffix, StringComparison.OrdinalIgnoreCase)) continue;
+                // CreateOrMoveEntry inside MoveEntryToGroup will both promote
+                // a previously-implicit dep to an explicit entry and reassign
+                // an explicit entry from its prior folder group — same call
+                // covers both cases.
+                MoveEntryToGroup(settings, luaPath, codeGroup);
+            }
+
+            // 8. Stragglers: any addressable still sitting in a Legacy
             //    folder group (not reached by any root's deps and not yet
-            //    moved to a Bundle-* or Misc) goes to Misc. These are
+            //    moved to a Bundle-* or Runtime) goes to Runtime. These are
             //    typically Lua-loaded audio/textures referenced by name at
             //    runtime — not visible to GetDependencies, so they stay
-            //    addressable in Misc instead of getting orphaned.
+            //    addressable in Runtime instead of getting orphaned.
+            //    Important: skip the chunked siblings (Runtime-2, Previews-2,
+            //    Code-2, ...) too. They contain content already correctly
+            //    placed by an earlier pass; harvesting them here would silently
+            //    reshuffle them through Runtime, defeating chunk stability.
             var stragglers = new List<AddressableAssetEntry>();
             foreach (var group in settings.groups.Where(g => g != null).ToList())
             {
                 if (!group.Name.StartsWith(gameId + "-")) continue;
-                if (group.Name == $"{gameId}-{MiscSuffix}") continue;
+                if (group.Name == $"{gameId}-{RuntimeSuffix}") continue;
+                if (group.Name == $"{gameId}-{PreviewsSuffix}") continue;
+                if (group.Name == $"{gameId}-{CodeSuffix}") continue;
+                if (group.Name == $"{gameId}-{SharedFoundationSuffix}") continue;
                 if (group.Name.StartsWith($"{gameId}-{GroupPrefix}-")) continue;
+                if (group.Name.StartsWith($"{gameId}-{RuntimeSuffix}-", StringComparison.Ordinal)) continue;
+                if (group.Name.StartsWith($"{gameId}-{PreviewsSuffix}-", StringComparison.Ordinal)) continue;
+                if (group.Name.StartsWith($"{gameId}-{CodeSuffix}-", StringComparison.Ordinal)) continue;
+                if (group.Name.StartsWith($"{gameId}-{SharedFoundationSuffix}-", StringComparison.Ordinal)) continue;
                 if (group.Name.EndsWith("-Logos")) continue;
 
                 foreach (var entry in group.entries.ToList())
@@ -272,11 +506,118 @@ namespace DreamPark
             {
                 string p = AssetDatabase.GUIDToAssetPath(entry.guid);
                 if (string.IsNullOrEmpty(p)) continue;
-                MoveEntryToGroup(settings, p, miscGroup);
-                result.miscAssets++;
+                MoveEntryToGroup(settings, p, runtimeGroup);
+                result.runtimeAssets++;
             }
 
-            // 8. Sweep empty Legacy folder groups so the Addressables window
+            // 8.5. Chunk oversized groups so individual asset edits ship
+            //      small re-uploads instead of the whole bundle.
+            //
+            // When a single Bundle-* / Runtime / Content group ends up too large
+            // (a texture-heavy Content bundle, a Lua-referenced audio Runtime
+            // bundle, etc.), an edit to any one asset inside it requires
+            // re-uploading the entire bundle. Splitting into chunks bounds
+            // the re-upload cost per asset edit.
+            //
+            // Strategy: simple bin-packing in path-sorted order. Each chunk
+            // fills with assets until adding the next one would exceed the
+            // size limit, then spills into the next chunk. Chunk sizes stay
+            // ≤ limit (one exception: a single asset bigger than the limit
+            // gets its own chunk even though it exceeds the limit).
+            const long kChunkInputBytesLimit = 40L * 1024 * 1024;
+
+            // Load the append-only packing order for this content title.
+            // The order is shared across the team via git so all devs produce
+            // identical chunk composition for the same content. See
+            // PackingOrderStore for the rationale and append-only semantics.
+            var packingOrder = PackingOrderStore.Load(gameId);
+            var packingIndexByGuid = new Dictionary<string, int>(StringComparer.Ordinal);
+            for (int i = 0; i < packingOrder.Count; i++)
+                packingIndexByGuid[packingOrder[i]] = i;
+
+            // Helper that returns a stable index for a guid, appending it to
+            // the order list (and the lookup) if it's new. Captures the
+            // packingOrder / packingIndexByGuid locals so the chunker doesn't
+            // need to know about persistence.
+            int GetOrAssignPackingIndex(string guid)
+            {
+                if (packingIndexByGuid.TryGetValue(guid, out int idx)) return idx;
+                int newIdx = packingOrder.Count;
+                packingOrder.Add(guid);
+                packingIndexByGuid[guid] = newIdx;
+                return newIdx;
+            }
+
+            // Pre-pass: assign a packing index to EVERY entry across every
+            // managed group, in path-sorted order, BEFORE any chunking runs.
+            //
+            // Why this is critical:
+            //   1. First-build determinism. Without this pre-pass, indices are
+            //      assigned in `group.entries` iteration order (Unity HashSet),
+            //      which is NOT stable across machines. Two devs running the
+            //      first build on a fresh content title would produce different
+            //      PackingOrder.json files and start fighting over bundle names.
+            //   2. Single-entry-group correctness. ChunkOversizedGroupIfNeeded
+            //      early-returns when entries.Count <= 1, which means a group
+            //      containing a single oversize asset never gets its GUID
+            //      indexed. When a sibling joins later, the existing entry's
+            //      position is determined by iteration order — non-deterministic.
+            //
+            // Path-sorted is the canonical deterministic ordering: same asset
+            // paths produce the same indices regardless of which dev / OS /
+            // Unity session runs the grouper first.
+            var allManagedEntries = new List<AddressableAssetEntry>();
+            foreach (var rootPath in rootPaths)
+            {
+                if (rootGroups.TryGetValue(rootPath, out var lg) && lg != null)
+                    allManagedEntries.AddRange(lg.entries);
+                if (rootAssetsGroups.TryGetValue(rootPath, out var cg) && cg != null)
+                    allManagedEntries.AddRange(cg.entries);
+            }
+            if (runtimeGroup != null) allManagedEntries.AddRange(runtimeGroup.entries);
+            if (previewGroup != null) allManagedEntries.AddRange(previewGroup.entries);
+            if (codeGroup != null) allManagedEntries.AddRange(codeGroup.entries);
+            var foundationGroupForIndexing = settings.groups
+                .FirstOrDefault(g => g != null && g.Name == $"{gameId}-{SharedFoundationSuffix}");
+            if (foundationGroupForIndexing != null)
+                allManagedEntries.AddRange(foundationGroupForIndexing.entries);
+
+            allManagedEntries.Sort((a, b) =>
+            {
+                string pa = AssetDatabase.GUIDToAssetPath(a?.guid) ?? "";
+                string pb = AssetDatabase.GUIDToAssetPath(b?.guid) ?? "";
+                return string.CompareOrdinal(pa, pb);
+            });
+
+            foreach (var entry in allManagedEntries)
+            {
+                if (entry == null || string.IsNullOrEmpty(entry.guid)) continue;
+                GetOrAssignPackingIndex(entry.guid);   // no-op for existing; appends for new
+            }
+
+            foreach (var rootPath in rootPaths)
+            {
+                ChunkOversizedGroupIfNeeded(settings, rootGroups[rootPath], kChunkInputBytesLimit, GetOrAssignPackingIndex, ref result);
+                ChunkOversizedGroupIfNeeded(settings, rootAssetsGroups[rootPath], kChunkInputBytesLimit, GetOrAssignPackingIndex, ref result);
+            }
+            ChunkOversizedGroupIfNeeded(settings, runtimeGroup, kChunkInputBytesLimit, GetOrAssignPackingIndex, ref result);
+            ChunkOversizedGroupIfNeeded(settings, previewGroup, kChunkInputBytesLimit, GetOrAssignPackingIndex, ref result);
+            ChunkOversizedGroupIfNeeded(settings, codeGroup, kChunkInputBytesLimit, GetOrAssignPackingIndex, ref result);
+
+            // Foundation can grow large once URP shadergraphs + SDK textures
+            // pile up, so it gets the same chunk treatment as Runtime / Content.
+            var foundationGroupForChunking = settings.groups
+                .FirstOrDefault(g => g != null && g.Name == $"{gameId}-{SharedFoundationSuffix}");
+            if (foundationGroupForChunking != null)
+                ChunkOversizedGroupIfNeeded(settings, foundationGroupForChunking, kChunkInputBytesLimit, GetOrAssignPackingIndex, ref result);
+
+            // Persist the (possibly-extended) packing order so the next build
+            // sorts entries by the same indices. Save() short-circuits when
+            // the file's on-disk content is already current, so this is a
+            // no-op when nothing's been added since last build.
+            PackingOrderStore.Save(gameId, packingOrder);
+
+            // 9. Sweep empty Legacy folder groups so the Addressables window
             //    stays tidy. Don't touch groups owned by other contentIds or
             //    by the Default Local Group / Built In Data, which Addressables
             //    requires.
@@ -284,8 +625,12 @@ namespace DreamPark
             foreach (var group in settings.groups.Where(g => g != null))
             {
                 if (!group.Name.StartsWith(gameId + "-")) continue;
-                if (group.Name == $"{gameId}-{MiscSuffix}") continue;
+                if (group.Name == $"{gameId}-{RuntimeSuffix}") continue;
+                if (group.Name == $"{gameId}-{PreviewsSuffix}") continue;
+                if (group.Name == $"{gameId}-{CodeSuffix}") continue;
+                if (group.Name == $"{gameId}-{SharedFoundationSuffix}") continue;
                 if (group.Name.StartsWith($"{gameId}-{GroupPrefix}-")) continue;
+                if (group.Name.StartsWith($"{gameId}-{SharedFoundationSuffix}-", StringComparison.Ordinal)) continue;
                 if (group.Name.EndsWith("-Logos")) continue;
                 if (group.entries.Count == 0)
                     toRemove.Add(group);
@@ -296,12 +641,24 @@ namespace DreamPark
                 result.groupsRemoved++;
             }
 
-            // Also drop empty Smart groups (Bundle-* or Misc when nothing
-            // qualified) so the next pass starts clean.
+            // Also drop empty Smart groups (Bundle-*, Runtime, Previews, Code,
+            // and their chunked variants like Runtime-2 / Bundle-X-3) so the
+            // next pass starts clean.
+            string runtimePrefix = $"{gameId}-{RuntimeSuffix}-";
+            string previewsPrefix = $"{gameId}-{PreviewsSuffix}-";
+            string codePrefix = $"{gameId}-{CodeSuffix}-";
+            string foundationPrefix = $"{gameId}-{SharedFoundationSuffix}-";
             var emptyManaged = settings.groups
                 .Where(g => g != null && g.Name.StartsWith(gameId + "-")
-                            && (g.Name.StartsWith($"{gameId}-{GroupPrefix}-")
-                                || g.Name == $"{gameId}-{MiscSuffix}")
+                            && (g.Name.StartsWith($"{gameId}-{GroupPrefix}-")          // Bundle-* (and Bundle-*-N chunks)
+                                || g.Name == $"{gameId}-{RuntimeSuffix}"
+                                || g.Name == $"{gameId}-{PreviewsSuffix}"
+                                || g.Name == $"{gameId}-{CodeSuffix}"
+                                || g.Name == $"{gameId}-{SharedFoundationSuffix}"
+                                || g.Name.StartsWith(runtimePrefix)                        // Runtime-2, Runtime-3, ...
+                                || g.Name.StartsWith(previewsPrefix)
+                                || g.Name.StartsWith(codePrefix)
+                                || g.Name.StartsWith(foundationPrefix))                    // Shared-Foundation-2, ...
                             && g.entries.Count == 0)
                 .ToList();
             foreach (var g in emptyManaged)
@@ -310,8 +667,144 @@ namespace DreamPark
                 result.groupsRemoved++;
             }
 
+            // 10. Hygiene pass — sweep orphan files left on disk by Unity's
+            //     incomplete cascade-delete. settings.RemoveGroup deletes the
+            //     group's own .asset file but doesn't reliably remove the
+            //     per-group schema .asset files in the Schemas/ subfolder
+            //     (those live as separate assets that the group only references
+            //     via property — Unity's cleanup is inconsistent about them).
+            //     Without this pass, every build leaves behind two schema
+            //     files per swept legacy group (e.g. {gameId}-Materials's
+            //     BundledAssetGroupSchema + ContentUpdateGroupSchema), and the
+            //     Schemas folder slowly accumulates cruft across builds.
+            //
+            //     Also catches orphan top-level group .asset files that exist
+            //     on disk but aren't referenced by settings (cross-park
+            //     leftovers, manually-copied files, branch-switch residue,
+            //     etc.). Dangling m_GroupAssets entries pointing at deleted
+            //     files are pruned implicitly when Unity reserializes the
+            //     settings asset after our DeleteAsset calls.
+            result.orphanFilesRemoved = CleanupOrphanAssetGroupsFiles(settings);
+
             EditorUtility.SetDirty(settings);
             return result;
+        }
+
+        // Removes orphan files left in Assets/AddressableAssetsData/AssetGroups/
+        // and its Schemas/ subfolder. Safe to call standalone (e.g. from a
+        // menu item) — only deletes files that don't correspond to any group
+        // currently registered in settings.groups.
+        //
+        // Returns the count of files deleted (counts both .asset and .meta
+        // as separate deletions — AssetDatabase.DeleteAsset removes both
+        // atomically but we surface each as one count for logging clarity).
+        public static int CleanupOrphanAssetGroupsFiles(AddressableAssetSettings settings)
+        {
+            if (settings == null) return 0;
+
+            const string assetGroupsDir = "Assets/AddressableAssetsData/AssetGroups";
+            const string schemasDir = assetGroupsDir + "/Schemas";
+            if (!AssetDatabase.IsValidFolder(assetGroupsDir)) return 0;
+
+            // Build sets of valid group .asset paths + valid group names from
+            // the in-memory settings. Anything in AssetGroups/ that doesn't
+            // match these is by definition orphan.
+            var validGroupAssetPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var validGroupNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var g in settings.groups.Where(g => g != null))
+            {
+                string p = AssetDatabase.GetAssetPath(g);
+                if (!string.IsNullOrEmpty(p))
+                    validGroupAssetPaths.Add(p);
+                if (!string.IsNullOrEmpty(g.Name))
+                    validGroupNames.Add(g.Name);
+            }
+
+            int removed = 0;
+
+            // 1. Orphan top-level group .asset files. These shouldn't normally
+            //    exist (RemoveGroup deletes the .asset reliably), but can leak
+            //    in via manual file copies, branch switches, or merges that
+            //    bring in files without their settings.asset references.
+            foreach (var path in Directory.GetFiles(assetGroupsDir, "*.asset", SearchOption.TopDirectoryOnly))
+            {
+                string assetPath = path.Replace('\\', '/');
+                // Strip leading absolute-prefix if any (defensive — Directory.GetFiles
+                // can return absolute or relative depending on platform).
+                int idx = assetPath.IndexOf("Assets/", StringComparison.Ordinal);
+                if (idx > 0) assetPath = assetPath.Substring(idx);
+                if (!validGroupAssetPaths.Contains(assetPath))
+                {
+                    if (AssetDatabase.DeleteAsset(assetPath))
+                        removed++;
+                }
+            }
+
+            // 2. Orphan schema .asset files. Each schema is named like
+            //    "{GroupName}_BundledAssetGroupSchema.asset" or
+            //    "{GroupName}_ContentUpdateGroupSchema.asset". Strip the
+            //    suffix and check if a group with that name exists.
+            if (AssetDatabase.IsValidFolder(schemasDir))
+            {
+                string[] schemaSuffixes = new[]
+                {
+                    "_BundledAssetGroupSchema",
+                    "_ContentUpdateGroupSchema",
+                };
+
+                foreach (var path in Directory.GetFiles(schemasDir, "*.asset", SearchOption.TopDirectoryOnly))
+                {
+                    string assetPath = path.Replace('\\', '/');
+                    int idx = assetPath.IndexOf("Assets/", StringComparison.Ordinal);
+                    if (idx > 0) assetPath = assetPath.Substring(idx);
+
+                    string filename = Path.GetFileNameWithoutExtension(assetPath);
+                    string groupName = filename;
+                    foreach (var suffix in schemaSuffixes)
+                    {
+                        if (filename.EndsWith(suffix, StringComparison.Ordinal))
+                        {
+                            groupName = filename.Substring(0, filename.Length - suffix.Length);
+                            break;
+                        }
+                    }
+
+                    if (!validGroupNames.Contains(groupName))
+                    {
+                        if (AssetDatabase.DeleteAsset(assetPath))
+                            removed++;
+                    }
+                }
+            }
+
+            // 3. Dangling m_GroupAssets references are auto-pruned by Unity
+            //    when AddressableAssetSettings.asset is reserialized after our
+            //    DeleteAsset calls above — the serializer drops references to
+            //    assets that no longer exist on disk. Earlier revisions called
+            //    a settings.RemoveMissingGroupReferences() API explicitly, but
+            //    that method doesn't exist on every Addressables version we
+            //    ship against, so we rely on the implicit cleanup.
+
+            return removed;
+        }
+
+        // Manual cleanup entry — useful when the project has accumulated
+        // orphans from prior builds before the auto-cleanup was added, or
+        // when you want to verify hygiene independently of running a full
+        // Smart pass. Sits under Troubleshooting because it's a recovery
+        // tool, not part of the normal authoring flow.
+        [MenuItem("DreamPark/Troubleshooting/Cleanup Orphan AssetGroups Files", false, 209)]
+        public static void CleanupOrphanAssetGroupsFilesMenu()
+        {
+            var settings = UnityEditor.AddressableAssets.AddressableAssetSettingsDefaultObject.Settings;
+            if (settings == null)
+            {
+                Debug.LogError("[SmartBundleGrouper] AddressableAssetSettings not found.");
+                return;
+            }
+            int removed = CleanupOrphanAssetGroupsFiles(settings);
+            AssetDatabase.SaveAssets();
+            Debug.Log($"🧹 Cleanup Orphan AssetGroups Files: removed {removed} file(s).");
         }
 
         // --- helpers ---------------------------------------------------------
@@ -371,6 +864,153 @@ namespace DreamPark
                     hash *= 16777619u;
                 }
                 return hash.ToString("x8").Substring(0, 6);
+            }
+        }
+
+        // Sums the input-file bytes of every entry in a group. Used by the
+        // tiny-root merge step and as part of the chunking decision. Missing
+        // / unreadable files contribute 0.
+        private static long SumGroupEntryBytes(AddressableAssetGroup group)
+        {
+            if (group == null) return 0;
+            long total = 0;
+            foreach (var entry in group.entries)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(entry.guid);
+                if (string.IsNullOrEmpty(path)) continue;
+                try
+                {
+                    var info = new FileInfo(path);
+                    if (info.Exists) total += info.Length;
+                }
+                catch { /* unreadable; skip */ }
+            }
+            return total;
+        }
+
+        // If the group's total entry input-bytes exceed maxInputBytes,
+        // bin-pack the entries into chunks. Sort order is the team-shared
+        // packing index from PackingOrderStore (NOT alphabetical) — new
+        // entries get appended to the end of the index list, so they always
+        // land in the last chunk (or spill into a new last chunk). Existing
+        // entries' indices never change.
+        //
+        // Properties:
+        //   - Chunk sizes stay bounded by maxInputBytes (with one exception:
+        //     a single asset bigger than the limit gets its own chunk).
+        //   - Stable under appends: adding a new asset → it goes to the end
+        //     of the order → only the last chunk grows or a new last chunk
+        //     is created. Every other chunk is byte-identical to before.
+        //   - Stable under removals: removing an asset → its slot in the
+        //     packing order is preserved (append-only); the chunk it was
+        //     in just loses that one entry. Every other chunk unchanged.
+        //   - Stable under modifications: editing an asset → its index
+        //     stays → same chunk. Only that chunk's bytes change.
+        //
+        // Chunk 0 keeps the original group name. Chunks 1..N-1 are named
+        // "{groupName}-2", "{groupName}-3", ... so the un-suffixed group
+        // name stays a stable identifier in the catalog.
+        private static void ChunkOversizedGroupIfNeeded(
+            AddressableAssetSettings settings,
+            AddressableAssetGroup group,
+            long maxInputBytes,
+            Func<string, int> getOrAssignPackingIndex,
+            ref Result result)
+        {
+            if (group == null) return;
+            if (getOrAssignPackingIndex == null)
+                throw new ArgumentNullException(nameof(getOrAssignPackingIndex));
+            var entries = group.entries.ToList();
+            if (entries.Count <= 1) return;
+
+            long totalBytes = 0;
+            foreach (var entry in entries)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(entry.guid);
+                if (string.IsNullOrEmpty(path)) continue;
+                try
+                {
+                    var info = new FileInfo(path);
+                    if (info.Exists) totalBytes += info.Length;
+                }
+                catch
+                {
+                    // Asset path doesn't map to a real file on disk
+                    // (could be a folder marker, a stale entry, etc.).
+                    // Ignore — those contribute 0 to size.
+                }
+            }
+
+            if (totalBytes <= maxInputBytes) return;
+
+            // Walk entries in packing-index order and fill each chunk until
+            // adding the next entry would push it over the limit, then spill
+            // to the next chunk. Each chunk's size stays ≤ maxInputBytes,
+            // except for the rare case where a single asset is larger than
+            // the limit (it gets its own chunk).
+            //
+            // Sort key is the packing index (append-only, team-shared via
+            // PackingOrderStore). Existing entries keep their index across
+            // builds; new entries get the next available index, which puts
+            // them at the END of the order — so they only affect the last
+            // chunk, never reshuffle existing chunks.
+            var entriesWithSize = new List<(AddressableAssetEntry entry, int packIdx, long size)>();
+            foreach (var entry in entries)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(entry.guid);
+                if (string.IsNullOrEmpty(path)) continue;
+                long size = 0;
+                try
+                {
+                    var info = new FileInfo(path);
+                    if (info.Exists) size = info.Length;
+                }
+                catch { /* unreadable; size 0 */ }
+                int packIdx = getOrAssignPackingIndex(entry.guid);
+                entriesWithSize.Add((entry, packIdx, size));
+            }
+
+            entriesWithSize.Sort((a, b) => a.packIdx.CompareTo(b.packIdx));
+
+            // First pass: figure out chunk count by walking the bin-pack.
+            // We do this in a separate pass so we can pre-create exactly
+            // the right number of groups instead of creating them lazily.
+            var assignments = new List<int>(entriesWithSize.Count);
+            int currentChunk = 0;
+            long currentChunkBytes = 0;
+            foreach (var (_, _, size) in entriesWithSize)
+            {
+                if (currentChunkBytes > 0 && currentChunkBytes + size > maxInputBytes)
+                {
+                    currentChunk++;
+                    currentChunkBytes = 0;
+                }
+                assignments.Add(currentChunk);
+                currentChunkBytes += size;
+            }
+
+            int chunkCount = currentChunk + 1;
+            if (chunkCount <= 1) return;
+
+            // Chunk 0 = the original group (unrenamed). Chunks 1..N-1 are
+            // freshly-created sibling groups.
+            var chunkGroups = new AddressableAssetGroup[chunkCount];
+            chunkGroups[0] = group;
+            for (int i = 1; i < chunkCount; i++)
+            {
+                string chunkName = $"{group.Name}-{i + 1}";
+                chunkGroups[i] = GetOrCreateGroup(settings, chunkName, out bool created);
+                ConfigureBundleSchema(settings, chunkGroups[i]);
+                if (created) result.groupsCreated++;
+            }
+
+            // Second pass: actually move entries into their assigned chunks.
+            // CreateOrMoveEntry is a no-op when the entry's already there.
+            for (int i = 0; i < entriesWithSize.Count; i++)
+            {
+                var target = chunkGroups[assignments[i]];
+                if (entriesWithSize[i].entry.parentGroup == target) continue;
+                settings.CreateOrMoveEntry(entriesWithSize[i].entry.guid, target, false, false);
             }
         }
 
@@ -446,6 +1086,117 @@ namespace DreamPark
                 || prefab.GetComponent<PlayerRig>() != null;
         }
 
+        // Sort key for the dep-ownership pass. Smaller numbers come first,
+        // and earlier-iterated roots win shared-dep ownership. We want the
+        // smallest, most reusable unit to claim a shared dep — that way
+        // edits to that dep ship the smallest possible patch.
+        //
+        //   Props (0)       — smallest, most reusable. A wood texture shared
+        //                     between an attraction and a prop ends up here.
+        //   Levels (1)      — attractions. Owns its unique content but yields
+        //                     to props for anything shared.
+        //   PlayerRig (2)   — loaded for every park session, owns global
+        //                     content like input rig, locomotion. Lowest
+        //                     priority because we want least-frequent changes
+        //                     to ride along with smaller bundles.
+        //
+        // Unknown root types (shouldn't happen given IsUserFacingRoot's gate,
+        // but defensive) sort last so they don't shadow the canonical types.
+        private static int RootPriority(string assetPath)
+        {
+            if (string.IsNullOrEmpty(assetPath)) return 99;
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+            if (prefab == null) return 99;
+            if (prefab.GetComponent<PropTemplate>() != null)  return 0;
+            if (prefab.GetComponent<LevelTemplate>() != null) return 1;
+            if (prefab.GetComponent<PlayerRig>() != null)     return 2;
+            return 99;
+        }
+
+        // Logic vs Content split: which bundle should a non-root dep land in?
+        //
+        // Logic bundle (returns true): files that carry user MonoBehaviour or
+        //   ScriptableObject serialization — their bytes change when user C#
+        //   scripts change shape. Isolated so a script edit doesn't drag the
+        //   heavy presentation content along with it.
+        //
+        //     - .prefab   ONLY when the prefab actually contains a
+        //                 MonoBehaviour-derived component. A pure-rendering
+        //                 prefab — MeshFilter + MeshRenderer + Animator +
+        //                 AudioSource, no user scripts — has no MonoScript
+        //                 references that change when C# changes, so it's
+        //                 effectively presentation content and routes to
+        //                 the Content bundle.
+        //
+        //                 What gets flagged as "logic" by this check:
+        //                 - User scripts (any class inheriting `MonoBehaviour`
+        //                   that lives in Assembly-CSharp or a content asmdef).
+        //                 - SDK runtime components (LuaBehaviour,
+        //                   LevelTemplate, PropTemplate, etc.).
+        //                 - Unity UI types (Image, Text, Button, Canvas-
+        //                   serializing components) — these DO extend
+        //                   MonoBehaviour, so any UI-bearing prefab routes
+        //                   to Logic. Intentional: UI prefabs carry script
+        //                   refs whose serialized shape shifts with their
+        //                   source code.
+        //                 - Package components that extend MonoBehaviour:
+        //                   TextMeshPro (TMP_Text), Cinemachine, NavMesh
+        //                   surfaces, PlayableDirector consumers, etc.
+        //
+        //                 What is NOT flagged (engine-native, returns false):
+        //                 - Camera, Light, Animator, AudioSource — extend
+        //                   Behaviour, not MonoBehaviour.
+        //                 - Transform, MeshFilter, MeshRenderer, Rigidbody,
+        //                   Collider — extend Component directly.
+        //                 - ParticleSystem, Renderer subclasses.
+        //
+        //     - .asset    Always counts as logic — ScriptableObjects carry
+        //                 MonoScript refs and their serialized data shifts
+        //                 when those scripts change. Rare false positives
+        //                 (e.g. a TextAsset stored as .asset) are tolerable
+        //                 because .asset files are typically tiny.
+        //
+        // Content bundle (returns false): everything else. Type-agnostic
+        //   presentation data whose bytes are independent of C# script shape.
+        //     - .mat (materials), .png/.jpg/.tga/.exr (textures), .fbx/.obj/
+        //       .mesh (meshes), .wav/.mp3/.ogg (audio), .anim (animations),
+        //       .shader, .shadergraph, .cubemap, .terrainlayer, etc.
+        //     - .prefab files with no user MonoBehaviours (decorative
+        //       sub-prefabs).
+        //
+        // Note on perf: this loads each prefab via AssetDatabase, which is
+        // an in-memory cache so calls are cheap after the first one per asset.
+        // Called once per non-root dep per Smart pass — a few thousand calls
+        // for a large content set, well under a second total.
+        private static bool IsLogicAsset(string assetPath)
+        {
+            if (string.IsNullOrEmpty(assetPath)) return false;
+            string ext = Path.GetExtension(assetPath).ToLowerInvariant();
+
+            if (ext == ".asset") return true;
+
+            if (ext == ".prefab")
+            {
+                var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+                if (prefab == null)
+                {
+                    // Unloadable / broken — safer to treat as logic so it
+                    // doesn't accidentally end up grouped with assets and
+                    // confuse a future debugging pass.
+                    return true;
+                }
+
+                // Any MonoBehaviour-derived component means there's a
+                // user MonoScript reference somewhere in the prefab's
+                // serialized graph. GetComponentsInChildren<MonoBehaviour>
+                // walks the entire hierarchy including inactive children.
+                var mbs = prefab.GetComponentsInChildren<MonoBehaviour>(includeInactive: true);
+                return mbs.Length > 0;
+            }
+
+            return false;
+        }
+
         private static bool ShouldSkipAsDep(string path)
         {
             if (string.IsNullOrEmpty(path)) return true;
@@ -464,6 +1215,114 @@ namespace DreamPark
             return false;
         }
 
+        // A foundation candidate is a dep that lives under a path we want to
+        // share across consumer bundles (Assets/DreamPark/, URP package).
+        // ShouldSkipAsDep is too aggressive for this purpose — it filters
+        // out the entire Packages/ tree as non-addressable. For the
+        // foundation promotion we DO want package shaders to become
+        // explicit addressables; that's the whole point. So this is a
+        // narrower allow-list check rather than a wider deny-list check.
+        //
+        // We still exclude scripts / asmdefs / dlls / metas — same reasons
+        // as ShouldSkipAsDep (they ship via the MonoScript bundle or
+        // shouldn't be bundled at all). Raw font source files (.ttf/.otf)
+        // are also excluded: Android Addressables builds can choke on a
+        // promoted TrueType entry, while the TMP font asset / atlas is the
+        // actual runtime dependency we want in bundles.
+        private static bool IsFoundationCandidate(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            string ext = Path.GetExtension(path).ToLowerInvariant();
+            if (ext == ".cs" || ext == ".asmdef" || ext == ".asmref") return false;
+            if (ext == ".dll" || ext == ".meta") return false;
+            if (ext == ".ttf" || ext == ".otf" || ext == ".ttc") return false;
+
+            foreach (var prefix in FoundationPathPrefixes)
+            {
+                if (path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+
+        // Walk every prefab under Assets/Content/{gameId}/ and collect any
+        // dep matching FoundationPathPrefixes. Promote each one to an
+        // explicit addressable entry in "{gameId}-Shared-Foundation".
+        //
+        // Why this fixes duplication:
+        //   Unity's Addressables bundle builder treats non-addressable
+        //   deps as implicit — when bundle A references a non-addressable
+        //   shader S, Unity inlines S's serialized bytes into A. When
+        //   bundle B also references S, S is inlined into B too. With
+        //   50+ consumer bundles all referencing the same handful of SDK
+        //   / URP shaders, we get the ~300-entry duplicate-dep report
+        //   the Analyze window flags.
+        //
+        //   Making S explicitly addressable (via CreateOrMoveEntry into
+        //   the foundation group) flips it to "explicit" — Unity now
+        //   packs S into the foundation bundle ONCE and resolves runtime
+        //   references from A and B via the dep graph. Storage cost
+        //   drops to 1x.
+        //
+        // GetDependencies(recursive: true) is the right walk depth here:
+        //   - Direct refs from content prefabs (a content prefab uses an
+        //     SDK helper prefab → foundation owns the helper prefab).
+        //   - Transitive refs via materials (a content material's shader
+        //     ref → foundation owns the shader).
+        // Recursive walking can be slow on large content folders; cache
+        // would be premature optimization since this runs at build time
+        // and the result of GetDependencies is itself cached by Unity.
+        private static void PromoteFoundationDepsToSharedGroup(
+            AddressableAssetSettings settings, string gameId, ref Result result)
+        {
+            string contentRoot = $"Assets/Content/{gameId}";
+            if (!AssetDatabase.IsValidFolder(contentRoot)) return;
+
+            // 1. Discover what foundation paths are reachable from content.
+            //    We scope by prefabs because content roots are always prefabs
+            //    in DreamPark (no scenes ship as addressables).
+            string[] prefabGuids = AssetDatabase.FindAssets("t:Prefab", new[] { contentRoot });
+            if (prefabGuids == null || prefabGuids.Length == 0) return;
+
+            var foundationDeps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var guid in prefabGuids)
+            {
+                string prefabPath = AssetDatabase.GUIDToAssetPath(guid);
+                if (string.IsNullOrEmpty(prefabPath)) continue;
+                foreach (var dep in AssetDatabase.GetDependencies(prefabPath, recursive: true))
+                {
+                    if (IsFoundationCandidate(dep))
+                        foundationDeps.Add(dep);
+                }
+            }
+
+            if (foundationDeps.Count == 0) return;
+
+            // 2. Get / create the shared foundation group.
+            string groupName = $"{gameId}-{SharedFoundationSuffix}";
+            var sharedGroup = GetOrCreateGroup(settings, groupName, out bool created);
+            ConfigureBundleSchema(settings, sharedGroup);
+            if (created) result.groupsCreated++;
+
+            // 3. Promote every foundation dep to an explicit entry in the
+            //    shared group. CreateOrMoveEntry handles both cases:
+            //      - new entry (was implicit dep) → becomes explicit
+            //      - existing entry (was in some other group) → relocated
+            //        into the foundation group. This intentionally pulls
+            //        foundation paths out of wherever a prior pass put them
+            //        (e.g. an earlier Smart pass that didn't know about the
+            //        Foundation step might have left foundation assets in
+            //        Runtime or a per-root Content bundle).
+            foreach (var depPath in foundationDeps)
+            {
+                string guid = AssetDatabase.AssetPathToGUID(depPath);
+                if (string.IsNullOrEmpty(guid)) continue;
+                var entry = settings.FindAssetEntry(guid);
+                if (entry != null && entry.parentGroup == sharedGroup) continue;
+                settings.CreateOrMoveEntry(guid, sharedGroup, false, false);
+            }
+        }
+
         private static AddressableAssetGroup GetOrCreateGroup(
             AddressableAssetSettings settings, string groupName, out bool created)
         {
@@ -473,8 +1332,8 @@ namespace DreamPark
             return settings.CreateGroup(groupName, false, false, true,
                 new List<AddressableAssetGroupSchema>
                 {
-                    (AddressableAssetGroupSchema)Activator.CreateInstance(typeof(BundledAssetGroupSchema)),
-                    (AddressableAssetGroupSchema)Activator.CreateInstance(typeof(ContentUpdateGroupSchema)),
+                    ScriptableObject.CreateInstance<BundledAssetGroupSchema>(),
+                    ScriptableObject.CreateInstance<ContentUpdateGroupSchema>(),
                 });
         }
 
@@ -486,12 +1345,56 @@ namespace DreamPark
             bag.LoadPath.SetVariableByName(settings, AddressableAssetSettings.kRemoteLoadPath);
             bag.UseAssetBundleCache = true;
             bag.UseAssetBundleCrc = true;
-            bag.UseAssetBundleCrcForCachedBundles = false;
+            bag.UseAssetBundleCrcForCachedBundles = true; // also CRC-check cached bundles on load → a corrupt/wrong cached bundle is rejected and re-downloaded instead of crashing
             // PackTogether *within* a group — the granularity comes from how
             // we slice the groups, not from PackSeparately. Avoids the nested-
             // directory bundle layout problem that PackSeparately causes.
             bag.BundleMode = BundledAssetGroupSchema.BundlePackingMode.PackTogether;
             bag.Compression = BundledAssetGroupSchema.BundleCompressionMode.LZ4;
+        }
+
+        // The dedicated group the Content Uploader parks the content logo in.
+        public static string LogosGroupName(string gameId) => $"{gameId}-Logos";
+
+        // July 2026 — preview thumbnails and the content logo are delivered by
+        // the backend now (POST /api/content/:id/attractions/preview and
+        // POST /api/content/:id/logo), so their bundles are dead weight: no
+        // runtime path loads them, yet preview churn kept aborting CodeOnly
+        // uploads over a change no client reads.
+        //
+        // The groups and their entries stay exactly where they are — only
+        // IncludeInBuild flips off, so no bundle is produced, nothing lands in
+        // ServerData, and nothing uploads. Keeping the entries (rather than
+        // ripping them out of Addressables) means the logo texture doesn't get
+        // re-harvested into a gameplay bundle, addresses/GUID bookkeeping is
+        // untouched, and re-enabling is a one-line change.
+        //
+        // Safe to call on any project: groups that don't exist are skipped.
+        public static void ExcludeRetiredArtGroupsFromBuild(
+            AddressableAssetSettings settings, string gameId)
+        {
+            if (settings == null || string.IsNullOrEmpty(gameId)) return;
+
+            string previews = PreviewsGroupName(gameId);
+            string previewsChunkPrefix = previews + "-";   // Previews-2, Previews-3, ...
+            string logos = LogosGroupName(gameId);
+
+            foreach (var group in settings.groups.Where(g => g != null).ToList())
+            {
+                bool retired = group.Name == previews
+                    || group.Name.StartsWith(previewsChunkPrefix, StringComparison.Ordinal)
+                    || group.Name == logos;
+                if (retired) SetIncludeInBuild(group, false);
+            }
+        }
+
+        private static void SetIncludeInBuild(AddressableAssetGroup group, bool include)
+        {
+            var bag = group?.GetSchema<BundledAssetGroupSchema>();
+            if (bag == null || bag.IncludeInBuild == include) return;
+            bag.IncludeInBuild = include;
+            EditorUtility.SetDirty(bag);
+            Debug.Log($"[SmartBundleGrouper] {group.Name}: IncludeInBuild = {include}");
         }
 
         private static void MoveEntryToGroup(

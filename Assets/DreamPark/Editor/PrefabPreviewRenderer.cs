@@ -26,16 +26,34 @@ namespace DreamPark
     //   soft. Two passes give every preview a full 512×512 of actual
     //   rendered pixels (1024×1024 supersampled), regardless of how
     //   eccentric the prefab's bounds are.
+    //
+    // Animation: when the supplied PreviewSettings carry frozen poses, the
+    // hidden instance is sampled onto the chosen clips/frames before pass 1
+    // (see PreviewAnimationSampler), so both passes and the shipped PNG all
+    // photograph the same pose the creator picked in the Preview Editor.
     public static class PrefabPreviewRenderer
     {
         private static readonly Vector3 kIsolatedPosition = new Vector3(10000, 10000, 10000);
-        private const float kElevationAngle = 30f;
-        private const float kAzimuthAngle = 45f;
+
+        // The default camera orbit (30° elevation, 45° azimuth) now lives on
+        // PreviewSettings.Default — it's supplied per render so the Preview
+        // Editor can override it. The angle-locked RenderPreview overload
+        // passes PreviewSettings.Default, reproducing the historical framing.
 
         // Generous padding for the scout render so we never clip the
         // silhouette. Pass 2's framing is computed from the scout's actual
         // alpha rect, so this only needs to "include everything".
         private const float kScoutFramingPadding = 1.5f;
+
+        // Extra scout headroom when the prefab has been frozen on an
+        // animation frame. Bounds are measured from the bind pose (Unity
+        // only recomputes skinned bounds at render time), so a pose that
+        // throws an arm or a lid well outside the rest shape can overflow
+        // the scout frame and get cropped. Pass 2 reframes off the alpha
+        // rect either way, so the only cost of a roomier scout is a slightly
+        // smaller silhouette to measure — cheap insurance against a clipped
+        // preview. Unposed renders keep the historical 1.5 exactly.
+        private const float kPosedScoutFramingPadding = 2.25f;
 
         // Final breathing room around the silhouette, as a fraction of the
         // longer side. 3% = nearly edge-to-edge with just enough margin
@@ -51,9 +69,24 @@ namespace DreamPark
         // resolves to a usable bounding rect for the corrective math.
         private const int kScoutRes = 256;
 
+        // Angle-locked convenience overload — renders with the historical
+        // default framing (45° azimuth, 30° elevation, auto-fit zoom).
         public static Texture2D RenderPreview(GameObject prefab, int resolution = 512)
         {
+            return RenderPreview(prefab, PreviewSettings.Default, resolution);
+        }
+
+        // Settings-aware render. Camera azimuth/elevation, the final zoom
+        // (framing fill) and any frozen animation poses are taken from
+        // `settings`; everything else — the two-pass silhouette centering,
+        // lighting, supersampling — is unchanged. With PreviewSettings.Default
+        // this is byte-identical to the original renderer, so untouched
+        // prefabs never churn their PNG.
+        public static Texture2D RenderPreview(GameObject prefab, PreviewSettings settings, int resolution = 512)
+        {
             if (prefab == null) return null;
+
+            settings = settings.Sanitized();
 
             // Instantiate at isolated position so it doesn't interfere with scene
             GameObject instance = Object.Instantiate(prefab, kIsolatedPosition, Quaternion.identity);
@@ -65,9 +98,20 @@ namespace DreamPark
             RenderTexture scoutRt = null;
             RenderTexture finalRt = null;
             Camera cam = null;
+            PreviewAnimationSampler.PoseScope poseScope = default;
 
             try
             {
+                // Freeze any animated entities on their chosen clip + frame
+                // BEFORE bounds are measured, so the scout pass sees the pose
+                // the creator picked rather than the authored bind pose. The
+                // sampling batch stays live until poseScope is disposed in
+                // the finally block — the renders below must happen inside
+                // it. A settings value with no poses doesn't touch the
+                // instance at all — this is a no-op for every prefab that
+                // predates the animation controls.
+                poseScope = PreviewAnimationSampler.ApplyPoses(instance, settings);
+
                 Bounds bounds = CalculateBounds(instance);
                 if (bounds.size == Vector3.zero)
                 {
@@ -84,6 +128,20 @@ namespace DreamPark
                 cam.fieldOfView = 30f;
                 cam.allowMSAA = false;
                 cam.cameraType = CameraType.Preview;
+
+                // Optionally cull the "Gizmo" layer so in-prefab helper
+                // objects don't render into the preview. Both passes share
+                // this camera, so the scout silhouette and the final render
+                // agree on what's visible — the alpha-based corrective framing
+                // then centers/fills on the visible geometry only. Left at the
+                // default "everything" mask when the toggle is off, so default
+                // previews are byte-identical to before.
+                if (settings.hideGizmoLayer)
+                {
+                    int gizmoLayer = LayerMask.NameToLayer(PreviewSettings.GizmoLayerName);
+                    if (gizmoLayer >= 0)
+                        cam.cullingMask &= ~(1 << gizmoLayer);
+                }
 
                 lightObj = new GameObject("PreviewLight") { hideFlags = HideFlags.HideAndDontSave };
                 Light keyLight = lightObj.AddComponent<Light>();
@@ -102,7 +160,8 @@ namespace DreamPark
                 // ── Pass 1: scout at low res with generous framing ───────
                 scoutRt = NewRenderTexture(kScoutRes);
                 cam.targetTexture = scoutRt;
-                FrameInfo scoutFrame = ApplyBoundsFraming(cam, bounds, kScoutFramingPadding);
+                float scoutPadding = settings.HasAnyPose ? kPosedScoutFramingPadding : kScoutFramingPadding;
+                FrameInfo scoutFrame = ApplyBoundsFraming(cam, bounds, scoutPadding, settings);
                 cam.Render();
 
                 RectInt silhouette;
@@ -127,7 +186,7 @@ namespace DreamPark
                 // ── Compute corrective framing for pass 2 ────────────────
                 // Goal: the final render should have the silhouette CENTERED
                 // and filling (1 - 2*breathing) of the longer screen axis.
-                ApplyCorrectiveFraming(cam, scoutFrame, silhouette);
+                ApplyCorrectiveFraming(cam, scoutFrame, silhouette, settings);
 
                 // ── Pass 2: final render at supersampled resolution ──────
                 int finalRes = resolution * 2;
@@ -147,6 +206,12 @@ namespace DreamPark
             }
             finally
             {
+                // Leave animation mode after rendering but before anything
+                // gets destroyed — StopAnimationMode reverts the property
+                // modifications it recorded, and reverting onto a destroyed
+                // instance is how you get phantom errors in the Console.
+                poseScope.Dispose();
+
                 if (cam != null) cam.targetTexture = null;
                 if (camObj != null) Object.DestroyImmediate(camObj);
                 if (lightObj != null) Object.DestroyImmediate(lightObj);
@@ -184,12 +249,14 @@ namespace DreamPark
         // as the basis for the corrective second pass. Returns the camera
         // basis vectors so the caller can convert pixel-space offsets back
         // into world-space corrections.
-        private static FrameInfo ApplyBoundsFraming(Camera cam, Bounds bounds, float padding)
+        private static FrameInfo ApplyBoundsFraming(Camera cam, Bounds bounds, float padding, PreviewSettings settings)
         {
             Vector3 center = bounds.center;
 
-            float elevRad = kElevationAngle * Mathf.Deg2Rad;
-            float azimRad = kAzimuthAngle * Mathf.Deg2Rad;
+            // Orbit angles come from the per-prefab settings (default
+            // 30°/45° via PreviewSettings.Default).
+            float elevRad = settings.elevation * Mathf.Deg2Rad;
+            float azimRad = settings.azimuth * Mathf.Deg2Rad;
             Vector3 direction = new Vector3(
                 Mathf.Cos(elevRad) * Mathf.Sin(azimRad),
                 Mathf.Sin(elevRad),
@@ -237,7 +304,7 @@ namespace DreamPark
         //   - Zoom factor = silhouetteFraction / fillTarget. When < 1 we're
         //     zooming in (silhouette gets bigger). When > 1 we're pulling
         //     back (silhouette was already filling more than the target).
-        private static void ApplyCorrectiveFraming(Camera cam, FrameInfo scout, RectInt silhouette)
+        private static void ApplyCorrectiveFraming(Camera cam, FrameInfo scout, RectInt silhouette, PreviewSettings settings)
         {
             float fillTarget = 1f - 2f * kPostCropBreathingRoom;
             float silhouetteFraction = (float)Mathf.Max(silhouette.width, silhouette.height) / kScoutRes;
@@ -254,7 +321,11 @@ namespace DreamPark
                                 + scout.up    * (pixCenterY * worldPerPixel);
 
             Vector3 newLookAt = scout.lookAt + lookAtShift;
-            float newDistance = scout.distance * zoomFactor;
+            // User zoom is a multiplier on how much of the frame the subject
+            // fills. zoom > 1 pulls the camera in (subject bigger); zoom < 1
+            // pushes it back. Dividing distance by zoom keeps zoom == 1 a
+            // no-op, preserving the default auto-fit framing exactly.
+            float newDistance = scout.distance * zoomFactor / settings.zoom;
 
             cam.transform.position = newLookAt + scout.directionToCamera * newDistance;
             cam.transform.LookAt(newLookAt);

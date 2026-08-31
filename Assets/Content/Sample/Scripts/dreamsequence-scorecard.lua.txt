@@ -1,0 +1,203 @@
+-- ============================================================
+-- dreamsequence-scorecard.lua.txt — show the run's score on a
+-- TextMeshPro label, using the SAME number the DreamBand shows.
+--
+-- Put this on the GameObject carrying the TMP component (or point
+-- `scoreText` at it). Works with TextMeshPro and TextMeshProUGUI.
+--
+-- ── IT MIRRORS, IT DOES NOT COUNT ───────────────────────────
+-- The number floating at the DreamBand position is owned by
+-- `lua_example_manager.lua.txt` on Player.prefab — the `[EXAMPLE] Point
+-- Collector` object, which publishes itself as the Lua global
+-- `example_manager` and drives the `[EXAMPLE] Point Counter` label.
+--
+-- This script deliberately keeps NO tally of its own. Two counters that
+-- both try to be "the score" agree right up until one of them misses an
+-- event, and then you are debugging which one is lying. There is one
+-- owner and everybody else reads it.
+--
+-- The manager lives on Player.prefab, which is a DIFFERENT addressable
+-- from the attraction — so "it does not exist yet" is an ordinary state,
+-- not an error. dp.on_global handles that: it fires now if the global is
+-- already bound, otherwise the moment it appears.
+--
+-- Resolution order, most specific first:
+--
+--   1. `scoreSource`   — any script exposing get_points() or get_score()
+--   2. `managerGlobal` — the Player.prefab manager behind the DreamBand
+--                        number (default `example_manager`)
+--   3. the containing Dream Sequence controller's get_score()
+--   4. storage.get(storageKey) — the persisted value the Adventure Log
+--                        reads, for a board that outlives the session
+--
+-- With `showHighScore` on it reports the persisted best instead of the
+-- run in progress — right for a "personal best" board, wrong for an
+-- end-of-run scorecard.
+--
+-- @var scoreText gameobject
+-- @var scoreSource script
+-- @var managerGlobal string example_manager
+-- @var prefix string
+-- @var suffix string
+-- @var storageKey string high_score
+-- @var showHighScore bool false
+-- @var refreshInterval float 0.25
+-- ============================================================
+
+local UE = CS.UnityEngine
+local Time = UE.Time
+
+local tmp = nil
+local controller = nil
+local manager = nil
+local nextPollAt = 0.0
+local lastShown = nil
+
+-- ── Finding the label ────────────────────────────────────────
+local function resolve_text_object()
+    if scoreText ~= nil then return scoreText end
+    return self.gameObject
+end
+
+local function resolve_tmp()
+    if tmp ~= nil then return tmp end
+
+    local target = resolve_text_object()
+    if target == nil then return nil end
+
+    -- World-space label first: a scorecard standing in a level is far more
+    -- likely to be TextMeshPro than a canvas-parented TextMeshProUGUI.
+    pcall(function()
+        local t = target:GetComponent(typeof(CS.TMPro.TextMeshPro))
+        if t ~= nil then tmp = t end
+    end)
+    if tmp == nil then
+        pcall(function()
+            local t = target:GetComponent(typeof(CS.TMPro.TextMeshProUGUI))
+            if t ~= nil then tmp = t end
+        end)
+    end
+
+    return tmp
+end
+
+-- ── Finding the score ────────────────────────────────────────
+-- Same walk the portal uses: dp.attraction() resolves to the nearest
+-- GameArea, so anything living inside a prop would get handed its own
+-- scope instead of the attraction's.
+local function find_controller()
+    local current = self.transform
+
+    while current ~= nil do
+        local scope = dp.scope(current.gameObject)
+        if scope ~= nil and scope.get_score ~= nil then
+            return scope
+        end
+        current = current.parent
+    end
+
+    local scope = dp.attraction(self.gameObject)
+    if scope ~= nil and scope.get_score ~= nil then return scope end
+
+    return nil
+end
+
+local function get_controller()
+    if controller == nil then controller = find_controller() end
+    return controller
+end
+
+-- Managers disagree about what to call it: the sample's point collector
+-- says get_points(), the Dream Sequence controller says get_score(). Ask
+-- for whichever one the scope actually has rather than making every
+-- manager in the park conform to this label's vocabulary.
+local function score_of(scope)
+    if scope == nil then return nil end
+
+    local ok, value = pcall(function()
+        if showHighScore == true and scope.get_high_score ~= nil then
+            return scope.get_high_score()
+        end
+        if scope.get_points ~= nil then return scope.get_points() end
+        if scope.get_score  ~= nil then return scope.get_score()  end
+        return nil
+    end)
+
+    if ok and value ~= nil then return math.floor(value) end
+    return nil
+end
+
+local function resolve_score()
+    -- 1. an explicit source
+    local value = score_of(scoreSource)
+    if value ~= nil then return value end
+
+    -- 2. the manager driving the DreamBand number
+    value = score_of(manager)
+    if value ~= nil then return value end
+
+    -- 3. the Dream Sequence this label lives in
+    value = score_of(get_controller())
+    if value ~= nil then return value end
+
+    -- 4. the persisted value the Adventure Log reads
+    if storage ~= nil then
+        local ok, stored = pcall(function()
+            return storage.get(storageKey or "high_score", 0)
+        end)
+        if ok and stored ~= nil then return math.floor(stored) end
+    end
+
+    return 0
+end
+
+local function render(score)
+    if score == lastShown then return end
+    lastShown = score
+
+    local label = resolve_tmp()
+    if label == nil then return end
+
+    pcall(function()
+        label.text = (prefix or "") .. tostring(score) .. (suffix or "")
+    end)
+end
+
+-- ── Lifecycle ────────────────────────────────────────────────
+function onready()
+    resolve_tmp()
+    get_controller()
+
+    -- Fires immediately if Player.prefab already landed, otherwise the
+    -- moment it does. Late is normal; missing it must be impossible.
+    local name = managerGlobal
+    if name == nil or name == "" then name = "example_manager" end
+    dp.on_global(name, function(scope)
+        manager = scope
+        render(resolve_score())
+    end)
+
+    render(resolve_score())
+
+    -- The persisted value arrives from the server after the fact. Reads work
+    -- before it lands (local cache), so this is a refresh, not a gate.
+    if storage ~= nil then
+        storage.onReady(function() render(resolve_score()) end)
+    end
+
+    -- Snap to the final number the moment the run ends, rather than waiting
+    -- for the next poll tick to catch up.
+    local ds = get_controller()
+    if ds ~= nil and ds.on_sequence_complete ~= nil then
+        ds.on_sequence_complete(function() render(resolve_score()) end)
+    end
+end
+
+function update()
+    local interval = refreshInterval or 0.25
+    if interval <= 0 then interval = 0.25 end
+    if Time.time < nextPollAt then return end
+
+    nextPollAt = Time.time + interval
+    render(resolve_score())
+end

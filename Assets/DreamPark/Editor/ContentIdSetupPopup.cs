@@ -24,7 +24,9 @@ namespace DreamPark
         // {2,64}       length 2-64 (enforced separately to give a clearer error message)
         public static readonly Regex ContentIdRegex = new Regex(@"^[A-Za-z][A-Za-z0-9]*$");
 
-        public const string PlaceholderName = "YOUR_GAME_HERE";
+        // Defined in ContentFolders, which is not gated on !DREAMPARKCORE —
+        // the optimizer windows and the addressable janitor need it too.
+        public const string PlaceholderName = ContentFolders.PlaceholderName;
 
         private string oldFolderName;
         private string newName = "";

@@ -1,0 +1,167 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  serializedVersion: 8
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: FX_DreamGlow
+  m_Shader: {fileID: 4800000, guid: 40c81d00e66074b738ba29dc8aefb70f, type: 3}
+  m_Parent: {fileID: 0}
+  m_ModifiedSerializedProperties: 0
+  m_ValidKeywords:
+  - _BLENDMODE_ADDITIVE
+  - _COLORCOLOR_ON
+  - _EMISSION
+  - _FADING_ON
+  - _SURFACE_TYPE_TRANSPARENT
+  - _VC_MULTIPLY
+  m_InvalidKeywords: []
+  m_LightmapFlags: 1
+  m_EnableInstancingVariants: 0
+  m_DoubleSidedGI: 0
+  m_CustomRenderQueue: 3000
+  stringTagMap: {}
+  disabledShaderPasses:
+  - ALWAYS
+  - SHADOWCASTER
+  - DepthOnly
+  m_LockedProperties: 
+  m_SavedProperties:
+    serializedVersion: 3
+    m_TexEnvs:
+    - _BaseMap:
+        m_Texture: {fileID: 2800000, guid: 16d1ab7e4019b4abbaa485f46d5e27eb, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _BumpMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _DissolveMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _DistortionMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _DistortionMap2:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _EmissionMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _MainTex:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _NoiseModTex:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _OverlayTex:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _SecondColorTex:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    m_Ints: []
+    m_Floats:
+    - _AlphaClip: 0
+    - _AlphaTest: 0
+    - _AlphaToMask: 0
+    - _Blend: 1
+    - _BlendMode: 1
+    - _BlendOp: 0
+    - _BumpScale: 1
+    - _CameraFade: 0
+    - _CameraFadingEnabled: 0
+    - _CameraFarFadeDistance: 2
+    - _CameraNearFadeDistance: 1
+    - _ColorMode: 4
+    - _Cull: 2
+    - _Cutoff: 0.5
+    - _Dissolve: 0
+    - _DissolveAmount: 0
+    - _DissolveEdgeWidth: 0.05
+    - _Distortion: 0
+    - _Distortion2: 0
+    - _DistortionBlend: 0.5
+    - _DistortionEnabled: 0
+    - _DistortionScroll2X: 0
+    - _DistortionScroll2Y: 0
+    - _DistortionScrollX: 0
+    - _DistortionScrollY: 0
+    - _DistortionStrength: 1
+    - _DistortionStrength2: 0.1
+    - _DistortionStrengthScaled: 0
+    - _DstBlend: 1
+    - _DstBlendAlpha: 10
+    - _EdgeFade: 0
+    - _EdgeFadeWidth: 0.1
+    - _Emission: 0
+    - _EmissionEnabled: 1
+    - _EmissionStrength: 1
+    - _FakeLightAmbient: 0.3
+    - _FakeLightStrength: 0.7
+    - _FlipbookBlending: 0
+    - _FlipbookMode: 0
+    - _FresnelPower: 4
+    - _HdrBoost: 0
+    - _HdrBoostMultiplier: 1
+    - _LightingEnabled: 0
+    - _MetaDepthBias: 0
+    - _Mode: 2
+    - _MultiplyBrightnessCoverage: 0
+    - _NoiseMod: 0
+    - _NoiseModBasePower: 0.5
+    - _NoiseModGlowPower: 0.5
+    - _NoiseModSpeedX: 0
+    - _NoiseModSpeedY: 0
+    - _Overlay: 0
+    - _OverlayBlendMode: 0
+    - _OverlayScrollX: 0
+    - _OverlayScrollY: 0
+    - _OverlayStrength: 1
+    - _PseudoLit: 0
+    - _QueueOffset: 0
+    - _RadialUV: 0
+    - _RadialUVInnerRadius: 0
+    - _RadialUVRotation: 0
+    - _SecondColorEnable: 0
+    - _SecondColorSmooth: 0.5
+    - _SingleChannel: 0
+    - _SoftParticles: 0
+    - _SoftParticlesEnabled: 1
+    - _SoftParticlesFar: 0.2
+    - _SoftParticlesFarFadeDistance: 0.2
+    - _SoftParticlesNear: 0
+    - _SoftParticlesNearFadeDistance: 0
+    - _SrcBlend: 5
+    - _SrcBlendAlpha: 1
+    - _Surface: 1
+    - _VC: 1
+    - _ZTest: 4
+    - _ZWrite: 0
+    m_Colors:
+    - _BaseColor: {r: 1, g: 1, b: 1, a: 1}
+    - _BaseColorAddSubDiff: {r: 0, g: 0, b: 0, a: 0}
+    - _CameraFadeParams: {r: 0, g: Infinity, b: 0, a: 0}
+    - _Color: {r: 1, g: 1, b: 1, a: 1}
+    - _ColorAddSubDiff: {r: 0, g: 0, b: 0, a: 0}
+    - _DissolveEdgeColor: {r: 1, g: 0.5, b: 0, a: 1}
+    - _EmissionColor: {r: 1, g: 1, b: 1, a: 1}
+    - _FakeLightDir: {r: 0, g: 1, b: 1, a: 0}
+    - _FresnelColor: {r: 0, g: 0, b: 0, a: 1}
+    - _RadialUVCenter: {r: 0.5, g: 0.5, b: 0, a: 0}
+    - _SecondColor: {r: 1, g: 1, b: 1, a: 1}
+    - _SoftParticleFadeParams: {r: 0, g: 5, b: 0, a: 0}
+  m_BuildTextureStacks: []
+  m_AllowLocking: 1

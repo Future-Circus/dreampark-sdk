@@ -1313,7 +1313,7 @@
     "m_AdditionalMotionVectorMode": 0,
     "m_AlembicMotionVectors": false,
     "m_SupportsLODCrossFade": false,
-    "m_CustomEditorGUI": "",
+    "m_CustomEditorGUI": "DreamPark.EditorTools.Shaders.DreamParkUnlitShaderGUI",
     "m_SupportVFX": false
 }
 

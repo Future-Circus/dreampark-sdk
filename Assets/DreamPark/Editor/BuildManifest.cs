@@ -3,8 +3,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using UnityEditor;
 using UnityEngine;
+using Defective.JSON;
 
 namespace DreamPark
 {
@@ -16,12 +18,12 @@ namespace DreamPark
     // and will always show up in the changed-files set; that's correct, they're
     // tiny.
     //
-    // The manifest baseline is the snapshot of the most recent *successful*
-    // upload for a given contentId. Stored at:
+    // The manifest baseline is the snapshot we diff against when estimating
+    // or shipping a patch. We still cache the most recent successful local
+    // upload under:
     //   <ProjectRoot>/Library/DreamParkBuildManifests/{contentId}.json
-    // Library/ is git-ignored and per-machine, which is fine for solo / small
-    // teams. A future enhancement would sync baselines via the backend so a
-    // teammate's first upload after pulling matches another teammate's last.
+    // but Smart patching prefers the latest backend version metadata when it
+    // is available, so cross-machine uploads compare against the same parent.
 
     [Serializable]
     public class BuildManifestFile
@@ -29,6 +31,17 @@ namespace DreamPark
         // Path relative to ServerData/{platform}/, forward-slash normalized.
         public string fileName;
         public long sizeBytes;
+
+        // Hex MD5 of the file's actual bytes. This is the authoritative
+        // change signal — filename+size is NOT sufficient because the
+        // AppendHash bundle name is Unity's *content* Hash128 (asset graph),
+        // not a hash of the compiled file. Two builds of the same assets
+        // (e.g. legacy vs smart packer, or a Unity version bump) can produce
+        // the SAME filename/hash but DIFFERENT bytes. Diffing on md5 is what
+        // stops the patcher from skip-uploading a byte-changed bundle.
+        // Empty when unknown (legacy baseline without md5) → Diff falls back
+        // to the size heuristic for that entry only.
+        public string md5;
     }
 
     [Serializable]
@@ -42,7 +55,8 @@ namespace DreamPark
             get
             {
                 long sum = 0;
-                foreach (var f in files) sum += f.sizeBytes;
+                foreach (var f in files)
+                    if (f != null && f.sizeBytes > 0) sum += f.sizeBytes;
                 return sum;
             }
         }
@@ -135,6 +149,33 @@ namespace DreamPark
 
     public static class BuildManifestStore
     {
+        private const long UnknownFileSize = -1;
+
+        private static bool ShouldAlwaysUploadInPatch(string fileName)
+        {
+            if (string.IsNullOrEmpty(fileName)) return false;
+            string ext = Path.GetExtension(fileName);
+            return ext.Equals(".json", StringComparison.OrdinalIgnoreCase)
+                || ext.Equals(".hash", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string ExtractRelativeBackendFilename(string contentId, int versionNumber, string platform, string catalogPath)
+        {
+            if (string.IsNullOrEmpty(catalogPath) || string.IsNullOrEmpty(platform))
+                return null;
+
+            string expectedPrefix = $"addressables/{contentId}/{versionNumber}/{platform}/";
+            if (catalogPath.StartsWith(expectedPrefix, StringComparison.Ordinal))
+                return catalogPath.Substring(expectedPrefix.Length);
+
+            string platformMarker = $"/{platform}/";
+            int platformIdx = catalogPath.IndexOf(platformMarker, StringComparison.Ordinal);
+            if (platformIdx >= 0)
+                return catalogPath.Substring(platformIdx + platformMarker.Length);
+
+            return catalogPath.Replace('\\', '/');
+        }
+
         private static string ProjectRoot =>
             Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
 
@@ -164,6 +205,16 @@ namespace DreamPark
                 sdkVersion = SDKVersion.Current,
             };
 
+            // Preview + logo bundles were retired (July 2026) and their groups
+            // are excluded from the Addressables build — but an older build's
+            // output can still be sitting in ServerData/, and Addressables only
+            // clears that folder on a Clean build. A stale bundle here would
+            // enter the manifest, the baseline diff, and the upload: exactly the
+            // "4 non-Code bundle(s) also changed" abort this change exists to
+            // kill. Sweep them before walking. Safe to delete unconditionally —
+            // ServerData is build output, nothing authors into it.
+            PurgeRetiredArtifactFiles(contentId, platformsToInclude);
+
             foreach (string platform in platformsToInclude)
             {
                 var pm = new BuildManifestPlatform { platform = platform };
@@ -175,7 +226,11 @@ namespace DreamPark
                     {
                         string rel = Path.GetRelativePath(platformDir, filePath).Replace('\\', '/');
                         long size = new FileInfo(filePath).Length;
-                        pm.files.Add(new BuildManifestFile { fileName = rel, sizeBytes = size });
+                        // Compute md5 only for bundles — catalog_*.json/.hash are in
+                        // ShouldAlwaysUploadInPatch and never skip, so their md5 is
+                        // irrelevant and we skip the hashing cost.
+                        string md5 = ShouldAlwaysUploadInPatch(rel) ? null : ComputeFileMd5(filePath);
+                        pm.files.Add(new BuildManifestFile { fileName = rel, sizeBytes = size, md5 = md5 });
                     }
                     // Stable ordering for deterministic comparisons / diffs.
                     pm.files.Sort((a, b) => string.CompareOrdinal(a.fileName, b.fileName));
@@ -184,6 +239,45 @@ namespace DreamPark
             }
 
             return manifest;
+        }
+
+        // Deletes any {contentId}-previews / {contentId}-logos bundle left in
+        // ServerData by a build made before those groups were excluded.
+        // Filename shape is Addressables' AppendHash naming, lowercased:
+        //   "<groupname>_assets_…_<hash>.bundle"  (and "<groupname>-2_…" chunks)
+        internal static void PurgeRetiredArtifactFiles(string contentId, IEnumerable<string> platformsToInclude)
+        {
+            if (string.IsNullOrEmpty(contentId) || platformsToInclude == null) return;
+
+            string previews = (contentId + "-previews").ToLowerInvariant();
+            string logos = (contentId + "-logos").ToLowerInvariant();
+
+            foreach (string platform in platformsToInclude)
+            {
+                string platformDir = Path.Combine(ServerDataRoot, platform);
+                if (!Directory.Exists(platformDir)) continue;
+
+                foreach (string filePath in Directory.GetFiles(platformDir, "*.bundle", SearchOption.AllDirectories))
+                {
+                    string name = Path.GetFileName(filePath).ToLowerInvariant();
+                    bool retired =
+                        name.StartsWith(previews + "_", StringComparison.Ordinal) ||
+                        name.StartsWith(previews + "-", StringComparison.Ordinal) ||
+                        name.StartsWith(logos + "_", StringComparison.Ordinal) ||
+                        name.StartsWith(logos + "-", StringComparison.Ordinal);
+                    if (!retired) continue;
+
+                    try
+                    {
+                        File.Delete(filePath);
+                        Debug.Log($"[BuildManifest] Removed retired art bundle from ServerData: {platform}/{name}");
+                    }
+                    catch (Exception e)
+                    {
+                        Debug.LogWarning($"[BuildManifest] Couldn't delete stale art bundle {platform}/{name}: {e.Message}");
+                    }
+                }
+            }
         }
 
         public static BuildManifest LoadBaseline(string contentId)
@@ -201,6 +295,111 @@ namespace DreamPark
                 Debug.LogWarning($"[BuildManifest] Failed to load baseline at {path}: {e.Message}");
                 return null;
             }
+        }
+
+        public static BuildManifest BuildFromBackendVersion(string contentId, JSONObject versionJson)
+        {
+            if (string.IsNullOrEmpty(contentId) || versionJson == null || versionJson.type != JSONObject.Type.Object)
+                return null;
+
+            int versionNumber = versionJson.HasField("versionNumber")
+                ? versionJson.GetField("versionNumber").intValue
+                : 0;
+
+            var manifest = new BuildManifest
+            {
+                contentId = contentId,
+                versionNumber = versionNumber,
+                buildTimestampUtc =
+                    versionJson.GetField("createdAt")?.stringValue
+                    ?? versionJson.GetField("uploadedAt")?.stringValue
+                    ?? versionJson.GetField("updatedAt")?.stringValue
+                    ?? string.Empty,
+                sdkVersion = versionJson.GetField("sdkVersion")?.stringValue ?? string.Empty,
+            };
+
+            var sizeLookup = new Dictionary<string, Dictionary<string, long>>(StringComparer.OrdinalIgnoreCase);
+            var md5Lookup = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+            var manifestJson = versionJson.GetField("manifest");
+            var filesArr = manifestJson?.GetField("files");
+            if (filesArr != null && filesArr.type == JSONObject.Type.Array && filesArr.list != null)
+            {
+                foreach (var fileNode in filesArr.list)
+                {
+                    if (fileNode == null || fileNode.type != JSONObject.Type.Object) continue;
+                    string platform = fileNode.GetField("platform")?.stringValue;
+                    string filename = fileNode.GetField("filename")?.stringValue;
+                    if (string.IsNullOrEmpty(platform) || string.IsNullOrEmpty(filename)) continue;
+
+                    long size = UnknownFileSize;
+                    var sizeNode = fileNode.GetField("size");
+                    if (sizeNode != null && sizeNode.type == JSONObject.Type.Number)
+                        size = sizeNode.longValue;
+
+                    if (!sizeLookup.TryGetValue(platform, out var byFile))
+                    {
+                        byFile = new Dictionary<string, long>(StringComparer.Ordinal);
+                        sizeLookup[platform] = byFile;
+                    }
+                    byFile[filename] = size;
+
+                    // Authoritative server md5 (accept "md5" or legacy "hash" field).
+                    // This is what makes the diff a true md5-vs-server comparison.
+                    string md5 = fileNode.GetField("md5")?.stringValue
+                                 ?? fileNode.GetField("hash")?.stringValue;
+                    if (!string.IsNullOrEmpty(md5))
+                    {
+                        if (!md5Lookup.TryGetValue(platform, out var byFileMd5))
+                        {
+                            byFileMd5 = new Dictionary<string, string>(StringComparer.Ordinal);
+                            md5Lookup[platform] = byFileMd5;
+                        }
+                        byFileMd5[filename] = md5.ToLowerInvariant();
+                    }
+                }
+            }
+
+            var catalog = versionJson.GetField("catalog");
+            if (catalog != null && catalog.type == JSONObject.Type.Object && catalog.keys != null)
+            {
+                foreach (string platform in catalog.keys)
+                {
+                    var platformManifest = new BuildManifestPlatform { platform = platform };
+                    var pathsArr = catalog.GetField(platform);
+                    if (pathsArr != null && pathsArr.type == JSONObject.Type.Array && pathsArr.list != null)
+                    {
+                        foreach (var pathNode in pathsArr.list)
+                        {
+                            string catalogPath = pathNode?.stringValue;
+                            string relativeFileName = ExtractRelativeBackendFilename(contentId, versionNumber, platform, catalogPath);
+                            if (string.IsNullOrEmpty(relativeFileName)) continue;
+
+                            long size = UnknownFileSize;
+                            if (sizeLookup.TryGetValue(platform, out var byFile)
+                                && byFile.TryGetValue(relativeFileName, out long knownSize))
+                            {
+                                size = knownSize;
+                            }
+
+                            string md5 = null;
+                            if (md5Lookup.TryGetValue(platform, out var byFileMd5))
+                                byFileMd5.TryGetValue(relativeFileName, out md5);
+
+                            platformManifest.files.Add(new BuildManifestFile
+                            {
+                                fileName = relativeFileName,
+                                sizeBytes = size,
+                                md5 = md5,
+                            });
+                        }
+                    }
+
+                    platformManifest.files.Sort((a, b) => string.CompareOrdinal(a.fileName, b.fileName));
+                    manifest.platforms.Add(platformManifest);
+                }
+            }
+
+            return manifest.platforms.Count > 0 ? manifest : null;
         }
 
         public static void SaveBaseline(BuildManifest manifest)
@@ -250,11 +449,11 @@ namespace DreamPark
             foreach (var currPlatform in current.platforms)
             {
                 var basePlatform = baseline?.GetPlatform(currPlatform.platform);
-                var baseFiles = new Dictionary<string, long>();
+                var baseFiles = new Dictionary<string, BuildManifestFile>();
                 if (basePlatform?.files != null)
                 {
                     foreach (var f in basePlatform.files)
-                        baseFiles[f.fileName] = f.sizeBytes;
+                        baseFiles[f.fileName] = f;
                 }
 
                 var pd = new PlatformDiff { platform = currPlatform.platform };
@@ -263,7 +462,33 @@ namespace DreamPark
                 foreach (var f in currPlatform.files)
                 {
                     currFileNames.Add(f.fileName);
-                    if (baseFiles.TryGetValue(f.fileName, out var baseSize) && baseSize == f.sizeBytes)
+                    bool alwaysUpload = ShouldAlwaysUploadInPatch(f.fileName);
+                    bool filenameMatch = baseFiles.TryGetValue(f.fileName, out var baseFile);
+
+                    // Decide "unchanged" by CONTENT, not by filename.
+                    //   - If both sides have an md5 → that's the authoritative
+                    //     check (catches same-name/same-AppendHash/different-bytes,
+                    //     which filename+size cannot).
+                    //   - If md5 is missing on either side (legacy baseline that
+                    //     predates md5 capture) → fall back to the old size test
+                    //     so we don't needlessly re-upload everything once.
+                    bool unchanged = false;
+                    if (!alwaysUpload && filenameMatch)
+                    {
+                        bool haveBothMd5 = !string.IsNullOrEmpty(f.md5)
+                                           && !string.IsNullOrEmpty(baseFile.md5);
+                        if (haveBothMd5)
+                        {
+                            unchanged = string.Equals(f.md5, baseFile.md5, StringComparison.OrdinalIgnoreCase);
+                        }
+                        else
+                        {
+                            unchanged = baseFile.sizeBytes == UnknownFileSize
+                                        || baseFile.sizeBytes == f.sizeBytes;
+                        }
+                    }
+
+                    if (unchanged)
                     {
                         pd.unchangedFiles.Add(f.fileName);
                         pd.unchangedBytes += f.sizeBytes;
@@ -301,6 +526,29 @@ namespace DreamPark
                     set.Add($"{p.platform}/{f}");
             }
             return set;
+        }
+
+        // Hex MD5 of a file's bytes. Matches the GCS object md5 the backend
+        // exposes (Buffer.from(metadata.md5Hash,'base64').toString('hex')), so
+        // the server baseline and the local build are directly comparable.
+        public static string ComputeFileMd5(string filePath)
+        {
+            try
+            {
+                using (var md5 = MD5.Create())
+                using (var stream = File.OpenRead(filePath))
+                {
+                    byte[] hash = md5.ComputeHash(stream);
+                    var sb = new System.Text.StringBuilder(hash.Length * 2);
+                    foreach (byte b in hash) sb.Append(b.ToString("x2"));
+                    return sb.ToString();
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[BuildManifest] Could not md5 {filePath}: {e.Message}");
+                return null;
+            }
         }
 
         public static string FormatBytes(long bytes)
@@ -376,6 +624,29 @@ namespace DreamPark
             deltaBlock.AddField("totalBytes", deltaTotal);
             deltaBlock.AddField("byPlatform", deltaByPlatform);
             summary.AddField("deltaUploaded", deltaBlock);
+
+            // Per-bundle metadata (size + md5) for every built bundle, so the
+            // backend can bake it into resolved-bundles.json. That makes the
+            // artifact a fully self-contained static file the patch uploader can
+            // diff against with zero GCS metadata reads. Catalog files have no
+            // md5 (they always re-upload) and are skipped.
+            var bundleMetadata = new Defective.JSON.JSONObject();
+            foreach (var p in current.platforms)
+            {
+                var platformObj = new Defective.JSON.JSONObject();
+                int n = 0;
+                foreach (var f in p.files)
+                {
+                    if (f == null || string.IsNullOrEmpty(f.fileName) || string.IsNullOrEmpty(f.md5)) continue;
+                    var fileObj = new Defective.JSON.JSONObject();
+                    fileObj.AddField("size", f.sizeBytes);
+                    fileObj.AddField("md5", f.md5);
+                    platformObj.AddField(f.fileName, fileObj);
+                    n++;
+                }
+                if (n > 0) bundleMetadata.AddField(p.platform, platformObj);
+            }
+            summary.AddField("bundleMetadata", bundleMetadata);
 
             return summary;
         }

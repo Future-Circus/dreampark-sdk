@@ -16,6 +16,60 @@ public static class CoreExtensions
     private static bool _skipDefaultInit = false; // Skip InitializeAsync after beta toggle
 
     /// <summary>
+    /// Describes an Addressables asset load failure. Kept dependency-free so the
+    /// SDK stays standalone — project code (e.g. ContentErrorReporter) subscribes
+    /// to <see cref="AssetLoadFailed"/> and decides how to surface it (UI, native bridge, etc.).
+    /// </summary>
+    public struct AssetLoadFailure
+    {
+        public string assetKey;        // e.g. "SuperAdventureLand/Levels/Custom/A_DreamSequence"
+        public string message;         // human-readable reason
+        public bool isCorruption;      // true for corrupt/truncated AssetBundle faults
+    }
+
+    /// <summary>
+    /// Raised when an Addressables load fails. Subscribers run on Unity's main thread.
+    /// Handlers MUST NOT throw — failures here are already error paths.
+    /// </summary>
+    public static event Action<AssetLoadFailure> AssetLoadFailed;
+
+    /// <summary>
+    /// Heuristic: does this message look like a corrupt/incompatible/truncated AssetBundle?
+    /// These are the native deserialization faults ("archive is corrupted", "Position out
+    /// of bounds") that can hard-crash on device if the same bad cached bundle is reloaded.
+    /// </summary>
+    private static bool LooksLikeCorruption(string message)
+    {
+        if (string.IsNullOrEmpty(message)) return false;
+        string m = message.ToLowerInvariant();
+        return m.Contains("corrupt")
+            || m.Contains("position out of bounds")
+            || m.Contains("is not a valid asset bundle")
+            || m.Contains("failed to decompress")
+            || m.Contains("failed to read")
+            || m.Contains("data integrity");
+    }
+
+    private static void RaiseAssetLoadFailed(string assetKey, string message)
+    {
+        var handler = AssetLoadFailed;
+        if (handler == null) return;
+        try
+        {
+            handler.Invoke(new AssetLoadFailure
+            {
+                assetKey = assetKey,
+                message = message,
+                isCorruption = LooksLikeCorruption(message)
+            });
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[CoreExtensions] AssetLoadFailed handler threw: {ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// Clears the cached Addressables initialization task.
     /// MUST be called when Addressables is reinitialized (e.g., during beta mode toggle)
     /// to ensure GetAsset uses the fresh Addressables state.
@@ -132,17 +186,23 @@ public static class CoreExtensions
             }
             else
             {
+                string failMessage = handle.OperationException?.Message
+                    ?? $"LoadAssetAsync returned status {handle.Status}";
                 Debug.LogWarning($"[GetAsset] LoadAssetAsync status: {handle.Status} for '{resourceName}'");
                 if (handle.OperationException != null)
                 {
                     Debug.LogWarning($"[GetAsset] Exception: {handle.OperationException.Message}");
                 }
                 Addressables.Release(handle);
+                RaiseAssetLoadFailed(resourceName, failMessage);
             }
         }
         catch (Exception e)
         {
+            // Contain the failure here so a bad/corrupt bundle never propagates as an
+            // unhandled exception up the async chain (which is what kills the boot/load).
             Debug.LogWarning($"[GetAsset] Exception loading '{resourceName}': {e.Message}");
+            RaiseAssetLoadFailed(resourceName, e.Message);
         }
 
         // Debug: Check if key exists in any locator (for debugging purposes)

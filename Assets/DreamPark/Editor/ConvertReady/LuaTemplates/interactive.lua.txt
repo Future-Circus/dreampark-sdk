@@ -1,0 +1,186 @@
+-- ============================================================
+-- {PROP}.lua.txt — this prop's script. Interactive.
+--
+-- THIS IS YOUR FILE. Convert generated it and will not touch it
+-- again. It is deliberately boring: it detects that something hit
+-- this prop, works out what and how hard, and reports it. The
+-- interesting part is what YOU do about it — see the marked spots
+-- in on_hit().
+--
+-- WHAT IT DOES OUT OF THE BOX
+--   Logs every qualifying hit with the speed and what hit it, and
+--   fires anything registered through on_hit(). That's it. Nothing
+--   moves, nothing scores, nothing plays. Delete the log line the
+--   moment you've put something real in.
+--
+-- WHERE IT LIVES
+--   On the Anchor, because that is where the fitted collider is.
+--   Unity delivers OnCollisionEnter to the collider's GameObject and
+--   to the GameObject of that collider's attached Rigidbody — and
+--   LuaMessageRelays adds its relay to THIS GameObject only, with no
+--   ancestor walk. On the root this file would fire only when the
+--   prop has a Rigidbody, and go silent when it doesn't.
+--
+-- TRIGGER vs COLLISION
+--   Both are wired below. A solid collider gives you oncollisionenter
+--   with a real contact point and closing speed. A collider with Is
+--   Trigger ON gives you ontriggerenter with neither — you get told
+--   something overlapped, and that is all. Convert fits a solid one,
+--   so oncollisionenter is the live path and ontriggerenter is there
+--   for when you tick Is Trigger.
+--
+-- @var minImpactSpeed float 0.0
+-- @var requireTag string ""
+-- @var playerOnly bool false
+-- @var cooldownSeconds float 0.25
+-- @var logHits bool true
+-- ============================================================
+
+local UE = CS.UnityEngine
+local Debug = UE.Debug
+local Time = UE.Time
+
+-- ── State ───────────────────────────────────────────────────
+
+local next_hit_allowed_at = -1.0
+local hit_count = 0
+local on_hit_handlers = {}
+
+local function log(message)
+    Debug.Log("[{PROP}] " .. message)
+end
+
+-- ── Filtering ───────────────────────────────────────────────
+
+-- One place that decides whether a contact counts, so the trigger path
+-- and the collision path can never drift apart. `speed` is nil for a
+-- trigger — there is no closing speed to read — and a nil speed skips
+-- the speed test rather than failing it.
+local function accepts(other_go, speed)
+    if other_go == nil then return false end
+
+    if Time.time < next_hit_allowed_at then return false end
+
+    -- A prop that fires four times per touch is the single most common
+    -- thing to get wrong here: a hand rig has several colliders and they
+    -- do not arrive on the same frame.
+    if speed ~= nil and speed < minImpactSpeed then return false end
+
+    if playerOnly and not dp.is_player(other_go) then return false end
+
+    -- "" means any tag. The park's tag roster is fixed — Coin, Ball,
+    -- Projectile, Stone, Fruit and the rest — so compare against one of
+    -- those rather than inventing a new one.
+    if requireTag ~= nil and requireTag ~= "" then
+        if other_go.tag ~= requireTag then return false end
+    end
+
+    return true
+end
+
+-- ── The hit ─────────────────────────────────────────────────
+
+-- Everything funnels here. Put your game in this function, or register a
+-- handler from another script with on_hit(fn).
+local function on_hit(other_go, point, speed)
+    next_hit_allowed_at = Time.time + cooldownSeconds
+    hit_count = hit_count + 1
+
+    if logHits then
+        local who = "?"
+        if other_go ~= nil then who = other_go.name end
+        if speed ~= nil then
+            log(string.format("hit #%d by '%s' at %.2f m/s", hit_count, who, speed))
+        else
+            log(string.format("touched #%d by '%s'", hit_count, who))
+        end
+    end
+
+    -- ── YOUR GAME GOES HERE ────────────────────────────────
+    --
+    -- Some things you probably want, and where to find them:
+    --
+    --   Score it            storage.increment("hits", 1)
+    --                       storage.max("best_speed", speed or 0)
+    --
+    --   Sound / effects     local audio = self.gameObject:GetComponent(
+    --                           typeof(UE.AudioSource))
+    --                       if audio ~= nil then audio:Play() end
+    --
+    --   Push it             local body = self.gameObject:GetComponentInParent(
+    --                           typeof(UE.Rigidbody))
+    --                       if body ~= nil then
+    --                           body:AddForce(UE.Vector3.up * 2, UE.ForceMode.Impulse)
+    --                       end
+    --
+    --   Tell the attraction local a = dp.attraction(self.gameObject)
+    --                       if a ~= nil and a.add_score ~= nil then a.add_score(10) end
+    --
+    --   Multiplayer         if net_send then net_send("hit", "{}") end
+    --                       (needs a NetId on THIS GameObject; see
+    --                        Samples/Multiplayer/MULTIPLAYER.md)
+    --
+    -- ───────────────────────────────────────────────────────
+
+    for i = 1, #on_hit_handlers do
+        -- pcall around a CALLER's handler so a throwing listener cannot
+        -- stop the others from running.
+        local ok, err = pcall(on_hit_handlers[i], other_go, point, speed)
+        if not ok then Debug.LogError("[{PROP}] on_hit handler threw: " .. tostring(err)) end
+    end
+end
+
+-- ── Public API ──────────────────────────────────────────────
+-- Reachable from any other script via dp.scope(go).
+
+--- fn(other_gameObject, contact_point, speed) on every accepted hit.
+--- `speed` is nil for trigger overlaps. Register in onready().
+function on_hit_add(fn)
+    if fn ~= nil then on_hit_handlers[#on_hit_handlers + 1] = fn end
+end
+
+--- How many accepted hits so far this session.
+function get_hit_count()
+    return hit_count
+end
+
+--- Pretend something hit it. Useful from a start button or a test script.
+function force_hit()
+    on_hit(nil, self.transform.position, nil)
+end
+
+-- ── Lifecycle ───────────────────────────────────────────────
+
+function oncollisionenter(collision)
+    if collision == nil then return end
+
+    local other = collision.gameObject
+    -- relativeVelocity is the CLOSING speed of the two bodies. Reading this
+    -- prop's own velocity instead would miss the case that matters most:
+    -- something thrown at a prop that is standing still.
+    local speed = collision.relativeVelocity.magnitude
+
+    if not accepts(other, speed) then return end
+
+    local point = self.transform.position
+    if collision.contactCount > 0 then point = collision:GetContact(0).point end
+
+    on_hit(other, point, speed)
+end
+
+function ontriggerenter(other)
+    if other == nil then return end
+
+    -- A trigger has no contact point and no closing speed, so minImpactSpeed
+    -- cannot be applied here. If you need a speed gate, use a solid collider.
+    --
+    -- Note this also fires for overlaps that ALREADY EXISTED when the object
+    -- came up: colliders are disabled during park load and Unity does not
+    -- reliably raise OnTriggerEnter for something already inside one, so the
+    -- SDK sweeps once on the first real frame. A pickup the player spawns
+    -- standing on top of still fires.
+    local other_go = other.gameObject
+    if not accepts(other_go, nil) then return end
+
+    on_hit(other_go, other.bounds.center, nil)
+end

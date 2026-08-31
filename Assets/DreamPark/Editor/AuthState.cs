@@ -22,6 +22,22 @@ namespace DreamPark
         // every domain reload (script recompile / play mode toggle).
         private const string LastCheckedPrefKey = "DreamPark.AuthState.LastCheckedAt";
 
+        // How much runway is left before we say something. /auth/refresh VALIDATES a
+        // session but never re-mints it (routes/auth.routes.js POST /refresh verifies the
+        // cookie, returns the user, and stops there), so the ~14-day deadline set at login
+        // is final and nothing the editor does postpones it. Warning at 48h means the
+        // creator hears about it while signing in again is a ten-second interruption,
+        // rather than when a long upload 401s at the commit step with the build spent.
+        private const double ExpiryWarningHours = 48;
+
+        // The expiry value we last warned about, so the notice appears once per SESSION
+        // rather than once per focus probe. Keyed on the deadline itself: a fresh login
+        // produces a new deadline and re-arms the warning, while the current session stays
+        // quiet however many times the user tabs away and back. In EditorPrefs for the
+        // same reason as LastCheckedPrefKey — a static field would re-arm on every
+        // script recompile.
+        private const string ExpiryWarnedPrefKey = "DreamPark.AuthState.ExpiryWarnedFor";
+
         static AuthState()
         {
             // Subscribe once. focusChanged passes true on focus gained, false on lost.
@@ -63,8 +79,27 @@ namespace DreamPark
                     // LoginStateChanged. We log a hint so devs know why panels
                     // suddenly demand re-login.
                     Debug.Log($"[DreamPark] Session expired (probed via {reason}). Please log in again.");
+                    return;
                 }
+                WarnIfSessionEndingSoon();
             });
+        }
+
+        private static void WarnIfSessionEndingSoon()
+        {
+            double hoursLeft = AuthAPI.sessionExpiresInHours;
+            // -1 means the expiry is unknown — a session stored before the SDK recorded
+            // expiresAt, or one injected by the native handoff. Unknown is NOT "expiring
+            // soon"; staying silent is the only correct reading.
+            if (hoursLeft < 0 || hoursLeft > ExpiryWarningHours) return;
+
+            string stamp = AuthAPI.sessionExpiresAt.ToString();
+            if (EditorPrefs.GetString(ExpiryWarnedPrefKey, "") == stamp) return;
+            EditorPrefs.SetString(ExpiryWarnedPrefKey, stamp);
+
+            Debug.LogWarning(
+                $"[DreamPark] Your DreamPark session ends in about {Mathf.CeilToInt((float)hoursLeft)}h. "
+                + "Sign in again (DreamPark → Sign In) before starting a long upload.");
         }
     }
 }

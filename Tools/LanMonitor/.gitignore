@@ -1,0 +1,19 @@
+# .NET build artifacts
+bin/
+obj/
+
+# Published self-contained binaries
+dist/
+
+# Local dev config (dev.example.json is tracked)
+config/dev.json
+
+# Session captures — these are debugging artifacts, not source
+captures/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo

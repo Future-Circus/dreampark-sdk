@@ -5,6 +5,8 @@ using DreamBoxRelay;
 using LiteNetLib;
 using LiteNetLib.Utils;
 
+const int MaxDebugMessagePreviewChars = 512;
+
 // ── Environment check mode ────────────────────────────────────────
 if (args.Contains("--check"))
 {
@@ -162,6 +164,19 @@ listener.PeerDisconnectedEvent += (peer, info) =>
 
 listener.NetworkReceiveEvent += (peer, reader, channel, method) =>
 {
+    // Inbound size cap. Both PeerRelayServer (:29) and DreamBoxClient (:559)
+    // cap at 16 KB; the Pi had no length check anywhere on this path, so one
+    // peer on a venue LAN could push an arbitrary-size payload through to every
+    // headset in the room. The peer relay was written later and more
+    // defensively; this brings the kiosk to the same floor.
+    if (reader.AvailableBytes > config.MaxMessageBytes)
+    {
+        Console.WriteLine($"[relay] dropping oversized message from {peer}: " +
+                          $"{reader.AvailableBytes} bytes (cap {config.MaxMessageBytes}).");
+        reader.Recycle();
+        return;
+    }
+
     var bytes = reader.GetRemainingBytes();
     state.RecordRelay(bytes.Length);
     state.Log.Record(peer.Id, peer.ToString() ?? "?", bytes);
@@ -169,7 +184,7 @@ listener.NetworkReceiveEvent += (peer, reader, channel, method) =>
     if (config.Debug)
     {
         string message = System.Text.Encoding.UTF8.GetString(bytes);
-        Console.WriteLine($"[relay] received from {peer}: {message}");
+        Console.WriteLine($"[relay] received from {peer}: {TruncateForLog(message)}");
     }
 
     var writer = new NetDataWriter();
@@ -240,4 +255,12 @@ void PrintStartupFailed(string error, string hint)
     Console.Error.WriteLine();
     Console.Error.WriteLine($"  Hint: {hint}");
     Console.Error.WriteLine();
+}
+
+string TruncateForLog(string value)
+{
+    if (string.IsNullOrEmpty(value) || value.Length <= MaxDebugMessagePreviewChars)
+        return value;
+
+    return value[..MaxDebugMessagePreviewChars] + $"... ({value.Length - MaxDebugMessagePreviewChars} chars truncated)";
 }

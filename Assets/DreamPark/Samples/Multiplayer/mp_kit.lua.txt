@@ -1,0 +1,810 @@
+-- ============================================================
+-- mp_kit.lua.txt — reusable multiplayer primitives
+--
+-- Reference material. Copy it into your own park's Scripts/ folder and use
+-- what you need; it is a library, not something the SDK wires up for you.
+-- Every pattern here is explained in MULTIPLAYER.md, next to this file.
+-- It is a LIBRARY, not a behaviour: it owns no NetId, sends nothing
+-- by itself, and never touches _G. Attraction managers receive it
+-- through a LuaBehaviour **Script Injection** named `kit`, which
+-- boots this script on demand (LuaBehaviour.ScriptScope) so load
+-- order can never bite.
+--
+--   Manager GameObject:  NetId + LuaBehaviour(manager.lua)
+--                        scriptInjections: [ kit -> MPKit ]
+--                        (no explicitId — NetId hashes itself, and the hash is
+--                         stable on every headset. You do not author ids.)
+--   MPKit GameObject:    LuaBehaviour(mp_kit.lua)   -- no NetId
+--
+-- ── WHAT THE TRANSPORT ACTUALLY GUARANTEES ──────────────────
+-- Everything here is shaped by five facts about the DreamPark relay.
+-- Read these before changing anything:
+--
+--  1. NO SELF-ECHO. The relay fans a message to every peer EXCEPT the
+--     sender (PeerRelayServer.NetworkReceiveEvent). Your own onnet
+--     never fires for your own net_send. Always apply locally first,
+--     then tell everyone else.
+--
+--  2. ONE NetId = ONE BUS, AND EVERY PLAYER'S COPY SHARES IT.
+--     net_send is addressed to the sending object's NetId, which is a
+--     hash of the prefab-relative hierarchy path. Every headset runs
+--     the same prefab, so the same object on every headset computes
+--     the SAME id — and that is precisely what makes sending on it a
+--     broadcast to that object's twin everywhere else. A NetId is an
+--     ADDRESS, not an owner. Identity of *which player* rides in the
+--     payload's `u` field. There is no server-side "player".
+--
+--  3. 60 MESSAGES / PEER / SECOND, then silent drops
+--     (PeerRelayServer.MaxMessagesPerPeerPerSecond). That is a budget
+--     for the WHOLE HEADSET, shared by every script on it. Nothing
+--     tells you when you cross it. Use new_budget() and mean it.
+--
+--  4. RELIABLE-ORDERED ONLY. Every message is ReliableOrdered on a
+--     single channel, so a lost packet head-of-line blocks everything
+--     behind it. Never stream state you could instead re-send: prefer
+--     absolute values over deltas, so one dropped message is repaired
+--     by the next one instead of corrupting the total forever.
+--
+--  5. NUMBERS ARRIVE AS float32. json_parse maps every JSON number
+--     through JSONObject.floatValue, so integers are exact only below
+--     2^24 (16,777,216). Ids, tokens and counters must stay under it.
+--     Identity that must never collide belongs in a STRING.
+--
+-- Wire shape produced by net_send(kind, body):
+--     {"type":"<kind>","payload":{"netId":N, <body fields>}}
+-- so onnet gets the whole envelope:
+--     local t = json_parse(raw); local kind, p = t.type, t.payload
+-- ============================================================
+
+local UE = CS.UnityEngine
+
+-- Hard limits of the transport, exposed so demos can display them.
+RELAY_MSG_PER_SEC   = 60        -- PeerRelayServer.MaxMessagesPerPeerPerSecond
+RELAY_MAX_BYTES     = 16 * 1024 -- DreamBoxClient.MaxIncomingMessageBytes
+FLOAT32_SAFE_INT    = 16777216  -- 2^24
+
+-- Join-order palette. Index is agreed by every headset (see new_room),
+-- so colour is agreed too — without anyone assigning it.
+PALETTE = {
+    { 0.20, 0.55, 1.00, "blue"    },
+    { 1.00, 0.28, 0.22, "red"     },
+    { 0.25, 0.90, 0.42, "green"   },
+    { 1.00, 0.82, 0.15, "yellow"  },
+    { 0.85, 0.30, 1.00, "magenta" },
+    { 0.15, 0.92, 0.95, "cyan"    },
+    { 1.00, 0.52, 0.10, "orange"  },
+    { 0.70, 1.00, 0.25, "lime"    },
+}
+
+function palette_rgb(i)
+    return PALETTE[(math.floor(i) % #PALETTE) + 1]
+end
+
+function palette_color(i)
+    local c = palette_rgb(i)
+    return UE.Color(c[1], c[2], c[3], 1)
+end
+
+function palette_name(i)
+    return palette_rgb(i)[4]
+end
+
+-- Tint a renderer without instancing a material per object.
+-- MaterialPropertyBlock is the only cheap way to give N cubes N colours.
+function tint(go, col)
+    if go == nil then return end
+    pcall(function()
+        local r = go:GetComponent(typeof(UE.Renderer))
+        if r == nil then return end
+        local mpb = UE.MaterialPropertyBlock()
+        r:GetPropertyBlock(mpb)
+        mpb:SetColor("_BaseColor", col)   -- URP
+        mpb:SetColor("_Color", col)       -- Built-in / fallback
+        r:SetPropertyBlock(mpb)
+    end)
+end
+
+function set_text(go, s)
+    if go == nil then return end
+    pcall(function()
+        local tmp = go:GetComponent(typeof(CS.TMPro.TextMeshPro))
+        if tmp == nil then tmp = go:GetComponent(typeof(CS.TMPro.TextMeshProUGUI)) end
+        if tmp ~= nil then tmp.text = s end
+    end)
+end
+
+function text_color(go, col)
+    if go == nil then return end
+    pcall(function()
+        local tmp = go:GetComponent(typeof(CS.TMPro.TextMeshPro))
+        if tmp == nil then tmp = go:GetComponent(typeof(CS.TMPro.TextMeshProUGUI)) end
+        if tmp ~= nil then tmp.color = col end
+    end)
+end
+
+-- ============================================================
+-- new_budget(hz) — the send permit pool
+--
+-- Rule 3 above is a per-HEADSET budget, not per-script, and crossing
+-- it drops messages silently at the relay. Every stream in a demo
+-- draws permits from one budget so the total is provably bounded.
+-- ============================================================
+function new_budget(hz)
+    local b = { hz = hz or 20, tokens = 0, last = -1, sent = 0, denied = 0 }
+
+    function b.set_hz(v) b.hz = math.max(0, v) end
+
+    -- Token bucket, depth 1 second. Returns false instead of blocking.
+    function b.take(n)
+        n = n or 1
+        local t = UE.Time.unscaledTime
+        if b.last < 0 then b.last = t end
+        b.tokens = math.min(b.hz, b.tokens + (t - b.last) * b.hz)
+        b.last = t
+        if b.tokens >= n then
+            b.tokens = b.tokens - n
+            b.sent = b.sent + n
+            return true
+        end
+        b.denied = b.denied + 1
+        return false
+    end
+
+    function b.rate() return b.hz end
+    return b
+end
+
+-- ============================================================
+-- new_rate(hz) — plain fixed-interval gate for one stream
+-- ============================================================
+function new_rate(hz)
+    local r = { hz = hz or 10, next_at = 0 }
+    function r.set_hz(v) r.hz = v end
+    function r.ready()
+        if r.hz <= 0 then return false end
+        local t = UE.Time.unscaledTime
+        if t < r.next_at then return false end
+        r.next_at = t + (1.0 / r.hz)
+        return true
+    end
+    return r
+end
+
+-- ============================================================
+-- new_dedupe(limit) — "did I already apply this?"
+--
+-- ReliableOrdered still lets you double-apply: a peer that rejoins
+-- replays its snapshot, and any hand-rolled retry sends the same
+-- event twice. Effects that are not idempotent (spawn a bolt, +1 a
+-- score) MUST be keyed. See A_MP_Ordering for the failure mode.
+-- ============================================================
+function new_dedupe(limit)
+    local d = { seen = {}, order = {}, limit = limit or 256 }
+
+    -- Returns true the FIRST time a key is offered, false afterwards.
+    function d.accept(key)
+        if key == nil then return true end
+        if d.seen[key] then return false end
+        d.seen[key] = true
+        d.order[#d.order + 1] = key
+        if #d.order > d.limit then
+            local old = table.remove(d.order, 1)
+            d.seen[old] = nil
+        end
+        return true
+    end
+
+    function d.reset() d.seen = {}; d.order = {} end
+    return d
+end
+
+-- ============================================================
+-- new_counter() — grow-only counter (G-Counter CRDT)
+--
+-- The primitive behind A_MP_ButtonMash. Each peer owns exactly one
+-- cell per slot and only ever raises its own; the displayed score is
+-- the sum of all cells. Merge is max(), which makes the whole thing
+-- immune to the four things that break naive "+1" scoring:
+--
+--   * two players scoring in the same frame  -> different cells, no race
+--   * a dropped message                      -> next absolute value repairs it
+--   * a duplicated message                   -> max() is idempotent
+--   * a player leaving                       -> their cell stays, score holds
+--
+-- Nobody is authoritative and no ordering is required. That is the
+-- whole point: it cannot desync.
+-- ============================================================
+function new_counter()
+    local c = { cells = {} }   -- cells[uid][slot] = n
+
+    function c.set(uid, slot, n)
+        if uid == nil or slot == nil then return false end
+        n = math.floor(n or 0)
+        local row = c.cells[uid]
+        if row == nil then row = {}; c.cells[uid] = row end
+        local cur = row[slot] or 0
+        if n <= cur then return false end   -- monotonic: never goes down
+        row[slot] = n
+        return true
+    end
+
+    function c.mine(uid, slot)
+        local row = c.cells[uid]
+        return (row and row[slot]) or 0
+    end
+
+    function c.bump(uid, slot, n)
+        local v = c.mine(uid, slot) + (n or 1)
+        c.set(uid, slot, v)
+        return v
+    end
+
+    function c.total(slot)
+        local sum = 0
+        for _, row in pairs(c.cells) do sum = sum + (row[slot] or 0) end
+        return sum
+    end
+
+    function c.contributors(slot)
+        local n = 0
+        for _, row in pairs(c.cells) do
+            if (row[slot] or 0) > 0 then n = n + 1 end
+        end
+        return n
+    end
+
+    -- Compact snapshot for late joiners: "uid:slot:n|uid:slot:n"
+    function c.encode()
+        local parts = {}
+        for uid, row in pairs(c.cells) do
+            for slot, n in pairs(row) do
+                parts[#parts + 1] = string.format("%s:%d:%d", uid, slot, n)
+            end
+        end
+        return table.concat(parts, "|")
+    end
+
+    function c.decode(s)
+        if type(s) ~= "string" or s == "" then return false end
+        local changed = false
+        for chunk in string.gmatch(s, "[^|]+") do
+            local uid, slot, n = string.match(chunk, "^(.-):(%d+):(%d+)$")
+            if uid then
+                if c.set(uid, tonumber(slot), tonumber(n)) then changed = true end
+            end
+        end
+        return changed
+    end
+
+    return c
+end
+
+-- ============================================================
+-- new_room(cfg) — identity, roster, join order, leader, late join
+--
+-- cfg = {
+--   send      = function(kind, jsonBody)   REQUIRED
+--   listen    = 1.0     seconds spent hearing who is already here
+--   timeout   = 6.0     silence after which a peer is considered gone
+--   beat      = 2.0     heartbeat interval
+--   snapshot  = function() -> string|nil   state for a late joiner
+--   on_snapshot = function(str, fromUid)
+--   on_join   = function(uid)
+--   on_leave  = function(uid)
+--   tag       = "mp"    log prefix
+--   debug     = false
+-- }
+--
+-- IDENTITY. uid = "%04d-%s" = joinSeq + 8 random hex. Seq is one past
+-- the highest already in the room, learned during the listen window,
+-- so uids sort into join order lexicographically. Index = position in
+-- the sorted roster. Every headset sorts the same set the same way,
+-- so every headset agrees on every index — with no coordinator and no
+-- renumbering of players who were already here.
+--
+-- LEADER = index 0 = the earliest joiner still present. Deterministic
+-- on every client, and it re-elects itself the instant that uid ages
+-- out of the roster. Used for "exactly one peer should do this"
+-- (snapshot replies, clock beats, the shared counter's tick).
+-- ============================================================
+function new_room(cfg)
+    cfg = cfg or {}
+    local r = {}
+    local send_fn   = cfg.send
+    local listen_s  = cfg.listen  or 1.0
+    local timeout_s = cfg.timeout or 6.0
+    local beat_s    = cfg.beat    or 2.0
+    local tag       = cfg.tag     or "mp"
+
+    local connect_wait = cfg.connect_wait or 8.0
+
+    local my_uid, peers, order, dirty = nil, {}, {}, true
+    local listening, listen_until     = false, -999
+    local announced, next_beat        = false, 0
+    local started                     = false
+    local hello_pending, waiting_from = false, 0
+
+    local function now() return UE.Time.time end
+
+    local function log(msg)
+        if cfg.debug then print("[" .. tag .. "/room] " .. msg) end
+    end
+
+    local function random_tag()
+        local s = ""
+        for _ = 1, 8 do s = s .. string.format("%x", math.random(0, 15)) end
+        return s
+    end
+
+    local function make_uid(seq) return string.format("%04d-%s", seq, random_tag()) end
+    local function seq_of(uid) return tonumber(string.sub(uid or "", 1, 4)) or 0 end
+
+    local function rebuild()
+        order = {}
+        if my_uid ~= nil then order[1] = my_uid end
+        for uid in pairs(peers) do order[#order + 1] = uid end
+        table.sort(order)
+        dirty = false
+    end
+
+    local function ensure() if dirty then rebuild() end end
+
+    local function send(kind, body)
+        if send_fn == nil then return end
+        pcall(function() send_fn(kind, body) end)
+    end
+
+    -- Is the relay link up? Falls back to "assume up" on an SDK without
+    -- dp.relay, so this can never make an existing project worse.
+    local function link_up()
+        local ok, up = pcall(function() return dp.relay().connected end)
+        if not ok then return true end
+        return up
+    end
+
+    local function touch(uid)
+        if uid == nil or uid == my_uid then return nil end
+        local p = peers[uid]
+        if p == nil then
+            p = { uid = uid, seq = seq_of(uid), seen = now() }
+            peers[uid] = p
+            dirty = true
+            log("join " .. uid)
+            if cfg.on_join then pcall(function() cfg.on_join(uid) end) end
+        end
+        p.seen = now()
+        return p
+    end
+
+    local function drop(uid)
+        if peers[uid] == nil then return end
+        peers[uid] = nil
+        dirty = true
+        log("leave " .. uid)
+        if cfg.on_leave then pcall(function() cfg.on_leave(uid) end) end
+    end
+
+    -- ── public ────────────────────────────────────────────
+    function r.uid() return my_uid end
+    function r.peers() local o = {}; for _, p in pairs(peers) do o[#o + 1] = p end; return o end
+    function r.count() ensure(); return #order end
+    function r.has(uid) return peers[uid] ~= nil or uid == my_uid end
+
+    function r.index(uid)
+        ensure()
+        uid = uid or my_uid
+        for i = 1, #order do if order[i] == uid then return i - 1 end end
+        return 0
+    end
+
+    function r.leader() ensure(); return order[1] end
+    function r.is_leader() ensure(); return #order > 0 and order[1] == my_uid end
+
+    -- Leader-only work, with a safety valve: a room of one is always
+    -- its own leader, so a solo player still sees the demo run.
+    function r.should_drive() return r.is_leader() end
+
+    function r.color()   return palette_color(r.index()) end
+    function r.color_of(uid) return palette_color(r.index(uid)) end
+    function r.color_name() return palette_name(r.index()) end
+
+    function r.send(kind, body) send(kind, body) end
+
+    -- Call from start() AND onenable(); both are correct entry points and
+    -- Unity delivers OnEnable before Start, so this WILL be called twice on
+    -- the first frame. Guarded rather than merely cheap: re-running it would
+    -- clear a roster we had already started building and put a second
+    -- mp_hello on the wire for the same arrival.
+    function r.begin()
+        if started then return end
+        if my_uid == nil then
+            math.randomseed(math.floor(now() * 100000) % 2147483647 + 7919)
+            for _ = 1, 5 do math.random() end
+        end
+        my_uid = make_uid(1)        -- provisional; replaced when the window closes
+        peers = {}; dirty = true; announced = false
+        listening = false        -- opened by r.announce(), when the link is up
+        listen_until = now() + listen_s
+        started = true
+        hello_pending = true
+        waiting_from = now()
+
+        -- Announce when the LINK comes up, not when Start runs.
+        --
+        -- The SDK now queues messages sent before the relay connects, so the
+        -- hello would arrive either way. But delivery was only half the problem:
+        -- the listen window is a piece of TIMING, and a window that opened and
+        -- closed while the client was still connecting closes against an empty
+        -- roster. Every headset then believes it is alone, takes seq 1, and only
+        -- discovers the others on the 2 s heartbeat — so join order and colour
+        -- settle late, and settle WRONG if anything reads them in between.
+        --
+        -- dp.on_connected fires immediately if the link is already up, so the
+        -- common case costs nothing.
+        local ok = pcall(function()
+            dp.on_connected(function() r.announce() end)
+        end)
+        if not ok then r.announce() end          -- SDK without dp.on_connected
+        log("waiting for the relay before announcing as " .. my_uid)
+    end
+
+    -- Opens the listen window and says hello. Idempotent.
+    function r.announce()
+        if not started or not hello_pending then return end
+        hello_pending = false
+        listening = true
+        listen_until = now() + listen_s
+        send("mp_hello", string.format('{"u":"%s"}', my_uid))
+        log("listening for peers as " .. my_uid)
+    end
+
+    -- Call from ondisable()/ondestroy(). Tells the room we are gone
+    -- immediately instead of making everyone wait out the timeout.
+    function r.leave()
+        -- Only worth saying goodbye if the link is up. On Play-mode exit (or any
+        -- teardown after the client is already gone) this would just log a
+        -- "Not connected, dropping event" warning per attraction. Peers fall
+        -- back to the silence reaper, which is what covers a crash anyway.
+        if my_uid ~= nil and link_up() then
+            send("mp_bye", string.format('{"u":"%s"}', my_uid))
+        end
+        for uid in pairs(peers) do
+            if cfg.on_leave then pcall(function() cfg.on_leave(uid) end) end
+        end
+        peers = {}; dirty = true; started = false; hello_pending = false
+    end
+
+    local function close_listen()
+        listening = false
+        local highest = 0
+        for uid in pairs(peers) do
+            local s = seq_of(uid)
+            if s > highest then highest = s end
+        end
+        -- The provisional uid already went out in mp_hello, so every peer
+        -- has it in their roster. Retire it explicitly — a phantom player
+        -- sitting in the roster until the reaper shifts everyone's join
+        -- index, and index is what picks your colour.
+        local provisional = my_uid
+        my_uid = make_uid(highest + 1)
+        dirty = true
+        if provisional ~= my_uid then
+            send("mp_bye", string.format('{"u":"%s"}', provisional))
+        end
+        announced = true
+        send("mp_here", string.format('{"u":"%s"}', my_uid))
+        log("joined as " .. my_uid .. " index " .. tostring(r.index()))
+    end
+
+    -- Returns true if the message was room protocol and needs no
+    -- further handling by the caller.
+    function r.handle(kind, p)
+        if kind == nil or p == nil then return false end
+        local uid = p.u
+        if uid == nil or uid == my_uid then return kind == "mp_hello" or kind == "mp_here" or kind == "mp_bye" end
+
+        if kind == "mp_hello" then
+            touch(uid)
+            -- Answer so the newcomer learns we exist. Only the LEADER
+            -- attaches a snapshot: N peers each replying with full state
+            -- is an N-message burst against a 60/s budget, and they would
+            -- all say the same thing.
+            local snap = nil
+            if cfg.snapshot and r.is_leader() then
+                local ok, s = pcall(cfg.snapshot)
+                if ok and type(s) == "string" and #s > 0 and #s < 8000 then snap = s end
+            end
+            if snap then
+                send("mp_here", string.format('{"u":"%s","s":"%s"}', my_uid, snap))
+            else
+                send("mp_here", string.format('{"u":"%s"}', my_uid))
+            end
+            return true
+
+        elseif kind == "mp_here" then
+            touch(uid)
+            if p.s ~= nil and cfg.on_snapshot then
+                pcall(function() cfg.on_snapshot(p.s, uid) end)
+            end
+            return true
+
+        elseif kind == "mp_bye" then
+            drop(uid)
+            return true
+        end
+
+        -- Not room protocol, but ANY traffic proves the peer is alive.
+        touch(uid)
+        return false
+    end
+
+    -- Call every frame from update().
+    function r.tick()
+        if not started then return end
+        local t = now()
+
+        -- Never close the window before we have actually said hello. Bounded by
+        -- connect_wait so a scene with no relay at all still starts — as a room
+        -- of one, which is the correct answer.
+        if hello_pending and t - waiting_from > connect_wait then
+            log("no relay after " .. tostring(connect_wait) .. "s — continuing solo")
+            r.announce()
+        end
+        if listening and not hello_pending and t >= listen_until then close_listen() end
+        if not listening and not announced and my_uid ~= nil then
+            announced = true
+            send("mp_here", string.format('{"u":"%s"}', my_uid))
+        end
+
+        -- Heartbeat. Also the only thing that keeps an idle player in
+        -- everyone else's roster, which is what keeps their colour and
+        -- their score cell alive.
+        if not listening and t >= next_beat then
+            next_beat = t + beat_s
+            send("mp_here", string.format('{"u":"%s"}', my_uid))
+        end
+
+        -- Reap. A headset that crashes or walks out of Wi-Fi never sends
+        -- mp_bye, so silence has to be enough.
+        local stale = nil
+        for uid, p in pairs(peers) do
+            if t - p.seen > timeout_s then
+                stale = stale or {}
+                stale[#stale + 1] = uid
+            end
+        end
+        if stale then for i = 1, #stale do drop(stale[i]) end end
+    end
+
+    return r
+end
+
+-- ============================================================
+-- new_clock(room, cfg) — one agreed timeline, no server
+--
+-- UE.Time.time starts at zero when YOUR app started, so it is
+-- meaningless across headsets. The leader beats out its own already-
+-- synced clock value; everyone else stores an offset and reports
+-- my_time + offset. Because the leader publishes its SYNCED value
+-- rather than its raw Time.time, the timeline survives leader change:
+-- the new leader was itself synced a moment ago, so it just keeps
+-- counting.
+--
+-- Accuracy is one-way (no RTT estimate), so it carries the network's
+-- one-way latency as bias — single-digit milliseconds on a LAN. That
+-- is far below the threshold for rounds, countdowns and spawn-time
+-- compensation, which is all this is for. Do not use it to arbitrate
+-- who pressed a button first: use a token compare instead.
+-- ============================================================
+function new_clock(room, cfg)
+    cfg = cfg or {}
+    local c = {}
+    local beat_s   = cfg.beat or 1.0
+    local slew     = cfg.slew or 0.25   -- seconds of correction per second
+    local snap_at  = cfg.snap or 0.75   -- jump instead of slewing past this
+    local offset, target, have = 0, 0, false
+    local next_beat = 0
+
+    function c.now() return UE.Time.time + offset end
+    function c.synced() return have or room.is_leader() end
+    function c.offset() return offset end
+
+    function c.handle(kind, p)
+        if kind ~= "mp_clk" or p == nil or p.t == nil then return false end
+        if room.is_leader() then return true end  -- we are the source
+        local t = tonumber(p.t)
+        if t == nil then return true end
+        target = t - UE.Time.time
+        if not have or math.abs(target - offset) > snap_at then
+            offset = target
+            have = true
+        end
+        return true
+    end
+
+    function c.tick()
+        -- Slew toward the target so a countdown never jumps a frame.
+        if have and offset ~= target then
+            local d = target - offset
+            local step = slew * UE.Time.unscaledDeltaTime
+            if math.abs(d) <= step then offset = target
+            else offset = offset + (d > 0 and step or -step) end
+        end
+        if room.is_leader() then
+            local t = UE.Time.unscaledTime
+            if t >= next_beat then
+                next_beat = t + beat_s
+                room.send("mp_clk", string.format('{"u":"%s","t":%.3f}', room.uid(), c.now()))
+            end
+        end
+    end
+
+    return c
+end
+
+-- ============================================================
+-- new_lease(room, clock, cfg) — single-writer ownership
+--
+-- Whoever holds the lease is the only peer allowed to move the object;
+-- everyone else follows. Contests are resolved with the SAME comparison
+-- on every client (earlier claim wins; ties break on lower uid), so
+-- there is no arbiter and no round trip. Held leases expire on silence,
+-- which is what makes an owner who takes the headset off release it.
+-- ============================================================
+function new_lease(room, clock, cfg)
+    cfg = cfg or {}
+    local L = {}
+    local grace   = cfg.grace   or 0.30   -- window in which a better claim can win
+    local hold    = cfg.hold    or 1.0    -- owner heartbeat interval
+    local expiry  = cfg.expiry  or 3.0    -- silence after which a lease is dead
+    local kind_c  = (cfg.prefix or "mp") .. "_claim"
+    local kind_h  = (cfg.prefix or "mp") .. "_hold"
+    local kind_r  = (cfg.prefix or "mp") .. "_rel"
+
+    local owner, owner_at, seen_at = nil, 0, -999
+    local pending_at, next_hold = nil, 0
+
+    -- Deterministic: earlier claim wins; equal claim times break on uid.
+    local function better(uid_a, t_a, uid_b, t_b)
+        if uid_b == nil then return true end
+        if math.abs(t_a - t_b) > 0.001 then return t_a < t_b end
+        return uid_a < uid_b
+    end
+
+    function L.owner() return owner end
+    function L.is_mine() return owner ~= nil and owner == room.uid() end
+    function L.is_free() return owner == nil end
+    function L.pending() return pending_at ~= nil end
+
+    function L.request()
+        if L.is_mine() then return true end
+        local t = clock.now()
+        if owner ~= nil and not better(room.uid(), t, owner, owner_at) then return false end
+        pending_at = t
+        owner, owner_at, seen_at = room.uid(), t, UE.Time.time   -- optimistic
+        room.send(kind_c, string.format('{"u":"%s","t":%.3f}', room.uid(), t))
+        return true
+    end
+
+    function L.release()
+        if not L.is_mine() then return end
+        owner, owner_at, pending_at = nil, 0, nil
+        room.send(kind_r, string.format('{"u":"%s"}', room.uid()))
+    end
+
+    function L.handle(kind, p)
+        if p == nil then return false end
+        if kind == kind_c then
+            local uid, t = p.u, tonumber(p.t) or 0
+            if better(uid, t, owner, owner_at) then
+                local was_mine = L.is_mine()
+                owner, owner_at, seen_at, pending_at = uid, t, UE.Time.time, nil
+                if was_mine and cfg.on_lost then pcall(cfg.on_lost) end
+            end
+            return true
+        elseif kind == kind_h then
+            if p.u == owner then seen_at = UE.Time.time end
+            return true
+        elseif kind == kind_r then
+            if p.u == owner then owner, owner_at, seen_at = nil, 0, -999 end
+            return true
+        end
+        return false
+    end
+
+    function L.tick()
+        local t = UE.Time.time
+        if pending_at ~= nil and clock.now() - pending_at > grace then pending_at = nil end
+
+        if L.is_mine() then
+            if t >= next_hold then
+                next_hold = t + hold
+                room.send(kind_h, string.format('{"u":"%s"}', room.uid()))
+            end
+        elseif owner ~= nil then
+            -- Owner went quiet (crashed, doffed the headset, left the room).
+            if t - seen_at > expiry or not room.has(owner) then
+                owner, owner_at = nil, 0
+            end
+        end
+    end
+
+    return L
+end
+
+-- ============================================================
+-- Small shared helpers
+-- ============================================================
+
+-- Read a float out of a parsed payload with a default. json_parse
+-- returns numbers as float32 and omits JSON nulls entirely, so every
+-- field read off the wire needs this.
+function num(v, d)
+    local n = tonumber(v)
+    if n == nil then return d or 0 end
+    return n
+end
+
+function vec(p, kx, ky, kz)
+    return UE.Vector3(num(p[kx]), num(p[ky]), num(p[kz]))
+end
+
+-- Position/direction as compact JSON. 2 decimals is ~1 cm, which is
+-- under tracking noise and shortens every message on the wire.
+function v3json(prefix, v)
+    return string.format('"%sx":%.2f,"%sy":%.2f,"%sz":%.2f', prefix, v.x, prefix, v.y, prefix, v.z)
+end
+
+-- Live relay stats, when a DreamBoxClient exists. Wrapped because the
+-- singleton is absent in a plain scene with no networking at all.
+--
+-- ⚠ DreamBoxClient and NetSessionArbiter are not registered for XLua codegen
+-- as of this writing (2026-08-30) — they were added to
+-- DreamParkLuaConfig.LuaCallCSharp but that only takes effect after
+-- Generate XLua Code + a core app rebuild ships. Until a build with that
+-- registration is out, these four functions (relay_ping/relay_state/
+-- relay_messages/session_state) fall back to reflection on device and can
+-- silently no-op under IL2CPP the same way the Zombiez bug did — the pcall
+-- around each one means you get the sentinel value back ("no client" / -1),
+-- not an error, so it looks fine in the Editor either way. Confirm they're
+-- registered in the app you're targeting before relying on them.
+function relay_ping()
+    local ping = -1
+    pcall(function()
+        local c = CS.DreamBoxClient.Instance
+        if c ~= nil then ping = c.Ping end
+    end)
+    return ping
+end
+
+function relay_state()
+    local s = "no client"
+    pcall(function()
+        local c = CS.DreamBoxClient.Instance
+        if c ~= nil then s = tostring(c.ConnectionState) end
+    end)
+    return s
+end
+
+function relay_messages()
+    local n = -1
+    pcall(function()
+        local c = CS.DreamBoxClient.Instance
+        if c ~= nil then n = c.MessageCount end
+    end)
+    return n
+end
+
+-- Arbiter view: which rung of the fallback ladder we are on.
+function session_state()
+    local s, host, peers = "no arbiter", "", -1
+    pcall(function()
+        local a = CS.DreamPark.NetSessionArbiter.Instance
+        if a ~= nil then
+            s = tostring(a.State)
+            host = a.CurrentHostId or ""
+            peers = a.HostedPeerCount
+        end
+    end)
+    return s, host, peers
+end

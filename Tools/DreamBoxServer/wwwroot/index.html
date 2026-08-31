@@ -187,7 +187,7 @@
     <h2>Server</h2>
     <div class="kv">
       <div class="k">Port (UDP)</div><div class="v" id="port">—</div>
-      <div class="k">Connection key</div><div class="v" id="key">—</div>
+      <div class="k">Key configured</div><div class="v" id="key">—</div>
       <div class="k">Debug</div><div class="v" id="debug">—</div>
       <div class="k">Discovery</div><div class="v" id="discovery">—</div>
       <div class="k">Discovery port</div><div class="v" id="discoveryPort">—</div>
@@ -295,7 +295,7 @@
       el("lastAct").textContent = fmtSecsAgo(s.lastActivityAt, s.nowUnix);
       el("uptime").textContent = fmtDuration(s.nowUnix - s.startedAt);
       el("port").textContent = s.port;
-      el("key").textContent = s.connectionKey;
+      el("key").textContent = s.connectionKeyConfigured ? "yes" : "no";
       el("debug").textContent = s.debug ? "on" : "off";
       el("discovery").textContent = s.discoveryEnabled ? "enabled" : "disabled";
       el("discoveryPort").textContent = s.discoveryPort;

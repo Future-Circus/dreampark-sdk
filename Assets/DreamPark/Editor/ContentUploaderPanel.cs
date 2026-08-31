@@ -4,6 +4,7 @@ using UnityEngine;
 using System.IO;
 using DreamPark.API;
 using DreamPark.Editor;
+using DreamPark.Badges;
 using System;
 using UnityEditor.AddressableAssets;
 using UnityEditor.AddressableAssets.Build;
@@ -14,7 +15,10 @@ using Defective.JSON;
 using System.Linq;
 using System.Text.RegularExpressions;
 using UnityEngine.AddressableAssets;
+using System.Collections;
 using System.Collections.Generic;
+using UnityEngine.Networking;
+using Unity.EditorCoroutines.Editor;
 
 namespace DreamPark {
     public class ContentUploaderPanel : EditorWindow
@@ -26,13 +30,93 @@ namespace DreamPark {
         private Texture2D logoTexture = null;
         private bool isUploading = false;
         private bool isLoadingMetadata = false;
+        private int? latestPublishedVersionNumber = null;
         private int? lastSchemaVersion = null;
-        private Vector2 uploadProgressScroll;
+        private string uploadStatusTitle = "";
+        private string uploadStatusMessage = "";
+        private float uploadStatusProgress = -1f;
+        private bool uploadStatusIsError = false;
+        private bool uploadCompleted = false;
+        private bool uploadSucceeded = false;
+        private bool uploadBuildMode = true;
+
+        // Pending test build state — populated when the user clicks "Check
+        // Patch Size" from the test build dialog and a one-shot estimate
+        // runs (compile + diff, no upload). The bundles sit in ServerData/
+        // and the testBuildId is allocated on the backend; if the user
+        // then clicks the primary upload button with the same settings,
+        // ResumePendingTestBuildUpload picks up where the estimate left off
+        // — skipping the compile step entirely so we don't pay the 5+ min
+        // build cost twice.
+        // Null when no estimate is currently pending (cleared on cancel,
+        // on a fresh estimate, or once the resumed upload starts).
+        private string pendingTestBuildId = null;
+        private string pendingTestBuildTitle = null;
+        private string pendingTestBuildNotes = null;
+        private string pendingTestBuildContentId = null;
+        private string pendingTestBuildLogoAddress = null;
+        private string pendingTestBuildParentId = null;
+        private JSONObject pendingTestBuildManifestSummary = null;
+        private bool pendingTestBuildOsx = false;
+        private bool pendingTestBuildWindows = false;
+
+        // Pending production estimate state — populated when the user clicks
+        // "Check Patch Size" from the main Compile & Upload popup. This is
+        // the production analogue of the test-build estimate flow: run the
+        // full compile, diff the freshly-built ServerData bundles against the
+        // latest backend version, then stop before uploading any bytes. If
+        // the user then clicks Start with the same settings, we reuse those
+        // already-built bundles and the already-computed skipSet/summary
+        // instead of paying the build cost a second time.
+        private bool pendingProductionEstimateOnly = false;
+        private string pendingProductionContentId = null;
+        private UploadMode pendingProductionMode = UploadMode.Patch;
+        private bool pendingProductionBuildOsx = false;
+        private bool pendingProductionBuildWindows = false;
+        private int pendingProductionVersionNumber = 0;
+        private bool pendingProductionPatchingEnabled = false;
+        private BuildManifest pendingProductionCurrentManifest = null;
+        private HashSet<string> pendingProductionSkipSet = null;
+        private JSONObject pendingProductionManifestSummary = null;
+        // Set by BeginUploadFromPopup before the async UploadContent flow
+        // starts so the inner skip-set computation can route through
+        // UploadModeFilter for the chosen mode. Defaults to Patch — the
+        // historical behavior when older code paths call UploadContent
+        // without explicitly picking a mode.
+        private UploadMode pendingUploadMode = UploadMode.Patch;
+
+        // Set by BeginUploadFromPopup when the user picks "Upload Failed
+        // Bundles" on the Try Reupload dialog. Overrides pendingUploadMode
+        // and reroutes the upload through FailedBundleStore so only the
+        // bundles that failed in the previous run get re-sent, while the
+        // commitUpload payload still references the full set (previous
+        // successes + this run's successes). Cleared at the end of every
+        // upload run so a subsequent normal upload doesn't accidentally
+        // pick up the flag.
+        private bool pendingFailedOnly = false;
 
         // Main panel scroll. Persists for the lifetime of the window so scroll
         // position doesn't reset every time OnGUI runs (which is many times
         // per second). Reset would feel jumpy as the user types.
         private Vector2 mainScroll;
+
+        private const string SectionContentInfoPrefKey = "DreamPark.ContentUploader.Section.ContentInfo";
+        private const string SectionTeamPrefKey = "DreamPark.ContentUploader.Section.Team";
+        private const string SectionContentOverviewPrefKey = "DreamPark.ContentUploader.Section.ContentOverview";
+        private const string SectionTroubleshootingPrefKey = "DreamPark.ContentUploader.Section.Troubleshooting";
+        private const string SectionPreLaunchPrefKey = "DreamPark.ContentUploader.Section.PreLaunch";
+        private const string SectionReleaseLaunchPrefKey = "DreamPark.ContentUploader.Section.ReleaseLaunch";
+        private bool foldContentInfo = true;
+        private bool foldTeam = true;
+        private bool foldContentOverview = true;
+        private bool foldTroubleshooting = false;
+        // Pre Launch Options defaults to expanded — these are the
+        // "do-this-before-you-publish" tools (texture optimizer, etc.),
+        // and we want them visible at the moment the creator's about to
+        // hit Release. Hiding them behind a foldout would defeat the
+        // point of moving the optimizer into the upload flow.
+        private bool foldPreLaunch = true;
+        private bool foldReleaseLaunch = true;
 
         // Foldout state for the "Park Assets" preview block. EditorPrefs-
         // backed so collapse choices survive Unity restarts and domain
@@ -41,10 +125,12 @@ namespace DreamPark {
         private const string ParkAssetsAttractionsPrefKey = "DreamPark.ContentUploader.Fold.ParkAssets.Attractions";
         private const string ParkAssetsPropsPrefKey       = "DreamPark.ContentUploader.Fold.ParkAssets.Props";
         private const string ParkAssetsPlayerPrefKey      = "DreamPark.ContentUploader.Fold.ParkAssets.Player";
+        private const string ParkAssetsBadgesPrefKey      = "DreamPark.ContentUploader.Fold.ParkAssets.Badges";
         private bool parkAssetsFold = true;
         private bool foldAttractions = true;
         private bool foldProps = true;
         private bool foldPlayer = true;
+        private bool foldBadges = true;
 
         private List<string> contentIdOptions = new List<string>();
         private int contentIdIndex = 0;
@@ -97,6 +183,7 @@ namespace DreamPark {
         private BuildManifestDiff patchDiff;
         private string patchEstimateContentId;
         private DateTime patchEstimateComputedAt;
+        private JSONObject latestContentDirectorySnapshot;
 
         // Source-aware estimate: matches dirty-groups (touched in real-time
         // by the ContentFolderWatchdog) against bundle filenames in the
@@ -142,6 +229,38 @@ namespace DreamPark {
         private List<ContentRootEntry> contentRoots = new List<ContentRootEntry>();
         private string contentRootsContentId;
         private bool contentRootsDirty;
+
+        // ── Badges ──────────────────────────────────────────────────────
+        // The badge cards this content package defines. Unlike contentRoots,
+        // this list is NOT purely derived from the project: it is the local
+        // draft (BadgeStore, .badges.json) merged with whatever BadgeLuaScanner
+        // finds in the developer's own Lua. Ids that came from Lua are locked;
+        // titles, descriptions and icons are always the developer's to type.
+        private List<BadgeStore.Entry> badges = new List<BadgeStore.Entry>();
+        private string badgesContentId;
+        private BadgeLuaScanner.Result badgeScan;
+        // Set when a field is edited; flushed to .badges.json on the next
+        // Layout pass rather than on every keystroke.
+        private bool badgesDirty;
+        private bool isPushingBadges;
+        // Structural mutations (adding or removing a card) are QUEUED, never
+        // applied mid-frame. IMGUI hands out control ids by draw order, so a
+        // list that gained or lost an element between the Layout and Repaint
+        // passes shifts the id stream and every text field after the edit point
+        // starts eating the wrong keystrokes. Same reason preUploadBadges is
+        // swapped only at Layout.
+        private bool badgeAddRequested;
+        private int badgeRemoveIndex = -1;
+
+        // Per-frame snapshot of the pre-upload findings, keyed by asset path (which is
+        // what ContentRootEntry carries — the GUID is discarded during the scan).
+        // Rebuilt only when the report changes, never queried live from OnGUI: the
+        // Layout and Repaint passes must agree on whether each card has a badge, or
+        // GUI.Button's control-id stream shifts between them.
+        private Dictionary<string, KeyValuePair<PreUploadChecks.CheckSeverity, string>> preUploadBadges;
+        private Dictionary<string, KeyValuePair<PreUploadChecks.CheckSeverity, string>> preUploadBadgesPending;
+        private bool preUploadAdvisoryScheduled;
+        private double preUploadAdvisoryDueAt;
 
         // priority 0 pins Content Uploader to the top of the DreamPark menu;
         // the big priority gap to the next item (Multiplayer at 100) creates
@@ -212,16 +331,30 @@ namespace DreamPark {
             AuthAPI.LoginStateChanged += OnLoginStateChanged;
             SDKUpdateChecker.ManifestUpdated += OnManifestUpdated;
             EditorApplication.projectChanged += OnProjectChangedForRoots;
+            PreviewEditorWindow.PreviewSaved += OnPreviewSaved;
+            // Repaint when the admin-state probe settles so the Upload
+            // Test Build button in the Troubleshooting section becomes
+            // visible the moment the backend's canPublish response lands
+            // (without this, the button only shows up the next time the
+            // user clicks the panel and forces a repaint).
+            AdminState.AdminStateChanged += Repaint;
+            PreUploadChecks.PreUploadCheckRunner.ReportChanged += OnPreUploadReportChanged;
+
+            preUploadChecksCleared = false;
 
             RestoreContentIdSelection();
             LoadBuildTargetSelection();
             LoadFoldoutPrefs();
+            LoadSectionFoldoutPrefs();
 
             LoadLogoSelection();
             FetchContentMetadata();
             FetchContentUsers();
             RefreshPatchEstimate();
             RefreshContentRoots();
+            RefreshBadges();
+            RebuildPreUploadBadges();
+            ScheduleAdvisoryPreUploadScan();
         }
 
         private void LoadFoldoutPrefs()
@@ -230,6 +363,17 @@ namespace DreamPark {
             foldAttractions = EditorPrefs.GetBool(ParkAssetsAttractionsPrefKey, true);
             foldProps       = EditorPrefs.GetBool(ParkAssetsPropsPrefKey,       true);
             foldPlayer      = EditorPrefs.GetBool(ParkAssetsPlayerPrefKey,      true);
+            foldBadges      = EditorPrefs.GetBool(ParkAssetsBadgesPrefKey,      true);
+        }
+
+        private void LoadSectionFoldoutPrefs()
+        {
+            foldContentInfo = EditorPrefs.GetBool(SectionContentInfoPrefKey, true);
+            foldTeam = EditorPrefs.GetBool(SectionTeamPrefKey, true);
+            foldContentOverview = EditorPrefs.GetBool(SectionContentOverviewPrefKey, true);
+            foldTroubleshooting = EditorPrefs.GetBool(SectionTroubleshootingPrefKey, false);
+            foldPreLaunch = EditorPrefs.GetBool(SectionPreLaunchPrefKey, true);
+            foldReleaseLaunch = EditorPrefs.GetBool(SectionReleaseLaunchPrefKey, true);
         }
 
         // ProjectChanged fires for every asset save/import/move which can be
@@ -248,9 +392,99 @@ namespace DreamPark {
             AuthAPI.LoginStateChanged -= OnLoginStateChanged;
             SDKUpdateChecker.ManifestUpdated -= OnManifestUpdated;
             EditorApplication.projectChanged -= OnProjectChangedForRoots;
+            PreviewEditorWindow.PreviewSaved -= OnPreviewSaved;
+            AdminState.AdminStateChanged -= Repaint;
+            PreUploadChecks.PreUploadCheckRunner.ReportChanged -= OnPreUploadReportChanged;
+            EditorApplication.update -= PumpAdvisoryPreUploadScan;
+            preUploadAdvisoryScheduled = false;
         }
 
         private void OnManifestUpdated() => Repaint();
+
+        // ------------------------------------------------------------------
+        // Pre-upload checks (advisory pass — the blocking gate lives in
+        // BeginUploadFromPopup).
+
+        private void OnPreUploadReportChanged()
+        {
+            RebuildPreUploadBadges();
+            Repaint();
+        }
+
+        // Staged, not applied. The report can change on an editor tick that lands
+        // between this frame's Layout and Repaint events; swapping the map right then
+        // adds or removes a GUI.Button in the card grid, which shifts every subsequent
+        // control id and misroutes clicks. The swap happens at the top of the next
+        // Layout (see OnGUI) so both passes always agree.
+        private void RebuildPreUploadBadges()
+        {
+            var report = PreUploadChecks.PreUploadCheckRunner.CachedReportFor(contentId);
+            preUploadBadgesPending = PreUploadChecks.PreUploadCheckRunner.BuildBadgeMap(report);
+        }
+
+        // Runs the cheap checks so the Park Assets tiles can carry warning badges the
+        // moment the panel is looked at. Deferred, never inside OnGUI, and never while
+        // the editor is busy — the scene-override check is deliberately excluded from
+        // this pass because it opens scenes.
+        private void ScheduleAdvisoryPreUploadScan()
+        {
+            if (string.IsNullOrEmpty(contentId)) return;
+
+            // Debounced. projectChanged fires on EVERY asset import, and the advisory
+            // pass loads prefab contents for each content root — running it per import
+            // froze the editor for seconds every time someone saved a file with the
+            // uploader open.
+            preUploadAdvisoryDueAt = EditorApplication.timeSinceStartup + 1.5;
+
+            if (preUploadAdvisoryScheduled) return;
+            preUploadAdvisoryScheduled = true;
+            EditorApplication.update += PumpAdvisoryPreUploadScan;
+        }
+
+        private void PumpAdvisoryPreUploadScan()
+        {
+            if (this == null)
+            {
+                EditorApplication.update -= PumpAdvisoryPreUploadScan;
+                return;
+            }
+
+            if (EditorApplication.timeSinceStartup < preUploadAdvisoryDueAt) return;
+            if (EditorApplication.isCompiling) return;
+            if (EditorApplication.isUpdating) return;
+            if (EditorApplication.isPlayingOrWillChangePlaymode) return;
+            if (isUploading) return;
+
+            EditorApplication.update -= PumpAdvisoryPreUploadScan;
+            preUploadAdvisoryScheduled = false;
+
+            try
+            {
+                PreUploadChecks.PreUploadCheckRunner.RunAdvisory(contentId);
+            }
+            catch (System.Exception e)
+            {
+                // Advisory only. It must never be able to disturb the panel.
+                Debug.LogWarning($"[DreamPark] Advisory pre-upload scan failed: {e.Message}");
+            }
+        }
+
+        // The Preview Editor just re-baked a preview PNG. If it belongs to the
+        // content package we're showing, drop the cached thumbnails and re-walk
+        // the tree so the freshly-saved PNG appears in the grid immediately.
+        private void OnPreviewSaved(string savedContentId)
+        {
+            if (savedContentId != contentId) return;
+            for (int i = 0; i < contentRoots.Count; i++)
+            {
+                contentRoots[i].customPreview = null;
+                contentRoots[i].autoPreview = null;
+                contentRoots[i].autoPreviewResolved = false;
+                contentRoots[i].firstPollTime = 0;
+            }
+            contentRootsDirty = true;
+            Repaint();
+        }
 
         // Called by ContentIdSetupPopup after a successful rename. Refreshes the
         // dropdown options and selects the newly-named folder so the panel
@@ -265,8 +499,13 @@ namespace DreamPark {
                 contentId = newFolderName;
                 SaveContentIdSelection();
             }
-            // Force fresh metadata + team list for the new id.
+            // Force fresh metadata + team list for the new id. Clear the
+            // per-content name/description too, otherwise a brand-new (or
+            // not-yet-named) content keeps the previously selected content's
+            // values and uploads them as its own identity.
             releaseNotes = "";
+            contentName = "";
+            contentDescription = "";
             LoadLogoSelection();
             FetchContentMetadata();
             FetchContentUsers();
@@ -328,6 +567,26 @@ namespace DreamPark {
 
         private void OnGUI()
         {
+            // Swap in a new badge map ONLY at the start of a Layout pass. IMGUI hands
+            // out control ids by draw order, so if the map gained or lost an entry
+            // between Layout and Repaint the card grid would allocate a different
+            // number of controls in each pass and every click after that point would
+            // land on the wrong control.
+            if (Event.current.type == EventType.Layout && preUploadBadgesPending != null)
+            {
+                preUploadBadges = preUploadBadgesPending;
+                preUploadBadgesPending = null;
+            }
+
+            // Same rule for the badge list: add/remove only ever happens between
+            // frames, so Layout and Repaint always agree on how many cards (and
+            // therefore how many control ids) the grid draws.
+            if (Event.current.type == EventType.Layout)
+            {
+                ApplyQueuedBadgeMutations();
+                FlushBadgeDraft();
+            }
+
             // Auth gate: if logged out, the rest of the panel is hidden behind a
             // single Login CTA. Authentication itself happens in AuthPopup.
             if (!AuthAPI.isLoggedIn)
@@ -336,24 +595,9 @@ namespace DreamPark {
                 return;
             }
 
-            // Upload-in-progress takeover. While an upload is running we hide
-            // the entire configuration UI (content selector, name, team,
-            // bundling strategy, patch estimate, action buttons) and give the
-            // whole panel to a focused progress view. Otherwise the per-file
-            // progress list gets buried below ~400px of fields the user
-            // can't interact with mid-upload anyway.
-            if (isUploading)
-            {
-                DrawUploadInProgressView();
-                return;
-            }
-
             // Wrap the entire configuration UI in a scroll view. Without this
-            // the panel runs off-screen on smaller windows once Park Assets +
-            // Patch Estimate + Build Targets all expand at once. We exclude
-            // only the upload-in-progress takeover (which has its own
-            // dedicated layout) — the post-upload progress strip below is
-            // inside this scroll so completed/failed status is reachable.
+            // the panel runs off-screen on smaller windows once the content
+            // preview and troubleshooting sections both open up.
             mainScroll = EditorGUILayout.BeginScrollView(mainScroll);
 
             // Compact logged-in header — full email + Logout
@@ -367,8 +611,25 @@ namespace DreamPark {
             }
             GUILayout.EndHorizontal();
 
+            // Session-expiry nudge. /auth/refresh validates a session but never extends
+            // it, so the ~14-day deadline set at sign-in is final — and the failure mode
+            // without this notice is a creator finding out when a 40-minute upload 401s at
+            // the commit step, with the build already spent and nothing to resume from.
+            // sessionExpiresInHours returns -1 when the expiry is unknown (a session
+            // stored by an SDK older than this field); that must stay silent rather than
+            // nag every existing user forever.
+            double sessionHoursLeft = AuthAPI.sessionExpiresInHours;
+            if (sessionHoursLeft >= 0 && sessionHoursLeft <= 48)
+            {
+                EditorGUILayout.HelpBox(
+                    sessionHoursLeft < 1
+                        ? "Your DreamPark session expires within the hour. Log out and back in before starting an upload."
+                        : $"Your DreamPark session expires in about {Mathf.CeilToInt((float)sessionHoursLeft)}h. Log out and back in before starting a long upload.",
+                    MessageType.Warning);
+            }
+
             GUILayout.Space(10);
-            GUILayout.Label("Upload New Content", EditorStyles.boldLabel);
+            GUILayout.Label("Content Uploader", EditorStyles.boldLabel);
 
             // ContentId dropdown
             GUILayout.BeginHorizontal();
@@ -395,13 +656,19 @@ namespace DreamPark {
             GUILayout.EndHorizontal();
             if (prevIndex != contentIdIndex)
             {
+                // Clear per-content fields on switch so the new selection can't
+                // inherit the previous content's name/description. FetchContentMetadata
+                // repopulates them from the server if this content already has them.
                 releaseNotes = "";
+                contentName = "";
+                contentDescription = "";
                 SaveContentIdSelection();
                 LoadLogoSelection();
                 FetchContentMetadata();
                 FetchContentUsers();
                 RefreshPatchEstimate();
                 RefreshContentRoots();
+                RefreshBadges();
             }
 
             // Deferred refresh: the projectChanged callback only sets a
@@ -412,11 +679,63 @@ namespace DreamPark {
             if ((contentRootsDirty || contentRootsContentId != contentId) && !isUploading)
             {
                 RefreshContentRoots();
+
+                // Badges ride the same debounce: a new .lua.txt, a changed @var
+                // default, or a badgeId typed into a LuaBehaviour's Inspector all
+                // arrive as projectChanged, and all three change what the scan
+                // should find.
+                RefreshBadges();
+
+                // Piggyback: this block already fires exactly when the root set
+                // changed (content-id switch, projectChanged, preview save) and is
+                // already debounced, so the advisory findings stay in lockstep with
+                // the tiles for free.
+                RebuildPreUploadBadges();
+                ScheduleAdvisoryPreUploadScan();
             }
 
             if (contentIdOptions.Count == 0)
             {
                 EditorGUILayout.HelpBox("No content folders found under Assets/Content. Please create at least one game/content folder.", MessageType.Warning);
+            }
+
+            // ── Sample notice. DELIBERATELY NOT A GATE.
+            //
+            //    Sample exists to be read. It is the one fully wired example a
+            //    new creator has — real attractions, real props, previews,
+            //    dimensions, a logo, the lot — so the panel stays completely
+            //    browsable while it is selected. Returning out of the draw here
+            //    (as Gate 1 does for the untouched template) would hide the
+            //    exact thing they came to look at.
+            //
+            //    What IS off is every action that pushes to the backend; see
+            //    UploadsBlocked. Sample ships with every copy of the SDK, so
+            //    "upload to Sample" means publishing over a contentId that
+            //    exists identically in everyone's install — the first person to
+            //    do it would take ownership of an SDK default for everybody
+            //    else. The backend refuses it outright
+            //    (lib/reservedContentIds.js); this is the local half, so the
+            //    refusal is explained up front rather than discovered as a
+            //    failed upload after a full compile.
+            if (ContentFolders.IsSample(contentId))
+            {
+                GUILayout.Space(8);
+                EditorGUILayout.HelpBox(
+                    "'Sample' is the worked example bundled with the SDK — browse it freely to see " +
+                    "how content is set up.\n\n" +
+                    "Upload actions are disabled: this content ID ships with every copy of the SDK, " +
+                    "so it is reserved and the backend will refuse it. Pick your own folder from the " +
+                    "dropdown above when you are ready to publish.",
+                    MessageType.Info);
+
+                // Only offered when the template folder is actually on disk —
+                // the popup renames an existing folder, it cannot create one.
+                if (!ContentFolders.HasNamedGame() && ContentFolders.PlaceholderExists()
+                    && GUILayout.Button("Set Up My Game Folder", GUILayout.Height(24)))
+                {
+                    ContentIdSetupPopup.Show(ContentFolders.PlaceholderName, OnContentFolderRenamed);
+                }
+                GUILayout.Space(4);
             }
 
             // ── Gate 1: placeholder folder name (SDK template default).
@@ -472,39 +791,36 @@ namespace DreamPark {
             }
 
             GUILayout.Space(5);
-            contentName = EditorGUILayout.TextField("Name", contentName);
-            EditorGUILayout.LabelField("Description");
-            contentDescription = EditorGUILayout.TextArea(contentDescription, GUILayout.MinHeight(52));
-            logoTexture = (Texture2D)EditorGUILayout.ObjectField("Logo", logoTexture, typeof(Texture2D), false);
-            if (GUILayout.Button("Use Default Logo (Assets/Resources/Logos/<ContentId>.png)"))
+            if (BeginSectionBox(ref foldContentInfo, SectionContentInfoPrefKey, "Content Info", "d_Prefab Icon"))
             {
-                string defaultLogoPath = $"Assets/Resources/Logos/{contentId}.png";
-                logoTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(defaultLogoPath);
-                SaveLogoSelection();
+                contentName = EditorGUILayout.TextField("Name", contentName);
+                EditorGUILayout.LabelField("Description");
+                contentDescription = EditorGUILayout.TextArea(
+                    contentDescription,
+                    WrappedTextAreaStyle,
+                    GUILayout.MinHeight(52),
+                    GUILayout.ExpandWidth(true));
+                logoTexture = (Texture2D)EditorGUILayout.ObjectField("Logo", logoTexture, typeof(Texture2D), false);
+                if (isLoadingMetadata)
+                {
+                    EditorGUILayout.HelpBox("Loading content metadata from backend...", MessageType.Info);
+                }
+                EndSectionBox();
             }
 
-            GUILayout.Space(5);
-            EditorGUILayout.LabelField("Release Notes");
-            releaseNotes = EditorGUILayout.TextArea(releaseNotes, GUILayout.MinHeight(70));
-            if (isLoadingMetadata)
+            if (BeginSectionBox(ref foldTeam, SectionTeamPrefKey, "Team", "d_UnityEditor.InspectorWindow"))
             {
-                EditorGUILayout.HelpBox("Loading content metadata from backend...", MessageType.Info);
+                DrawTeamSection();
+                EndSectionBox();
             }
 
-            GUILayout.Space(10);
-            DrawTeamSection();
+            if (BeginSectionBox(ref foldContentOverview, SectionContentOverviewPrefKey, "Content Overview", "d_SceneViewFx"))
+            {
+                DrawLegacyBundlingNotice();
+                DrawContentPreviewSection();
+                EndSectionBox();
+            }
 
-            GUILayout.Space(10);
-            DrawBundlingStrategySection();
-            GUILayout.Space(6);
-
-            DrawBuildTargetSelection();
-            GUILayout.Space(10);
-
-            DrawContentPreviewSection();
-            GUILayout.Space(10);
-
-            DrawPatchEstimateSection();
             GUILayout.Space(6);
 
             // Upload gate: if the manifest fetch succeeded AND the local SDK
@@ -522,53 +838,155 @@ namespace DreamPark {
                     MessageType.Error);
                 if (GUILayout.Button("Update SDK Now", GUILayout.Height(28)))
                 {
-                    UpdateAvailablePopup.Show(
-                        SDKVersion.Current,
-                        SDKUpdateChecker.LatestVersion,
-                        SDKUpdateChecker.LatestReleaseNotes,
-                        SDKUpdateChecker.LatestDownloadUrl);
+                    // Route through the same manual-check path as
+                    // DreamPark ▸ Check for SDK Updates instead of calling
+                    // UpdateAvailablePopup.Show ourselves.
+                    //
+                    // This panel is a pure READER of SDKUpdateChecker's cache,
+                    // and that cache is written once per domain generation by
+                    // the [InitializeOnLoad] check at editor load / login. So
+                    // LatestDownloadUrl here is as old as the Unity session.
+                    // The manifest's downloadUrl is a signed storage link that
+                    // UpdateAvailablePopup GETs with no Authorization header —
+                    // once the signature expires the download comes back 400.
+                    // That is why the identical popup worked from the menu item
+                    // (CheckForUpdateManual re-fetches the manifest immediately
+                    // before showing it) and 400'd from here.
+                    //
+                    // CheckForUpdateManual re-fetches the manifest, calls
+                    // SDKVersion.Reload(), bypasses skip/remind state and then
+                    // shows the popup with a seconds-old URL. It also fixes the
+                    // stale LatestVersion this warning renders when a release
+                    // ships mid-session.
+                    SDKUpdateChecker.CheckForUpdateManual();
                 }
                 GUILayout.Space(6);
             }
 
-            // Compile & Upload runs the full pipeline (third-party sync,
-            // build, upload). Gated on having at least one shippable root
-            // (Attraction or Prop) — a bare Player rig isn't a deliverable
-            // on its own.
+            if (BeginSectionBox(ref foldTroubleshooting, SectionTroubleshootingPrefKey, "Troubleshooting", "d_console.warnicon"))
+            {
+                DrawTroubleshootingSection();
+                EndSectionBox();
+            }
+
+            // Pre Launch Options sits right above Release Launch so the
+            // optimization tools are visible at the moment the creator's
+            // about to publish. Anything that should be sanity-checked
+            // before sending content to the OTA pipeline lives here.
+            if (BeginSectionBox(ref foldPreLaunch, SectionPreLaunchPrefKey, "Pre Launch Options", "d_CustomTool"))
+            {
+                DrawPreLaunchSection();
+                EndSectionBox();
+            }
+
+            if (BeginSectionBox(ref foldReleaseLaunch, SectionReleaseLaunchPrefKey, "Release Launch", null))
+            {
+                DrawLaunchActions(sdkOutOfDate);
+                EndSectionBox();
+            }
+
+            EditorGUILayout.EndScrollView();
+        }
+
+        private bool BeginSectionBox(ref bool foldState, string prefKey, string title, string iconName)
+        {
+            GUILayout.BeginVertical(EditorStyles.helpBox);
+            GUIContent icon = string.IsNullOrEmpty(iconName) ? null : EditorGUIUtility.IconContent(iconName);
+            string headerTitle = icon != null && icon.image != null ? $" {title}" : title;
+            bool nextState = EditorGUILayout.BeginFoldoutHeaderGroup(foldState, new GUIContent(headerTitle, icon != null ? icon.image : null));
+            if (nextState != foldState)
+            {
+                foldState = nextState;
+                EditorPrefs.SetBool(prefKey, foldState);
+            }
+
+            if (!foldState)
+            {
+                EditorGUILayout.EndFoldoutHeaderGroup();
+                GUILayout.EndVertical();
+                return false;
+            }
+
+            GUILayout.Space(4);
+            return true;
+        }
+
+        private void EndSectionBox()
+        {
+            EditorGUILayout.EndFoldoutHeaderGroup();
+            GUILayout.EndVertical();
+        }
+
+        // EditorGUILayout.TextArea() without an explicit style falls back to
+        // EditorStyles.textField, which has wordWrap = false. A non-wrapping
+        // control reports its min layout width as the full pixel width of its
+        // text, so one long description line forces the whole window wider —
+        // and because the window's width feeds back into the layout next
+        // frame, it just keeps growing. Wrapping fixes the root cause: a
+        // wrapping style's min width is a single character, so the control
+        // fills the available width instead of demanding more.
+        private static GUIStyle wrappedTextAreaStyle;
+        private static GUIStyle WrappedTextAreaStyle
+        {
+            get
+            {
+                if (wrappedTextAreaStyle == null)
+                {
+                    wrappedTextAreaStyle = new GUIStyle(EditorStyles.textArea)
+                    {
+                        wordWrap = true
+                    };
+                }
+                return wrappedTextAreaStyle;
+            }
+        }
+
+        private void DrawLaunchActions(bool sdkOutOfDate)
+        {
             bool shippable = HasShippableContent();
-            GUI.enabled = !isUploading
-                          && !string.IsNullOrEmpty(contentId)
-                          && !string.IsNullOrEmpty(contentName)
-                          && !sdkOutOfDate
-                          && shippable;
+            bool hasBuildArtifacts = patchCurrentSnapshot != null && patchCurrentSnapshot.TotalFileCount > 0;
+            bool canLaunch = !isUploading
+                             && !UploadsBlocked
+                             && !string.IsNullOrEmpty(contentId)
+                             && !string.IsNullOrEmpty(contentName)
+                             && !sdkOutOfDate
+                             && shippable;
+
+            if (isUploading)
+            {
+                EditorGUILayout.HelpBox(
+                    "An upload is currently running in the launch window. You can keep editing prep here, but upload actions stay locked until that run finishes.",
+                    MessageType.Info);
+                if (GUILayout.Button("Open Upload Window", GUILayout.Height(24)))
+                {
+                    ContentUploadFlowPopup.Show(this, uploadBuildMode);
+                }
+                GUILayout.Space(6);
+            }
+            else
+            {
+                EditorGUILayout.HelpBox(
+                    "Final title, description, release notes, build targets, and live progress now happen in the launch window so this screen can stay focused on setup.",
+                    MessageType.None);
+            }
+
+            GUI.enabled = canLaunch;
             string compileLabel = shippable
                 ? "Compile & Upload"
                 : "Compile & Upload (add an Attraction or Prop first)";
-            if (GUILayout.Button(compileLabel, GUILayout.Height(32)))
+            if (GUILayout.Button(compileLabel, GUILayout.Height(34)))
             {
-                if (!SaveModifiedScenesBeforeCompile())
-                {
-                    EditorUtility.DisplayDialog("Compile Cancelled", "Save all modified scenes before compiling.", "OK");
-                    EditorGUILayout.EndScrollView();
-                    return;
-                }
                 SaveLogoSelection();
-                UploadContent(true);
+                // Fresh version check at click time — the passive sdkOutOfDate
+                // gate above reads the once-per-session manifest cache, which
+                // goes stale if the editor stays open across an SDK release.
+                // Out of date → routes to UpdateAvailablePopup instead of the
+                // upload popup.
+                SDKUpdateChecker.EnsureUpToDateThen(() => ContentUploadFlowPopup.Show(this, true));
             }
             GUI.enabled = true;
 
-            // Try Reupload skips the build and pushes whatever's currently in
-            // ServerData/. Only meaningful if a build has actually populated
-            // it — otherwise we'd ship zero files and waste the user's click.
-            // patchCurrentSnapshot is refreshed on panel-open and after every
-            // build, so checking its file count is the cheapest accurate gate.
-            bool hasBuildArtifacts = patchCurrentSnapshot != null && patchCurrentSnapshot.TotalFileCount > 0;
-            GUI.enabled = !isUploading
-                          && !string.IsNullOrEmpty(contentId)
-                          && !string.IsNullOrEmpty(contentName)
-                          && !sdkOutOfDate
-                          && hasBuildArtifacts
-                          && shippable;
+            GUI.enabled = canLaunch && hasBuildArtifacts;
             string reuploadLabel = hasBuildArtifacts
                 ? "Try Reupload"
                 : "Try Reupload (no build artifacts)";
@@ -576,20 +994,190 @@ namespace DreamPark {
                 hasBuildArtifacts
                     ? "Re-upload the contents of ServerData/ without rebuilding."
                     : "Run Compile & Upload first — ServerData/ is empty."),
-                GUILayout.Height(32)))
+                GUILayout.Height(28)))
             {
                 SaveLogoSelection();
-                UploadContent(false);
+
+                // If the previous upload for this content left a failed-run
+                // record behind, give the user the choice between re-sending
+                // only the bundles that failed last time vs. re-uploading the
+                // whole batch. No record (or no retryable failures in it)
+                // means the standard "Reupload All" path with no extra
+                // friction — same UX as before this feature existed.
+                bool useFailedOnly = false;
+                var failedRecord = !string.IsNullOrEmpty(contentId)
+                    ? FailedBundleStore.Load(contentId)
+                    : null;
+                if (failedRecord != null && failedRecord.HasRetryableFailures)
+                {
+                    // DisplayDialogComplex button slots:
+                    //   ok  → "Upload Failed Only ({failed})"  → choice 0
+                    //   cancel → "Cancel"                       → choice 1
+                    //   alt → "Reupload All ({total})"          → choice 2
+                    int choice = EditorUtility.DisplayDialogComplex(
+                        "Retry Upload",
+                        $"Last upload had {failedRecord.FailedCount} of {failedRecord.totalFiles} bundle(s) fail.\n\n" +
+                        $"• Upload Failed Only: re-send just the {failedRecord.FailedCount} failed bundle(s). " +
+                        $"The {failedRecord.SucceededCount} bundle(s) that already uploaded last time will be reused " +
+                        $"and committed alongside.\n\n" +
+                        $"• Reupload All: ignore the previous run and re-send every bundle currently in ServerData/.",
+                        $"Upload Failed Only ({failedRecord.FailedCount})",
+                        "Cancel",
+                        $"Reupload All ({failedRecord.totalFiles})");
+                    if (choice == 1) return; // Cancel — leave panel state untouched.
+                    useFailedOnly = (choice == 0);
+                }
+
+                // Same click-time version gate as Compile & Upload — a reupload
+                // still publishes bundles built against the stale SDK.
+                bool failedOnlyFinal = useFailedOnly;
+                SDKUpdateChecker.EnsureUpToDateThen(() => ContentUploadFlowPopup.Show(this, false, failedOnlyFinal));
             }
             GUI.enabled = true;
 
-            // Diagnostic: full build pipeline for the active platform only,
-            // no upload, then opens the Addressables Groups window so the
-            // user can review what the bundling pass actually produced.
-            // Useful for validating Smart's partitioning before committing
-            // to a real upload.
+            if (uploadCompleted)
+            {
+                GUILayout.Space(8);
+                EditorGUILayout.HelpBox(
+                    string.IsNullOrEmpty(uploadStatusMessage)
+                        ? (uploadSucceeded ? "Upload complete." : "Upload ended with an issue.")
+                        : uploadStatusMessage,
+                    uploadSucceeded ? MessageType.Info : MessageType.Error);
+            }
+        }
+
+        // Pre Launch Options: optimization tools the creator should run
+        // before publishing. Each tool opens its own review window — we
+        // keep this section minimal (just buttons) because every tool
+        // surfaces its own header card and description on open. Each
+        // button's tooltip carries the one-liner about what the tool does.
+        private void DrawPreLaunchSection()
+        {
+            EditorGUILayout.HelpBox(
+                "Correctness checks run automatically when you upload. The optimizers below are "
+                + "optional — they shrink the bundle size your players download and speed up "
+                + "first-launch attraction load times.",
+                MessageType.None);
+
             GUILayout.Space(4);
-            GUI.enabled = !isUploading && !string.IsNullOrEmpty(contentId) && shippable;
+
+            // The correctness gate, surfaced as a button so it can be run deliberately
+            // rather than only discovered at upload time. Framed apart from the
+            // optimizers below: those are about size, this is about whether the content
+            // is correct at all.
+            {
+                var reviewIcon = EditorGUIUtility.IconContent("console.warnicon");
+                var report = PreUploadChecks.PreUploadCheckRunner.CachedReportFor(contentId);
+
+                string suffix = "";
+                if (report != null)
+                {
+                    if (report.BlockingCount > 0) suffix = $"  ({report.BlockingCount} blocking)";
+                    else if (report.WarningCount > 0) suffix = $"  ({report.WarningCount} warning{(report.WarningCount == 1 ? "" : "s")})";
+                }
+
+                var reviewContent = new GUIContent(
+                    " Review Pre-Upload Checks..." + suffix,
+                    reviewIcon != null ? reviewIcon.image : null,
+                    "Duplicate prefab names, directional lights in content, materials missing Meta "
+                    + "occlusion, unapplied scene overrides, and dependencies living outside this "
+                    + "content folder. Runs automatically before every upload; this runs the full "
+                    + "suite now, including the scene scan.");
+
+                if (GUILayout.Button(reviewContent, GUILayout.Height(28)))
+                {
+                    PreUploadChecks.PreUploadChecksPopup.ShowForReview(this, contentId);
+                }
+            }
+
+            GUILayout.Space(6);
+
+            // Helper: build a 28px-tall button with a Unity built-in icon
+            // (asset-type icon matching the tool's domain). The icons make
+            // the optimizer suite read as a first-class, official part of
+            // the SDK — same visual weight as Unity's own toolbars.
+            //
+            // EditorGUIUtility.IconContent auto-picks the right theme
+            // variant (light / dark), so we just pass the canonical name.
+            // Asset-type icons like "Material Icon", "Texture Icon",
+            // "AudioClip Icon" have been stable across every Unity 2019+
+            // release.
+            bool ToolButton(string label, string iconName, string tooltip)
+            {
+                var iconContent = EditorGUIUtility.IconContent(iconName);
+                var content = new GUIContent(" " + label, iconContent?.image, tooltip);
+                return GUILayout.Button(content, GUILayout.Height(28));
+            }
+
+            if (ToolButton(
+                    "Open Material Converter...",
+                    "Material Icon",
+                    "Scan every material in this park's content folder. Flips Standard / URP / vendor "
+                    + "shaders to DreamPark-Universal (lit), DreamPark-Unlit (flat), or DreamPark/Particles. "
+                    + "Per-row review before any material is touched; GUIDs preserved so prefab "
+                    + "references stay intact. Cuts shader-variant duplication across bundles."))
+            {
+                DreamPark.EditorTools.MaterialConversion.MaterialConverterWindow.Open();
+            }
+
+            if (ToolButton(
+                    "Open Texture Optimizer...",
+                    "Texture Icon",
+                    "Scan every texture in this park's content folder. Converts oversized .tga / .tif sources "
+                    + "to PNG (alpha) or JPG (opaque) and picks 256 / 512 / 1024 based on the largest prop "
+                    + "using each texture. Per-row review before any file is touched; Unity GUIDs preserved."))
+            {
+                DreamPark.EditorTools.TextureOptimization.TextureOptimizerWindow.Open();
+            }
+
+            if (ToolButton(
+                    "Open Animation Optimizer...",
+                    "AnimationClip Icon",
+                    "Scan every .anim and FBX sub-clip in this park's content folder. Routes each clip through "
+                    + "Unity's ModelImporter keyframe reducer — standalones round-trip through their source "
+                    + "FBX with GUID preservation, sub-clips compress in place."))
+            {
+                DreamPark.EditorTools.AnimationOptimization.AnimationOptimizerWindow.Open();
+            }
+
+            if (ToolButton(
+                    "Open Audio Optimizer...",
+                    "AudioClip Icon",
+                    "Scan every AudioClip in this park's content folder. Re-encodes oversized WAVs as "
+                    + "Vorbis or ADPCM (matched to clip duration and use case), down-mixes to mono where "
+                    + "appropriate, and resamples to 22 kHz / 44 kHz based on the clip's role. Per-row "
+                    + "review before any file is re-encoded; GUIDs preserved."))
+            {
+                DreamPark.EditorTools.AudioOptimization.AudioOptimizerWindow.Open();
+            }
+
+            if (ToolButton(
+                    "Open Bundle Size Breakdown...",
+                    "Package Manager",
+                    "Pack this park's content into addressable bundles and inspect what's taking up space. "
+                    + "Use this to verify the texture, audio, and animation optimizers actually shrank what "
+                    + "you expected before you publish."))
+            {
+                DreamPark.Diagnostics.BundleSizeBreakdown.Open();
+            }
+        }
+
+        private void DrawTroubleshootingSection()
+        {
+            EditorGUILayout.HelpBox(
+                "Use these tools when a release needs a little extra inspection before you send it.",
+                MessageType.None);
+
+            bool newCleanBeforeEachTarget = EditorGUILayout.ToggleLeft("Clean Addressables Before Each Target", cleanBeforeEachTarget);
+            if (newCleanBeforeEachTarget != cleanBeforeEachTarget)
+            {
+                cleanBeforeEachTarget = newCleanBeforeEachTarget;
+                SaveBuildTargetSelection();
+            }
+
+            GUILayout.Space(6);
+            bool shippable = HasShippableContent();
+            GUI.enabled = !isUploading && !UploadsBlocked && !string.IsNullOrEmpty(contentId) && shippable;
             if (GUILayout.Button(new GUIContent(
                 "Build & Inspect Groups (no upload)",
                 "Runs the full bundling pipeline for the current build target (third-party sync, " +
@@ -609,114 +1197,1283 @@ namespace DreamPark {
             }
             GUI.enabled = true;
 
-            // The upload-in-progress takeover at the top of OnGUI early-returns,
-            // so this only renders post-upload — showing the final completed/
-            // failed state of the most recent attempt until the user starts
-            // another one.
-            DrawUploadProgressArea();
-
-            EditorGUILayout.EndScrollView();
-        }
-
-        private void DrawUploadProgressArea()
-        {
-            var progressEntries = ContentAPI.GetUploadProgressSnapshot();
-            if (!isUploading && (progressEntries == null || progressEntries.Count == 0))
-            {
-                return;
-            }
-
-            GUILayout.Space(12);
-            GUILayout.Label("Upload Progress", EditorStyles.boldLabel);
-
-            if (progressEntries == null || progressEntries.Count == 0)
-            {
-                EditorGUILayout.HelpBox("Collecting files and initializing upload...", MessageType.Info);
-                return;
-            }
-
-            float overall = progressEntries.Average(e => e.progress);
-            EditorGUILayout.LabelField($"Overall: {(overall * 100f):0.0}% ({progressEntries.Count} files)");
-            Rect overallRect = GUILayoutUtility.GetRect(18, 18, "TextField");
-            EditorGUI.ProgressBar(overallRect, overall, $"{overall * 100f:0.0}%");
+            // ─── Force upload all previews ───────────────────────
+            // Regenerates every attraction/prop preview PNG and pushes each to
+            // this content's attractions catalog (POST /api/content/:id/
+            // attractions/preview), refreshing previews even for assets that
+            // didn't change — a manual repair path independent of a version
+            // upload. Uses the same session auth as the normal upload flow.
             GUILayout.Space(6);
-
-            uploadProgressScroll = EditorGUILayout.BeginScrollView(uploadProgressScroll, GUILayout.MinHeight(140), GUILayout.MaxHeight(220));
-            foreach (var entry in progressEntries)
+            GUI.enabled = !isUploading && !UploadsBlocked && !string.IsNullOrEmpty(contentId);
+            if (GUILayout.Button(new GUIContent(
+                "Force Upload All Previews",
+                "Regenerates and uploads a preview image for every attraction and prop in this " +
+                "content, updating the attractions catalog even if the asset didn't change. " +
+                "Use this to repair or refresh previews without publishing a new version."),
+                GUILayout.Height(22)))
             {
-                string status = entry.failed ? "Failed" : (entry.completed ? "Done" : "Uploading");
-                string header = $"{entry.platform} / {entry.fileName}";
-                string sizeText = $"{FormatBytes(entry.uploadedBytes)} / {FormatBytes(entry.totalBytes)}";
-
-                EditorGUILayout.LabelField(header, EditorStyles.miniBoldLabel);
-                EditorGUILayout.LabelField($"{status}  -  {sizeText}  -  {(entry.progress * 100f):0.0}%", EditorStyles.miniLabel);
-                Rect rowRect = GUILayoutUtility.GetRect(18, 18, "TextField");
-                EditorGUI.ProgressBar(rowRect, Mathf.Clamp01(entry.progress), $"{entry.progress * 100f:0.0}%");
-                GUILayout.Space(4);
+                if (EditorUtility.DisplayDialog(
+                    "Force Upload All Previews",
+                    "Regenerate and upload preview images for every attraction and prop in \"" + contentId + "\"?",
+                    "Upload Previews", "Cancel"))
+                {
+                    EditorCoroutineUtility.StartCoroutineOwnerless(ForceUploadAllPreviewsRoutine(contentId));
+                }
             }
-            EditorGUILayout.EndScrollView();
+            GUI.enabled = true;
+
+            // ─── Update attraction dimensions ────────────────────
+            // Reads every attraction's authored footprint (LevelTemplate
+            // size/customSize, in feet) and pushes the batch to this
+            // content's attractions catalog (POST /api/content/:id/
+            // attractions/dimensions), where the backend derives each
+            // attraction's size-reference tag ("fits a Basketball Court").
+            // A manual repair/backfill path — the same push runs silently
+            // after every upload. Also available for ALL content folders at
+            // once via DreamPark → Troubleshooting → Update Attraction
+            // Dimensions.
+            GUILayout.Space(6);
+            GUI.enabled = !isUploading && !UploadsBlocked && !string.IsNullOrEmpty(contentId);
+            if (GUILayout.Button(new GUIContent(
+                "Update Attraction Dimensions",
+                "Uploads every attraction's authored dimensions (feet) to the attractions " +
+                "catalog, refreshing size info even if the asset didn't change. Operators use " +
+                "these to plan around their real-world space — run this to backfill content " +
+                "published before dimensions existed."),
+                GUILayout.Height(22)))
+            {
+                if (EditorUtility.DisplayDialog(
+                    "Update Attraction Dimensions",
+                    "Upload authored dimensions for every attraction in \"" + contentId + "\"?",
+                    "Upload Dimensions", "Cancel"))
+                {
+                    EditorCoroutineUtility.StartCoroutineOwnerless(UploadAttractionDimensionsRoutine(contentId));
+                }
+            }
+            GUI.enabled = true;
+
+            // ─── Re-upload Logo ──────────────────────────────────
+            // Pushes the selected Logo texture straight to the backend
+            // (POST /api/content/:id/logo), refreshing the web-renderable
+            // logoImageUrl without publishing a new version. The bundled
+            // logoAddress the VR client uses is unaffected.
+            GUILayout.Space(6);
+            GUI.enabled = !isUploading && !UploadsBlocked && !string.IsNullOrEmpty(contentId) && logoTexture != null;
+            if (GUILayout.Button(new GUIContent(
+                "Re-upload Logo",
+                "Uploads the selected Logo image directly to DreamPark so web, iOS, and admin " +
+                "surfaces show the latest logo — no version upload needed."),
+                GUILayout.Height(22)))
+            {
+                UploadLogoImage(contentId, interactive: true);
+            }
+            GUI.enabled = true;
+
+            // ─── Test Channel upload ─────────────────────────────
+            // Admin / dreampark.app teammates only. Pushes the bundles
+            // currently sitting in ServerData/ to the Test Channel in
+            // dreampark-core's Content Manager — a separate listing
+            // outside the Beta/Release versioning flow that auto-expires
+            // after 7 days. Useful for handing an in-progress test
+            // build to internal SDK / smartpacker development without
+            // burning a real version number.
+            //
+            // AdminState.IsAdmin is sourced from /api/sdk/canPublish on
+            // the backend, which calls getAdminAccessForEmail — the same
+            // primitive the test-content backend gates with. So if this
+            // button is rendered, the upload will succeed; if IsAdmin
+            // hasn't probed yet (null) the button stays hidden rather
+            // than disabled, to keep the section uncluttered for non-team
+            // users.
+            if (AdminState.IsAdmin == true)
+            {
+                GUILayout.Space(6);
+                bool testShippable = HasShippableContent();
+                GUI.enabled = !isUploading && !UploadsBlocked && !string.IsNullOrEmpty(contentId) && testShippable;
+                if (GUILayout.Button(new GUIContent(
+                    "Upload Test Build (Test Channel)",
+                    "DreamPark teammates only.\n\n" +
+                    "Runs a fresh editor-only compile (Mac and/or Windows — picked in the dialog) " +
+                    "and pushes the resulting bundles to the Test Channel in dreampark-core's " +
+                    "Content Manager. Test builds live in their own listing, separate from " +
+                    "Beta/Release, and auto-expire after 7 days. iOS and Android are skipped " +
+                    "because test builds are meant for previewing inside the dreampark-core " +
+                    "Unity editor."),
+                    GUILayout.Height(22)))
+                {
+                    BeginTestBuildUpload();
+                }
+                GUI.enabled = true;
+            }
         }
 
-        // Full-panel takeover during upload. Replaces the entire configuration
-        // UI with a focused progress view so the per-file list isn't buried
-        // below ~400px of fields the user can't interact with anyway. The
-        // file list expands to fill all remaining vertical space.
-        private void DrawUploadInProgressView()
+        // ── Force Upload All Previews ────────────────────────────────
+        // Regenerates preview PNGs, then uploads one per attraction/prop to the
+        // content's attractions catalog (POST /api/content/:id/attractions/
+        // preview). Sequential so a big catalog doesn't fire hundreds of
+        // concurrent requests. A repair path, independent of a version upload.
+        private class PreviewUploadRoot
         {
-            // Compact header so the user still sees who they're uploading as.
-            GUILayout.BeginHorizontal();
-            string displayEmail = !string.IsNullOrEmpty(AuthAPI.email) ? AuthAPI.email : ("uid: " + AuthAPI.userId);
-            EditorGUILayout.LabelField("Signed in as " + displayEmail, EditorStyles.miniLabel);
-            GUILayout.EndHorizontal();
+            public string name;
+            public string resourceName;
+            public byte[] previewBytes;
+        }
 
-            GUILayout.Space(8);
+        // ─── Logo image upload (direct to backend) ─────────────────────
+        // The logo has always shipped inside the Unity bundle (logoAddress —
+        // that's what the VR client loads and it is untouched here). This
+        // ALSO pushes the raw image file to the backend
+        // (POST /api/content/:id/logo → content.logoImageUrl) so iOS, web,
+        // and admin render the logo without touching Unity bundles — same
+        // pattern as the attraction preview uploads. Runs fire-and-forget
+        // inside the normal upload flow; manual repair lives in
+        // Troubleshooting → "Re-upload Logo".
+        private byte[] ReadLogoImageBytes(out string fileName, out string mimeType)
+        {
+            fileName = null; mimeType = null;
+            if (logoTexture == null) return null;
 
-            string title = string.IsNullOrEmpty(contentName) ? contentId : contentName;
-            GUILayout.Label($"Uploading {title}", EditorStyles.boldLabel);
-            GUILayout.Space(4);
-
-            var progressEntries = ContentAPI.GetUploadProgressSnapshot();
-            if (progressEntries == null || progressEntries.Count == 0)
+            // Prefer the source asset file on disk — original bytes, no
+            // Read/Write import requirement.
+            string path = AssetDatabase.GetAssetPath(logoTexture);
+            if (!string.IsNullOrEmpty(path) && File.Exists(path))
             {
-                EditorGUILayout.HelpBox(
-                    "Preparing upload — building bundles and computing patch estimate. " +
-                    "Per-file progress will appear here once the upload starts.",
-                    MessageType.Info);
+                string ext = Path.GetExtension(path).ToLowerInvariant();
+                if (ext == ".png") mimeType = "image/png";
+                else if (ext == ".jpg" || ext == ".jpeg") mimeType = "image/jpeg";
+                else if (ext == ".webp") mimeType = "image/webp";
+                if (mimeType != null)
+                {
+                    try
+                    {
+                        fileName = Path.GetFileName(path);
+                        return File.ReadAllBytes(path);
+                    }
+                    catch (Exception e) { Debug.LogWarning("[Logo] source read failed: " + e.Message); }
+                }
+            }
+
+            // Fallback (PSD/TGA sources, unreadable textures): blit to a
+            // readable copy and encode PNG.
+            try
+            {
+                RenderTexture rt = RenderTexture.GetTemporary(logoTexture.width, logoTexture.height, 0, RenderTextureFormat.ARGB32);
+                Graphics.Blit(logoTexture, rt);
+                RenderTexture prev = RenderTexture.active;
+                RenderTexture.active = rt;
+                Texture2D readable = new Texture2D(logoTexture.width, logoTexture.height, TextureFormat.RGBA32, false);
+                readable.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
+                readable.Apply();
+                RenderTexture.active = prev;
+                RenderTexture.ReleaseTemporary(rt);
+                byte[] png = readable.EncodeToPNG();
+                UnityEngine.Object.DestroyImmediate(readable);
+                fileName = logoTexture.name + ".png";
+                mimeType = "image/png";
+                return png;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[Logo] PNG encode fallback failed: " + e.Message);
+                return null;
+            }
+        }
+
+        private void UploadLogoImage(string idForUpload, bool interactive)
+        {
+            string auth = AuthAPI.GetUserAuth();
+            if (string.IsNullOrEmpty(auth))
+            {
+                if (interactive) EditorUtility.DisplayDialog("Not signed in", "Sign in to DreamPark before uploading the logo.", "OK");
+                return;
+            }
+            if (logoTexture == null)
+            {
+                if (interactive) EditorUtility.DisplayDialog("No logo selected", "Pick a Logo texture in the uploader first.", "OK");
+                return;
+            }
+            string fileName, mimeType;
+            byte[] bytes = ReadLogoImageBytes(out fileName, out mimeType);
+            if (bytes == null || bytes.Length == 0)
+            {
+                if (interactive) EditorUtility.DisplayDialog("Logo unreadable", "Couldn't read the logo image bytes from the selected texture.", "OK");
                 return;
             }
 
-            // Overall summary row: percent, file count, and bytes.
-            float overall = progressEntries.Average(e => e.progress);
-            long uploadedBytes = progressEntries.Sum(e => e.uploadedBytes);
-            long totalBytes = progressEntries.Sum(e => e.totalBytes);
-            int doneCount = progressEntries.Count(e => e.completed);
-            int failedCount = progressEntries.Count(e => e.failed);
-
-            string overallStatus = $"{doneCount}/{progressEntries.Count} files done";
-            if (failedCount > 0) overallStatus += $" · {failedCount} failed";
-            overallStatus += $" · {FormatBytes(uploadedBytes)} of {FormatBytes(totalBytes)}";
-            EditorGUILayout.LabelField(overallStatus);
-
-            Rect overallRect = GUILayoutUtility.GetRect(22, 22, "TextField");
-            EditorGUI.ProgressBar(overallRect, Mathf.Clamp01(overall), $"{overall * 100f:0.0}%");
-            GUILayout.Space(8);
-
-            // File list takes all remaining vertical space.
-            uploadProgressScroll = EditorGUILayout.BeginScrollView(uploadProgressScroll,
-                GUILayout.ExpandHeight(true));
-            foreach (var entry in progressEntries)
+            string endpoint = "/api/content/" + Uri.EscapeDataString(idForUpload) + "/logo";
+            UploadContentData image = new UploadContentData(fileName, bytes);
+            image.mimeType = mimeType;
+            List<KeyValuePair<string, UploadContentData>> files = new List<KeyValuePair<string, UploadContentData>>
             {
-                string status = entry.failed ? "Failed" : (entry.completed ? "Done" : "Uploading");
-                string header = $"{entry.platform} / {entry.fileName}";
-                string sizeText = $"{FormatBytes(entry.uploadedBytes)} / {FormatBytes(entry.totalBytes)}";
+                new KeyValuePair<string, UploadContentData>("image", image)
+            };
+            DreamParkAPI.POST(endpoint, auth, files, (s, resp) =>
+            {
+                if (s)
+                {
+                    Debug.Log("[Logo] logo image uploaded to backend for " + idForUpload);
+                    if (interactive) EditorUtility.DisplayDialog("Logo uploaded", "Logo pushed to DreamPark — web, iOS, and admin surfaces now use it.", "OK");
+                }
+                else
+                {
+                    string err = (resp != null && !string.IsNullOrEmpty(resp.error)) ? resp.error : "upload failed";
+                    Debug.LogWarning("[Logo] backend logo upload failed: " + err);
+                    if (interactive) EditorUtility.DisplayDialog("Logo upload failed", err, "OK");
+                }
+            });
+        }
 
-                EditorGUILayout.LabelField(header, EditorStyles.miniBoldLabel);
-                EditorGUILayout.LabelField($"{status}  -  {sizeText}  -  {(entry.progress * 100f):0.0}%", EditorStyles.miniLabel);
-                Rect rowRect = GUILayoutUtility.GetRect(18, 18, "TextField");
-                EditorGUI.ProgressBar(rowRect, Mathf.Clamp01(entry.progress), $"{entry.progress * 100f:0.0}%");
-                GUILayout.Space(4);
+        // interactive: true = Troubleshooting button (dialogs + progress bar +
+        // forced preview regeneration). false = silent post-upload push — runs
+        // automatically after a successful commit, because the backend's
+        // preview endpoint is attach-only against rows the server's commit-
+        // time catalog sync just created. Silent mode only fills in missing
+        // preview PNGs (the compile pipeline already generated them).
+        private IEnumerator ForceUploadAllPreviewsRoutine(string idForUpload, bool interactive = true)
+        {
+            string auth = AuthAPI.GetUserAuth();
+            if (string.IsNullOrEmpty(auth))
+            {
+                if (interactive) EditorUtility.DisplayDialog("Not signed in", "Sign in to DreamPark before uploading previews.", "OK");
+                else Debug.LogWarning("[Previews] auto-push skipped: not signed in.");
+                yield break;
             }
-            EditorGUILayout.EndScrollView();
+
+            // 1) Regenerate the preview PNGs (same generator the compile pipeline runs).
+            if (interactive) EditorUtility.DisplayProgressBar("Force Upload All Previews", "Regenerating preview images…", 0f);
+            try { ContentProcessor.GenerateAllLevelPreviews(idForUpload, forceRegenerate: interactive); }
+            catch (Exception e) { Debug.LogWarning("[Previews] regenerate failed: " + e.Message); }
+            AssetDatabase.Refresh();
+
+            // 2) Collect attraction/prop roots + their preview bytes.
+            List<PreviewUploadRoot> roots = CollectPreviewUploadRoots(idForUpload);
+            if (roots.Count == 0)
+            {
+                if (interactive)
+                {
+                    EditorUtility.ClearProgressBar();
+                    EditorUtility.DisplayDialog("No attractions", "No attractions or props were found under Assets/Content/" + idForUpload + ".", "OK");
+                }
+                yield break;
+            }
+
+            // 3) Upload each preview sequentially.
+            int ok = 0, missing = 0, failed = 0;
+            for (int i = 0; i < roots.Count; i++)
+            {
+                PreviewUploadRoot r = roots[i];
+                if (interactive) EditorUtility.DisplayProgressBar("Force Upload All Previews", r.name + " (" + (i + 1) + "/" + roots.Count + ")", (float)i / roots.Count);
+
+                if (r.previewBytes == null || r.previewBytes.Length == 0) { missing++; continue; }
+
+                // resourceName is the ONLY parameter the endpoint reads (it looks
+                // the row up by slug and attaches the image; it never creates one).
+                // `name` and `category` used to ride along here and were never
+                // read on either side — and category is now portal state, assigned
+                // after upload against the server-owned taxonomy, so sending the
+                // SDK's frozen PropTemplate.category would have been actively
+                // misleading had anything started reading it.
+                string endpoint = "/api/content/" + Uri.EscapeDataString(idForUpload) + "/attractions/preview"
+                    + "?resourceName=" + Uri.EscapeDataString(r.resourceName);
+
+                UploadContentData image = new UploadContentData(r.name + ".png", r.previewBytes);
+                image.mimeType = "image/png";
+                List<KeyValuePair<string, UploadContentData>> files = new List<KeyValuePair<string, UploadContentData>>
+                {
+                    new KeyValuePair<string, UploadContentData>("image", image)
+                };
+
+                bool done = false, success = false;
+                string err = null;
+                DreamParkAPI.POST(endpoint, auth, files, (s, resp) =>
+                {
+                    success = s;
+                    if (!s) err = (resp != null && !string.IsNullOrEmpty(resp.error)) ? resp.error : "upload failed";
+                    done = true;
+                });
+                while (!done) yield return null;
+
+                if (success) ok++;
+                else { failed++; Debug.LogWarning("[Previews] " + r.name + " failed: " + err); }
+            }
+
+            string summary = ok + " uploaded" +
+                (missing > 0 ? ", " + missing + " with no preview file" : "") +
+                (failed > 0 ? ", " + failed + " failed" : "") + ".";
+            if (interactive)
+            {
+                EditorUtility.ClearProgressBar();
+                EditorUtility.DisplayDialog("Previews uploaded", summary, "OK");
+            }
+            else
+            {
+                Debug.Log("[Previews] auto-push: " + summary);
+            }
+        }
+
+        // Walks Assets/Content/{id} for Attraction (LevelTemplate) and Prop
+        // (PropTemplate) prefabs, derives each one's addressable resourceName
+        // using the same convention ContentProcessor bakes into the catalog,
+        // and loads its preview PNG from the Previews/ folder.
+        private List<PreviewUploadRoot> CollectPreviewUploadRoots(string idForUpload)
+        {
+            List<PreviewUploadRoot> list = new List<PreviewUploadRoot>();
+            string contentRoot = "Assets/Content/" + idForUpload;
+            if (!AssetDatabase.IsValidFolder(contentRoot)) return list;
+            string previewsFolder = contentRoot + "/Previews";
+
+            string[] guids = AssetDatabase.FindAssets("t:Prefab", new[] { contentRoot });
+            foreach (string guid in guids)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                if (string.IsNullOrEmpty(path)) continue;
+                if (path.IndexOf("/ThirdPartyLocal/", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+
+                GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                if (prefab == null) continue;
+
+                string name = Path.GetFileNameWithoutExtension(path);
+
+                LevelTemplate level = prefab.GetComponent<LevelTemplate>();
+                PropTemplate prop = prefab.GetComponent<PropTemplate>();
+                if (level == null && prop == null) continue; // attractions + props only, never the player rig
+
+                // resourceName must match the backend catalog key exactly: the asset
+                // path with the leading "Assets/" and the file extension stripped
+                // (see leafStem() in lib/addressablesCatalog.js) — e.g.
+                // "Content/SuperAdventureLand/.../A_BeachParty". This keeps the
+                // "Sync Attractions" (catalog scrape) and preview uploads on one key.
+                string resourceName = path;
+                if (resourceName.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+                    resourceName = resourceName.Substring("Assets/".Length);
+                int extDot = resourceName.LastIndexOf('.');
+                if (extDot >= 0) resourceName = resourceName.Substring(0, extDot);
+
+                list.Add(new PreviewUploadRoot
+                {
+                    name = name,
+                    resourceName = resourceName,
+                    previewBytes = ReadPreviewBytes(previewsFolder, name),
+                });
+            }
+            return list;
+        }
+
+        // ── Update Dimensions ────────────────────────────────────────
+        // Collects every PLACEABLE's footprint — attractions from LevelTemplate
+        // size/customSize (authored, FEET, custom-aware) and props from
+        // PropTemplate.FootprintMeters (measured, converted) — and pushes the
+        // batch to the backend catalog in ONE request
+        // (POST /api/content/:id/attractions/dimensions; props share the
+        // endpoint because they share the collection —
+        // content/{id}/attractions/{slug} holds attraction, prop AND level
+        // rows). Attach-only server-side, exactly like previews: rows are
+        // created by the commit-time catalog sync; this only fills them in.
+        //
+        // THE TWO KINDS ARE NOT INTERCHANGEABLE and the wire does not pretend
+        // they are. An attraction's footprint is authored and is shown to
+        // operators as a measurement; a prop's is inferred from collider
+        // geometry and exists only to answer "is this bigger than that" for
+        // relative marker scale on the 2D park maps. The server keeps them
+        // apart by refusing to stamp a size-reference tag on a prop row —
+        // which is also why props are not logged with one below. See the
+        // FootprintMeters docblock in PropTemplate for the longer version.
+        //
+        // Runs: silently after every successful upload (auto-push), from the
+        // panel's Troubleshooting section, and from DreamPark →
+        // Troubleshooting → Update Attraction Dimensions (all content folders).
+        private class DimensionUploadRoot
+        {
+            public string name;
+            public string resourceName;
+            public float widthFt;
+            public float lengthFt;
+            // Suppresses the size-reference tag in logs. The server makes the
+            // same call independently off the row's own kind — this flag is a
+            // console nicety, never the authority.
+            public bool isProp;
+            // LevelTemplate.WallsWireValue / PropTemplate.PublishedWallSideToken
+            // — comma-joined axis tokens ("+z,-x") in the prefab's own local
+            // frame, "" when no side is toggled. GENERATE_LAYOUT (dreampark-core
+            // SpaceMapPacker) parses this to auto-route items into its wall
+            // pass instead of needing them pre-sorted by the caller.
+            public string walls = "";
+            // Feet, only meaningful when walls is non-empty. 0 means "not
+            // applicable" (no wall declared) rather than "authored zero
+            // height" — omitted from the wire entirely in that case (see the
+            // AddField below) so the server's own 10ft default stays in
+            // control rather than a sentinel value trying to mean two things.
+            public float wallHeightFt;
+        }
+
+        // Backend catalog key derivation, shared with the preview walk: the
+        // asset path minus the leading "Assets/" and the extension (see
+        // leafStem() in lib/addressablesCatalog.js).
+        private static string ResourceNameForAssetPath(string path)
+        {
+            string resourceName = path;
+            if (resourceName.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+                resourceName = resourceName.Substring("Assets/".Length);
+            int extDot = resourceName.LastIndexOf('.');
+            if (extDot >= 0) resourceName = resourceName.Substring(0, extDot);
+            return resourceName;
+        }
+
+        // Feet per metre — the SDK's own constant, matching
+        // GameLevelDimensions.GetDimensionsInMeters' 0.3048 the other way
+        // round. FEET is the wire unit for this endpoint (the server's
+        // attractionSizes.normalizeDimensions takes widthFt/lengthFt), so a
+        // prop measured in metres converts HERE rather than teaching the
+        // endpoint a second unit — one unit on the wire, one place to be
+        // wrong.
+        private const float FeetPerMeter = 1f / 0.3048f;
+
+        // Every placeable with a readable footprint: LevelTemplate roots
+        // (attractions and legacy levels) plus PropTemplate roots. A prefab
+        // carrying BOTH is a LevelTemplate first — PropTemplate suppresses
+        // itself under a template parent anyway, and the address namespace
+        // that the catalog keys on is /Levels/.
+        private static List<DimensionUploadRoot> CollectDimensionRoots(string idForUpload)
+        {
+            List<DimensionUploadRoot> list = new List<DimensionUploadRoot>();
+            string contentRoot = "Assets/Content/" + idForUpload;
+            if (!AssetDatabase.IsValidFolder(contentRoot)) return list;
+
+            string[] guids = AssetDatabase.FindAssets("t:Prefab", new[] { contentRoot });
+            foreach (string guid in guids)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                if (string.IsNullOrEmpty(path)) continue;
+                if (path.IndexOf("/ThirdPartyLocal/", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+
+                GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                if (prefab == null) continue;
+
+                float widthFt;
+                float lengthFt;
+                bool isProp;
+                string walls;
+                float wallHeightFt = 0f;
+
+                LevelTemplate level = prefab.GetComponent<LevelTemplate>();
+                if (level != null)
+                {
+                    Vector2 feet = level.DimensionsInFeet;
+                    if (!(feet.x > 0f) || !(feet.y > 0f)) continue; // unset custom size etc.
+                    widthFt = feet.x;
+                    lengthFt = feet.y;
+                    isProp = false;
+                    walls = level.WallsWireValue;
+                    if (!string.IsNullOrEmpty(walls)) wallHeightFt = level.GetWallHeightMeters() * FeetPerMeter;
+                }
+                else
+                {
+                    PropTemplate prop = prefab.GetComponent<PropTemplate>();
+                    if (prop == null) continue;
+
+                    // Always positive — FootprintMeters sanitizes to the 1 m
+                    // fallback rather than returning something unusable, so a
+                    // prop is never silently dropped from the batch. A prop
+                    // missing from the catalog is indistinguishable from one
+                    // whose developer has not re-uploaded yet, and the map
+                    // would draw both at the fallback size regardless; sending
+                    // the row makes the state legible in the response summary.
+                    Vector2 meters = prop.FootprintMeters;
+                    widthFt = meters.x * FeetPerMeter;
+                    lengthFt = meters.y * FeetPerMeter;
+                    isProp = true;
+                    walls = prop.PublishedWallSideToken;
+                    if (!string.IsNullOrEmpty(walls)) wallHeightFt = prop.GetWallHeightMeters() * FeetPerMeter;
+                }
+
+                list.Add(new DimensionUploadRoot
+                {
+                    name = Path.GetFileNameWithoutExtension(path),
+                    resourceName = ResourceNameForAssetPath(path),
+                    widthFt = widthFt,
+                    wallHeightFt = wallHeightFt,
+                    lengthFt = lengthFt,
+                    isProp = isProp,
+                    walls = walls,
+                });
+            }
+            return list;
+        }
+
+        // interactive: true = Troubleshooting buttons (dialogs + summary).
+        // false = silent post-upload push, mirroring the previews auto-push —
+        // must run AFTER the commit because the endpoint is attach-only
+        // against rows the server's commit-time catalog sync creates.
+        private static IEnumerator UploadAttractionDimensionsRoutine(string idForUpload, bool interactive = true)
+        {
+            string auth = AuthAPI.GetUserAuth();
+            if (string.IsNullOrEmpty(auth))
+            {
+                if (interactive) EditorUtility.DisplayDialog("Not signed in", "Sign in to DreamPark before uploading dimensions.", "OK");
+                else Debug.LogWarning("[Dimensions] auto-push skipped: not signed in.");
+                yield break;
+            }
+
+            List<DimensionUploadRoot> roots = CollectDimensionRoots(idForUpload);
+            if (roots.Count == 0)
+            {
+                if (interactive)
+                    EditorUtility.DisplayDialog("Nothing to measure", "No attractions or props with a footprint were found under Assets/Content/" + idForUpload + ".", "OK");
+                else
+                    Debug.Log("[Dimensions] auto-push: nothing to send for " + idForUpload + ".");
+                yield break;
+            }
+
+            // ONE batched request — dims are tiny, unlike preview PNGs.
+            JSONObject payload = new JSONObject(JSONObject.Type.Object);
+            JSONObject arr = new JSONObject(JSONObject.Type.Array);
+            foreach (DimensionUploadRoot r in roots)
+            {
+                JSONObject row = new JSONObject(JSONObject.Type.Object);
+                row.AddField("resourceName", r.resourceName);
+                row.AddField("widthFt", r.widthFt);
+                row.AddField("lengthFt", r.lengthFt);
+                row.AddField("walls", r.walls);
+                // Omitted (not zero) when there's no wall to measure, so the
+                // server's own 10ft default stays in control — see the field's
+                // own comment on DimensionUploadRoot.
+                if (r.wallHeightFt > 0f) row.AddField("wallHeightFt", r.wallHeightFt);
+                arr.Add(row);
+                // The size-reference ladder bottoms out at a 4 x 4 ft phone booth,
+                // so EVERY prop would tag "fits a Phone Booth" — a line that reads
+                // like a measurement and carries no information. Props log their
+                // metres instead, which is the unit they were authored in.
+                if (r.isProp)
+                {
+                    Debug.Log("[Dimensions] " + r.name + " (prop): "
+                        + (r.widthFt / FeetPerMeter).ToString("0.##") + " × "
+                        + (r.lengthFt / FeetPerMeter).ToString("0.##") + " m");
+                }
+                else
+                {
+                    var reference = AttractionSizeReference.Compute(r.widthFt, r.lengthFt);
+                    Debug.Log("[Dimensions] " + r.name + ": " + r.widthFt.ToString("0.#") + " × " + r.lengthFt.ToString("0.#")
+                        + " ft" + (reference != null ? " (fits a " + reference.Value.label + ")" : ""));
+                }
+            }
+            payload.AddField("attractions", arr);
+
+            bool done = false, success = false;
+            string err = null;
+            JSONObject result = null;
+            DreamParkAPI.POST("/api/content/" + Uri.EscapeDataString(idForUpload) + "/attractions/dimensions", auth, payload, (s, resp) =>
+            {
+                success = s && resp != null && resp.statusCode == 200;
+                result = resp != null ? resp.json : null;
+                if (!success) err = (resp != null && !string.IsNullOrEmpty(resp.error)) ? resp.error : "upload failed";
+                done = true;
+            });
+            while (!done) yield return null;
+
+            if (success)
+            {
+                int updated = result != null && result.GetField("updated") != null ? result.GetField("updated").intValue : roots.Count;
+                int skipped = result != null && result.GetField("skipped") != null ? result.GetField("skipped").intValue : 0;
+                // Non-zero only if the SDK and server disagree about the wall
+                // token vocabulary — the one failure mode of a two-vocabulary
+                // field, and otherwise silent everywhere (the row still
+                // uploads, just with the offending side quietly gone). Surfaced
+                // rather than logged-only so it's not missed in the common
+                // (interactive) path.
+                int droppedWallSides = result != null && result.GetField("droppedWallSides") != null ? result.GetField("droppedWallSides").intValue : 0;
+                string summary = updated + " footprint" + (updated == 1 ? "" : "s") + " updated" +
+                    (skipped > 0 ? ", " + skipped + " not in the catalog yet (upload a build first)" : "") +
+                    (droppedWallSides > 0 ? ", " + droppedWallSides + " wall side" + (droppedWallSides == 1 ? "" : "s") + " rejected by the server (vocabulary mismatch — check for an SDK/backend version skew)" : "") + ".";
+                if (interactive) EditorUtility.DisplayDialog("Dimensions uploaded", summary, "OK");
+                else Debug.Log("[Dimensions] auto-push: " + summary);
+                if (droppedWallSides > 0)
+                    Debug.LogWarning("[Dimensions] " + droppedWallSides + " wall side(s) were rejected by the server — the SDK and backend disagree on the wall token vocabulary.");
+            }
+            else
+            {
+                Debug.LogWarning("[Dimensions] upload failed for " + idForUpload + ": " + err);
+                if (interactive) EditorUtility.DisplayDialog("Dimensions upload failed", err, "OK");
+            }
+        }
+
+        // DreamPark → Troubleshooting: push dimensions for EVERY content
+        // folder under Assets/Content — the quick backfill path for parks
+        // published before dimensions existed. (The panel's Troubleshooting
+        // section has the same action scoped to the selected content.)
+        [MenuItem("DreamPark/Troubleshooting/Update Attraction Dimensions", false, 208)]
+        private static void UpdateAttractionDimensionsMenu()
+        {
+            string contentRoot = "Assets/Content";
+            if (!AssetDatabase.IsValidFolder(contentRoot))
+            {
+                EditorUtility.DisplayDialog("No content", "No Assets/Content folder found.", "OK");
+                return;
+            }
+
+            List<string> contentIds = new List<string>();
+            foreach (string dir in Directory.GetDirectories(contentRoot))
+            {
+                string id = Path.GetFileName(dir);
+                if (!string.IsNullOrEmpty(id)) contentIds.Add(id);
+            }
+            if (contentIds.Count == 0)
+            {
+                EditorUtility.DisplayDialog("No content", "No content folders found under Assets/Content.", "OK");
+                return;
+            }
+
+            if (!EditorUtility.DisplayDialog(
+                "Update Attraction Dimensions",
+                "Upload authored attraction dimensions for: " + string.Join(", ", contentIds) + "?",
+                "Upload Dimensions", "Cancel"))
+                return;
+
+            EditorCoroutineUtility.StartCoroutineOwnerless(UploadDimensionsForContentsRoutine(contentIds));
+        }
+
+        private static IEnumerator UploadDimensionsForContentsRoutine(List<string> contentIds)
+        {
+            foreach (string id in contentIds)
+            {
+                yield return UploadAttractionDimensionsRoutine(id, interactive: contentIds.Count == 1);
+                if (contentIds.Count > 1) Debug.Log("[Dimensions] finished " + id);
+            }
+            if (contentIds.Count > 1)
+                EditorUtility.DisplayDialog("Dimensions uploaded", "Pushed attraction dimensions for " + contentIds.Count + " content folders. See Console for per-content results.", "OK");
+        }
+
+        private byte[] ReadPreviewBytes(string previewsFolder, string name)
+        {
+            string[] exts = { ".png", ".jpg", ".jpeg" };
+            foreach (string ext in exts)
+            {
+                string p = previewsFolder + "/" + name + ext;
+                if (File.Exists(p))
+                {
+                    try { return File.ReadAllBytes(p); } catch { }
+                }
+            }
+            return null;
+        }
+
+        // Entry point for the Test Channel upload button. Opens the
+        // title/release-notes/platforms dialog, then on confirm runs the
+        // full compile-and-upload pipeline:
+        //
+        //   1. Allocate a testBuildId via POST /api/test-content/create.
+        //      The ID has to exist BEFORE the addressables build runs so
+        //      the build can bake the test-channel URL pattern into the
+        //      catalog's RemoteLoadPath. Without that step, Unity's
+        //      Caching layer would key bundles against a stale production
+        //      URL and the editor would re-fetch every bundle on each
+        //      load instead of hitting the cache.
+        //   2. Run the same compile pipeline production uses — clear
+        //      ServerData, configure addressable settings, third-party
+        //      sync, group update, logo entry, namespace enforcement,
+        //      Unity package build — but ONLY for the editor targets the
+        //      user picked (Mac / Windows). iOS and Android are
+        //      intentionally skipped: test builds exist to preview in
+        //      dreampark-core's editor, which runs on Mac or Windows.
+        //   3. Upload everything in ServerData/ to the pre-allocated
+        //      test_build doc via ContentAPI.UploadTestBuildArtifacts
+        //      and commit with the final metadata + manifest.
+        //
+        // Wraps the whole sequence in the same isUploading guard the
+        // regular Compile & Upload flow uses, so the rest of the panel
+        // stays disabled while a test compile is in flight.
+        private void BeginTestBuildUpload()
+        {
+            if (string.IsNullOrEmpty(contentId))
+            {
+                EditorUtility.DisplayDialog("No content selected", "Select a content folder before uploading a test build.", "OK");
+                return;
+            }
+
+            // Step 0: fetch recent test builds first so the dialog can show
+            // a patch-base picker. Filter to this content's prior builds so
+            // a stale upload for a different park doesn't pollute the
+            // dropdown. The default selection in the dialog is the most
+            // recent surviving build for this content — patches against
+            // your own last test build is the dominant workflow and we
+            // want it to be one click.
+            DreamPark.API.ContentAPI.GetTestBuilds((listOk, listResp) =>
+            {
+                var candidates = new List<TestBuildUploadDialog.PatchBaseOption>();
+                if (listOk && listResp?.json != null)
+                {
+                    var buildsArr = listResp.json.GetField("builds");
+                    if (buildsArr != null && buildsArr.type == JSONObject.Type.Array && buildsArr.list != null)
+                    {
+                        foreach (var b in buildsArr.list)
+                        {
+                            if (b == null) continue;
+                            string id = b.GetField("testBuildId")?.stringValue;
+                            string buildTitle = b.GetField("title")?.stringValue ?? "";
+                            string buildContentName = b.GetField("contentName")?.stringValue ?? "";
+                            if (string.IsNullOrEmpty(id)) continue;
+                            // Only offer same-content builds as patch bases.
+                            // Patching a CarnivalPub bundle onto a Cauldron
+                            // base would be nonsensical (different bundle
+                            // sets, ~0% filename overlap), so we filter
+                            // upfront rather than surfacing useless options.
+                            if (!string.Equals(buildContentName, contentId, StringComparison.OrdinalIgnoreCase))
+                                continue;
+                            long createdAt = 0;
+                            var createdAtField = b.GetField("createdAt");
+                            if (createdAtField != null && createdAtField.type == JSONObject.Type.Number)
+                                createdAt = createdAtField.longValue;
+                            string when = createdAt > 0
+                                ? DateTimeOffset.FromUnixTimeMilliseconds(createdAt).LocalDateTime.ToString("MMM d h:mm tt")
+                                : "unknown time";
+                            string label = $"{buildTitle}  ·  {when}";
+                            candidates.Add(new TestBuildUploadDialog.PatchBaseOption(id, label));
+                        }
+                    }
+                }
+
+                ShowTestBuildDialog(candidates);
+            });
+        }
+
+        private void ShowTestBuildDialog(List<TestBuildUploadDialog.PatchBaseOption> candidates)
+        {
+            TestBuildUploadDialog.Show(contentId, candidates, (title, releaseNotes, _, doBuildOsx, doBuildWindows, parentTestBuildId, estimateOnly) =>
+            {
+                if (!doBuildOsx && !doBuildWindows)
+                {
+                    EditorUtility.DisplayDialog("No platforms selected",
+                        "Pick at least one editor target (Mac or Windows) before uploading a test build.",
+                        "OK");
+                    return;
+                }
+                if (estimateOnly && string.IsNullOrEmpty(parentTestBuildId))
+                {
+                    EditorUtility.DisplayDialog("No patch base",
+                        "Check Patch Size needs a patch base — pick one from the dropdown, or use Compile & Upload for a full upload.",
+                        "OK");
+                    return;
+                }
+                if (!SaveModifiedScenesBeforeCompile())
+                {
+                    EditorUtility.DisplayDialog("Cancelled", "Save all modified scenes before compiling a test build.", "OK");
+                    return;
+                }
+                SaveLogoSelection();
+
+                // Clear any prior estimate state before kicking off a new
+                // run. Important when the user did one estimate, decided
+                // not to upload, and is now running another estimate — we
+                // don't want the resumed-upload path referencing
+                // the old testBuildId.
+                ClearPendingTestBuildState();
+
+                isUploading = true;
+                uploadStatusTitle = estimateOnly ? "Estimating patch size..." : "Compiling test build...";
+                uploadStatusMessage = string.IsNullOrEmpty(parentTestBuildId)
+                    ? $"Allocating Test Channel ID for \"{title}\""
+                    : (estimateOnly
+                        ? $"Allocating Test Channel ID (estimate vs {parentTestBuildId}) for \"{title}\""
+                        : $"Allocating Test Channel ID (patch of {parentTestBuildId}) for \"{title}\"");
+                uploadStatusProgress = 0.02f;
+                uploadStatusIsError = false;
+                uploadCompleted = false;
+                uploadSucceeded = false;
+                Repaint();
+
+                // Step 1: allocate testBuildId first so the build can
+                // bake the test-channel URL into the catalog. parentTestBuildId
+                // is passed through so the backend marks this build as a
+                // patch of the chosen parent at create time (the commit step
+                // later uses that ref to authorize server-side copies).
+                DreamPark.API.ContentAPI.CreateTestBuild(title, releaseNotes, contentId, parentTestBuildId, (createOk, testBuildId, createResp) =>
+                {
+                    if (!createOk || string.IsNullOrEmpty(testBuildId))
+                    {
+                        FinishTestBuildUpload(success: false, testBuildId: null, title: title,
+                            errorMessage: createResp?.error ?? "Could not allocate test build ID");
+                        return;
+                    }
+
+                    // Step 2: run the compile pipeline with the test URL
+                    // baked in. Build any platforms the user picked; iOS
+                    // and Android are intentionally never on for test
+                    // builds. Returns true iff every requested target
+                    // compiled cleanly.
+                    bool buildOk = RunTestBuildCompile(testBuildId, doBuildOsx, doBuildWindows, (stepLabel, stepProgress) =>
+                    {
+                        uploadStatusTitle = "Compiling test build...";
+                        uploadStatusMessage = stepLabel;
+                        uploadStatusProgress = stepProgress;
+                        Repaint();
+                    });
+
+                    if (!buildOk)
+                    {
+                        FinishTestBuildUpload(success: false, testBuildId: testBuildId, title: title,
+                            errorMessage: "Test build compile failed — see Console for details. The allocated test build will auto-expire in 7 days.");
+                        return;
+                    }
+
+                    // Step 3: build the manifest summary from what we
+                    // just compiled (so per-platform size shows up in
+                    // dreampark-core's Test Channel table) and upload.
+                    JSONObject testManifestSummary = null;
+                    try
+                    {
+                        // Match GetEnabledPlatformsForManifest — Unity is
+                        // always included so the Content Manager's
+                        // Supported Platforms table renders the
+                        // unitypackage size alongside the bundle
+                        // platforms. Without Unity here, that row shows
+                        // "—" even though the .unitypackage is in the
+                        // upload (because BuildUnityPackage writes to
+                        // ServerData/Unity/ and the request harvester
+                        // picks it up regardless of this list).
+                        var platformsForManifest = new List<string>();
+                        if (doBuildOsx) platformsForManifest.Add("StandaloneOSX");
+                        if (doBuildWindows) platformsForManifest.Add("StandaloneWindows");
+                        platformsForManifest.Add("Unity");
+                        if (platformsForManifest.Count > 0)
+                        {
+                            var manifest = BuildManifestStore.BuildFromServerData(contentId, 1, platformsForManifest);
+                            testManifestSummary = BuildManifestStore.BuildCommitSummary(manifest, diff: null);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogWarning($"[TestBuild] Could not build manifest summary: {ex.Message}");
+                        testManifestSummary = null;
+                    }
+
+                    uploadStatusTitle = "Uploading test build...";
+                    uploadStatusMessage = $"Pushing bundles to Test Channel ({title})";
+                    uploadStatusProgress = 0.85f;
+                    Repaint();
+
+                    // Test builds no longer carry a logo Addressables key:
+                    // the logo isn't bundled (July 2026), so core reads
+                    // content.logoImageUrl from the backend instead. Null
+                    // here means "no bundled logo", which is now always true.
+                    string testLogoAddress = null;
+
+                    if (estimateOnly)
+                    {
+                        // Estimate path — run the same diff the upload
+                        // path would, but stop before pushing any bytes.
+                        // Stash all the info we need so ResumePendingTestBuildUpload
+                        // can finish the job later if the user clicks the
+                        // primary upload button with unchanged settings.
+                        pendingTestBuildId = testBuildId;
+                        pendingTestBuildTitle = title;
+                        pendingTestBuildNotes = releaseNotes;
+                        pendingTestBuildContentId = contentId;
+                        pendingTestBuildLogoAddress = testLogoAddress;
+                        pendingTestBuildParentId = parentTestBuildId;
+                        pendingTestBuildManifestSummary = testManifestSummary;
+                        pendingTestBuildOsx = doBuildOsx;
+                        pendingTestBuildWindows = doBuildWindows;
+
+                        uploadStatusTitle = "Estimating patch size...";
+                        uploadStatusMessage = $"Diffing local bundles against parent {parentTestBuildId}";
+                        uploadStatusProgress = 0.92f;
+                        Repaint();
+
+                        DreamPark.API.ContentAPI.ComputePatchPlan(parentTestBuildId, (planOk, stats, planErr) =>
+                        {
+                            isUploading = false;
+                            uploadStatusProgress = -1f;
+                            if (!planOk || stats == null)
+                            {
+                                ClearPendingTestBuildState();
+                                FinishTestBuildUpload(success: false, testBuildId: testBuildId, title: title,
+                                    errorMessage: planErr ?? "Could not compute patch plan");
+                                return;
+                            }
+                            uploadStatusTitle = "Patch estimate ready";
+                            uploadStatusMessage =
+                                $"{stats.newFiles} new bundle(s), {stats.inheritedFiles} inherited  ·  " +
+                                $"Bundle patch size: {BuildManifestStore.FormatBytes(stats.patchSizeBytes)} out of {BuildManifestStore.FormatBytes(stats.totalSizeBytes)} total  ·  " +
+                                $"click \"Compile & Upload\" with the same settings to commit without rebuilding.";
+                            uploadStatusIsError = false;
+                            uploadCompleted = false;
+                            // Stay in the Upload Test Build dialog. The
+                            // checked-patch resume path now lives on that
+                            // dialog's main "Compile & Upload" button, so
+                            // we should not bounce the user into the
+                            // Try Reupload / launch popup.
+                            Repaint();
+                        });
+                        return;
+                    }
+
+                    DreamPark.API.ContentAPI.UploadTestBuildArtifacts(testBuildId, title, releaseNotes, contentId, testLogoAddress, parentTestBuildId, testManifestSummary,
+                        (uploadOk, uploadedTestBuildId, uploadResp) =>
+                        {
+                            FinishTestBuildUpload(uploadOk, uploadedTestBuildId, title,
+                                uploadOk ? null : (uploadResp?.error ?? "Unknown error"));
+                        });
+                });
+            });
+        }
+
+        // Discards the cached estimate state. Called when starting a fresh
+        // estimate, when the resumed upload actually fires, or when the user
+        // explicitly cancels.
+        private void ClearPendingTestBuildState()
+        {
+            pendingTestBuildId = null;
+            pendingTestBuildTitle = null;
+            pendingTestBuildNotes = null;
+            pendingTestBuildContentId = null;
+            pendingTestBuildLogoAddress = null;
+            pendingTestBuildParentId = null;
+            pendingTestBuildManifestSummary = null;
+            pendingTestBuildOsx = false;
+            pendingTestBuildWindows = false;
+        }
+
+        private void ClearPendingProductionEstimateState()
+        {
+            pendingProductionEstimateOnly = false;
+            pendingProductionContentId = null;
+            pendingProductionMode = UploadMode.Patch;
+            pendingProductionBuildOsx = false;
+            pendingProductionBuildWindows = false;
+            pendingProductionVersionNumber = 0;
+            pendingProductionPatchingEnabled = false;
+            pendingProductionCurrentManifest = null;
+            pendingProductionSkipSet = null;
+            pendingProductionManifestSummary = null;
+        }
+
+        // Exposed to ContentUploadFlowPopup — true iff there's a built-but-
+        // unuploaded test build sitting in ServerData/, with the testBuildId
+        // already allocated server-side, waiting on the user to commit.
+        // The test-build UI uses this to decide whether a checked patch is
+        // waiting and can be reused by the primary upload button.
+        internal bool HasPendingTestBuildUpload => !string.IsNullOrEmpty(pendingTestBuildId);
+
+        // True when the current Upload Test Build dialog state still matches
+        // the already-built patch estimate sitting in ServerData/. In that
+        // case the primary upload button can safely reuse the checked patch
+        // instead of recompiling.
+        internal bool PendingTestBuildMatches(
+            string title,
+            string releaseNotes,
+            string contentName,
+            bool doBuildOsx,
+            bool doBuildWindows,
+            string parentTestBuildId)
+        {
+            if (!HasPendingTestBuildUpload) return false;
+            return string.Equals(pendingTestBuildTitle ?? "", title ?? "", StringComparison.Ordinal)
+                && string.Equals(pendingTestBuildNotes ?? "", releaseNotes ?? "", StringComparison.Ordinal)
+                && string.Equals(pendingTestBuildContentId ?? "", contentName ?? "", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(pendingTestBuildParentId ?? "", parentTestBuildId ?? "", StringComparison.Ordinal)
+                && pendingTestBuildOsx == doBuildOsx
+                && pendingTestBuildWindows == doBuildWindows;
+        }
+
+        // Cancels a pending estimate without uploading. The allocated
+        // testBuildId on the backend auto-expires after 7 days, and the
+        // bundles in ServerData/ stay on disk (no harm — they'll get
+        // overwritten by the next compile). Also clears the patch stats
+        // so the popup stops showing the estimate breakdown.
+        internal void DiscardPendingTestBuild()
+        {
+            ClearPendingTestBuildState();
+            uploadStatusTitle = "";
+            uploadStatusMessage = "Estimate discarded. Run Compile & Upload or Check Patch Size again when ready.";
+            uploadStatusProgress = -1f;
+            uploadStatusIsError = false;
+            uploadCompleted = false;
+            uploadSucceeded = false;
+            // Clearing CurrentPatchStats hides the patch breakdown in the
+            // popup; otherwise the user sees stale "0 of N uploaded" numbers.
+            DreamPark.API.ContentAPI.ClearCurrentPatchStats();
+            Repaint();
+        }
+
+        // Resumes a paused estimate: takes the bundles that the estimate
+        // step already wrote to ServerData/ (no recompile, that's the whole
+        // point) and pushes them through the standard test-build upload
+        // path using the testBuildId we allocated earlier. Triggered by the
+        // primary upload button. The user's only acceptable click path here
+        // is "I saw the estimate, I want to ship it as-is" —
+        // any change to title / notes / platforms / patch base requires
+        // re-running the estimate flow.
+        internal void ResumePendingTestBuildUpload()
+        {
+            if (!HasPendingTestBuildUpload)
+            {
+                EditorUtility.DisplayDialog("Nothing to upload",
+                    "No estimate is currently waiting. Run \"Check Patch Size\" first.",
+                    "OK");
+                return;
+            }
+
+            // This path bypasses BeginUploadFromPopup entirely — it goes straight to
+            // ContentAPI.UploadTestBuildArtifacts — and it has two callers
+            // (ContentUploadFlowPopup's Start button when an estimate is pending, and
+            // TestBuildUploadDialog). Without this, running an estimate and then
+            // pressing Start would skip every pre-upload check. The estimate compiled
+            // the same assets, so there is nothing different to validate.
+            if (!preUploadChecksCleared)
+            {
+                bool passed = PreUploadChecks.PreUploadChecksGate.Passes(
+                    this, contentId,
+                    onCleared: () =>
+                    {
+                        preUploadChecksCleared = true;
+                        EditorApplication.delayCall += () =>
+                        {
+                            if (this == null) return;
+                            try { ResumePendingTestBuildUpload(); }
+                            finally { preUploadChecksCleared = false; }
+                        };
+                    },
+                    // This path never calls SaveModifiedScenesBeforeCompile, so the
+                    // scene-override check must not assume disk is current.
+                    scenesAreSaved: false);
+                if (!passed) return;
+            }
+            preUploadChecksCleared = false;
+
+            // Snapshot the pending values into locals before we kick off
+            // the upload — once isUploading is true the user might cancel
+            // or another flow might overwrite pendingTestBuildId.
+            string testBuildId = pendingTestBuildId;
+            string title = pendingTestBuildTitle;
+            string releaseNotes = pendingTestBuildNotes;
+            string pendingContentId = pendingTestBuildContentId;
+            string logoAddress = pendingTestBuildLogoAddress;
+            string parentId = pendingTestBuildParentId;
+            JSONObject manifestSummary = pendingTestBuildManifestSummary;
+            ClearPendingTestBuildState();
+
+            isUploading = true;
+            uploadStatusTitle = "Uploading test build...";
+            uploadStatusMessage = $"Pushing bundles to Test Channel ({title})";
+            uploadStatusProgress = 0.85f;
+            uploadStatusIsError = false;
+            uploadCompleted = false;
+            uploadSucceeded = false;
+            Repaint();
+
+            DreamPark.API.ContentAPI.UploadTestBuildArtifacts(
+                testBuildId, title, releaseNotes, pendingContentId, logoAddress, parentId, manifestSummary,
+                (uploadOk, uploadedTestBuildId, uploadResp) =>
+                {
+                    FinishTestBuildUpload(uploadOk, uploadedTestBuildId, title,
+                        uploadOk ? null : (uploadResp?.error ?? "Unknown error"));
+                });
+        }
+
+        internal void ResumePendingProductionUpload()
+        {
+            if (!HasPendingProductionEstimate)
+            {
+                EditorUtility.DisplayDialog("Nothing to upload",
+                    "No production patch estimate is currently waiting. Run \"Check Patch Size\" first.",
+                    "OK");
+                return;
+            }
+
+            string estimateContentId = pendingProductionContentId;
+            bool patchingEnabledForEstimate = pendingProductionPatchingEnabled;
+            int versionNumber = pendingProductionVersionNumber;
+            var currentManifest = pendingProductionCurrentManifest;
+            var skipSet = pendingProductionSkipSet != null
+                ? new HashSet<string>(pendingProductionSkipSet, StringComparer.Ordinal)
+                : null;
+            var manifestSummary = pendingProductionManifestSummary;
+
+            ClearPendingProductionEstimateState();
+
+            isUploading = true;
+            uploadCompleted = false;
+            uploadSucceeded = false;
+            uploadStatusIsError = false;
+            uploadStatusProgress = 1f;
+            SetUploadStatus(
+                "Uploading release",
+                "Using the checked patch estimate and existing bundles in ServerData. No rebuild needed.",
+                1f);
+
+            StartPreparedProductionUpload(
+                estimateContentId,
+                releaseNotes,
+                versionNumber,
+                patchingEnabledForEstimate,
+                currentManifest,
+                skipSet,
+                manifestSummary,
+                preUploadedFiles: null);
+        }
+
+        // Common landing pad for both the create-failed and
+        // upload-finished branches — keeps the panel's progress/spinner
+        // state consistent regardless of which step bailed out, and
+        // always clears the EditorUtility progress bar (which the
+        // compile pipeline may have shown via reportStep).
+        private void FinishTestBuildUpload(bool success, string testBuildId, string title, string errorMessage)
+        {
+            EditorUtility.ClearProgressBar();
+            isUploading = false;
+            uploadCompleted = true;
+            uploadSucceeded = success;
+            uploadStatusProgress = success ? 1f : -1f;
+            uploadStatusIsError = !success;
+            if (success)
+            {
+                uploadStatusTitle = "Test build uploaded";
+                uploadStatusMessage = string.IsNullOrEmpty(testBuildId)
+                    ? $"Pushed to Test Channel as \"{title}\". Auto-expires in 7 days."
+                    : $"Pushed to Test Channel as \"{title}\" ({testBuildId}). Auto-expires in 7 days.";
+            }
+            else
+            {
+                uploadStatusTitle = "Test build failed";
+                uploadStatusMessage = errorMessage ?? "Unknown error";
+            }
+            Repaint();
+        }
+
+        // Runs the compile half of a Compile & Upload, scoped to editor
+        // targets only and with the catalog's RemoteLoadPath pointed at
+        // /api/test-content/addressables/{testBuildId} so the bundles
+        // baked into the catalog match the URLs dreampark-core's
+        // BuildEditorBundleUrl helper rewrites to. Returns true iff every
+        // selected target compiled.
+        //
+        // Deliberately a mirror of UploadContent's build steps (lines
+        // ~2710-2828 in the production path) rather than calling into
+        // that method directly:
+        //   • UploadContent is welded to the full Compile & Upload flow
+        //     (manifest diff → skipSet → commit metadata → schema sync
+        //     etc.) and reusing it would require threading a "test build"
+        //     flag through dozens of conditionals.
+        //   • Test builds don't need iOS / Android, don't need the
+        //     manifest diff or skipSet logic (every test push is a full
+        //     compile), and don't run through the version-approval
+        //     pipeline at all.
+        // Keeping this as a focused mirror means production stays
+        // untouched and test-channel behavior is easy to read in one
+        // place.
+        private bool RunTestBuildCompile(string testBuildId, bool doBuildOsx, bool doBuildWindows, Action<string, float> reportProgress)
+        {
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            string serverDataPath = Path.Combine(projectRoot, "ServerData");
+
+            // RemoteLoadPath baked into the catalog. Must match the URL
+            // dreampark-core/Assets/Editor/ContentManagerPanelWindow.cs's
+            // BuildEditorBundleUrl produces for test-addressables/ paths
+            // (see TestAddressablesStoragePrefix routing there) — when
+            // they match, Unity's Caching layer keys bundles against
+            // the same URL the editor download flow downloads them at,
+            // so test build loads hit the cache instead of redownloading.
+            string testTargetUrl = $"{DreamParkAPI.baseUrl}/api/test-content/addressables/{testBuildId}";
+
+            int numPlatforms = (doBuildOsx ? 1 : 0) + (doBuildWindows ? 1 : 0);
+            int currentStep = 0;
+            int totalSteps = 7 + numPlatforms;
+            Action<string> reportStep = (message) =>
+            {
+                currentStep++;
+                float stageProgress = Mathf.Clamp01((float)currentStep / Mathf.Max(1, totalSteps));
+                EditorUtility.DisplayProgressBar(
+                    "Compile Test Build",
+                    $"({currentStep}/{totalSteps}) {message}",
+                    stageProgress);
+                // Map the compile steps into the [0.05, 0.80] band of the
+                // panel-wide progress bar; upload fills the remaining
+                // [0.80, 1.00] band.
+                reportProgress?.Invoke(message, 0.05f + (stageProgress * 0.75f));
+            };
+
+            try
+            {
+                reportStep("Clearing previous build artifacts...");
+                if (Directory.Exists(serverDataPath))
+                {
+                    Directory.Delete(serverDataPath, true);
+                }
+                Caching.ClearCache();
+                Addressables.ClearResourceLocators();
+                AssetDatabase.Refresh();
+
+                reportStep("Configuring addressable settings...");
+                var settings = AddressableAssetSettingsDefaultObject.Settings;
+                settings.MonoScriptBundleNaming = MonoScriptBundleNaming.Custom;
+                settings.MonoScriptBundleCustomNaming = contentId + "_";
+                settings.OverridePlayerVersion = contentId;
+                // Pinned to Unity's default per the production comment
+                // about IL2CPP / Quest crashes when this is false.
+                settings.NonRecursiveBuilding = true;
+                EditorUtility.SetDirty(settings);
+                AssetDatabase.SaveAssets();
+
+                reportStep("Syncing third-party assets...");
+                try
+                {
+                    ThirdPartySyncTool.RunSyncForContent(contentId);
+                }
+                catch (Exception syncEx)
+                {
+                    Debug.LogWarning($"[TestBuild] Third-party sync skipped: {syncEx.Message}");
+                }
+                AssetDatabase.SaveAssets();
+                AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
+
+                reportStep("Updating addressable groups...");
+                ContentProcessor.ForceUpdateContent(contentId);
+                ContentProcessor.CleanupAddressableSettings();
+
+                reportStep("Updating logo entry...");
+                SyncLogoAddressableEntry();
+
+                reportStep("Enforcing content namespaces...");
+                ContentProcessor.EnforceContentNamespaces(contentId);
+
+                reportStep("Building scripts package...");
+                if (!ContentProcessor.BuildUnityPackage(contentId))
+                {
+                    Debug.LogError("[TestBuild] Unity package build failed");
+                    return false;
+                }
+
+                if (doBuildOsx)
+                {
+                    reportStep("Building StandaloneOSX...");
+                    if (!BuildForTarget(BuildTarget.StandaloneOSX, BuildTargetGroup.Standalone,
+                        $"{testTargetUrl}/StandaloneOSX", contentId))
+                    {
+                        Debug.LogError("[TestBuild] OSX build failed");
+                        return false;
+                    }
+                }
+                if (doBuildWindows)
+                {
+                    reportStep("Building StandaloneWindows...");
+                    if (!BuildForTarget(BuildTarget.StandaloneWindows, BuildTargetGroup.Standalone,
+                        $"{testTargetUrl}/StandaloneWindows", contentId))
+                    {
+                        Debug.LogError("[TestBuild] Windows build failed");
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[TestBuild] Compile failed: {ex}");
+                return false;
+            }
+            finally
+            {
+                EditorUtility.ClearProgressBar();
+            }
         }
 
         private static string FormatBytes(long bytes)
@@ -733,192 +2490,941 @@ namespace DreamPark {
             return $"{value:0.##} {units[unit]}";
         }
 
-        private void DrawBuildTargetSelection()
+        private struct EstimateBuildTargetInfo
         {
-            EditorGUILayout.LabelField("Build Targets", EditorStyles.boldLabel);
+            public BuildTarget target;
+            public BuildTargetGroup group;
+            public string platformName;
+            public string label;
+        }
 
-            bool changed = false;
-
-            bool newBuildAndroid = EditorGUILayout.ToggleLeft("Android", buildAndroid);
-            if (newBuildAndroid != buildAndroid) { buildAndroid = newBuildAndroid; changed = true; }
-
-            bool newBuildIos = EditorGUILayout.ToggleLeft("iOS", buildIos);
-            if (newBuildIos != buildIos) { buildIos = newBuildIos; changed = true; }
-
-            bool newBuildOsx = EditorGUILayout.ToggleLeft("StandaloneOSX", buildOsx);
-            if (newBuildOsx != buildOsx) { buildOsx = newBuildOsx; changed = true; }
-
-            bool newBuildWindows = EditorGUILayout.ToggleLeft("StandaloneWindows", buildWindows);
-            if (newBuildWindows != buildWindows) { buildWindows = newBuildWindows; changed = true; }
-
-            bool newCleanBeforeEachTarget = EditorGUILayout.ToggleLeft("Clean Addressables Before Each Target", cleanBeforeEachTarget);
-            if (newCleanBeforeEachTarget != cleanBeforeEachTarget) { cleanBeforeEachTarget = newCleanBeforeEachTarget; changed = true; }
-
-            if (!buildAndroid && !buildIos && !buildOsx && !buildWindows)
+        private bool TryGetSinglePlatformEstimateTarget(out EstimateBuildTargetInfo info)
+        {
+            bool Supports(BuildTarget target)
             {
-                EditorGUILayout.HelpBox("Select at least one target for Compile & Upload.", MessageType.Warning);
+                switch (target)
+                {
+                    case BuildTarget.Android: return buildAndroid;
+                    case BuildTarget.iOS: return buildIos;
+                    case BuildTarget.StandaloneOSX: return buildOsx;
+                    case BuildTarget.StandaloneWindows:
+                    case BuildTarget.StandaloneWindows64: return buildWindows;
+                    default: return false;
+                }
             }
 
-            if (changed)
+            EstimateBuildTargetInfo Make(BuildTarget target)
             {
+                switch (target)
+                {
+                    case BuildTarget.Android:
+                        return new EstimateBuildTargetInfo
+                        {
+                            target = BuildTarget.Android,
+                            group = BuildTargetGroup.Android,
+                            platformName = "Android",
+                            label = "Android"
+                        };
+                    case BuildTarget.iOS:
+                        return new EstimateBuildTargetInfo
+                        {
+                            target = BuildTarget.iOS,
+                            group = BuildTargetGroup.iOS,
+                            platformName = "iOS",
+                            label = "iOS"
+                        };
+                    case BuildTarget.StandaloneOSX:
+                        return new EstimateBuildTargetInfo
+                        {
+                            target = BuildTarget.StandaloneOSX,
+                            group = BuildTargetGroup.Standalone,
+                            platformName = "StandaloneOSX",
+                            label = "Editor (Mac)"
+                        };
+                    default:
+                        return new EstimateBuildTargetInfo
+                        {
+                            target = BuildTarget.StandaloneWindows,
+                            group = BuildTargetGroup.Standalone,
+                            platformName = "StandaloneWindows",
+                            label = "Editor (Windows)"
+                        };
+                }
+            }
+
+            var active = EditorUserBuildSettings.activeBuildTarget;
+            if (Supports(active))
+            {
+                info = Make(active);
+                return true;
+            }
+
+            BuildTarget[] fallbackOrder =
+            {
+                BuildTarget.StandaloneOSX,
+                BuildTarget.StandaloneWindows,
+                BuildTarget.Android,
+                BuildTarget.iOS
+            };
+
+            foreach (var candidate in fallbackOrder)
+            {
+                if (Supports(candidate))
+                {
+                    info = Make(candidate);
+                    return true;
+                }
+            }
+
+            info = default;
+            return false;
+        }
+
+        internal string ContentId => contentId;
+        internal string ContentName => contentName;
+        internal string ContentDescription => contentDescription;
+        internal bool IsUploading => isUploading;
+        internal bool UploadCompleted => uploadCompleted;
+        internal bool UploadSucceeded => uploadSucceeded;
+        internal bool UploadBuildMode => uploadBuildMode;
+        internal string UploadStatusTitle => uploadStatusTitle;
+        internal string UploadStatusMessage => uploadStatusMessage;
+        internal float UploadStatusProgress => uploadStatusProgress;
+        internal bool UploadStatusIsError => uploadStatusIsError;
+        internal int? LatestPublishedVersionNumber => latestPublishedVersionNumber;
+        internal Texture2D LogoTexture => logoTexture;
+
+        internal string ReleaseNotes
+        {
+            get => releaseNotes;
+            set => releaseNotes = value ?? "";
+        }
+
+        internal string GetBuildTargetSummary()
+        {
+            var targets = new List<string>();
+            targets.Add("Android");
+            targets.Add("iOS");
+            if (buildOsx) targets.Add("Editor (Mac)");
+            if (buildWindows) targets.Add("Editor (Windows)");
+            if (targets.Count == 0) return "No targets selected";
+            return string.Join(" · ", targets);
+        }
+
+        internal string GetUploadModeSummary(bool build)
+        {
+            if (build)
+            {
+                return "Fresh compile, bundle build, and upload";
+            }
+            return "Reuse current ServerData build artifacts and upload only";
+        }
+
+        internal string GetVersionSummary()
+        {
+            int current = latestPublishedVersionNumber ?? 0;
+            int next = current + 1;
+            return current <= 0 ? $"First release → v{next}" : $"v{current} → v{next}";
+        }
+
+        private static string GetVersionSummaryAfterUpload(int uploadedVersion)
+        {
+            return $"v{uploadedVersion}";
+        }
+
+        internal string GetPatchEstimateSummary()
+        {
+            bool patchingEnabled = IsPatchUploadEnabled();
+            if (patchCurrentSnapshot == null || patchCurrentSnapshot.TotalFileCount == 0)
+            {
+                return "No build artifacts yet. Compile & Upload will create the first bundle set.";
+            }
+
+            if (!patchingEnabled)
+            {
+                return $"Full upload: {patchCurrentSnapshot.TotalFileCount} files · {BuildManifestStore.FormatBytes(patchCurrentSnapshot.TotalBytes)}";
+            }
+
+            if (patchDiff == null)
+            {
+                return $"Build snapshot ready: {patchCurrentSnapshot.TotalFileCount} files · {BuildManifestStore.FormatBytes(patchCurrentSnapshot.TotalBytes)}";
+            }
+
+            string baselineLine;
+            if (patchBaseline == null)
+            {
+                baselineLine = "No baseline yet. The next upload will establish the first patch baseline.";
+            }
+            else
+            {
+                if (System.DateTime.TryParse(patchBaseline.buildTimestampUtc, out var ts))
+                {
+                    string baselineWhen = ts.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+                    baselineLine = $"Backend parent: v{patchBaseline.versionNumber} at {baselineWhen}.";
+                }
+                else
+                {
+                    baselineLine = $"Backend parent: v{patchBaseline.versionNumber}.";
+                }
+            }
+
+            long changed = patchDiff.TotalChangedBytes;
+            long total = patchDiff.TotalCurrentBytes;
+            int changedFiles = patchDiff.TotalChangedFileCount;
+            if (patchBaseline == null)
+            {
+                return $"{baselineLine}\nPending upload: {changedFiles} files · {BuildManifestStore.FormatBytes(changed)}";
+            }
+
+            double reduction = total > 0 ? (1.0 - (double)changed / total) * 100.0 : 0.0;
+            return $"{baselineLine}\nPending changes: {changedFiles} files · {BuildManifestStore.FormatBytes(changed)} of {BuildManifestStore.FormatBytes(total)} ({reduction:0.0}% smaller)";
+        }
+
+        internal bool HasCheckedProductionPatchEstimate => HasPendingProductionEstimate && patchDiff != null;
+
+        internal int GetCurrentChangedFileCount()
+        {
+            if (patchDiff?.platforms == null) return 0;
+            int count = 0;
+            foreach (var platform in patchDiff.platforms)
+                count += platform?.changedFiles?.Count ?? 0;
+            return count;
+        }
+
+        internal int GetCurrentUnchangedFileCount()
+        {
+            if (patchDiff?.platforms == null) return 0;
+            int count = 0;
+            foreach (var platform in patchDiff.platforms)
+                count += platform?.unchangedFiles?.Count ?? 0;
+            return count;
+        }
+
+        internal List<string> GetChangedFileBreakdownLines()
+        {
+            return BuildPatchEstimateFileBreakdownLines(changed: true);
+        }
+
+        internal List<string> GetUnchangedFileBreakdownLines()
+        {
+            return BuildPatchEstimateFileBreakdownLines(changed: false);
+        }
+
+        private List<string> BuildPatchEstimateFileBreakdownLines(bool changed)
+        {
+            var lines = new List<string>();
+            if (patchDiff?.platforms == null) return lines;
+
+            var sizeLookup = new Dictionary<string, long>(StringComparer.Ordinal);
+            if (patchCurrentSnapshot?.platforms != null)
+            {
+                foreach (var platform in patchCurrentSnapshot.platforms)
+                {
+                    if (platform?.files == null) continue;
+                    foreach (var file in platform.files)
+                    {
+                        if (file == null) continue;
+                        sizeLookup[$"{platform.platform}/{file.fileName}"] = file.sizeBytes;
+                    }
+                }
+            }
+
+            foreach (var platform in patchDiff.platforms)
+            {
+                if (platform == null) continue;
+                var files = changed ? platform.changedFiles : platform.unchangedFiles;
+                if (files == null) continue;
+
+                foreach (var fileName in files)
+                {
+                    string key = $"{platform.platform}/{fileName}";
+                    string sizeLabel = sizeLookup.TryGetValue(key, out long size)
+                        ? BuildManifestStore.FormatBytes(size)
+                        : "--";
+                    lines.Add($"{platform.platform} / {fileName}  ·  {sizeLabel}");
+                }
+            }
+
+            return lines;
+        }
+
+        internal List<ContentAPI.UploadProgressEntry> GetProgressEntries()
+        {
+            return ContentAPI.GetUploadProgressSnapshot();
+        }
+
+        internal bool BuildOsx
+        {
+            get => buildOsx;
+            set
+            {
+                if (buildOsx == value) return;
+                buildOsx = value;
                 SaveBuildTargetSelection();
                 RefreshPatchEstimate();
             }
         }
 
-        // ── Bundling strategy ────────────────────────────────────────────
-        // Lets the user pick how assets are partitioned into bundles. The
-        // toggle is persisted in EditorPrefs (see BundlingStrategyPrefs);
-        // ContentProcessor reads the current value when it (re)organizes
-        // addressable groups.
-        private void DrawBundlingStrategySection()
+        internal bool BuildWindows
         {
-            EditorGUILayout.LabelField("Bundling", EditorStyles.boldLabel);
-
-            var current = BundlingStrategyPrefs.Current;
-            var values = (BundlingStrategy[])System.Enum.GetValues(typeof(BundlingStrategy));
-            var labels = values.Select(v => BundlingStrategyPrefs.Label(v)).ToArray();
-            int currentIdx = System.Array.IndexOf(values, current);
-            if (currentIdx < 0) currentIdx = 0;
-
-            int newIdx = EditorGUILayout.Popup("Strategy", currentIdx, labels);
-            if (newIdx != currentIdx)
+            get => buildWindows;
+            set
             {
-                var picked = values[newIdx];
-                if (picked == BundlingStrategy.Smart)
-                {
-                    bool ok = EditorUtility.DisplayDialog(
-                        "Switch to Smart bundling?",
-                        "Smart (dependency-aware) bundling re-partitions addressable groups so " +
-                        "that single-asset edits invalidate single bundles instead of folder-" +
-                        "level bundles. The first build after switching will look like a full " +
-                        "re-upload because every asset moves to a new group.\n\n" +
-                        "This feature is experimental. You can switch back to Legacy at any time.",
-                        "Switch to Smart", "Cancel");
-                    if (!ok) return;
-                }
-                BundlingStrategyPrefs.Current = picked;
-                Debug.Log($"[ContentUploader] Bundling strategy → {picked}");
-            }
-
-            if (current == BundlingStrategy.Smart)
-            {
-                EditorGUILayout.HelpBox(
-                    "Smart bundling is experimental. Verify the next upload behaves correctly before relying on it.",
-                    MessageType.Info);
-            }
-        }
-
-        // ── Patch estimator ──────────────────────────────────────────────
-        // Compares the current ServerData/ output against the saved baseline
-        // (= what was on the server at the last successful upload) and shows
-        // how many bytes will actually need to ship. The same diff drives the
-        // upload-skip logic in ContentAPI.UploadContent so the estimate
-        // matches reality.
-        private void DrawPatchEstimateSection()
-        {
-            EditorGUILayout.LabelField("Patch Estimate", EditorStyles.boldLabel);
-
-            // Baseline summary
-            if (patchBaseline == null)
-            {
-                EditorGUILayout.HelpBox(
-                    "No baseline yet — the next upload will be a full upload. After that, " +
-                    "subsequent uploads will only ship bundles whose contents changed.",
-                    MessageType.None);
-            }
-            else
-            {
-                string baselineWhen = "—";
-                if (System.DateTime.TryParse(patchBaseline.buildTimestampUtc, out var ts))
-                    baselineWhen = ts.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
-                EditorGUILayout.LabelField(
-                    $"Last upload: v{patchBaseline.versionNumber} · {patchBaseline.TotalFileCount} files · " +
-                    $"{BuildManifestStore.FormatBytes(patchBaseline.TotalBytes)} · {baselineWhen}",
-                    EditorStyles.miniLabel);
-            }
-
-            // Diff summary
-            if (patchDiff == null || patchCurrentSnapshot == null
-                || patchCurrentSnapshot.TotalFileCount == 0)
-            {
-                EditorGUILayout.LabelField(
-                    "No build artifacts in ServerData/ yet — run Compile & Upload to populate.",
-                    EditorStyles.miniLabel);
-            }
-            else
-            {
-                long changed = patchDiff.TotalChangedBytes;
-                long total = patchDiff.TotalCurrentBytes;
-                int changedFiles = patchDiff.TotalChangedFileCount;
-                double reduction = total > 0 ? (1.0 - (double)changed / total) * 100.0 : 0.0;
-
-                if (patchBaseline == null)
-                {
-                    EditorGUILayout.LabelField(
-                        $"Pending: {changedFiles} files · {BuildManifestStore.FormatBytes(changed)} (full upload)",
-                        EditorStyles.label);
-                }
-                else
-                {
-                    EditorGUILayout.LabelField(
-                        $"Pending changes: {changedFiles} files · " +
-                        $"{BuildManifestStore.FormatBytes(changed)} of {BuildManifestStore.FormatBytes(total)} " +
-                        $"({reduction:0.0}% reduction)",
-                        EditorStyles.label);
-                }
-
-                // Per-platform breakdown (compact)
-                foreach (var p in patchDiff.platforms)
-                {
-                    string line = $"  {p.platform}: {BuildManifestStore.FormatBytes(p.changedBytes)} " +
-                                  $"({p.changedFiles.Count} of {p.changedFiles.Count + p.unchangedFiles.Count})";
-                    EditorGUILayout.LabelField(line, EditorStyles.miniLabel);
-                }
-            }
-
-            // ── Source-aware estimate ─────────────────────────────────────
-            // Reflects edits the watchdog has seen since the last upload —
-            // doesn't require a fresh build to update. Sits underneath the
-            // ServerData-based "Pending changes" line so the user can compare:
-            // "ServerData says 4.2 MB pending, but I've also touched files in
-            // 3 more groups — those would change on next build, ~12 MB more."
-            GUILayout.Space(4);
-            if (dirtyGroupsEstimate == null || dirtyGroupsEstimate.matchedGroups + dirtyGroupsEstimate.unmatchedGroupNames.Count == 0)
-            {
-                EditorGUILayout.LabelField(
-                    "Source changes since last upload: none detected.",
-                    EditorStyles.miniLabel);
-            }
-            else
-            {
-                int totalDirty = dirtyGroupsEstimate.matchedGroups + dirtyGroupsEstimate.unmatchedGroupNames.Count;
-                string sizeLabel = dirtyGroupsEstimate.isIncomplete
-                    ? $"≥ {BuildManifestStore.FormatBytes(dirtyGroupsEstimate.estimatedBytes)} (incomplete — see below)"
-                    : $"~{BuildManifestStore.FormatBytes(dirtyGroupsEstimate.estimatedBytes)}";
-                EditorGUILayout.LabelField(
-                    $"Source changes since last upload: {totalDirty} group(s) modified · {sizeLabel}",
-                    EditorStyles.label);
-                if (dirtyGroupsEstimate.isIncomplete)
-                {
-                    string unmatchedSample = string.Join(", ", dirtyGroupsEstimate.unmatchedGroupNames.Take(3));
-                    if (dirtyGroupsEstimate.unmatchedGroupNames.Count > 3)
-                        unmatchedSample += $" … (+{dirtyGroupsEstimate.unmatchedGroupNames.Count - 3} more)";
-                    EditorGUILayout.LabelField(
-                        $"  Some dirty groups have no match in the baseline (new groups, or Smart re-partitioned): {unmatchedSample}",
-                        EditorStyles.miniLabel);
-                }
-            }
-
-            if (GUILayout.Button("Refresh estimate", GUILayout.Height(22)))
-            {
+                if (buildWindows == value) return;
+                buildWindows = value;
+                SaveBuildTargetSelection();
                 RefreshPatchEstimate();
             }
         }
 
+        internal bool HasPendingProductionEstimate => pendingProductionCurrentManifest != null;
+
+        internal bool CanCheckProductionPatchSize(UploadMode mode, bool build, bool failedOnly)
+        {
+            if (!build) return false;
+            if (failedOnly) return false;
+            if (BundlingStrategyPrefs.Current != BundlingStrategy.Smart) return false;
+            if (mode == UploadMode.All) return false;
+
+            // Keep this gate tied to the actual patch parent we can diff
+            // against right now, not just the cached version number field.
+            // latestPublishedVersionNumber can lag briefly behind a fresh
+            // metadata fetch or a just-completed upload, while the backend
+            // snapshot/local fallback already has everything we need to run a
+            // real estimate.
+            return GetPreferredPatchBaseline(latestContentDirectorySnapshot) != null;
+        }
+
+        internal bool PendingProductionEstimateMatches(UploadMode mode, bool doBuildOsx, bool doBuildWindows)
+        {
+            if (!HasPendingProductionEstimate) return false;
+            return string.Equals(pendingProductionContentId ?? "", contentId ?? "", StringComparison.OrdinalIgnoreCase)
+                && pendingProductionMode == mode
+                && pendingProductionBuildOsx == doBuildOsx
+                && pendingProductionBuildWindows == doBuildWindows;
+        }
+
+        internal bool CleanBeforeEachTarget => cleanBeforeEachTarget;
+
+        internal bool BeginUploadFromPopup(bool build, UploadMode mode)
+        {
+            return BeginUploadFromPopup(build, mode, failedOnly: false);
+        }
+
+        // failedOnly = true comes from the "Upload Failed Bundles" choice on
+        // the Try Reupload dialog. It reroutes the upload through
+        // FailedBundleStore so only the bundles that failed last time get
+        // re-sent. The supplied UploadMode is ignored in that case — Failed
+        // Only is its own filter and stacks with neither Patch nor All.
+        internal bool BeginUploadFromPopup(bool build, UploadMode mode, bool failedOnly)
+        {
+            if (isUploading)
+            {
+                return false;
+            }
+
+            // Lua surface gate. Content ships OVER THE AIR, but the XLua wrappers it
+            // needs are AOT code compiled into the app — so a Unity type nobody
+            // registered cannot be fixed by publishing content again, it needs an app
+            // rebuild and a store release. The same call works fine here in the Editor,
+            // because Mono reflects where IL2CPP cannot.
+            //
+            // LuaSurfaceScanner has caught exactly this since it was written and was
+            // wired to nothing: not this upload, not the player build, not the docs. A
+            // creator who never opened DreamPark > Troubleshooting shipped blind. This
+            // is the trigger it was missing. Sandbox-denied types hard-stop; merely
+            // unregistered ones warn and let the human decide.
+            if (!LuaSurfaceGate.PassesPreUploadCheck())
+            {
+                return false;
+            }
+
+            // Gate at the entry point so a stale popup (e.g. someone took the
+            // Troubleshooting Legacy escape hatch while the popup was open)
+            // can't sneak through with a strategy-incompatible mode. Failed-Only
+            // overrides the mode entirely, so the Smart-requirement check
+            // doesn't apply to it.
+            if (!failedOnly
+                && UploadModePrefs.RequiresSmart(mode)
+                && BundlingStrategyPrefs.Current != BundlingStrategy.Smart)
+            {
+                EditorUtility.DisplayDialog(
+                    "Upload mode requires Smart bundling",
+                    $"{UploadModePrefs.ShortLabel(mode)} requires the Smart bundling strategy, " +
+                    "and this machine is on deprecated Legacy bundling. Turn Legacy off via " +
+                    "DreamPark \u25b8 Troubleshooting \u25b8 Use Legacy Bundling (deprecated), or pick " +
+                    "Upload All / Upload Patch.",
+                    "OK");
+                return false;
+            }
+
+            // Scene save moved UP from below, so it runs before the pre-upload checks
+            // rather than after. The scene-override check reads what is on disk; with
+            // the save happening afterwards it would report stale YAML, or skip.
+            //
+            // Consequence to know about: a user who then hits the pre-upload gate and
+            // cancels will have had their scenes saved anyway. That's the trade for
+            // checking the right bytes.
+            if (build && !SaveModifiedScenesBeforeCompile())
+            {
+                EditorUtility.DisplayDialog("Compile Cancelled", "Save all modified scenes before compiling.", "OK");
+                return false;
+            }
+
+            // Pre-upload checks: duplicate prefab names, directional lights, Meta
+            // occlusion, unapplied scene overrides, dependencies outside the content
+            // folder.
+            //
+            // This is INVISIBLE when nothing is wrong — no window, no dialog, no extra
+            // click. Only an actual finding interrupts. A gate that fires on every
+            // upload is a gate people learn to click through, and then the one that
+            // mattered gets clicked through too.
+            //
+            // Asynchronous, because it opens a real window rather than a
+            // DisplayDialog: EditorWindow.ShowUtility is non-modal, so it returns false
+            // here and re-enters through the continuation if the user chooses to
+            // proceed. Same shape as SDKUpdateChecker.EnsureUpToDateThen.
+            if (!preUploadChecksCleared)
+            {
+                bool passed = PreUploadChecks.PreUploadChecksGate.Passes(
+                    this, contentId,
+                    onCleared: () => ResumeUploadAfterPreUploadChecks(build, mode, failedOnly),
+                    scenesAreSaved: build);
+                if (!passed) return false;
+            }
+            preUploadChecksCleared = false;
+
+            buildAndroid = true;
+            buildIos = true;
+            SaveBuildTargetSelection();
+
+            SaveLogoSelection();
+            pendingUploadMode = mode;
+            pendingFailedOnly = failedOnly;
+            pendingProductionEstimateOnly = false;
+            ClearPendingProductionEstimateState();
+            ResetUploadPresentationState(build);
+            UploadContent(build);
+            return true;
+        }
+
+        // One-shot token. Set only for the single re-entry that follows the user
+        // pressing Continue in the Pre-Upload Checks window, and cleared as soon as
+        // the gate is passed, so it can never leave the gate permanently open.
+        private bool preUploadChecksCleared;
+
+        private void ResumeUploadAfterPreUploadChecks(bool build, UploadMode mode, bool failedOnly)
+        {
+            preUploadChecksCleared = true;
+
+            // delayCall gets us off the popup's OnGUI stack before re-entering the
+            // upload flow — the established idiom in this file.
+            EditorApplication.delayCall += () =>
+            {
+                // The panel can be closed while the checks window is open. Touching a
+                // destroyed EditorWindow throws MissingReferenceException and would
+                // start an upload with no UI attached to report it.
+                if (this == null) return;
+
+                try { BeginUploadFromPopup(build, mode, failedOnly); }
+                finally { preUploadChecksCleared = false; }
+            };
+        }
+
+        internal bool BeginPatchEstimateFromPopup(UploadMode mode)
+        {
+            if (isUploading)
+            {
+                return false;
+            }
+
+            if (!CanCheckProductionPatchSize(mode, build: true, failedOnly: false))
+            {
+                EditorUtility.DisplayDialog(
+                    "Check Patch Size unavailable",
+                    "Check Patch Size is only available for Smart production patch modes after the first published release.",
+                    "OK");
+                return false;
+            }
+
+            if (!SaveModifiedScenesBeforeCompile())
+            {
+                EditorUtility.DisplayDialog("Compile Cancelled", "Save all modified scenes before compiling.", "OK");
+                return false;
+            }
+
+            SaveLogoSelection();
+            pendingUploadMode = mode;
+            pendingFailedOnly = false;
+            ClearPendingProductionEstimateState();
+            pendingProductionEstimateOnly = true;
+            ResetUploadPresentationState(build: true);
+            uploadStatusTitle = "Estimating patch size...";
+            uploadStatusMessage = "Compiling the current platform and diffing it against the latest backend version.";
+            uploadStatusProgress = 0.02f;
+            UploadContent(build: true);
+            return true;
+        }
+
+        // Legacy single-arg entry point kept so older menu items / scripts
+        // that still call BeginUploadFromPopup(bool) keep compiling. Routes
+        // through the persisted UploadModePrefs choice.
+        internal bool BeginUploadFromPopup(bool build)
+        {
+            return BeginUploadFromPopup(build, UploadModePrefs.Current);
+        }
+
+        private void ResetUploadPresentationState(bool build)
+        {
+            uploadBuildMode = build;
+            uploadCompleted = false;
+            uploadSucceeded = false;
+            uploadStatusIsError = false;
+            uploadStatusProgress = 0f;
+            uploadStatusTitle = build ? "Preparing compile" : "Preparing upload";
+            uploadStatusMessage = build
+                ? "Checking content metadata, syncing schemas, and getting the build pipeline ready."
+                : "Checking content metadata and preparing the existing build artifacts for upload.";
+        }
+
+        // Called by ContentUploadFlowPopup.Show when the popup is being
+        // (re)opened. The previous run's completion flags are sticky on the
+        // panel — they persist until the next BeginUploadFromPopup resets
+        // them inside ResetUploadPresentationState — so without this nudge
+        // the popup's OnGUI early-return for UploadCompleted keeps drawing
+        // the completion view from the last upload even after the user
+        // closes and reopens it. Only clears state when nothing is in
+        // flight, so revisiting the popup mid-upload still shows live
+        // progress instead of jumping back to the prep view.
+        internal void ResetCompletionStateForNextRun()
+        {
+            if (isUploading) return;
+            if (!uploadCompleted) return;
+            uploadCompleted = false;
+            uploadSucceeded = false;
+            uploadStatusIsError = false;
+            uploadStatusProgress = 0f;
+            uploadStatusTitle = "";
+            uploadStatusMessage = "";
+            Repaint();
+        }
+
+        private void SetUploadStatus(string title, string message, float progress = -1f, bool isError = false)
+        {
+            uploadStatusTitle = title ?? "";
+            uploadStatusMessage = message ?? "";
+            uploadStatusProgress = progress;
+            uploadStatusIsError = isError;
+            Repaint();
+        }
+
+        private static JSONObject GetContentPayload(JSONObject contentDirectory)
+        {
+            if (contentDirectory == null) return null;
+            if (contentDirectory.HasField("content") && contentDirectory.GetField("content")?.type == JSONObject.Type.Object)
+                return contentDirectory.GetField("content");
+            return contentDirectory.type == JSONObject.Type.Object ? contentDirectory : null;
+        }
+
+        private static JSONObject GetLatestBackendVersionRecord(JSONObject contentDirectory)
+        {
+            var contentPayload = GetContentPayload(contentDirectory);
+            var versions = contentPayload?.GetField("versions");
+            if (versions == null || versions.type != JSONObject.Type.Array || versions.list == null || versions.list.Count == 0)
+                return null;
+
+            JSONObject latest = null;
+            int bestVersion = int.MinValue;
+            foreach (var versionNode in versions.list)
+            {
+                if (versionNode == null || versionNode.type != JSONObject.Type.Object) continue;
+                int candidate = versionNode.HasField("versionNumber") ? versionNode.GetField("versionNumber").intValue : 0;
+                if (latest == null || candidate >= bestVersion)
+                {
+                    latest = versionNode;
+                    bestVersion = candidate;
+                }
+            }
+
+            return latest;
+        }
+
+        // Cache for the patch baseline. CanCheckProductionPatchSize() calls this
+        // from OnGUI (every repaint frame), and the fetch is now a blocking
+        // network round-trip — so without caching the Editor freezes. Keyed by
+        // content + published version; re-fetched only when either changes. A
+        // failed/slow attempt is cached too (with a cooldown) so an unreachable
+        // or slow endpoint can't re-trigger a blocking fetch every frame.
+        private BuildManifest cachedPatchBaseline;
+        private string cachedPatchBaselineKey;
+        private double cachedPatchBaselineAttemptTime;
+        private const double PatchBaselineRetryCooldownSeconds = 30.0;
+
+        private BuildManifest GetPreferredPatchBaseline(JSONObject contentDirectory = null)
+        {
+            string key = $"{contentId ?? ""}@{(latestPublishedVersionNumber?.ToString() ?? "?")}";
+            bool keyMatches = string.Equals(key, cachedPatchBaselineKey, StringComparison.Ordinal);
+
+            // Hit for this content+version → return cached, no network.
+            if (keyMatches && cachedPatchBaseline != null)
+                return cachedPatchBaseline;
+
+            // Same key but the last attempt produced nothing (failed/empty):
+            // only retry after the cooldown so OnGUI can't hammer the network.
+            if (keyMatches && cachedPatchBaseline == null
+                && (EditorApplication.timeSinceStartup - cachedPatchBaselineAttemptTime) < PatchBaselineRetryCooldownSeconds)
+                return null;
+
+            cachedPatchBaselineKey = key;
+            cachedPatchBaselineAttemptTime = EditorApplication.timeSinceStartup;
+            cachedPatchBaseline = FetchBackendBaselineForUpload(contentDirectory);
+            return cachedPatchBaseline;
+        }
+
+        // Force the next GetPreferredPatchBaseline() call to re-fetch (e.g. after
+        // an upload completes or the user explicitly refreshes).
+        private void InvalidatePatchBaselineCache()
+        {
+            cachedPatchBaselineKey = null;
+            cachedPatchBaseline = null;
+        }
+
+        private static string BuildBundleManifestUrl(string contentId, int versionNumber, string platform)
+        {
+            string escapedContentId = UnityWebRequest.EscapeURL(contentId ?? "");
+            string escapedPlatform = UnityWebRequest.EscapeURL(platform ?? "");
+            // Developer surface: /api/content (session + content-owner gated),
+            // NOT /app/content (device, API-key gated). The uploader already
+            // authenticates the creator's session against /api/content for
+            // uploadUrl/commitUpload, so the baseline fetch belongs here too.
+            return $"{DreamParkAPI.baseUrl.TrimEnd('/')}/api/content/{escapedContentId}/bundle-manifest/{versionNumber}/{escapedPlatform}";
+        }
+
+        // Hard cap so a slow or unreachable endpoint can never freeze the Editor.
+        private const int BaselineRequestTimeoutSeconds = 10;
+
+        private static JSONObject GetJsonSync(string url, string authorizationHeader, out string error)
+        {
+            error = null;
+            using (var req = UnityWebRequest.Get(url))
+            {
+                if (!string.IsNullOrWhiteSpace(authorizationHeader))
+                    req.SetRequestHeader("Authorization", authorizationHeader);
+
+                req.timeout = BaselineRequestTimeoutSeconds;
+
+                var op = req.SendWebRequest();
+                // Backstop wall-clock deadline: the busy-wait must never spin
+                // forever on the main thread, and Sleep keeps it off the CPU.
+                double deadline = EditorApplication.timeSinceStartup + BaselineRequestTimeoutSeconds + 2;
+                while (!op.isDone
+                    && req.result != UnityWebRequest.Result.ConnectionError
+                    && EditorApplication.timeSinceStartup < deadline)
+                {
+                    System.Threading.Thread.Sleep(10);
+                }
+
+                if (!op.isDone)
+                {
+                    error = "Baseline request timed out";
+                    return null;
+                }
+
+                bool success = !(req.result == UnityWebRequest.Result.ConnectionError
+                    || req.result == UnityWebRequest.Result.ProtocolError);
+                if (!success)
+                {
+                    error = !string.IsNullOrWhiteSpace(req.downloadHandler?.text) ? req.downloadHandler.text : req.error;
+                    return null;
+                }
+
+                string raw = req.downloadHandler?.text;
+                if (string.IsNullOrWhiteSpace(raw))
+                {
+                    error = "Empty response body";
+                    return null;
+                }
+
+                try
+                {
+                    return new JSONObject(raw);
+                }
+                catch (Exception ex)
+                {
+                    error = $"Malformed JSON: {ex.Message}";
+                    return null;
+                }
+            }
+        }
+
+        private static long ExtractManifestPlatformBytes(JSONObject versionJson, string platform)
+        {
+            return versionJson?.GetField("manifest")
+                ?.GetField("fullContent")
+                ?.GetField("byPlatform")
+                ?.GetField(platform)
+                ?.GetField("bytes")
+                ?.longValue ?? -1L;
+        }
+
+        private BuildManifest FetchBackendBaselineForUpload(JSONObject contentDirectory = null)
+        {
+            if (string.IsNullOrEmpty(contentId))
+                return BuildManifestStore.LoadBaseline(contentId);
+
+            var latestVersion = GetLatestBackendVersionRecord(contentDirectory ?? latestContentDirectorySnapshot);
+            if (latestVersion == null)
+                return BuildManifestStore.LoadBaseline(contentId);
+
+            int versionNumber = latestVersion.HasField("versionNumber") ? latestVersion.GetField("versionNumber").intValue : 0;
+            if (versionNumber <= 0)
+                return BuildManifestStore.LoadBaseline(contentId);
+
+            var platformTargets = latestVersion.GetField("platformTargets")?.list?
+                .Select(node => node?.stringValue)
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList() ?? new List<string>();
+
+            if (platformTargets.Count == 0)
+                return BuildManifestStore.LoadBaseline(contentId);
+
+            // Use the session bearer, NOT GetAPIKey(): GetAPIKey() is core-only
+            // (#if DREAMPARKCORE) and returns "" in SDK/creator projects, which
+            // silently disabled the backend (md5-vs-server) baseline and fell back
+            // to the local manifest for every creator. GetUserAuth() is the
+            // SDK-correct method (session token from EditorPrefs) and also works in
+            // core. If the backend rejects it, the GetJsonSync failure path below
+            // still falls back to the local baseline — so this can't regress.
+            string authHeader = AuthAPI.GetUserAuth();
+            if (string.IsNullOrWhiteSpace(authHeader))
+            {
+                Debug.LogWarning("[ContentUploader] No session available for backend baseline fetch (log in via the uploader panel); falling back to local baseline.");
+                return BuildManifestStore.LoadBaseline(contentId);
+            }
+
+            var manifest = new BuildManifest
+            {
+                contentId = contentId,
+                versionNumber = versionNumber,
+                buildTimestampUtc =
+                    latestVersion.GetField("createdAt")?.stringValue
+                    ?? latestVersion.GetField("uploadedAt")?.stringValue
+                    ?? latestVersion.GetField("updatedAt")?.stringValue
+                    ?? string.Empty,
+                sdkVersion = latestVersion.GetField("sdkVersion")?.stringValue ?? string.Empty,
+            };
+
+            foreach (string platform in platformTargets)
+            {
+                if (string.Equals(platform, "Unity", StringComparison.OrdinalIgnoreCase))
+                {
+                    var unityPlatform = new BuildManifestPlatform { platform = "Unity" };
+                    long unityBytes = ExtractManifestPlatformBytes(latestVersion, "Unity");
+                    unityPlatform.files.Add(new BuildManifestFile
+                    {
+                        fileName = $"{contentId}.unitypackage",
+                        sizeBytes = unityBytes,
+                    });
+                    manifest.platforms.Add(unityPlatform);
+                    continue;
+                }
+
+                string url = BuildBundleManifestUrl(contentId, versionNumber, platform);
+                JSONObject responseJson = GetJsonSync(url, authHeader, out string error);
+                if (responseJson == null || responseJson.GetField("success")?.boolValue != true)
+                {
+                    string responseError = responseJson?.GetField("error")?.stringValue ?? "Unknown error";
+                    string baselineError = error ?? responseError;
+                    Debug.LogWarning($"[ContentUploader] Could not fetch backend baseline for {platform}: {baselineError}. Falling back to local baseline.");
+                    return BuildManifestStore.LoadBaseline(contentId);
+                }
+
+                var platformManifest = new BuildManifestPlatform { platform = platform };
+                var bundles = responseJson.GetField("bundles");
+                if (bundles?.type == JSONObject.Type.Array && bundles.list != null)
+                {
+                    foreach (var fileNode in bundles.list)
+                    {
+                        if (fileNode == null || fileNode.type != JSONObject.Type.Object) continue;
+                        string fileName = fileNode.GetField("name")?.stringValue;
+                        if (string.IsNullOrWhiteSpace(fileName)) continue;
+
+                        // The bundle-manifest endpoint returns each bundle's GCS md5
+                        // (hex) in "hash" — this is the server's authoritative bytes,
+                        // so carrying it into the baseline makes Diff a true
+                        // md5-vs-server comparison (catches same-name/different-bytes).
+                        string serverMd5 = fileNode.GetField("hash")?.stringValue;
+
+                        platformManifest.files.Add(new BuildManifestFile
+                        {
+                            fileName = fileName,
+                            sizeBytes = fileNode.GetField("size")?.longValue ?? -1L,
+                            md5 = string.IsNullOrEmpty(serverMd5) ? null : serverMd5.ToLowerInvariant(),
+                        });
+                    }
+                }
+
+                platformManifest.files.Sort((a, b) => string.CompareOrdinal(a.fileName, b.fileName));
+                manifest.platforms.Add(platformManifest);
+            }
+
+            return manifest.platforms.Count > 0 ? manifest : BuildManifestStore.LoadBaseline(contentId);
+        }
+
+        private void CompleteUploadStatus(bool success, string message)
+        {
+            uploadCompleted = true;
+            uploadSucceeded = success;
+            uploadStatusIsError = !success;
+            uploadStatusProgress = success ? 1f : uploadStatusProgress;
+            uploadStatusTitle = success ? "Release complete" : "Release interrupted";
+            uploadStatusMessage = message ?? (success ? "Upload complete." : "Upload failed.");
+            // A successful upload publishes a new version → the cached baseline is
+            // now stale. Drop it so the next estimate re-fetches against the new
+            // server state.
+            if (success) InvalidatePatchBaselineCache();
+            Repaint();
+        }
+
+        private void StartPreparedProductionUpload(
+            string uploadContentId,
+            string uploadReleaseNotes,
+            int versionNumber,
+            bool patchingEnabled,
+            BuildManifest currentManifest,
+            HashSet<string> skipSet,
+            JSONObject manifestSummary,
+            List<DreamPark.API.UploadedFileRecord> preUploadedFiles)
+        {
+            SetUploadStatus(
+                "Uploading release",
+                "Sending changed files to DreamPark. Live file progress will appear below.",
+                1f);
+
+            ContentAPI.UploadContent(uploadContentId, uploadReleaseNotes, lastSchemaVersion, skipSet, manifestSummary, preUploadedFiles, (success, apiResponse) =>
+            {
+                if (success)
+                {
+                    Debug.Log("✅ Content uploaded successfully");
+
+                    if (patchingEnabled && currentManifest != null)
+                    {
+                        try
+                        {
+                            BuildManifestStore.SaveBaseline(currentManifest);
+                            patchBaseline = currentManifest;
+                            patchDiff = BuildManifestStore.Diff(patchBaseline, patchCurrentSnapshot);
+                            Repaint();
+                        }
+                        catch (Exception saveEx)
+                        {
+                            Debug.LogWarning($"[ContentUploader] Failed to save baseline: {saveEx.Message}");
+                        }
+                    }
+
+                    try
+                    {
+                        DirtyGroupsStore.Clear(uploadContentId);
+                        dirtyGroupsEstimate = null;
+                    }
+                    catch (Exception dgEx)
+                    {
+                        Debug.LogWarning($"[ContentUploader] Failed to clear dirty groups: {dgEx.Message}");
+                    }
+
+                    latestPublishedVersionNumber = versionNumber;
+
+                    // Push attraction preview PNGs to the backend catalog —
+                    // identical to Troubleshooting → "Force Upload All
+                    // Previews" but silent. Must run AFTER the commit: the
+                    // preview endpoint is attach-only, and the attraction
+                    // rows it attaches to are created by the server's
+                    // commit-time catalog sync. Fire-and-forget; failures
+                    // log warnings and never affect the upload result.
+                    try
+                    {
+                        EditorCoroutineUtility.StartCoroutineOwnerless(
+                            ForceUploadAllPreviewsRoutine(uploadContentId, interactive: false));
+                    }
+                    catch (Exception pvEx)
+                    {
+                        Debug.LogWarning("[Previews] auto-push failed to start: " + pvEx.Message);
+                    }
+
+                    // Push authored attraction dimensions (feet) the same way —
+                    // silent, attach-only, after the commit-time catalog sync
+                    // has created the rows. Every upload keeps dimensions in
+                    // lockstep with the build; the backend derives each
+                    // attraction's size-reference tag from them.
+                    try
+                    {
+                        EditorCoroutineUtility.StartCoroutineOwnerless(
+                            UploadAttractionDimensionsRoutine(uploadContentId, interactive: false));
+                    }
+                    catch (Exception dimEx)
+                    {
+                        Debug.LogWarning("[Dimensions] auto-push failed to start: " + dimEx.Message);
+                    }
+
+                    CompleteUploadStatus(true, $"'{contentName}' uploaded successfully as {GetVersionSummaryAfterUpload(versionNumber)}.");
+
+                    // Bridge into the second half of the content creation
+                    // flow: the freshly-committed version just (re)synced this
+                    // content's attractions catalog server-side, so pop the
+                    // Developer Portal's Attractions page where every uploaded
+                    // attraction sits ready to be titled/described/priced.
+                    // Only fires on a real successful commit — never for the
+                    // zero-change short-circuit or Test Channel uploads.
+                    try
+                    {
+                        Application.OpenURL(DeveloperPortalMenuItem.AttractionsUrl(uploadContentId));
+                    }
+                    catch (Exception portalEx)
+                    {
+                        Debug.LogWarning("[ContentUploader] Could not open Developer Portal: " + portalEx.Message);
+                    }
+                }
+                else
+                {
+                    Debug.LogError($"❌ Content uploaded failed: {apiResponse.error}");
+                    CompleteUploadStatus(false, $"Upload failed: {apiResponse.error}");
+                    EditorUtility.DisplayDialog("Error", $"Upload failed: {apiResponse.error}", "OK");
+                }
+
+                pendingFailedOnly = false;
+                isUploading = false;
+            });
+        }
+
+        // ── Bundling strategy ────────────────────────────────────────────
+        // There is no picker here any more. Smart (dependency-aware) bundling
+        // is the default and the only strategy the shipping path expects; see
+        // BundlingStrategy.cs for why Legacy is deprecated and how the
+        // one-time migration moves existing machines across.
+        //
+        // All that survives is a notice for the rare machine still on Legacy
+        // — someone who took the Troubleshooting escape hatch, or whose
+        // migration hasn't run yet. Without it, Legacy is invisible from the
+        // panel while quietly forcing every upload to ship everything, which
+        // is exactly the confusion this change exists to end.
+        private void DrawLegacyBundlingNotice()
+        {
+            if (BundlingStrategyPrefs.Current != BundlingStrategy.Legacy) return;
+
+            EditorGUILayout.HelpBox(
+                "Legacy bundling is active (deprecated). Every upload from this machine is a full " +
+                "re-upload — the Upload Scope picker won't appear, and Patch / Code-only uploads are " +
+                "unavailable. Turn it off via DreamPark \u25b8 Troubleshooting \u25b8 Use Legacy " +
+                "Bundling (deprecated).",
+                MessageType.Warning);
+            GUILayout.Space(6);
+        }
+
         // Re-walks ServerData/ for the currently-enabled platforms and rebuilds
-        // the cached diff against the saved baseline. Cheap (just a directory
-        // listing + size lookup), so we can call it freely on lifecycle events.
+        // the cached diff against the latest backend version when available
+        // (falling back to the local cached baseline). Cheap once metadata is
+        // loaded, so we can call it freely on lifecycle events.
         private void RefreshPatchEstimate()
         {
             patchEstimateContentId = contentId;
@@ -934,18 +3440,27 @@ namespace DreamPark {
 
             try
             {
-                patchBaseline = BuildManifestStore.LoadBaseline(contentId);
                 var platforms = GetEnabledPlatformsForManifest();
                 patchCurrentSnapshot = BuildManifestStore.BuildFromServerData(contentId, /*versionNumber*/ 0, platforms);
-                patchDiff = BuildManifestStore.Diff(patchBaseline, patchCurrentSnapshot);
+                if (IsPatchUploadEnabled())
+                {
+                    patchBaseline = GetPreferredPatchBaseline(latestContentDirectorySnapshot);
+                    patchDiff = BuildManifestStore.Diff(patchBaseline, patchCurrentSnapshot);
 
-                // Source-aware estimate: read dirty-groups (maintained
-                // real-time by the watchdog) and match them against the
-                // baseline's bundle filenames for a quick "patch size" guess
-                // that reflects current source state, not the (possibly
-                // stale) ServerData/.
-                var dirtyGroups = DirtyGroupsStore.Load(contentId);
-                dirtyGroupsEstimate = DirtyGroupsEstimator.Estimate(patchBaseline, dirtyGroups);
+                    // Source-aware estimate: read dirty-groups (maintained
+                    // real-time by the watchdog) and match them against the
+                    // baseline's bundle filenames for a quick "patch size" guess
+                    // that reflects current source state, not the (possibly
+                    // stale) ServerData/.
+                    var dirtyGroups = DirtyGroupsStore.Load(contentId);
+                    dirtyGroupsEstimate = DirtyGroupsEstimator.Estimate(patchBaseline, dirtyGroups);
+                }
+                else
+                {
+                    patchBaseline = null;
+                    patchDiff = BuildManifestStore.Diff(null, patchCurrentSnapshot);
+                    dirtyGroupsEstimate = null;
+                }
             }
             catch (System.Exception e)
             {
@@ -956,6 +3471,48 @@ namespace DreamPark {
             }
 
             Repaint();
+        }
+
+        private static bool IsPatchUploadEnabled()
+        {
+            return BundlingStrategyPrefs.Current == BundlingStrategy.Smart;
+        }
+
+        private static JSONObject BuildUploaderMetadata(UploadMode effectiveMode)
+        {
+            var bundlingStrategy = BundlingStrategyPrefs.Current;
+
+            // patching reflects what THIS upload actually did — anything other
+            // than Upload All shipped a partial payload (Patch, CodeOnly).
+            // Previously we derived this from bundling strategy
+            // alone, which marked Upload-All-on-Smart-strategy releases as
+            // "patch" in the admin dashboard even though every bundle re-
+            // shipped. The bundling strategy is still recorded separately via
+            // `packer` / `bundlingStrategy`, so the "strategy was Smart but
+            // creator chose to re-upload everything" case is still
+            // recoverable from the metadata.
+            bool didPatch = effectiveMode != UploadMode.All;
+
+            var uploaderMetadata = new JSONObject(JSONObject.Type.Object);
+            uploaderMetadata.AddField("packer", bundlingStrategy == BundlingStrategy.Smart ? "smart" : "legacy");
+            uploaderMetadata.AddField("bundlingStrategy", bundlingStrategy.ToString().ToLowerInvariant());
+            uploaderMetadata.AddField("patching", didPatch ? "enabled" : "disabled");
+            uploaderMetadata.AddField("patchingEnabled", didPatch);
+            // The specific mode the creator picked for this upload. Lets the
+            // admin dashboard distinguish a full re-upload from a Patch /
+            // Code-only / Previews-only run instead of collapsing all three
+            // partial modes into one "patch" pill. The invariant lowercased
+            // enum name (`all` / `patch` / `codeonly` / `previewsonly`) is
+            // the stable key; uploadModeLabel is the human-friendly version
+            // that matches what the SDK's upload-mode picker shows.
+            uploaderMetadata.AddField("uploadMode", effectiveMode.ToString().ToLowerInvariant());
+            uploaderMetadata.AddField("uploadModeLabel", UploadModePrefs.ShortLabel(effectiveMode));
+            // SDK version this release was built with. The web admin dashboard
+            // surfaces this so support / ops can correlate creator issues with
+            // a specific SDK release, and the backend can flag releases built
+            // against EOL SDK versions for forced re-upload before they break.
+            uploaderMetadata.AddField("sdkVersion", SDKVersion.Current ?? "");
+            return uploaderMetadata;
         }
 
         // ── "What you're uploading" preview ──────────────────────────────
@@ -1080,8 +3637,10 @@ namespace DreamPark {
 
                 // The real deal: renders each Attraction/Prop prefab into a
                 // PNG file at Assets/Content/{contentId}/Previews/{name}.png.
-                // Logs progress to the console for individual prefabs.
-                ContentProcessor.GenerateAllLevelPreviews(contentId);
+                // Logs progress to the console for individual prefabs. This is
+                // the manual "Rebuild Previews" button, so force-regenerate —
+                // the upload path only fills in missing previews now.
+                ContentProcessor.GenerateAllLevelPreviews(contentId, forceRegenerate: true);
             }
             catch (Exception e)
             {
@@ -1144,6 +3703,18 @@ namespace DreamPark {
         // Gate for the Compile & Upload + Build & Inspect actions: a content
         // package is only meaningful if it ships at least one Attraction or
         // Prop. A bare PlayerRig isn't a complete deliverable on its own.
+        /// True when the selected content ID is one the SDK ships with, so no
+        /// creator may publish under it (see lib/reservedContentIds.js on the
+        /// backend, which refuses these outright).
+        ///
+        /// This gates ACTIONS, not the panel. Sample stays fully browsable on
+        /// purpose — it is the reference a new creator learns from — and only
+        /// the buttons that would push to the backend are turned off.
+        private bool UploadsBlocked
+        {
+            get { return ContentFolders.IsReserved(contentId); }
+        }
+
         private bool HasShippableContent()
         {
             for (int i = 0; i < contentRoots.Count; i++)
@@ -1169,9 +3740,10 @@ namespace DreamPark {
                 }
             }
 
-            string summary = contentRoots.Count == 0
+            string badgeSummary = badges.Count > 0 ? $"  ·  {badges.Count} badge(s)" : "";
+            string summary = (contentRoots.Count == 0 && badges.Count == 0)
                 ? "Park Assets (none)"
-                : $"Park Assets  ·  {attractionCount} attraction(s)  ·  {propCount} prop(s)  ·  {playerCount} player";
+                : $"Park Assets  ·  {attractionCount} attraction(s)  ·  {propCount} prop(s)  ·  {playerCount} player{badgeSummary}";
 
             // Manual rect layout so we can pin a small refresh-glyph button
             // to the top-right of the foldout header. EditorStyles.foldoutHeader
@@ -1219,19 +3791,30 @@ namespace DreamPark {
                     $"You haven't created any Attractions or Props yet. Add a prefab to Assets/Content/{contentId}/ " +
                     "with a LevelTemplate, AttractionTemplate, or PropTemplate component before uploading.",
                     MessageType.Warning);
-                return;
             }
-
-            if (!HasShippableContent())
+            else
             {
-                EditorGUILayout.HelpBox(
-                    "This content folder has no Attractions or Props. Uploading is disabled until you add at least one.",
-                    MessageType.Warning);
+                if (!HasShippableContent())
+                {
+                    EditorGUILayout.HelpBox(
+                        "This content folder has no Attractions or Props. Uploading is disabled until you add at least one.",
+                        MessageType.Warning);
+                }
+
+                DrawContentGroup("Attractions", ContentRootKind.Attraction, ref foldAttractions, ParkAssetsAttractionsPrefKey);
+                DrawContentGroup("Props",       ContentRootKind.Prop,       ref foldProps,       ParkAssetsPropsPrefKey);
+                DrawContentGroup("Player",      ContentRootKind.Player,     ref foldPlayer,      ParkAssetsPlayerPrefKey);
             }
 
-            DrawContentGroup("Attractions", ContentRootKind.Attraction, ref foldAttractions, ParkAssetsAttractionsPrefKey);
-            DrawContentGroup("Props",       ContentRootKind.Prop,       ref foldProps,       ParkAssetsPropsPrefKey);
-            DrawContentGroup("Player",      ContentRootKind.Player,     ref foldPlayer,      ParkAssetsPlayerPrefKey);
+            // Badges are data records, not prefabs, so they are not in
+            // contentRoots — and they must draw even when the package has no
+            // prefabs at all. Defining the badges before the attraction that
+            // awards them is a legitimate order to work in, and returning early
+            // above (which is what this section used to do) would have hidden
+            // the section from exactly the developer starting from scratch.
+            DrawBadgesGroup();
+
+            if (contentRoots.Count == 0) return;
 
             // Keep repainting until every root has its full AssetPreview
             // resolved. Relying on AssetPreview.IsLoadingAssetPreviews()
@@ -1296,6 +3879,324 @@ namespace DreamPark {
                 GUILayout.Space(CardSpacing);
             }
             EditorGUI.indentLevel--;
+        }
+
+        // ── Badges ──────────────────────────────────────────────────────
+        //
+        // Same chrome as the Attraction/Prop/Player groups — an EditorPrefs-
+        // backed foldout over a wrapping card grid — but backed by
+        // BadgeStore.Entry rather than by contentRoots, because a badge is a
+        // data record (id / title / description / icon), not a prefab. Trying to
+        // push it through ContentRootKind would have meant inventing a fake
+        // "root" with no asset behind it.
+        //
+        // The cards are WIDER than the prefab cards on purpose: a prefab card is
+        // a thumbnail plus a name, a badge card is three editable fields, and at
+        // the 110px prefab width the id field would be too narrow to read the id
+        // it is supposed to be preventing you from mistyping.
+        private const float BadgeCardWidth = 320f;
+        private const float BadgeCardHeight = 90f;
+        private const float BadgeIconSize = 64f;
+
+        private void RefreshBadges()
+        {
+            // Never lose a half-typed title to a background project change.
+            FlushBadgeDraft();
+
+            badgesContentId = contentId;
+            badgeAddRequested = false;
+            badgeRemoveIndex = -1;
+            badgesDirty = false;
+            badgeScan = null;
+
+            if (string.IsNullOrEmpty(contentId))
+            {
+                badges = new List<BadgeStore.Entry>();
+                return;
+            }
+
+            try
+            {
+                badgeScan = BadgeLuaScanner.Scan(contentId);
+                badges = BadgeStore.Merge(BadgeStore.Load(contentId), badgeScan.discoveries);
+            }
+            catch (Exception e)
+            {
+                // A scan failure must not cost the developer their saved draft —
+                // the draft is the part with hand-typed titles in it.
+                Debug.LogWarning("[Badges] Lua scan failed: " + e.Message);
+                badges = BadgeStore.Load(contentId);
+            }
+        }
+
+        private void ApplyQueuedBadgeMutations()
+        {
+            if (badgeAddRequested)
+            {
+                badgeAddRequested = false;
+                badges.Add(new BadgeStore.Entry());
+                badgesDirty = true;
+                Repaint();
+            }
+
+            if (badgeRemoveIndex >= 0)
+            {
+                if (badgeRemoveIndex < badges.Count) badges.RemoveAt(badgeRemoveIndex);
+                badgeRemoveIndex = -1;
+                badgesDirty = true;
+                Repaint();
+            }
+        }
+
+        // Writes .badges.json for whichever content the list currently belongs
+        // to — badgesContentId, NOT contentId. They differ for exactly one frame
+        // when the developer changes the dropdown, and saving to the new id there
+        // would copy the old package's badges into the new one.
+        private void FlushBadgeDraft()
+        {
+            if (!badgesDirty) return;
+            badgesDirty = false;
+            if (string.IsNullOrEmpty(badgesContentId)) return;
+            BadgeStore.Save(badgesContentId, badges);
+        }
+
+        private void DrawBadgesGroup()
+        {
+            GUILayout.Space(4);
+
+            bool newFold = EditorGUILayout.Foldout(foldBadges, $"Badges ({badges.Count})", true);
+            if (newFold != foldBadges)
+            {
+                foldBadges = newFold;
+                EditorPrefs.SetBool(ParkAssetsBadgesPrefKey, foldBadges);
+            }
+            if (!foldBadges) return;
+
+            EditorGUI.indentLevel++;
+
+            if (badges.Count == 0)
+            {
+                GUILayout.BeginHorizontal();
+                GUILayout.Space(EditorGUI.indentLevel * 12f);
+                EditorGUILayout.HelpBox(
+                    "No badges yet. Call dp.profile.awardBadge(\"some_id\") from your Lua and it appears here " +
+                    "automatically with the ID filled in — or press Add Badge to define one by hand.",
+                    MessageType.Info);
+                GUILayout.EndHorizontal();
+            }
+            else
+            {
+                float panelWidth = Mathf.Max(position.width - 24f, BadgeCardWidth);
+                int perRow = Mathf.Max(1, Mathf.FloorToInt((panelWidth + CardSpacing) / (BadgeCardWidth + CardSpacing)));
+
+                for (int i = 0; i < badges.Count; i += perRow)
+                {
+                    GUILayout.BeginHorizontal();
+                    GUILayout.Space(EditorGUI.indentLevel * 12f);
+                    for (int j = 0; j < perRow && i + j < badges.Count; j++)
+                    {
+                        DrawBadgeCard(badges[i + j], i + j);
+                        if (j < perRow - 1) GUILayout.Space(CardSpacing);
+                    }
+                    GUILayout.FlexibleSpace();
+                    GUILayout.EndHorizontal();
+                    GUILayout.Space(CardSpacing);
+                }
+            }
+
+            // What the scan could NOT work out. Reported rather than swallowed:
+            // a badge id built by concatenation or handed through a helper is
+            // invisible to a text scan, and a developer who sees nothing appear
+            // would reasonably conclude the feature is broken rather than that
+            // their id is out of reach.
+            if (badgeScan != null && badgeScan.unresolved.Count > 0)
+            {
+                GUILayout.BeginHorizontal();
+                GUILayout.Space(EditorGUI.indentLevel * 12f);
+                var names = badgeScan.unresolved
+                    .Take(4)
+                    .Select(u => $"{Path.GetFileName(u.scriptPath)}: {u.expression}")
+                    .ToArray();
+                EditorGUILayout.HelpBox(
+                    "Some badge calls name an ID this scan can't read (it isn't a literal or an @var), "
+                        + "so you'll need to add those by hand:\n  "
+                        + string.Join("\n  ", names)
+                        + (badgeScan.unresolved.Count > names.Length
+                            ? $"\n  ...and {badgeScan.unresolved.Count - names.Length} more"
+                            : ""),
+                    MessageType.Info);
+                GUILayout.EndHorizontal();
+            }
+
+            GUILayout.Space(2);
+            GUILayout.BeginHorizontal();
+            GUILayout.Space(EditorGUI.indentLevel * 12f);
+
+            if (GUILayout.Button(new GUIContent("Add Badge",
+                    "Define a badge that isn't referenced from Lua yet. You can type its ID."),
+                    GUILayout.Width(100), GUILayout.Height(22)))
+            {
+                badgeAddRequested = true;   // applied on the next Layout pass
+            }
+
+            if (GUILayout.Button(new GUIContent("Rescan Lua",
+                    "Re-read this content folder's .lua/.lua.txt files and prefabs for badge IDs."),
+                    GUILayout.Width(100), GUILayout.Height(22)))
+            {
+                RefreshBadges();
+            }
+
+            GUILayout.FlexibleSpace();
+
+            // The push is deliberately available WITHOUT a full Compile & Upload.
+            // Badge text is metadata on the backend, not bundle content, so
+            // making a developer pay a multi-minute build to fix a typo in a
+            // badge description would be the same mistake the logo re-upload
+            // button exists to undo.
+            using (new EditorGUI.DisabledScope(isPushingBadges || UploadsBlocked
+                                               || string.IsNullOrEmpty(contentId) || badges.Count == 0))
+            {
+                if (GUILayout.Button(new GUIContent(
+                        isPushingBadges ? "Pushing..." : "Push Badges to Portal",
+                        "Saves every badge above to your developer portal (POST /admin/content/:id/badges/save). "
+                            + "No build required."),
+                        GUILayout.Width(160), GUILayout.Height(22)))
+                {
+                    PushBadges(interactive: true);
+                }
+            }
+            GUILayout.EndHorizontal();
+
+            EditorGUI.indentLevel--;
+        }
+
+        private void DrawBadgeCard(BadgeStore.Entry entry, int index)
+        {
+            Rect card = GUILayoutUtility.GetRect(BadgeCardWidth, BadgeCardHeight,
+                GUILayout.Width(BadgeCardWidth), GUILayout.Height(BadgeCardHeight));
+
+            EditorGUI.DrawRect(card, new Color(0f, 0f, 0f, 0.18f));
+
+            // EditorGUI.* with an explicit Rect still offsets prefix labels by
+            // the ambient indent level, which would push these fields off the
+            // right edge of a card that is already exactly as wide as it needs
+            // to be. The grid rows do their own indenting with GUILayout.Space.
+            int prevIndent = EditorGUI.indentLevel;
+            EditorGUI.indentLevel = 0;
+            float prevLabelWidth = EditorGUIUtility.labelWidth;
+            EditorGUIUtility.labelWidth = 34f;
+
+            var iconRect = new Rect(card.x + 6f, card.y + 6f, BadgeIconSize, BadgeIconSize);
+            float fx = card.x + 6f + BadgeIconSize + 8f;
+            float fw = card.xMax - fx - 6f;
+
+            EditorGUI.BeginChangeCheck();
+
+            var icon = (Texture2D)EditorGUI.ObjectField(
+                iconRect,
+                string.IsNullOrEmpty(entry.iconAssetPath)
+                    ? null
+                    : AssetDatabase.LoadAssetAtPath<Texture2D>(entry.iconAssetPath),
+                typeof(Texture2D), false);
+
+            var titleRect = new Rect(fx, card.y + 6f, fw, 18f);
+            var idRect    = new Rect(fx, card.y + 28f, fw, 18f);
+            var descRect  = new Rect(fx, card.y + 50f, fw, 18f);
+
+            string newTitle = EditorGUI.TextField(titleRect, "Title", entry.name ?? "");
+
+            // A locked id is drawn, not hidden: the developer needs to SEE the
+            // string their Lua passes so they can confirm it's the badge they
+            // meant. Disabled-and-visible reads as "this came from your code";
+            // an empty or absent field would read as a bug.
+            string newId;
+            using (new EditorGUI.DisabledScope(entry.IdLocked))
+            {
+                newId = EditorGUI.TextField(
+                    idRect,
+                    new GUIContent("ID", entry.IdLocked
+                        ? entry.discoveredIn + "\n\nThis ID comes from your Lua, so it can't be edited here — "
+                          + "change it in the script and it updates on the next scan."
+                        : "The ID your Lua passes to dp.profile.awardBadge(). Letters, numbers, _ and - only."),
+                    entry.badgeId ?? "");
+            }
+
+            string newDesc = EditorGUI.TextField(descRect, "Desc", entry.description ?? "");
+
+            if (EditorGUI.EndChangeCheck())
+            {
+                entry.name = newTitle;
+                entry.description = newDesc;
+                // Ignore any write to a locked field. DisabledScope already stops
+                // the keyboard, but a scripted or accidental change must not be
+                // able to break the id/Lua correspondence either.
+                if (!entry.IdLocked) entry.badgeId = newId;
+                entry.iconAssetPath = icon != null ? AssetDatabase.GetAssetPath(icon) : "";
+                badgesDirty = true;
+            }
+
+            var sourceRect = new Rect(fx, card.y + 70f, fw - 56f, 14f);
+            GUI.Label(sourceRect,
+                new GUIContent(
+                    entry.IdLocked ? "● From your Lua" : "○ Added by hand",
+                    entry.IdLocked ? entry.discoveredIn : "Not referenced from Lua in this content folder."),
+                EditorStyles.miniLabel);
+
+            // Removing a discovered badge would be a lie: the next scan puts it
+            // straight back, because the reason it is here is a line of the
+            // developer's own code. Delete the call, then rescan.
+            var removeRect = new Rect(card.xMax - 56f, card.y + 69f, 50f, 16f);
+            using (new EditorGUI.DisabledScope(entry.IdLocked))
+            {
+                if (GUI.Button(removeRect,
+                        new GUIContent("Remove", entry.IdLocked
+                            ? "This badge is referenced from your Lua. Remove the call and rescan."
+                            : "Remove this badge card. (It is not deleted from the developer portal.)"),
+                        EditorStyles.miniButton))
+                {
+                    badgeRemoveIndex = index;   // applied on the next Layout pass
+                }
+            }
+
+            EditorGUIUtility.labelWidth = prevLabelWidth;
+            EditorGUI.indentLevel = prevIndent;
+        }
+
+        private void PushBadges(bool interactive)
+        {
+            if (string.IsNullOrEmpty(contentId) || isPushingBadges) return;
+
+            // Save the draft first so what lands on the backend and what is in
+            // .badges.json can never disagree about what was pushed.
+            badgesDirty = true;
+            FlushBadgeDraft();
+
+            isPushingBadges = true;
+            var snapshot = new List<BadgeStore.Entry>(badges);
+            BadgeUploader.UploadAll(contentId, snapshot, interactive, report =>
+            {
+                isPushingBadges = false;
+                Repaint();
+            });
+        }
+
+        // Fire-and-forget push that rides the normal upload flow, exactly like
+        // UploadLogoImage: it must never fail or delay a content upload, because
+        // the bundles are the release and the badge text is metadata that can be
+        // re-pushed from the panel in one click.
+        private void PushBadgesSilently(string idForUpload)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(idForUpload)) return;
+                var toPush = BadgeStore.Load(idForUpload);
+                if (toPush == null || toPush.Count == 0) return;
+                BadgeUploader.UploadAll(idForUpload, toPush, interactive: false);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[Badges] upload skipped: " + e.Message);
+            }
         }
 
         // 5 seconds is more than enough for any prefab Unity intends to
@@ -1400,6 +4301,34 @@ namespace DreamPark {
                 GUI.Label(imgRect, entry.subLabel, placeholderStyle);
             }
 
+            // Pre-upload warning badge, top-right of the thumbnail.
+            //
+            // badgeRect is computed UNCONDITIONALLY and the badge map is a per-frame
+            // snapshot: GUI.Button consumes a control id, so a badge that exists in the
+            // Layout pass but not the Repaint pass (or vice versa) shifts the id stream
+            // and corrupts every control drawn after it in this card.
+            //
+            // IMGUI paints in draw order, so this must come after GUI.DrawTexture to
+            // sit on top of the thumbnail.
+            var badgeRect = new Rect(imgRect.xMax - 20f, imgRect.y + 2f, 18f, 18f);
+            // `= default` is load-bearing: the `&&` below short-circuits, so the
+            // compiler cannot prove TryGetValue ran and reports CS0165 on badge.Key.
+            KeyValuePair<PreUploadChecks.CheckSeverity, string> badge = default;
+            bool hasBadge = preUploadBadges != null
+                         && preUploadBadges.TryGetValue(entry.assetPath, out badge);
+            if (hasBadge)
+            {
+                var badgeIcon = badge.Key == PreUploadChecks.CheckSeverity.Blocking
+                    ? EditorGUIUtility.IconContent("console.erroricon.sml")
+                    : EditorGUIUtility.IconContent("console.warnicon.sml");
+
+                if (GUI.Button(badgeRect, new GUIContent(badgeIcon != null ? badgeIcon.image : null, badge.Value),
+                               EditorStyles.iconButton))
+                {
+                    PreUploadChecks.PreUploadChecksPopup.ShowForAsset(this, contentId, entry.assetPath);
+                }
+            }
+
             // Two-line label: name on top (bold-ish), kind on bottom.
             var nameStyle = new GUIStyle(EditorStyles.miniLabel)
             {
@@ -1407,20 +4336,26 @@ namespace DreamPark {
                 wordWrap = true,
                 fontStyle = FontStyle.Bold,
             };
-            GUI.Label(labelRect, new GUIContent(entry.name, entry.assetPath), nameStyle);
+            GUI.Label(labelRect, new GUIContent(entry.name, $"Click to open the Preview Editor\n{entry.assetPath}"), nameStyle);
 
-            // Click anywhere on the card to ping + select the underlying
-            // prefab in the Project window. Standard Unity feel.
+            // Click anywhere on the card to open the Preview Editor for this
+            // prefab, where the camera angle and zoom of its generated preview
+            // can be tuned and saved. Also pings the underlying prefab in the
+            // Project window for context.
+            //
+            // The badge is excluded by rect rather than by relying on event
+            // consumption. GUI.Button consumes the event on MouseDown and returns true
+            // on MouseUp — two different passes — so a Use() inside its true branch
+            // would never run during the pass this handler reads. Rect exclusion is
+            // event-phase-independent.
             if (Event.current.type == EventType.MouseDown
                 && Event.current.button == 0
-                && cardRect.Contains(Event.current.mousePosition))
+                && cardRect.Contains(Event.current.mousePosition)
+                && !(hasBadge && badgeRect.Contains(Event.current.mousePosition)))
             {
+                PreviewEditorWindow.Open(contentId, entry.assetPath, entry.name, entry.subLabel);
                 var asset = AssetDatabase.LoadMainAssetAtPath(entry.assetPath);
-                if (asset != null)
-                {
-                    EditorGUIUtility.PingObject(asset);
-                    Selection.activeObject = asset;
-                }
+                if (asset != null) EditorGUIUtility.PingObject(asset);
                 Event.current.Use();
             }
         }
@@ -1458,8 +4393,45 @@ namespace DreamPark {
                 }
             }
 
-            string defaultLogoPath = $"Assets/Resources/Logos/{contentId}.png";
-            logoTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(defaultLogoPath);
+            logoTexture = FindAutoLogoTexture();
+        }
+
+        private Texture2D FindAutoLogoTexture()
+        {
+            string contentRoot = $"Assets/Content/{contentId}";
+            if (!AssetDatabase.IsValidFolder(contentRoot))
+            {
+                return null;
+            }
+
+            var contentTextures = AssetDatabase.FindAssets("t:Texture2D", new[] { contentRoot })
+                .Select(AssetDatabase.GUIDToAssetPath)
+                .Where(p => !string.IsNullOrEmpty(p))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            string logoNamedPath = contentTextures
+                .Where(p => Path.GetFileNameWithoutExtension(p).IndexOf("logo", StringComparison.OrdinalIgnoreCase) >= 0)
+                .OrderBy(p => p.Count(c => c == '/' || c == '\\'))
+                .ThenBy(p => p, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+            if (!string.IsNullOrEmpty(logoNamedPath))
+            {
+                return AssetDatabase.LoadAssetAtPath<Texture2D>(logoNamedPath);
+            }
+
+            string rootPngPath = contentTextures
+                .Where(p => string.Equals(Path.GetExtension(p), ".png", StringComparison.OrdinalIgnoreCase))
+                .Where(p => string.Equals(
+                    Path.GetDirectoryName(p)?.Replace("\\", "/"),
+                    contentRoot,
+                    StringComparison.OrdinalIgnoreCase))
+                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+
+            return string.IsNullOrEmpty(rootPngPath)
+                ? null
+                : AssetDatabase.LoadAssetAtPath<Texture2D>(rootPngPath);
         }
 
         private void SaveLogoSelection()
@@ -1534,8 +4506,8 @@ namespace DreamPark {
 
         private void LoadBuildTargetSelection()
         {
-            buildAndroid = EditorPrefs.GetBool(BuildAndroidPrefKey, true);
-            buildIos = EditorPrefs.GetBool(BuildIosPrefKey, true);
+            buildAndroid = true;
+            buildIos = true;
             buildOsx = EditorPrefs.GetBool(BuildOsxPrefKey, true);
             buildWindows = EditorPrefs.GetBool(BuildWindowsPrefKey, true);
             cleanBeforeEachTarget = EditorPrefs.GetBool(CleanBeforeEachTargetPrefKey, false);
@@ -1543,8 +4515,10 @@ namespace DreamPark {
 
         private void SaveBuildTargetSelection()
         {
-            EditorPrefs.SetBool(BuildAndroidPrefKey, buildAndroid);
-            EditorPrefs.SetBool(BuildIosPrefKey, buildIos);
+            buildAndroid = true;
+            buildIos = true;
+            EditorPrefs.SetBool(BuildAndroidPrefKey, true);
+            EditorPrefs.SetBool(BuildIosPrefKey, true);
             EditorPrefs.SetBool(BuildOsxPrefKey, buildOsx);
             EditorPrefs.SetBool(BuildWindowsPrefKey, buildWindows);
             EditorPrefs.SetBool(CleanBeforeEachTargetPrefKey, cleanBeforeEachTarget);
@@ -1727,6 +4701,8 @@ namespace DreamPark {
 
             if (string.IsNullOrEmpty(contentId) || !AuthAPI.isLoggedIn)
             {
+                latestPublishedVersionNumber = null;
+                latestContentDirectorySnapshot = null;
                 return;
             }
 
@@ -1755,11 +4731,17 @@ namespace DreamPark {
 
                 if (!success || response?.json == null || !response.json.HasField("content"))
                 {
+                    latestPublishedVersionNumber = null;
+                    latestContentDirectorySnapshot = null;
                     Repaint();
                     return;
                 }
 
+                latestContentDirectorySnapshot = response.json;
                 JSONObject content = response.json.GetField("content");
+                latestPublishedVersionNumber = content.HasField("versions") && content.GetField("versions").list != null
+                    ? content.GetField("versions").list.Count
+                    : 0;
                 if (content.HasField("contentName"))
                 {
                     contentName = content.GetField("contentName").stringValue ?? contentName;
@@ -1768,6 +4750,7 @@ namespace DreamPark {
                 {
                     contentDescription = content.GetField("contentDescription").stringValue ?? contentDescription;
                 }
+                RefreshPatchEstimate();
                 Repaint();
             });
         }
@@ -1890,6 +4873,23 @@ namespace DreamPark {
                 settings.MonoScriptBundleNaming = MonoScriptBundleNaming.Custom;
                 settings.MonoScriptBundleCustomNaming = contentId + "_";
                 settings.OverridePlayerVersion = contentId;
+                // NonRecursiveBuilding pinned to Unity's default (true).
+                //
+                // We previously toggled this to false for the Smart strategy to
+                // get per-bundle embedded MonoScript metadata — that would have
+                // eliminated the shared monoscripts.bundle dep-hash cascade
+                // (single C# edit → ~91% byte churn across bundles). But the
+                // change broke production: Quest 3S started throwing "Could not
+                // produce class with ID X" and iOS hit missing-StreamingAssets/
+                // Addressables errors, because without the shared monoscripts
+                // bundle Unity loses the implicit "preserve every MonoBehaviour
+                // / ScriptableObject type" safety net that IL2CPP's stripper
+                // depends on at runtime.
+                //
+                // Reverted while we work on a cleaner fix that doesn't change
+                // the runtime bundle layout — see CASCADE_WORKAROUND_DEFERRED.md
+                // for the catalog-rewrite / decompress-then-hash plan.
+                settings.NonRecursiveBuilding = true;
                 EditorUtility.SetDirty(settings);
                 AssetDatabase.SaveAssets();
 
@@ -1934,7 +4934,7 @@ namespace DreamPark {
                 // does its own clean build with the real per-platform URLs.
                 BuildTarget activeTarget = EditorUserBuildSettings.activeBuildTarget;
                 BuildTargetGroup activeGroup = BuildPipeline.GetBuildTargetGroup(activeTarget);
-                string inspectUrl = $"{DreamParkAPI.devBaseUrl}/app/content/addressables/{contentId}/inspect/{activeTarget}";
+                string inspectUrl = $"{DreamParkAPI.baseUrl}/app/content/addressables/{contentId}/inspect/{activeTarget}";
                 reportStep($"Building {activeTarget} (no upload)...");
                 bool buildOk = BuildForTarget(activeTarget, activeGroup, inspectUrl, contentId);
 
@@ -2063,7 +5063,7 @@ namespace DreamPark {
                 else
                 {
                     string err = ExtractServerErrorMessage(response);
-                    Debug.LogError($"[DreamPark] Add collaborator failed (status={response?.statusCode}, raw={response?.rawText}): {err}");
+                    Debug.LogError($"[DreamPark] Add collaborator failed (status={response?.statusCode}): {err}");
                     EditorUtility.DisplayDialog("Could not add collaborator", err, "OK");
                 }
             });
@@ -2083,7 +5083,7 @@ namespace DreamPark {
                 else
                 {
                     string err = ExtractServerErrorMessage(response);
-                    Debug.LogError($"[DreamPark] Remove collaborator failed (status={response?.statusCode}, raw={response?.rawText}): {err}");
+                    Debug.LogError($"[DreamPark] Remove collaborator failed (status={response?.statusCode}): {err}");
                     EditorUtility.DisplayDialog("Could not remove collaborator", err, "OK");
                 }
             });
@@ -2129,13 +5129,20 @@ namespace DreamPark {
             return string.IsNullOrEmpty(response.error) ? "Unknown error." : response.error;
         }
 
+        // Kept only so an existing integration that calls this still compiles. DreamPark
+        // has been passwordless since July 2026 — there is no password to pass — and the
+        // in-editor sign-in path is AuthPopup (email, then an emailed 6-digit code).
+        // Obsolete rather than deleted because it is public API on a public panel type;
+        // being Obsolete itself is also what stops the AuthAPI.Login call below (now
+        // Obsolete too) from raising a warning here.
+        [Obsolete("DreamPark is passwordless as of July 2026 — sign in via AuthPopup, or call AuthAPI.RequestLoginCode/VerifyLoginCode.")]
         public void Login(string email, string password)
         {
             AuthAPI.Login(email, password, (success, response) =>
             {
                 if (success)
                 {
-                    Debug.Log("Login successful: " + response.json.Print());
+                    Debug.Log("Login successful.");
                 }
                 else
                 {
@@ -2150,7 +5157,7 @@ namespace DreamPark {
             {
                 if (success)
                 {
-                    Debug.Log("Logout successful: " + response.json.Print());
+                    Debug.Log("Logout successful.");
                 }
                 else
                 {
@@ -2170,6 +5177,14 @@ namespace DreamPark {
                 }
 
                 isUploading = true;
+                uploadCompleted = false;
+                uploadSucceeded = false;
+                SetUploadStatus(
+                    build ? "Preparing release" : "Preparing reupload",
+                    build
+                        ? "Fetching metadata and staging the full compile pipeline."
+                        : "Fetching metadata and getting the existing build artifacts ready.",
+                    0.05f);
 
                 Debug.Log($"🚀 Uploading content for {contentId}...");
 
@@ -2178,10 +5193,22 @@ namespace DreamPark {
                     Action uploadBuiltContent = () =>
                     {
                         var contentDirectory = response != null ? response.json : null;
-                        var versionNumber = contentDirectory != null && contentDirectory.HasField("content") && contentDirectory.GetField("content").HasField("versions")
+                        latestContentDirectorySnapshot = contentDirectory;
+                        // Note the `.list != null` guard: a freshly-registered
+                        // content can come back with `versions: null`, where
+                        // HasField() is true but the JSON node has no list.
+                        var versionNumber = contentDirectory != null && contentDirectory.HasField("content")
+                                            && contentDirectory.GetField("content").HasField("versions")
+                                            && contentDirectory.GetField("content").GetField("versions").list != null
                             ? contentDirectory.GetField("content").GetField("versions").list.Count + 1
                             : 1;
-                        var targetUrl = $"{DreamParkAPI.devBaseUrl}/app/content/addressables/{contentId}/{versionNumber}";
+                        var targetUrl = $"{DreamParkAPI.baseUrl}/app/content/addressables-v2/{contentId}/{versionNumber}";
+                        bool singlePlatformEstimate = pendingProductionEstimateOnly;
+                        EstimateBuildTargetInfo estimateTargetInfo = default;
+                        if (singlePlatformEstimate && !TryGetSinglePlatformEstimateTarget(out estimateTargetInfo))
+                        {
+                            throw new Exception("Could not determine a platform for Check Patch Size. Switch Unity to a supported target and try again.");
+                        }
 
                         string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
                         string serverDataPath = Path.Combine(projectRoot, "ServerData");
@@ -2193,17 +5220,24 @@ namespace DreamPark {
                         // own progress bars take over for SwitchActiveBuildTarget and
                         // BuildPlayerContent inside each platform step, so we don't try
                         // to slice those further.
-                        int numPlatforms = (buildAndroid ? 1 : 0) + (buildIos ? 1 : 0)
-                                         + (buildOsx ? 1 : 0) + (buildWindows ? 1 : 0);
+                        int numPlatforms = singlePlatformEstimate
+                            ? 1
+                            : ((buildAndroid ? 1 : 0) + (buildIos ? 1 : 0)
+                             + (buildOsx ? 1 : 0) + (buildWindows ? 1 : 0));
                         int currentStep = 0;
                         int totalSteps = (build ? 7 + numPlatforms : 0) + 1; // +1 for manifest computation
                         Action<string> reportStep = (message) =>
                         {
                             currentStep++;
+                            float stageProgress = Mathf.Clamp01((float)currentStep / Mathf.Max(1, totalSteps));
+                            SetUploadStatus(
+                                build ? "Compiling release" : "Preparing upload",
+                                message,
+                                stageProgress);
                             EditorUtility.DisplayProgressBar(
                                 "Compile & Upload",
                                 $"({currentStep}/{totalSteps}) {message}",
-                                Mathf.Clamp01((float)currentStep / Mathf.Max(1, totalSteps)));
+                                stageProgress);
                         };
 
                         bool buildSuccess = true;
@@ -2240,6 +5274,11 @@ namespace DreamPark {
                                 Debug.Log($"📛 [BEFORE] OverridePlayerVersion = '{settings.OverridePlayerVersion}', PlayerBuildVersion = '{settings.PlayerBuildVersion}'");
                                 settings.OverridePlayerVersion = contentId;
                                 Debug.Log($"📛 [AFTER]  OverridePlayerVersion = '{settings.OverridePlayerVersion}', PlayerBuildVersion = '{settings.PlayerBuildVersion}'");
+                                // Pinned to Unity's default (true) — see the
+                                // longer comment in BeginUploadFromPopup's
+                                // configure step for the production-crash
+                                // context that drove this revert.
+                                settings.NonRecursiveBuilding = true;
                                 EditorUtility.SetDirty(settings);
                                 AssetDatabase.SaveAssets();
 
@@ -2296,33 +5335,52 @@ namespace DreamPark {
                                 reportStep("Enforcing content namespaces...");
                                 ContentProcessor.EnforceContentNamespaces(contentId);
 
-                                reportStep("Building scripts package...");
-                                buildSuccess &= ContentProcessor.BuildUnityPackage(contentId);
+                                if (singlePlatformEstimate)
+                                {
+                                    // Production patch estimates are just a
+                                    // quick "how much of the current platform
+                                    // changed?" check. Skip the Unity package
+                                    // entirely here so we don't spend time on
+                                    // non-bundle output that won't make this
+                                    // estimate materially better.
+                                    reportStep($"Building {estimateTargetInfo.label}...");
+                                    buildSuccess &= BuildForTarget(
+                                        estimateTargetInfo.target,
+                                        estimateTargetInfo.group,
+                                        $"{targetUrl}/{estimateTargetInfo.platformName}",
+                                        contentId);
+                                    if (!buildSuccess) throw new Exception($"{estimateTargetInfo.label} build failed");
+                                }
+                                else
+                                {
+                                    reportStep("Building scripts package...");
+                                    buildSuccess &= ContentProcessor.BuildUnityPackage(contentId);
 
-                                if (!buildSuccess) throw new Exception("Unity package build failed");
-                                if (buildAndroid)
-                                {
-                                    reportStep("Building Android...");
-                                    buildSuccess &= BuildForTarget(BuildTarget.Android, BuildTargetGroup.Android, $"{targetUrl}/Android", contentId);
-                                    if (!buildSuccess) throw new Exception("Android build failed");
-                                }
-                                if (buildIos)
-                                {
-                                    reportStep("Building iOS...");
-                                    buildSuccess &= BuildForTarget(BuildTarget.iOS, BuildTargetGroup.iOS, $"{targetUrl}/iOS", contentId);
-                                    if (!buildSuccess) throw new Exception("iOS build failed");
-                                }
-                                if (buildOsx)
-                                {
-                                    reportStep("Building StandaloneOSX...");
-                                    buildSuccess &= BuildForTarget(BuildTarget.StandaloneOSX, BuildTargetGroup.Standalone, $"{targetUrl}/StandaloneOSX", contentId);
-                                    if (!buildSuccess) throw new Exception("OSX build failed");
-                                }
-                                if (buildWindows)
-                                {
-                                    reportStep("Building StandaloneWindows...");
-                                    buildSuccess &= BuildForTarget(BuildTarget.StandaloneWindows, BuildTargetGroup.Standalone, $"{targetUrl}/StandaloneWindows", contentId);
-                                    if (!buildSuccess) throw new Exception("Windows build failed");
+                                    if (!buildSuccess) throw new Exception("Unity package build failed");
+                                    if (buildAndroid)
+                                    {
+                                        reportStep("Building Android...");
+                                        buildSuccess &= BuildForTarget(BuildTarget.Android, BuildTargetGroup.Android, $"{targetUrl}/Android", contentId);
+                                        if (!buildSuccess) throw new Exception("Android build failed");
+                                    }
+                                    if (buildIos)
+                                    {
+                                        reportStep("Building iOS...");
+                                        buildSuccess &= BuildForTarget(BuildTarget.iOS, BuildTargetGroup.iOS, $"{targetUrl}/iOS", contentId);
+                                        if (!buildSuccess) throw new Exception("iOS build failed");
+                                    }
+                                    if (buildOsx)
+                                    {
+                                        reportStep("Building StandaloneOSX...");
+                                        buildSuccess &= BuildForTarget(BuildTarget.StandaloneOSX, BuildTargetGroup.Standalone, $"{targetUrl}/StandaloneOSX", contentId);
+                                        if (!buildSuccess) throw new Exception("OSX build failed");
+                                    }
+                                    if (buildWindows)
+                                    {
+                                        reportStep("Building StandaloneWindows...");
+                                        buildSuccess &= BuildForTarget(BuildTarget.StandaloneWindows, BuildTargetGroup.Standalone, $"{targetUrl}/StandaloneWindows", contentId);
+                                        if (!buildSuccess) throw new Exception("Windows build failed");
+                                    }
                                 }
                             }
 
@@ -2330,42 +5388,259 @@ namespace DreamPark {
 
                             // Build a manifest of what's currently in ServerData (the just-built
                             // output, or whatever existed for "Try Reupload"), diff it against
-                            // the saved baseline, and use the diff to skip re-uploading bundles
-                            // whose contents didn't change. The same diff drives the panel's
-                            // patch-size estimate; computing it here ensures the displayed
-                            // estimate matches what we actually upload.
+                            // the latest backend version metadata, and route the diff through
+                            // UploadModeFilter to turn the active UploadMode into a skipSet.
+                            //
+                            // - All:        skipSet = null (full re-upload)
+                            // - Patch:      skipSet = unchanged-file keys, server fills gaps via fallback
+                            // - CodeOnly:   skipSet = everything except catalog + {gameId}-Code bundle.
+                            //               Aborts here if non-Code bundles also changed (would
+                            //               produce a catalog referencing local-only hashes).
+                            //
+                            // Legacy bundling forces UploadMode.All regardless of UI selection
+                            // because the Code carve-out group doesn't exist there and
+                            // baseline-driven patching wasn't validated on Legacy output.
                             BuildManifest currentManifest = null;
                             HashSet<string> skipSet = null;
+                            // Populated only on the Failed-Only retry path —
+                            // bundles that uploaded successfully in a previous
+                            // run but never reached commitUpload. Plumbed into
+                            // ContentAPI.UploadContent so commitUpload's
+                            // uploadedFiles map references the full set, not
+                            // just the bundles we re-sent this round.
+                            List<DreamPark.API.UploadedFileRecord> preUploadedFiles = null;
+                            bool patchingEnabled = IsPatchUploadEnabled();
+                            UploadMode effectiveMode = patchingEnabled ? pendingUploadMode : UploadMode.All;
+                            bool modeWasDowngraded = effectiveMode != pendingUploadMode;
+                            UploadModeFilter.Result modeResult = null;
+                            BuildManifest backendBaselineForUpload = patchingEnabled ? FetchBackendBaselineForUpload(contentDirectory) : null;
+
+                            // Failed-Only short-circuit: the user clicked
+                            // "Upload Failed Bundles" on the Try Reupload
+                            // dialog. Build a skip-set that excludes only the
+                            // bundles that failed last time, and seed the
+                            // commit payload with the previous run's successes.
+                            // The Failed-Only filter takes precedence over the
+                            // UploadMode picker (Patch/All/Code/Previews) —
+                            // mixing them doesn't have well-defined semantics.
+                            if (pendingFailedOnly)
+                            {
+                                try
+                                {
+                                    var manifestPlatformsFO = GetEnabledPlatformsForManifest();
+                                    currentManifest = BuildManifestStore.BuildFromServerData(contentId, versionNumber, manifestPlatformsFO);
+
+                                    var failedRecord = FailedBundleStore.Load(contentId);
+                                    if (failedRecord == null || !failedRecord.HasRetryableFailures)
+                                    {
+                                        // The dialog gated on Load() returning a
+                                        // retryable record, so this is the "the
+                                        // store got cleared between dialog and
+                                        // upload" race. Fall back to Reupload
+                                        // All by leaving skipSet null and
+                                        // logging an explanation.
+                                        Debug.LogWarning("[ContentUploader] Failed-Only requested but no failed-run record exists — falling back to Reupload All.");
+                                        pendingFailedOnly = false;
+                                    }
+                                    else
+                                    {
+                                        // Build the set of "{platform}/{fileName}"
+                                        // keys currently in ServerData so we can
+                                        // intersect with the persisted failed
+                                        // keys. A failed bundle that no longer
+                                        // exists on disk (e.g. the user
+                                        // rebuilt with different content) is
+                                        // silently dropped — there's nothing
+                                        // to retry.
+                                        var currentKeys = new HashSet<string>(System.StringComparer.Ordinal);
+                                        foreach (var p in currentManifest.platforms)
+                                        {
+                                            foreach (var f in p.files)
+                                                currentKeys.Add($"{p.platform}/{f.fileName}");
+                                        }
+
+                                        var failedKeys = FailedBundleStore.FailedKeys(failedRecord);
+                                        var failedKeysInBuild = new HashSet<string>(System.StringComparer.Ordinal);
+                                        foreach (var k in failedKeys)
+                                            if (currentKeys.Contains(k)) failedKeysInBuild.Add(k);
+
+                                        if (failedKeysInBuild.Count == 0)
+                                        {
+                                            EditorUtility.ClearProgressBar();
+                                            string msg = "The failed bundles from the previous run are no longer in this build — none of them matched a file currently in ServerData/. Use Reupload All to re-send everything.";
+                                            Debug.LogWarning($"[ContentUploader] {msg}");
+                                            EditorUtility.DisplayDialog("Nothing failed to retry", msg, "OK");
+                                            CompleteUploadStatus(false, msg);
+                                            isUploading = false;
+                                            pendingFailedOnly = false;
+                                            return;
+                                        }
+
+                                        skipSet = FailedBundleStore.BuildSkipSetForFailedOnly(currentKeys, failedKeysInBuild);
+
+                                        // Filter the persisted succeeded list
+                                        // to only entries whose file is still
+                                        // in the current build — a stale
+                                        // uploadPath would commit a reference
+                                        // to a bundle that's no longer part
+                                        // of this version.
+                                        preUploadedFiles = new List<DreamPark.API.UploadedFileRecord>();
+                                        foreach (var s in failedRecord.succeeded)
+                                        {
+                                            if (s == null || string.IsNullOrEmpty(s.platform) || string.IsNullOrEmpty(s.fileName) || string.IsNullOrEmpty(s.uploadPath))
+                                                continue;
+                                            string key = $"{s.platform}/{s.fileName}";
+                                            if (!currentKeys.Contains(key)) continue;
+                                            preUploadedFiles.Add(new DreamPark.API.UploadedFileRecord(s.platform, s.fileName, s.uploadPath));
+                                        }
+
+                                        // Snapshot baseline / diff fields for
+                                        // the panel UI without affecting the
+                                        // upload logic — keeps the visual
+                                        // state in sync with what's about to
+                                        // happen.
+                                        patchBaseline = backendBaselineForUpload;
+                                        patchCurrentSnapshot = currentManifest;
+                                        patchDiff = BuildManifestStore.Diff(patchBaseline, currentManifest);
+                                        dirtyGroupsEstimate = null;
+
+                                        Debug.Log(
+                                            $"📦 Failed-Only retry: re-sending {failedKeysInBuild.Count} bundle(s) that failed last run · " +
+                                            $"replaying {preUploadedFiles.Count} previously-uploaded path(s) in commitUpload · " +
+                                            $"{currentKeys.Count - failedKeysInBuild.Count} file(s) intentionally skipped.");
+                                        Repaint();
+                                    }
+                                }
+                                catch (Exception failedOnlyEx)
+                                {
+                                    Debug.LogWarning($"[ContentUploader] Failed-Only setup failed; falling back to Reupload All: {failedOnlyEx.Message}");
+                                    skipSet = null;
+                                    preUploadedFiles = null;
+                                    currentManifest = null;
+                                    pendingFailedOnly = false;
+                                }
+                            }
+
+                            if (!pendingFailedOnly)
+                            {
                             try
                             {
-                                var manifestPlatforms = GetEnabledPlatformsForManifest();
+                                var manifestPlatforms = singlePlatformEstimate
+                                    ? new List<string> { estimateTargetInfo.platformName }
+                                    : GetEnabledPlatformsForManifest();
                                 currentManifest = BuildManifestStore.BuildFromServerData(contentId, versionNumber, manifestPlatforms);
-                                var baseline = BuildManifestStore.LoadBaseline(contentId);
+                                BuildManifest baseline = backendBaselineForUpload;
                                 var diff = BuildManifestStore.Diff(baseline, currentManifest);
-                                skipSet = BuildManifestStore.BuildSkipSet(diff);
 
-                                long changed = diff.TotalChangedBytes;
-                                long total = diff.TotalCurrentBytes;
-                                int changedFiles = diff.TotalChangedFileCount;
-                                Debug.Log(
-                                    $"📦 Patch estimate: {changedFiles} changed file(s) · " +
-                                    $"{BuildManifestStore.FormatBytes(changed)} of " +
-                                    $"{BuildManifestStore.FormatBytes(total)} will upload " +
-                                    $"({skipSet.Count} unchanged file(s) skipped).");
+                                modeResult = UploadModeFilter.Build(effectiveMode, contentId, currentManifest, patchingEnabled ? diff : null);
+
+                                // Sanity check for Code-only: an empty Code group (no Lua
+                                // scripts) leaves no bundle to ship. SmartBundleGrouper's
+                                // empty-group sweep removes the group, Addressables skips
+                                // producing a bundle, and we'd end up uploading just a
+                                // catalog — technically successful but a no-op for the
+                                // runtime. Flag it instead.
+                                if (string.IsNullOrEmpty(modeResult.blockingError)
+                                    && effectiveMode == UploadMode.CodeOnly)
+                                {
+                                    const UploadModeFilter.FileCategory targetCat =
+                                        UploadModeFilter.FileCategory.CodeBundle;
+                                    bool hasTargetBundle = false;
+                                    foreach (var p in currentManifest.platforms)
+                                    {
+                                        foreach (var f in p.files)
+                                        {
+                                            if (UploadModeFilter.Categorize(contentId, f.fileName) == targetCat)
+                                            {
+                                                hasTargetBundle = true;
+                                                break;
+                                            }
+                                        }
+                                        if (hasTargetBundle) break;
+                                    }
+                                    if (!hasTargetBundle)
+                                    {
+                                        string what = "Lua scripts (*.lua.txt under Assets/Content/" + contentId + "/)";
+                                        modeResult.blockingError =
+                                            $"{UploadModePrefs.ShortLabel(effectiveMode)} upload aborted: " +
+                                            $"no {UploadModePrefs.ShortLabel(effectiveMode)} bundle was produced by this build. " +
+                                            $"Add some {what} and rebuild, or pick a different upload mode.";
+                                    }
+                                }
+
+                                // Hard-block path: a Code-only upload that would ship a
+                                // broken catalog. Surface the same message to the EditorLog and
+                                // a modal, then bail cleanly without touching the version
+                                // counter on the backend.
+                                if (!string.IsNullOrEmpty(modeResult.blockingError))
+                                {
+                                    Debug.LogError($"[ContentUploader] {modeResult.blockingError}");
+                                    EditorUtility.ClearProgressBar();
+                                    EditorUtility.DisplayDialog(
+                                        $"{UploadModePrefs.ShortLabel(effectiveMode)} upload blocked",
+                                        modeResult.blockingError,
+                                        "OK");
+                                    CompleteUploadStatus(false, modeResult.blockingError);
+                                    isUploading = false;
+                                    return;
+                                }
+
+                                skipSet = modeResult.skipSet;
+
+                                if (effectiveMode == UploadMode.All)
+                                {
+                                    Debug.Log(
+                                        $"📦 Upload All: sending full upload of {currentManifest.TotalFileCount} file(s) · " +
+                                        $"{BuildManifestStore.FormatBytes(currentManifest.TotalBytes)}" +
+                                        (modeWasDowngraded ? $" (Legacy bundling forced All; requested {pendingUploadMode})." : "."));
+                                }
+                                else if (effectiveMode == UploadMode.Patch)
+                                {
+                                    long changed = diff.TotalChangedBytes;
+                                    long total = diff.TotalCurrentBytes;
+                                    int changedFiles = diff.TotalChangedFileCount;
+                                    Debug.Log(
+                                        $"📦 Patch estimate: {changedFiles} changed file(s) · " +
+                                        $"{BuildManifestStore.FormatBytes(changed)} of " +
+                                        $"{BuildManifestStore.FormatBytes(total)} will upload " +
+                                        $"({(skipSet?.Count ?? 0)} unchanged file(s) skipped).");
+                                }
+                                else
+                                {
+                                    Debug.Log(
+                                        $"📦 {UploadModePrefs.ShortLabel(effectiveMode)} upload: " +
+                                        $"{modeResult.filesToUpload} file(s) · " +
+                                        $"{BuildManifestStore.FormatBytes(modeResult.bytesToUpload)} will upload " +
+                                        $"({modeResult.filesSkipped} file(s) intentionally skipped).");
+                                }
 
                                 // Refresh the panel's cached state so the UI reflects what
                                 // we're about to do.
                                 patchBaseline = baseline;
                                 patchCurrentSnapshot = currentManifest;
                                 patchDiff = diff;
+                                dirtyGroupsEstimate = null;
                                 Repaint();
                             }
                             catch (Exception manifestEx)
                             {
+                                if (pendingProductionEstimateOnly)
+                                {
+                                    Debug.LogError($"[ContentUploader] Check Patch Size failed: {manifestEx.Message}");
+                                    EditorUtility.ClearProgressBar();
+                                    pendingProductionEstimateOnly = false;
+                                    CompleteUploadStatus(false, $"Check Patch Size failed: {manifestEx.Message}");
+                                    EditorUtility.DisplayDialog("Check Patch Size Failed", manifestEx.Message, "OK");
+                                    isUploading = false;
+                                    return;
+                                }
+
                                 Debug.LogWarning($"[ContentUploader] Patch estimate failed; falling back to full upload: {manifestEx.Message}");
                                 skipSet = null;
                                 currentManifest = null;
+                                modeResult = null;
                             }
+                            } // end !pendingFailedOnly
 
                             // Build the compact manifest summary that rides along on commitUpload —
                             // gives dreampark-core's content manager UI both "full content size"
@@ -2375,7 +5650,9 @@ namespace DreamPark {
                             {
                                 if (currentManifest != null)
                                 {
-                                    var diffForSummary = BuildManifestStore.Diff(BuildManifestStore.LoadBaseline(contentId), currentManifest);
+                                    var diffForSummary = patchingEnabled
+                                        ? BuildManifestStore.Diff(backendBaselineForUpload, currentManifest)
+                                        : null;
                                     manifestSummary = BuildManifestStore.BuildCommitSummary(currentManifest, diffForSummary);
                                 }
                             }
@@ -2385,99 +5662,141 @@ namespace DreamPark {
                                 manifestSummary = null;
                             }
 
-                            // Hand off to the upload step. Its own progress UI
-                            // (DrawUploadProgressArea) takes over from here, so
-                            // clear our compile-progress bar to avoid the two
-                            // visually fighting.
+                            try
+                            {
+                                if (manifestSummary == null || manifestSummary.type != JSONObject.Type.Object)
+                                {
+                                    manifestSummary = new JSONObject(JSONObject.Type.Object);
+                                }
+
+                                manifestSummary.AddField("uploader", BuildUploaderMetadata(effectiveMode));
+                            }
+                            catch (Exception uploaderMetadataEx)
+                            {
+                                Debug.LogWarning($"[ContentUploader] Could not attach uploader metadata: {uploaderMetadataEx.Message}");
+                            }
+
+                            if (pendingProductionEstimateOnly)
+                            {
+                                pendingProductionContentId = contentId;
+                                pendingProductionMode = effectiveMode;
+                                pendingProductionBuildOsx = buildOsx;
+                                pendingProductionBuildWindows = buildWindows;
+                                pendingProductionVersionNumber = versionNumber;
+                                pendingProductionPatchingEnabled = patchingEnabled;
+                                pendingProductionCurrentManifest = currentManifest;
+                                pendingProductionSkipSet = skipSet != null
+                                    ? new HashSet<string>(skipSet, StringComparer.Ordinal)
+                                    : null;
+                                pendingProductionManifestSummary = manifestSummary;
+                                pendingProductionEstimateOnly = false;
+
+                                long estimateBytes = 0L;
+                                int estimateFiles = 0;
+                                if (effectiveMode == UploadMode.Patch && patchDiff != null)
+                                {
+                                    estimateBytes = patchDiff.TotalChangedBytes;
+                                    estimateFiles = patchDiff.TotalChangedFileCount;
+                                }
+                                else if (modeResult != null)
+                                {
+                                    estimateBytes = modeResult.bytesToUpload;
+                                    estimateFiles = modeResult.filesToUpload;
+                                }
+                                else if (currentManifest != null)
+                                {
+                                    estimateBytes = currentManifest.TotalBytes;
+                                    estimateFiles = currentManifest.TotalFileCount;
+                                }
+
+                                EditorUtility.ClearProgressBar();
+                                isUploading = false;
+                                uploadStatusProgress = -1f;
+                                uploadStatusIsError = false;
+                                uploadCompleted = false;
+                                uploadSucceeded = false;
+                                uploadStatusTitle = "Patch estimate ready";
+                                uploadStatusMessage =
+                                    $"{UploadModePrefs.ShortLabel(effectiveMode)} will upload {estimateFiles} file(s) · " +
+                                    $"{BuildManifestStore.FormatBytes(estimateBytes)}. Click Start with the same settings to upload without rebuilding.";
+                                Repaint();
+                                return;
+                            }
+
+                            // Hand off to the upload step. Clear the compile-
+                            // progress bar here so the dedicated launch window
+                            // owns the rest of the user-facing status display.
                             EditorUtility.ClearProgressBar();
+                            SetUploadStatus(
+                                "Uploading release",
+                                "Bundles are ready. Secure handoff in progress...",
+                                1f);
 
                             // Zero-change short-circuit: if the diff says nothing
                             // changed since the last successful upload, don't
                             // ping commitUpload — that would just create a new
                             // backend version with no actual content. Offer the
-                            // user a "Force full reupload" escape hatch that
-                            // wipes the local baseline so the next click sees
-                            // every file as new. This is the recovery path for
-                            // a divergent baseline (e.g. partial upload failure
-                            // in an older SDK that incorrectly saved the
-                            // baseline).
-                            bool everythingSkipped = currentManifest != null
+                            // user an "Upload All Now" escape hatch when they
+                            // intentionally want to publish a full resend even
+                            // though the backend parent comparison found no
+                            // changes.
+                            // Failed-Only uploads can legitimately have a skipSet
+                            // that covers most-or-all of currentManifest — that's
+                            // the whole point of "only re-send what failed." The
+                            // zero-change short-circuit and its "Force full
+                            // reupload" prompt are only meaningful for the Patch
+                            // path, so gate this check on !pendingFailedOnly.
+                            bool everythingSkipped = !pendingFailedOnly
+                                && patchingEnabled
+                                && currentManifest != null
                                 && skipSet != null
                                 && currentManifest.TotalFileCount > 0
                                 && skipSet.Count >= currentManifest.TotalFileCount;
                             if (everythingSkipped)
                             {
                                 Debug.Log("[ContentUploader] No content changes detected — skipping upload.");
-                                bool forceReupload = EditorUtility.DisplayDialog(
+                                bool uploadAllNow = EditorUtility.DisplayDialog(
                                     "Nothing to upload",
                                     $"'{contentName}' is already at the latest version — no content changes were detected since the last successful upload.\n\n" +
-                                    "If you believe the server is missing files (e.g. a previous upload failed partway), use Force full reupload to clear the local baseline and re-send everything.",
-                                    "Force full reupload", "OK");
-                                if (forceReupload)
+                                    "If you still want to publish this build anyway, you can force a full reupload right now.",
+                                    "Upload All Now", "OK");
+                                if (uploadAllNow)
                                 {
-                                    BuildManifestStore.DeleteBaseline(contentId);
                                     patchBaseline = null;
                                     patchDiff = BuildManifestStore.Diff(null, patchCurrentSnapshot);
-                                    Debug.Log("[ContentUploader] Local baseline cleared. Click Try Reupload to send everything.");
-                                    Repaint();
-                                }
-                                isUploading = false;
-                                return;
-                            }
-
-                            ContentAPI.UploadContent(contentId, releaseNotes, lastSchemaVersion, skipSet, manifestSummary, (success, apiResponse) =>
-                            {
-                                if (success)
-                                {
-                                    Debug.Log("✅ Content uploaded successfully");
-
-                                    // Persist the just-uploaded snapshot as the new baseline
-                                    // so the *next* upload's diff is "what changed since the
-                                    // last successful upload." Only save on success — a failed
-                                    // upload shouldn't move the baseline forward.
-                                    if (currentManifest != null)
-                                    {
-                                        try
-                                        {
-                                            BuildManifestStore.SaveBaseline(currentManifest);
-                                            patchBaseline = currentManifest;
-                                            // Recompute the displayed diff against the
-                                            // just-saved baseline so the panel immediately
-                                            // shows "no pending changes" instead of stranding
-                                            // the pre-upload diff on screen until the next
-                                            // user action triggers a refresh.
-                                            patchDiff = BuildManifestStore.Diff(patchBaseline, patchCurrentSnapshot);
-                                            Repaint();
-                                        }
-                                        catch (Exception saveEx)
-                                        {
-                                            Debug.LogWarning($"[ContentUploader] Failed to save baseline: {saveEx.Message}");
-                                        }
-                                    }
-
-                                    // Server is now in sync with local state — clear the
-                                    // dirty-groups set so the source-aware estimate goes
-                                    // back to "no pending changes" until the watchdog
-                                    // sees the next file edit.
+                                    skipSet = null;
+                                    effectiveMode = UploadMode.All;
                                     try
                                     {
-                                        DirtyGroupsStore.Clear(contentId);
-                                        dirtyGroupsEstimate = null;
+                                        manifestSummary = BuildManifestStore.BuildCommitSummary(currentManifest, diff: null);
+                                        if (manifestSummary == null || manifestSummary.type != JSONObject.Type.Object)
+                                            manifestSummary = new JSONObject(JSONObject.Type.Object);
+                                        manifestSummary.AddField("uploader", BuildUploaderMetadata(effectiveMode));
                                     }
-                                    catch (Exception dgEx)
+                                    catch (Exception forceSummaryEx)
                                     {
-                                        Debug.LogWarning($"[ContentUploader] Failed to clear dirty groups: {dgEx.Message}");
+                                        Debug.LogWarning($"[ContentUploader] Could not rebuild full-upload summary: {forceSummaryEx.Message}");
                                     }
-
-                                    EditorUtility.DisplayDialog("Success", $"'{contentName}' uploaded successfully!", "OK");
+                                    Debug.Log("[ContentUploader] Creator chose Upload All Now after zero-diff backend compare.");
+                                    Repaint();
                                 }
                                 else
                                 {
-                                    Debug.LogError($"❌ Content uploaded failed: {apiResponse.error}");
-                                    EditorUtility.DisplayDialog("Error", $"Upload failed: {apiResponse.error}", "OK");
+                                    CompleteUploadStatus(true, "No content changes were detected, so nothing needed to upload.");
+                                    isUploading = false;
+                                    return;
                                 }
-                                isUploading = false;
-                            });
+                            }
+
+                            StartPreparedProductionUpload(
+                                contentId,
+                                releaseNotes,
+                                versionNumber,
+                                patchingEnabled,
+                                currentManifest,
+                                skipSet,
+                                manifestSummary,
+                                preUploadedFiles);
                         }
                         catch (Exception e)
                         {
@@ -2485,18 +5804,25 @@ namespace DreamPark {
                             // isn't competing with a stale progress overlay.
                             EditorUtility.ClearProgressBar();
                             Debug.LogError("❌ Addressable build failed: " + e);
+                            CompleteUploadStatus(false, $"Release failed: {e.Message}");
                             EditorUtility.DisplayDialog("Error", $"Error: {e.Message}", "OK");
+                            pendingFailedOnly = false;
                             isUploading = false;
                         }
                     };
 
                     Action continueAfterSchemaSync = () =>
                     {
+                        SetUploadStatus(
+                            "Syncing schema",
+                            "Checking tags and layers so the release lands cleanly on the backend.",
+                            0.12f);
                         SyncTagLayerSchema((syncSuccess, syncError) =>
                         {
                             if (!syncSuccess)
                             {
                                 Debug.LogError($"❌ Schema sync failed: {syncError}");
+                                CompleteUploadStatus(false, $"Schema sync failed: {syncError}");
                                 EditorUtility.DisplayDialog("Schema Sync Failed", syncError, "OK");
                                 isUploading = false;
                                 return;
@@ -2507,25 +5833,38 @@ namespace DreamPark {
 
                     if (exists)
                     {
-                        Debug.Log("Content found: " + response.json.Print());
+                        Debug.Log($"Content found for {contentId}.");
                         JSONObject metadataUpdate = new JSONObject();
                         metadataUpdate.AddField("contentName", contentName);
                         metadataUpdate.AddField("contentDescription", contentDescription);
-                        string logoAddress = GetLogoAddress();
-                        if (!string.IsNullOrEmpty(logoAddress))
-                        {
-                            metadataUpdate.AddField("logoAddress", logoAddress);
-                        }
+                        // logoAddress (the Addressables key) is deliberately NOT
+                        // sent any more — July 2026 the logo stopped shipping in
+                        // a bundle. content.logoImageUrl, pushed by
+                        // UploadLogoImage below, is the one source of truth and
+                        // every surface (iOS, web, admin, the VR client) reads
+                        // it. Sending a key that no longer resolves would just
+                        // hand clients a dead address.
 
                         ContentAPI.UpdateContent(contentId, metadataUpdate, (updateSuccess, updateResponse) =>
                         {
                             if (!updateSuccess)
                             {
                                 Debug.LogError($"❌ Failed to update content metadata: {updateResponse.error}");
+                                CompleteUploadStatus(false, $"Metadata update failed: {updateResponse.error}");
                                 EditorUtility.DisplayDialog("Error", $"Metadata update failed: {updateResponse.error}", "OK");
                                 isUploading = false;
                                 return;
                             }
+                            // Fire-and-forget: push the raw logo image to the
+                            // backend alongside the metadata (never blocks or
+                            // fails the upload — repair via Troubleshooting).
+                            try { UploadLogoImage(contentId, interactive: false); }
+                            catch (Exception e) { Debug.LogWarning("[Logo] upload skipped: " + e.Message); }
+                            // Badges ride alongside the logo, and for the same
+                            // reason: they are backend metadata on the content
+                            // doc, not bundle payload, so this is the moment the
+                            // doc is known to exist and to be ours.
+                            PushBadgesSilently(contentId);
                             continueAfterSchemaSync();
                         });
                         return;
@@ -2533,6 +5872,7 @@ namespace DreamPark {
                     else if (response.statusCode == 403)
                     {
                         Debug.LogError($"❌ Content '{contentId}' is owned by another user.");
+                        CompleteUploadStatus(false, "Access denied. This content ID belongs to another owner.");
                         EditorUtility.DisplayDialog("Access Denied",
                             $"Content '{contentId}' is owned by another user. Choose a different folder name in Assets/Content/ or ask the content owner to add you as a collaborator.",
                             "OK");
@@ -2542,16 +5882,34 @@ namespace DreamPark {
                     else if (response.statusCode == 404)
                     {
                         // Content doesn't exist yet — create it
-                        ContentAPI.AddContent(contentId, contentName, contentDescription, GetLogoAddress(), (success, response) =>
+                        // logoAddress: null — the logo isn't in a bundle any
+                        // more (July 2026), so a key would be a dead pointer.
+                        // UploadLogoImage pushes the image itself and the
+                        // backend serves it as content.logoImageUrl.
+                        ContentAPI.AddContent(contentId, contentName, contentDescription, null, (success, response) =>
                         {
                             if (success)
                             {
                                 Debug.Log($"✅ Content '{contentName}' uploaded successfully!");
+                                // First upload is exactly when the logo should
+                                // land on the backend too (fire-and-forget).
+                                try { UploadLogoImage(contentId, interactive: false); }
+                                catch (Exception e) { Debug.LogWarning("[Logo] upload skipped: " + e.Message); }
+                                // First upload: the content doc has just been
+                                // created, so this is the earliest point at which
+                                // /admin/content/:id/badges/save can authorize us
+                                // as its owner. Pushing any earlier 403s.
+                                PushBadgesSilently(contentId);
+                                SetUploadStatus(
+                                    "Creating release record",
+                                    "Project created. Moving straight into the first release build.",
+                                    0.1f);
                                 UploadContent(build);
                             }
                             else
                             {
                                 Debug.LogError($"❌ Failed to create new content: {response.error}");
+                                CompleteUploadStatus(false, $"Failed to create content: {response.error}");
                                 EditorUtility.DisplayDialog("Error", $"Failed to create new content: {response.error}", "OK");
                                 isUploading = false;
                             }
@@ -2561,6 +5919,7 @@ namespace DreamPark {
                     {
                         // Other errors (401, 500, network issues)
                         Debug.LogError($"❌ Failed to check content: {response.error}. Make sure you are logged in.");
+                        CompleteUploadStatus(false, $"Failed to check content: {response.error}");
                         EditorUtility.DisplayDialog("Error",
                             $"Failed to check content: {response.error}\n\nMake sure you are logged in with a valid session.",
                             "OK");
@@ -2571,6 +5930,7 @@ namespace DreamPark {
             catch (Exception e)
             {
                 Debug.LogError("❌ Upload failed: " + e);
+                CompleteUploadStatus(false, $"Release failed: {e.Message}");
                 EditorUtility.DisplayDialog("Error", $"Error: {e.Message}", "OK");
                 isUploading = false;
             }
@@ -2660,6 +6020,14 @@ namespace DreamPark {
             }
         }
 
+        // Keeps the logo's addressable ENTRY (address + label + GUID
+        // bookkeeping) while making sure the group never builds. July 2026:
+        // the logo ships to the backend as an image
+        // (POST /api/content/:id/logo → content.logoImageUrl) and no runtime
+        // path loads it out of a bundle any more, so building a per-content
+        // logo bundle was pure upload weight. The entry stays put so the
+        // texture isn't re-harvested into a gameplay bundle by the next
+        // grouping pass — and so re-enabling is one flag.
         private void SyncLogoAddressableEntry()
         {
             if (logoTexture == null)
@@ -2692,8 +6060,8 @@ namespace DreamPark {
             var group = settings.groups.FirstOrDefault(g => g != null && g.Name == groupName)
                 ?? settings.CreateGroup(groupName, false, false, true, new List<AddressableAssetGroupSchema>
                 {
-                    (AddressableAssetGroupSchema)Activator.CreateInstance(typeof(BundledAssetGroupSchema)),
-                    (AddressableAssetGroupSchema)Activator.CreateInstance(typeof(ContentUpdateGroupSchema))
+                    ScriptableObject.CreateInstance<BundledAssetGroupSchema>(),
+                    ScriptableObject.CreateInstance<ContentUpdateGroupSchema>()
                 });
 
             var bag = group.GetSchema<BundledAssetGroupSchema>() ?? group.AddSchema<BundledAssetGroupSchema>();
@@ -2703,6 +6071,8 @@ namespace DreamPark {
             bag.UseAssetBundleCrc = true;
             bag.BundleMode = BundledAssetGroupSchema.BundlePackingMode.PackTogether;
             bag.Compression = BundledAssetGroupSchema.BundleCompressionMode.LZ4;
+            // The one behavioural line: no logo bundle is produced or uploaded.
+            bag.IncludeInBuild = false;
 
             var entry = settings.CreateOrMoveEntry(guid, group, false, false);
             entry.address = GetLogoAddress();
@@ -2710,7 +6080,7 @@ namespace DreamPark {
 
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
-            Debug.Log($"✅ Synced logo addressable: {entry.address}");
+            Debug.Log($"✅ Synced logo addressable (build-excluded): {entry.address}");
         }
         public static bool BuildForTarget(BuildTarget target, BuildTargetGroup group, string targetUrl, string contentId = null)
         {
@@ -2751,6 +6121,69 @@ namespace DreamPark {
                     settings.OverridePlayerVersion = contentId;
                     Debug.Log($"📛 [BuildForTarget] OverridePlayerVersion = '{settings.OverridePlayerVersion}', PlayerBuildVersion = '{settings.PlayerBuildVersion}'");
                 }
+
+                // Re-apply NonRecursiveBuilding defensively — any
+                // AssetDatabase.Refresh() between the configure step and the
+                // build could re-read AddressableAssetSettings.asset from disk
+                // and lose the value we just set. Pinned to Unity's default
+                // (true); see the longer comment at the configure step for the
+                // production-crash context that drove this revert.
+                settings.NonRecursiveBuilding = true;
+
+                // Strip the editor version from bundle headers. If left off, the
+                // Unity version string is baked into every bundle, so a Unity
+                // upgrade re-hashes ALL bundles → every content does a full
+                // re-download instead of a patch. There's no public C# property
+                // for this in this Addressables version, so set the serialized
+                // field directly. Enforced here (not just in the .asset) so every
+                // creator project builds patch-stable bundles regardless of their
+                // local Addressables settings.
+                {
+                    var settingsSO = new SerializedObject(settings);
+                    var stripProp = settingsSO.FindProperty("m_StripUnityVersionFromBundleBuild");
+                    if (stripProp != null && !stripProp.boolValue)
+                    {
+                        stripProp.boolValue = true;
+                        settingsSO.ApplyModifiedProperties();
+                        EditorUtility.SetDirty(settings);
+                        Debug.Log("🧱 [BuildForTarget] Forced StripUnityVersionFromBundleBuild = true (serialized field) for patch-stable bundles.");
+                    }
+                }
+
+                // Bake a CRC into the catalog for every bundle and validate it BOTH
+                // on download AND when loading from cache. Download-validation stops a
+                // corrupt download from being cached; cached-validation rejects a
+                // corrupt/wrong bundle that's ALREADY cached (re-downloads instead of
+                // crashing) — which is exactly the failure we hit. Enforced on every
+                // group so a creator project can't ship one without it (settings drift
+                // was why a corrupt bundle slipped through). Cost: a CRC pass when a
+                // cached bundle loads — async (adds load latency, not frame hitches).
+                int crcFixed = 0;
+                foreach (var grp in settings.groups)
+                {
+                    if (grp == null) continue;
+                    var bundledSchema = grp.GetSchema<UnityEditor.AddressableAssets.Settings.GroupSchemas.BundledAssetGroupSchema>();
+                    if (bundledSchema == null) continue;
+
+                    bool schemaChanged = false;
+                    if (!bundledSchema.UseAssetBundleCrc)
+                    {
+                        bundledSchema.UseAssetBundleCrc = true;                 // validate on download
+                        schemaChanged = true;
+                    }
+                    if (!bundledSchema.UseAssetBundleCrcForCachedBundles)
+                    {
+                        bundledSchema.UseAssetBundleCrcForCachedBundles = true; // ALSO validate cached bundles on load
+                        schemaChanged = true;
+                    }
+                    if (schemaChanged)
+                    {
+                        EditorUtility.SetDirty(bundledSchema);
+                        crcFixed++;
+                    }
+                }
+                if (crcFixed > 0)
+                    Debug.Log($"🔒 [BuildForTarget] Normalized CRC (download + cached validation) on {crcFixed} group schema(s).");
 
                 if (EditorPrefs.GetBool(CleanBeforeEachTargetPrefKey, false))
                 {

@@ -163,4 +163,24 @@ public class Simulator : MonoBehaviour
         
     }
 }
+#else
+using UnityEngine;
+
+/// DEVICE STUB. The real Simulator above is an editor-only play-mode helper
+/// (spawns a fly camera + fake hands), so its class doesn't exist in player
+/// builds — which turned the component on the DreamPark prefab into a
+/// "referenced script is missing!" warning at boot on iOS/Quest. This stub
+/// keeps the reference resolvable and removes itself instantly at runtime.
+public class Simulator : MonoBehaviour
+{
+    private void Awake()
+    {
+        Destroy(this);
+    }
+
+    public void UpdateCamera() {}
+    public void UpdateHands() {}
+    public virtual void ReceiveInput() {}
+    public virtual void ReceiveOptionInput(int option = 0) {}
+}
 #endif

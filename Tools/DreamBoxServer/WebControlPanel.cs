@@ -144,7 +144,7 @@ public sealed class WebControlPanel : IDisposable
     {
         dreamboxId = _state.Config.DreamboxId,
         port = _state.Config.Port,
-        connectionKey = _state.Config.ConnectionKey,
+        connectionKeyConfigured = !string.IsNullOrEmpty(_state.Config.ConnectionKey),
         maxConnections = _state.Config.MaxConnections,
         debug = _state.Config.Debug,
         discoveryEnabled = _state.Config.DiscoveryEnabled,

@@ -57,9 +57,20 @@ namespace DreamPark.API
         [Tooltip("Optional: override base URLs at runtime.")]
         public static string prodBaseUrl = "https://dreampark.app";
         public static string devBaseUrl  = "https://dreampark-dev-da8108e9492c.herokuapp.com";
+
+        // Default ALL traffic to PROD. Internal/dev projects opt into the dev
+        // backend by adding the DREAMPARK_DEV_BACKEND scripting define in Player
+        // Settings; the shipped SDK template and release builds must NOT define
+        // it. (Previously every verb hard-coded devBaseUrl, so shipped builds
+        // sent auth/login/PII to the dev environment.)
+#if DREAMPARK_DEV_BACKEND
+        public static string baseUrl = devBaseUrl;
+#else
+        public static string baseUrl = prodBaseUrl;
+#endif
         public static void POST(string endpoint, string authToken, object body, Action<bool, APIResponse> callback)
         {
-            var url = devBaseUrl + endpoint;
+            var url = baseUrl + endpoint;
             byte[] bodyRaw = null;
             if (body is JSONObject) {
                 bodyRaw = System.Text.Encoding.UTF8.GetBytes((body ?? new JSONObject()).ToString());
@@ -88,7 +99,7 @@ namespace DreamPark.API
 
         public static void PUT(string endpoint, string authToken, byte[] data, string contentType, Action<float> progressCallback, Action<bool, string> callback)
         {
-            var url = endpoint.StartsWith("http") ? endpoint : devBaseUrl + endpoint;
+            var url = endpoint.StartsWith("http") ? endpoint : baseUrl + endpoint;
             #if UNITY_EDITOR
             EditorCoroutineUtility.StartCoroutineOwnerless(PutRequest(url, data, contentType, progressCallback, callback));
             #else
@@ -98,19 +109,29 @@ namespace DreamPark.API
 
         public static void GET(string endpoint, string authToken, Action<bool, APIResponse> callback)
         {
-            var url = devBaseUrl + endpoint;
+            var url = baseUrl + endpoint;
             #if UNITY_EDITOR
             EditorCoroutineUtility.StartCoroutineOwnerless(GetRequest(url, authToken, callback));
             #else
             CoroutineRunner.Run(GetRequest(url, authToken, callback));
             #endif
         }
+        // UnityWebRequest's default timeout is 0 — WAIT FOREVER. A server
+        // that accepts the connection but never responds (e.g. a crashed
+        // route handler) used to hang the request eternally, and with it any
+        // UI waiting on the callback (the stuck park-save overlay). Every
+        // request gets a hard ceiling; the callback then fires with a
+        // timeout error like any other failure.
+        private const int RequestTimeoutSeconds = 30;
+        private const int UploadTimeoutSeconds = 180; // large multipart/PUT payloads
+
         private static IEnumerator PostRequest(string url, string authToken, byte[] bodyRaw, Action<bool, APIResponse> callback)
         {
             using (UnityWebRequest req = new UnityWebRequest(url, UnityWebRequest.kHttpVerbPOST))
             {
                 req.uploadHandler = new UploadHandlerRaw(bodyRaw);
                 req.downloadHandler = new DownloadHandlerBuffer();
+                req.timeout = RequestTimeoutSeconds;
 
                 req.SetRequestHeader("Content-Type", "application/json");
                 if (!string.IsNullOrEmpty(authToken))
@@ -128,6 +149,7 @@ namespace DreamPark.API
             using (UnityWebRequest req = new UnityWebRequest(url, UnityWebRequest.kHttpVerbGET))
             {
                 req.downloadHandler = new DownloadHandlerBuffer();
+                req.timeout = RequestTimeoutSeconds;
                 if (!string.IsNullOrEmpty(authToken))
                     req.SetRequestHeader("Authorization", authToken);
 
@@ -150,6 +172,7 @@ namespace DreamPark.API
 
             using (UnityWebRequest req = UnityWebRequest.Post(url, form))
             {
+                req.timeout = UploadTimeoutSeconds;
                 if (!string.IsNullOrEmpty(authToken))
                     req.SetRequestHeader("Authorization", authToken);
 
@@ -172,6 +195,7 @@ namespace DreamPark.API
             {
                 req.uploadHandler = new UploadHandlerRaw(data);
                 req.downloadHandler = new DownloadHandlerBuffer();
+                req.timeout = UploadTimeoutSeconds;
                 req.SetRequestHeader("Content-Type", contentType);
 
                 var op = req.SendWebRequest();
@@ -184,7 +208,7 @@ namespace DreamPark.API
 
                 bool success = req.result == UnityWebRequest.Result.Success || req.responseCode == 200;
                 if (success)
-                    Debug.Log($"✅ Uploaded successfully to Firebase: {url}");
+                    Debug.Log("✅ Upload completed successfully.");
                 else
                     Debug.LogError($"❌ Upload failed: {req.responseCode} - {req.error}");
 
