@@ -25,19 +25,20 @@ namespace DreamPark
     /// Which side of a prop's footprint mounts flush against a real wall — a
     /// torch, a sign, a portal window. A prop only ever needs ONE side (unlike
     /// LevelTemplate's 4 combinable wall bools), along the prop's local X axis
-    /// (Right/Left) per the original spec, matching the right/forward
-    /// convention TryGetManualFootprint and TryGetColliderFootprint already
-    /// use. A plain (non-[Flags]) enum keeps "no wall" and "one wall" the only
+    /// (Right/Left), matching the right/forward convention
+    /// TryGetManualFootprint and TryGetColliderFootprint already use. A plain
+    /// (non-[Flags]) enum keeps "no wall" and "one wall" the only
     /// representable states.
     ///
-    /// WIRE FORMAT UNDER DISCUSSION (2026-08-31, Scan Layout group): Mesh's
-    /// GENERATE_LAYOUT solver proposes props publish a fixed "-z" (wall
-    /// BEHIND the prop, prop facing +Z into the room) instead of a
-    /// left/right choice, to match PlaceOnWalls' existing facing convention
-    /// directly. That is a real X-vs-Z axis question, not just a wire-format
-    /// rename, so this enum and PublishedWallSideToken below are left as
-    /// originally specified until it's resolved — see that method for the
-    /// one-line flip once it is.
+    /// AXIS SETTLED ON X (2026-08-31, Scan Layout group): Mesh's
+    /// GENERATE_LAYOUT solver initially assumed a fixed "-z" (wall BEHIND the
+    /// prop, prop facing +Z into the room) to match PlaceOnWalls' facing
+    /// convention. Web independently re-read Aidan's original ask while
+    /// building the backend contract and confirmed it specifies X, same as
+    /// this file always has — Mesh is updating the solver to accept the X
+    /// token rather than this enum changing to Z. Server does not restrict
+    /// props to one side either (only validates tokens), so a future
+    /// multi-side prop needs no backend change if this enum ever grows.
     /// </summary>
     public enum PropWallSide
     {
@@ -135,9 +136,10 @@ namespace DreamPark
 
         /// <summary>
         /// This prop's wall side as a wire axis token ("+x"/"-x"), or "" if
-        /// wallSide is None. Kept as a single conversion point so the pending
-        /// X-vs-Z resolution (see PropWallSide's docblock) is a one-line change
-        /// here rather than a hunt through every caller.
+        /// wallSide is None. Always emitted on every dimensions row (never
+        /// omitted) per the backend contract: undefined means "don't touch
+        /// the stored value", "" is the explicit clear a re-authored prop
+        /// needs to actually turn a wall off.
         /// </summary>
         public string PublishedWallSideToken =>
             wallSide == PropWallSide.Right ? "+x" :

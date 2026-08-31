@@ -160,6 +160,11 @@ public class LevelTemplateEditor : Editor {
         /// sides describe a corner, two opposite sides describe a through-wall
         /// (e.g. a portal). Kept here rather than in the uploader so the token
         /// spelling has exactly one source.
+        ///
+        /// Always read and uploaded — never omitted from the row — because the
+        /// backend treats an ABSENT "walls" field as "don't touch the stored
+        /// value" and "" as the explicit clear. Untoggling every side has to
+        /// still publish "" or the old value would stick forever.
         /// </summary>
         public string WallsWireValue
         {
