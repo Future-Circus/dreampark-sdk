@@ -757,6 +757,17 @@ end
 
 -- Live relay stats, when a DreamBoxClient exists. Wrapped because the
 -- singleton is absent in a plain scene with no networking at all.
+--
+-- ⚠ DreamBoxClient and NetSessionArbiter are not registered for XLua codegen
+-- as of this writing (2026-08-30) — they were added to
+-- DreamParkLuaConfig.LuaCallCSharp but that only takes effect after
+-- Generate XLua Code + a core app rebuild ships. Until a build with that
+-- registration is out, these four functions (relay_ping/relay_state/
+-- relay_messages/session_state) fall back to reflection on device and can
+-- silently no-op under IL2CPP the same way the Zombiez bug did — the pcall
+-- around each one means you get the sentinel value back ("no client" / -1),
+-- not an error, so it looks fine in the Editor either way. Confirm they're
+-- registered in the app you're targeting before relying on them.
 function relay_ping()
     local ping = -1
     pcall(function()
