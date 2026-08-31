@@ -1592,7 +1592,32 @@ namespace DreamPark {
             // same call independently off the row's own kind — this flag is a
             // console nicety, never the authority.
             public bool isProp;
+            // AttractionTemplate.walls / PropTemplate.wallSide, stringified —
+            // [Flags] enums join their set members with a comma for free, so
+            // "Forward, Right" is already the wire format. "" for a plain
+            // LevelTemplate (no AttractionTemplate) that predates this field.
+            public string walls = "";
+            public float wallHeightFt;
         }
+
+        // Feet form of AttractionTemplate/PropTemplate's own
+        // DefaultWallHeightMeters (3.048 m = 10 ft) constant. Deliberately
+        // re-declared rather than shared, same call as FeetPerMeter below: one
+        // unit on the wire, one place to be wrong.
+        //
+        // NOT content-aware, unlike the two components' GetWallHeightMeters().
+        // That method reads Renderer.bounds, a WORLD-space AABB that is only
+        // meaningful for an INSTANTIATED object — exactly the trap this file's
+        // FootprintMeters comment already documents for Collider.bounds. This
+        // uploader loads prefab ASSETS straight off disk via
+        // AssetDatabase.LoadAssetAtPath and never instantiates them, so calling
+        // GetWallHeightMeters() here would silently read every renderer's
+        // bounds as zero and publish the flat default anyway — just with a
+        // false appearance of being content-derived. Publishing the constant
+        // directly is the honest version of the same number until an author
+        // gets a real override field or this walks local mesh-asset bounds the
+        // way TryMeasureLocalColliderFootprint walks local collider-shape data.
+        private const float DefaultWallHeightFeet = 10f;
 
         // Backend catalog key derivation, shared with the preview walk: the
         // asset path minus the leading "Assets/" and the extension (see
@@ -1640,6 +1665,8 @@ namespace DreamPark {
                 float widthFt;
                 float lengthFt;
                 bool isProp;
+                string walls = "";
+                float wallHeightFt = 0f;
 
                 LevelTemplate level = prefab.GetComponent<LevelTemplate>();
                 if (level != null)
@@ -1649,6 +1676,15 @@ namespace DreamPark {
                     widthFt = feet.x;
                     lengthFt = feet.y;
                     isProp = false;
+
+                    // Walls live on AttractionTemplate, not LevelTemplate itself
+                    // — a legacy level prefab with no AttractionTemplate simply
+                    // has no wall data to publish.
+                    if (level is AttractionTemplate attraction)
+                    {
+                        walls = attraction.walls.ToString();
+                        if (attraction.walls != WallSide.None) wallHeightFt = DefaultWallHeightFeet;
+                    }
                 }
                 else
                 {
@@ -1666,6 +1702,9 @@ namespace DreamPark {
                     widthFt = meters.x * FeetPerMeter;
                     lengthFt = meters.y * FeetPerMeter;
                     isProp = true;
+
+                    walls = prop.wallSide.ToString();
+                    if (prop.wallSide != PropWallSide.None) wallHeightFt = DefaultWallHeightFeet;
                 }
 
                 list.Add(new DimensionUploadRoot
@@ -1675,6 +1714,8 @@ namespace DreamPark {
                     widthFt = widthFt,
                     lengthFt = lengthFt,
                     isProp = isProp,
+                    walls = walls,
+                    wallHeightFt = wallHeightFt,
                 });
             }
             return list;
@@ -1713,6 +1754,8 @@ namespace DreamPark {
                 row.AddField("resourceName", r.resourceName);
                 row.AddField("widthFt", r.widthFt);
                 row.AddField("lengthFt", r.lengthFt);
+                row.AddField("walls", r.walls);
+                row.AddField("wallHeightFt", r.wallHeightFt);
                 arr.Add(row);
                 // The size-reference ladder bottoms out at a 4 x 4 ft phone booth,
                 // so EVERY prop would tag "fits a Phone Booth" — a line that reads

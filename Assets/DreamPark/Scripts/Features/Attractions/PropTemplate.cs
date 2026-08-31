@@ -21,6 +21,23 @@ namespace DreamPark
         Custom
     }
 
+    /// <summary>
+    /// Which side of a prop's footprint mounts flush against a real wall — a
+    /// torch, a sign, a portal window. A prop only ever needs ONE side (unlike
+    /// AttractionTemplate.WallSide's combinable 4), and it is always along the
+    /// prop's local X axis (Right/Left), matching the same right/forward
+    /// convention TryGetManualFootprint and TryGetColliderFootprint already use.
+    /// A plain (non-[Flags]) enum keeps "no wall" and "one wall" the only
+    /// representable states — there is no Forward/Back option to pick by
+    /// mistake.
+    /// </summary>
+    public enum PropWallSide
+    {
+        None,
+        Right,
+        Left
+    }
+
     [DisallowMultipleComponent][RequireComponent(typeof(GameArea))]
     public class PropTemplate : MonoBehaviour
     {
@@ -80,6 +97,10 @@ namespace DreamPark
         [ShowIf("_isManualFootprint")] public Vector2 customFootprintMeters = new Vector2(1f, 1f);
         public Vector2 footprintOffsetMeters = Vector2.zero;
         public bool showFootprintGizmos = true;
+        [Tooltip("If this prop mounts flush against a wall (e.g. a torch or a portal window), which side of its footprint the wall sits on. Published with the prop's dimensions so layout/AI tools can place it against a real wall.")]
+        public PropWallSide wallSide = PropWallSide.None;
+        [Tooltip("Draw the required wall as a gizmo plane when this prop is selected.")]
+        public bool showWallGizmo = true;
         [HideInInspector] public JSONObject pointData;
         [HideInInspector] public GameObject runtimePlane;
         [SerializeField, HideInInspector] private bool _isManualFootprint;
@@ -91,6 +112,33 @@ namespace DreamPark
         private bool _isSuppressedByTemplateParent;
 
         public float SurfaceHeight => transform.position.y + _calibratedYOffset;
+
+        /// <summary>
+        /// Minimum wall height this SDK will ever ask for, in meters (10 ft).
+        /// Matched by AttractionTemplate's own constant of the same value — kept
+        /// separate because the two components don't otherwise share internals.
+        /// </summary>
+        private const float DefaultWallHeightMeters = 3.048f;
+
+        /// <summary>
+        /// The wall height this prop needs, in meters: the 10 ft default, or
+        /// taller if the prop's own content reaches higher — never shorter, for
+        /// the same reason as AttractionTemplate.GetWallHeightMeters.
+        /// </summary>
+        public float GetWallHeightMeters()
+        {
+            float contentHeight = 0f;
+            var renderers = GetComponentsInChildren<Renderer>(true);
+            float floorY = SurfaceHeight;
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                var r = renderers[i];
+                if (r == null) continue;
+                float top = r.bounds.max.y - floorY;
+                if (top > contentHeight) contentHeight = top;
+            }
+            return Mathf.Max(DefaultWallHeightMeters, contentHeight);
+        }
 
         public static void NotifyPropTemplateChanged()
         {
@@ -628,16 +676,56 @@ namespace DreamPark
         // per-frame tax across all unselected props.
         private void OnDrawGizmosSelected()
         {
-            if (!showFootprintGizmos || !TryGetWorldFootprint(out var footprint, out var surfaceHeight))
+            if (!TryGetWorldFootprint(out var footprint, out var surfaceHeight))
                 return;
 
-            Gizmos.color = new Color(1f, 0.6f, 0f, 1f);
-            for (int i = 0; i < footprint.Length; i++)
+            if (showFootprintGizmos)
             {
-                Vector2 a = footprint[i];
-                Vector2 b = footprint[(i + 1) % footprint.Length];
-                Gizmos.DrawLine(new Vector3(a.x, surfaceHeight, a.y), new Vector3(b.x, surfaceHeight, b.y));
+                Gizmos.color = new Color(1f, 0.6f, 0f, 1f);
+                for (int i = 0; i < footprint.Length; i++)
+                {
+                    Vector2 a = footprint[i];
+                    Vector2 b = footprint[(i + 1) % footprint.Length];
+                    Gizmos.DrawLine(new Vector3(a.x, surfaceHeight, a.y), new Vector3(b.x, surfaceHeight, b.y));
+                }
             }
+
+            if (showWallGizmo && wallSide != PropWallSide.None)
+            {
+                DrawWallGizmo(footprint, surfaceHeight);
+            }
+        }
+
+        /// <summary>
+        /// footprint[] is ordered (-x,-z),(+x,-z),(+x,+z),(-x,+z) in the prop's
+        /// own oriented frame — see TryGetManualFootprint/TryGetColliderFootprint,
+        /// which both build it in that winding. Right is the +x edge (indices
+        /// 1,2), Left is the -x edge (indices 0,3). Drawn from those world-space
+        /// corners directly, the same frame the footprint outline above already
+        /// uses, rather than re-deriving a local frame via Gizmos.matrix — see
+        /// the FootprintMeters docblock on why this component avoids a second
+        /// position/rotation/scale convention living alongside the first.
+        /// </summary>
+        private void DrawWallGizmo(Vector2[] footprint, float surfaceHeight)
+        {
+            int a = wallSide == PropWallSide.Right ? 1 : 0;
+            int b = wallSide == PropWallSide.Right ? 2 : 3;
+
+            float wallHeight = GetWallHeightMeters();
+            Vector3 baseA = new Vector3(footprint[a].x, surfaceHeight, footprint[a].y);
+            Vector3 baseB = new Vector3(footprint[b].x, surfaceHeight, footprint[b].y);
+            Vector3 topA = baseA + Vector3.up * wallHeight;
+            Vector3 topB = baseB + Vector3.up * wallHeight;
+
+            Gizmos.color = new Color(0.1f, 0.6f, 1f, 1f);
+            Gizmos.DrawLine(baseA, baseB);
+            Gizmos.DrawLine(baseB, topB);
+            Gizmos.DrawLine(topB, topA);
+            Gizmos.DrawLine(topA, baseA);
+            // Diagonal cross so the rectangle reads as a plane rather than a
+            // frame, matching what "a gizmo plane wall" is meant to show.
+            Gizmos.DrawLine(baseA, topB);
+            Gizmos.DrawLine(baseB, topA);
         }
 #endif
     }
