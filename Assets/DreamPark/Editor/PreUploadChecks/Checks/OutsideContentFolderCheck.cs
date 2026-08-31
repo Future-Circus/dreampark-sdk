@@ -148,6 +148,24 @@ namespace DreamPark.PreUploadChecks.Checks
                               + "one's folder. If this asset is shared, duplicate it instead.\n\n"
                               + "Cannot be undone with Ctrl-Z. Use version control to revert.",
                         });
+
+                        // "Move into content folder" above only ever touches THIS one
+                        // asset — CollectOffenders deliberately doesn't crawl past an
+                        // offender into its own dependencies (see the comment on
+                        // CollectOffenders), so an offender that itself depends on
+                        // other out-of-folder assets leaves those exactly where they
+                        // were after a plain Move. This opens the dedicated resolver,
+                        // which walks that sub-tree and lets the dev choose Transfer
+                        // or Copy per item before applying anything.
+                        string resolverRootPath = root.assetPath;
+                        string resolverOffenderPath = depPath;
+                        string resolverContentId = ctx.contentId;
+                        string resolverContentRoot = ctx.contentRoot;
+                        finding.fixes.Add(FixAction.Navigate("Resolve dependencies…", () =>
+                        {
+                            OutsideContentDependencyResolverPopup.Show(
+                                resolverRootPath, resolverOffenderPath, resolverContentId, resolverContentRoot);
+                        }));
                     }
 
                     string pingPath = depPath;
@@ -283,10 +301,16 @@ namespace DreamPark.PreUploadChecks.Checks
 
         // ------------------------------------------------------------------
         // Classification
+        //
+        // Verdict, Classify, CanOfferMove, TargetPathFor, MoveAsset, ResolveCollision
+        // and CreateFolderRecursive below are internal (was private) so
+        // OutsideContentDependencyResolverPopup can reuse the exact same
+        // classification and move logic when it walks an offender's own
+        // dependency chain, instead of maintaining a second copy that could drift.
 
-        private enum Verdict { Allowed, Informational, Violation }
+        internal enum Verdict { Allowed, Informational, Violation }
 
-        private static Verdict Classify(string path, string contentId)
+        internal static Verdict Classify(string path, string contentId)
         {
             if (string.IsNullOrEmpty(path)) return Verdict.Allowed;
 
@@ -349,7 +373,7 @@ namespace DreamPark.PreUploadChecks.Checks
         // ------------------------------------------------------------------
         // Move
 
-        private static bool CanOfferMove(string depPath)
+        internal static bool CanOfferMove(string depPath)
         {
             // Never offer to relocate an installed SDK or another content package's
             // folder wholesale. PackageRelocator's content-based safety net catches
@@ -383,7 +407,7 @@ namespace DreamPark.PreUploadChecks.Checks
         // Textures/ Materials/ — those folder names drive the Addressables address
         // ({gameId}/{TypeFolder}/{name}), so auto-sorting would mint addresses the dev
         // never asked for.
-        private static string TargetPathFor(string depPath, string contentId)
+        internal static string TargetPathFor(string depPath, string contentId)
         {
             string rest = depPath.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase)
                 ? depPath.Substring("Assets/".Length)
@@ -392,7 +416,7 @@ namespace DreamPark.PreUploadChecks.Checks
             return $"{ContentRootScanner.ContentFolder}/{contentId}/ThirdParty/{rest}";
         }
 
-        private static bool MoveAsset(string source, string target)
+        internal static bool MoveAsset(string source, string target)
         {
             try
             {
@@ -432,7 +456,7 @@ namespace DreamPark.PreUploadChecks.Checks
             }
         }
 
-        private static string ResolveCollision(string target)
+        internal static string ResolveCollision(string target)
         {
             if (string.IsNullOrEmpty(AssetDatabase.AssetPathToGUID(target))) return target;
 
@@ -455,7 +479,7 @@ namespace DreamPark.PreUploadChecks.Checks
 
         // AssetDatabase.CreateFolder only creates ONE level, so walk up then build
         // downward. (PackageRelocator has an equivalent private helper.)
-        private static void CreateFolderRecursive(string folderAssetPath)
+        internal static void CreateFolderRecursive(string folderAssetPath)
         {
             if (string.IsNullOrEmpty(folderAssetPath)) return;
             if (AssetDatabase.IsValidFolder(folderAssetPath)) return;
