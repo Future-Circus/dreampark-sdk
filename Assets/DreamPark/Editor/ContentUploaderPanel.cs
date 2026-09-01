@@ -239,6 +239,12 @@ namespace DreamPark {
         private List<BadgeStore.Entry> badges = new List<BadgeStore.Entry>();
         private string badgesContentId;
         private BadgeLuaScanner.Result badgeScan;
+        // Which Attraction/Prop/Player roots award each badge id, for the
+        // "Awarded by" tooltip on the card's status icon. Recomputed alongside
+        // badgeScan in RefreshBadges — see that method's comment for why this
+        // is a light enough pass to run there rather than only inside the
+        // pre-upload check.
+        private BadgeAttributionScanner.Result badgeAttribution;
         // Set when a field is edited; flushed to .badges.json on the next
         // Layout pass rather than on every keystroke.
         private bool badgesDirty;
@@ -259,6 +265,18 @@ namespace DreamPark {
         // GUI.Button's control-id stream shifts between them.
         private Dictionary<string, KeyValuePair<PreUploadChecks.CheckSeverity, string>> preUploadBadges;
         private Dictionary<string, KeyValuePair<PreUploadChecks.CheckSeverity, string>> preUploadBadgesPending;
+        // Same staged-swap rule, keyed by badge id instead of asset path — feeds
+        // the checkmark/warning icon on the Badges section's own cards (see
+        // PreUploadCheckRunner.BuildBadgeAwardMap for why this needs its own map
+        // rather than reusing preUploadBadges).
+        private Dictionary<string, KeyValuePair<PreUploadChecks.CheckSeverity, string>> preUploadBadgeAwards;
+        private Dictionary<string, KeyValuePair<PreUploadChecks.CheckSeverity, string>> preUploadBadgeAwardsPending;
+        // True once a report has actually completed for this content. Needed
+        // because "no active finding for this badge id" is ambiguous on its
+        // own — it also describes the state before the first scan has run —
+        // and a false-positive checkmark on a badge that just hasn't been
+        // checked yet would be worse than no icon at all.
+        private bool preUploadReportEverBuilt;
         private bool preUploadAdvisoryScheduled;
         private double preUploadAdvisoryDueAt;
 
@@ -420,6 +438,8 @@ namespace DreamPark {
         {
             var report = PreUploadChecks.PreUploadCheckRunner.CachedReportFor(contentId);
             preUploadBadgesPending = PreUploadChecks.PreUploadCheckRunner.BuildBadgeMap(report);
+            preUploadBadgeAwardsPending = PreUploadChecks.PreUploadCheckRunner.BuildBadgeAwardMap(report);
+            if (report != null) preUploadReportEverBuilt = true;
         }
 
         // Runs the cheap checks so the Park Assets tiles can carry warning badges the
@@ -576,6 +596,11 @@ namespace DreamPark {
             {
                 preUploadBadges = preUploadBadgesPending;
                 preUploadBadgesPending = null;
+            }
+            if (Event.current.type == EventType.Layout && preUploadBadgeAwardsPending != null)
+            {
+                preUploadBadgeAwards = preUploadBadgeAwardsPending;
+                preUploadBadgeAwardsPending = null;
             }
 
             // Same rule for the badge list: add/remove only ever happens between
@@ -3908,6 +3933,7 @@ namespace DreamPark {
             badgeRemoveIndex = -1;
             badgesDirty = false;
             badgeScan = null;
+            badgeAttribution = null;
 
             if (string.IsNullOrEmpty(contentId))
             {
@@ -3927,6 +3953,36 @@ namespace DreamPark {
                 Debug.LogWarning("[Badges] Lua scan failed: " + e.Message);
                 badges = BadgeStore.Load(contentId);
             }
+
+            try
+            {
+                // Independent of the pre-upload report cache on purpose: the
+                // "Awarded by" tooltip should be current the moment a rescan
+                // runs, not wait on the (debounced) advisory check pass.
+                badgeAttribution = BadgeAttributionScanner.Scan(contentId, PreUploadChecks.ContentRootScanner.Scan(contentId));
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[Badges] Attribution scan failed: " + e.Message);
+                badgeAttribution = null;
+            }
+        }
+
+        // "Awarded by Fountain Quest (Attraction), the Player rig" — or "" when
+        // nothing (yet) awards this id, in which case the card falls back to
+        // whatever preUploadBadgeAwards says instead.
+        private string AwardedBySummary(string badgeId)
+        {
+            if (badgeAttribution == null || string.IsNullOrEmpty(badgeId)) return "";
+
+            var parts = new List<string>();
+            if (badgeAttribution.awardedByRoot.TryGetValue(badgeId, out var roots))
+            {
+                foreach (var r in roots) parts.Add(r.name + " (" + r.KindLabel + ")");
+            }
+            if (badgeAttribution.awardedByPlayer.Contains(badgeId)) parts.Add("the Player rig");
+
+            return parts.Count == 0 ? "" : "Awarded by " + string.Join(", ", parts);
         }
 
         private void ApplyQueuedBadgeMutations()
@@ -4141,6 +4197,54 @@ namespace DreamPark {
                     entry.IdLocked ? "● From your Lua" : "○ Added by hand",
                     entry.IdLocked ? entry.discoveredIn : "Not referenced from Lua in this content folder."),
                 EditorStyles.miniLabel);
+
+            // Readiness icon, top-right corner of the card: is this badge
+            // actually awarded anywhere, and ready to ship? Backed by
+            // BadgeAwardCheck (see PreUploadChecks/Checks/BadgeAwardCheck.cs)
+            // rather than computed inline here, so the same finding also shows
+            // up in the full Pre-Upload Checks popup and can be ignored per
+            // badge through the same ignore-store every other check uses.
+            //
+            // GUI.Label, not GUI.Button: it consumes no control id, so it is
+            // safe to draw even though its content (warning vs. checkmark vs.
+            // "not scanned yet") can legitimately differ between this frame's
+            // Layout and Repaint passes — unlike GUI.Button, there is no id
+            // stream here to shift.
+            if (!string.IsNullOrEmpty(entry.badgeId))
+            {
+                var statusRect = new Rect(card.xMax - 20f, card.y + 4f, 16f, 16f);
+
+                KeyValuePair<PreUploadChecks.CheckSeverity, string> award = default;
+                bool hasWarning = preUploadBadgeAwards != null
+                                && preUploadBadgeAwards.TryGetValue(entry.badgeId, out award);
+
+                if (hasWarning)
+                {
+                    var warnIcon = EditorGUIUtility.IconContent("console.warnicon.sml");
+                    GUI.Label(statusRect, new GUIContent(warnIcon != null ? warnIcon.image : null, award.Value));
+                }
+                else if (!preUploadReportEverBuilt)
+                {
+                    // Neither "warning" nor "clean" is known yet — the advisory
+                    // scan is debounced ~1.5s behind opening the panel. Say so
+                    // rather than guess.
+                    GUI.Label(statusRect, new GUIContent("…",
+                        "Pre-upload checks haven't run for this content yet."), EditorStyles.centeredGreyMiniLabel);
+                }
+                else
+                {
+                    string summary = AwardedBySummary(entry.badgeId);
+                    var checkStyle = new GUIStyle(EditorStyles.boldLabel)
+                    {
+                        alignment = TextAnchor.MiddleCenter,
+                        fontSize = 13,
+                    };
+                    checkStyle.normal.textColor = new Color(0.35f, 0.82f, 0.4f);
+                    GUI.Label(statusRect, new GUIContent("✓",
+                        string.IsNullOrEmpty(summary) ? "Awarded somewhere in this package's scripts." : summary),
+                        checkStyle);
+                }
+            }
 
             // Removing a discovered badge would be a lie: the next scan puts it
             // straight back, because the reason it is here is a line of the
