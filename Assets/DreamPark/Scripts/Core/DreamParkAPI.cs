@@ -101,9 +101,9 @@ namespace DreamPark.API
         {
             var url = endpoint.StartsWith("http") ? endpoint : baseUrl + endpoint;
             #if UNITY_EDITOR
-            EditorCoroutineUtility.StartCoroutineOwnerless(PutRequest(url, data, contentType, progressCallback, callback));
+            EditorCoroutineUtility.StartCoroutineOwnerless(PutRequest(url, authToken, data, contentType, progressCallback, callback));
             #else
-            CoroutineRunner.Run(PutRequest(url, data, contentType, progressCallback, callback));
+            CoroutineRunner.Run(PutRequest(url, authToken, data, contentType, progressCallback, callback));
             #endif
         }
 
@@ -189,7 +189,7 @@ namespace DreamPark.API
             }
         }
 
-        private static IEnumerator PutRequest(string url, byte[] data, string contentType, Action<float> progressCallback, Action<bool, string> callback)
+        private static IEnumerator PutRequest(string url, string authToken, byte[] data, string contentType, Action<float> progressCallback, Action<bool, string> callback)
         {
             using (UnityWebRequest req = new UnityWebRequest(url, "PUT"))
             {
@@ -197,6 +197,12 @@ namespace DreamPark.API
                 req.downloadHandler = new DownloadHandlerBuffer();
                 req.timeout = UploadTimeoutSeconds;
                 req.SetRequestHeader("Content-Type", contentType);
+                // Only when a token is actually supplied: every presigned-URL
+                // caller (screenshots, content bundles) passes "" — a GCS
+                // signed URL REJECTS a request that also carries Authorization,
+                // so this must never send an empty or unasked-for header.
+                if (!string.IsNullOrEmpty(authToken))
+                    req.SetRequestHeader("Authorization", authToken);
 
                 var op = req.SendWebRequest();
                 while (!op.isDone)
