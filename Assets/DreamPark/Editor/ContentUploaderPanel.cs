@@ -61,7 +61,7 @@ namespace DreamPark {
         private bool pendingTestBuildWindows = false;
 
         // Pending production estimate state — populated when the user clicks
-        // "Check Patch Size" from the main Compile & Upload popup. This is
+        // "Check Patch Size" from the main Upload Release popup. This is
         // the production analogue of the test-build estimate flow: run the
         // full compile, diff the freshly-built ServerData bundles against the
         // latest backend version, then stop before uploading any bytes. If
@@ -997,8 +997,8 @@ namespace DreamPark {
 
             GUI.enabled = canLaunch;
             string compileLabel = shippable
-                ? "Compile & Upload"
-                : "Compile & Upload (add an Attraction or Prop first)";
+                ? "Upload Release"
+                : "Upload Release (add an Attraction or Prop first)";
             if (GUILayout.Button(compileLabel, GUILayout.Height(34)))
             {
                 SaveLogoSelection();
@@ -1018,7 +1018,7 @@ namespace DreamPark {
             if (GUILayout.Button(new GUIContent(reuploadLabel,
                 hasBuildArtifacts
                     ? "Re-upload the contents of ServerData/ without rebuilding."
-                    : "Run Compile & Upload first — ServerData/ is empty."),
+                    : "Run Upload Release first — ServerData/ is empty."),
                 GUILayout.Height(28)))
             {
                 SaveLogoSelection();
@@ -1053,7 +1053,7 @@ namespace DreamPark {
                     useFailedOnly = (choice == 0);
                 }
 
-                // Same click-time version gate as Compile & Upload — a reupload
+                // Same click-time version gate as Upload Release — a reupload
                 // still publishes bundles built against the stale SDK.
                 bool failedOnlyFinal = useFailedOnly;
                 SDKUpdateChecker.EnsureUpToDateThen(() => ContentUploadFlowPopup.Show(this, false, failedOnlyFinal));
@@ -1904,7 +1904,7 @@ namespace DreamPark {
         //      and commit with the final metadata + manifest.
         //
         // Wraps the whole sequence in the same isUploading guard the
-        // regular Compile & Upload flow uses, so the rest of the panel
+        // regular Upload Release flow uses, so the rest of the panel
         // stays disabled while a test compile is in flight.
         private void BeginTestBuildUpload()
         {
@@ -2364,7 +2364,7 @@ namespace DreamPark {
             Repaint();
         }
 
-        // Runs the compile half of a Compile & Upload, scoped to editor
+        // Runs the compile half of an Upload Release, scoped to editor
         // targets only and with the catalog's RemoteLoadPath pointed at
         // /api/test-content/addressables/{testBuildId} so the bundles
         // baked into the catalog match the URLs dreampark-core's
@@ -2374,7 +2374,7 @@ namespace DreamPark {
         // Deliberately a mirror of UploadContent's build steps (lines
         // ~2710-2828 in the production path) rather than calling into
         // that method directly:
-        //   • UploadContent is welded to the full Compile & Upload flow
+        //   • UploadContent is welded to the full Upload Release flow
         //     (manifest diff → skipSet → commit metadata → schema sync
         //     etc.) and reusing it would require threading a "test build"
         //     flag through dozens of conditionals.
@@ -2662,7 +2662,7 @@ namespace DreamPark {
             bool patchingEnabled = IsPatchUploadEnabled();
             if (patchCurrentSnapshot == null || patchCurrentSnapshot.TotalFileCount == 0)
             {
-                return "No build artifacts yet. Compile & Upload will create the first bundle set.";
+                return "No build artifacts yet. Upload Release will create the first bundle set.";
             }
 
             if (!patchingEnabled)
@@ -3622,7 +3622,7 @@ namespace DreamPark {
 
         // Runs the project's actual preview-PNG generator
         // (ContentProcessor.GenerateAllLevelPreviews → PrefabPreviewRenderer)
-        // — the same pipeline that fires during Compile & Upload — and then
+        // — the same pipeline that fires during Upload Release — and then
         // re-walks the content tree so DrawCard picks up the freshly-
         // generated Previews/{name}.png files via the customPreview path.
         //
@@ -3725,7 +3725,7 @@ namespace DreamPark {
             return null;
         }
 
-        // Gate for the Compile & Upload + Build & Inspect actions: a content
+        // Gate for the Upload Release + Build & Inspect actions: a content
         // package is only meaningful if it ships at least one Attraction or
         // Prop. A bare PlayerRig isn't a complete deliverable on its own.
         /// True when the selected content ID is one the SDK ships with, so no
@@ -4104,7 +4104,7 @@ namespace DreamPark {
 
             GUILayout.FlexibleSpace();
 
-            // The push is deliberately available WITHOUT a full Compile & Upload.
+            // The push is deliberately available WITHOUT a full Upload Release.
             // Badge text is metadata on the backend, not bundle content, so
             // making a developer pay a multi-minute build to fix a typo in a
             // badge description would be the same mistake the logo re-upload
@@ -5034,7 +5034,7 @@ namespace DreamPark {
 
                 // Build only the active target — keep the diagnostic fast.
                 // The URL is a placeholder since these bundles will never be
-                // uploaded; if the user later decides to ship, Compile & Upload
+                // uploaded; if the user later decides to ship, Upload Release
                 // does its own clean build with the real per-platform URLs.
                 BuildTarget activeTarget = EditorUserBuildSettings.activeBuildTarget;
                 BuildTargetGroup activeGroup = BuildPipeline.GetBuildTargetGroup(activeTarget);
@@ -5339,7 +5339,7 @@ namespace DreamPark {
                                 message,
                                 stageProgress);
                             EditorUtility.DisplayProgressBar(
-                                "Compile & Upload",
+                                "Upload Release",
                                 $"({currentStep}/{totalSteps}) {message}",
                                 stageProgress);
                         };
@@ -5393,7 +5393,7 @@ namespace DreamPark {
                                 // references e.g. a Models or Textures asset still
                                 // sitting in ThirdPartyLocal would either ship a
                                 // broken bundle or skip the asset entirely. Running
-                                // the sync here makes "Compile & Upload" the one-
+                                // the sync here makes "Upload Release" the one-
                                 // button flow it's meant to be — the previously-
                                 // manual Manage Third Party Assets step is folded in.
                                 reportStep("Syncing third-party assets...");
