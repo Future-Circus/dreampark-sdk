@@ -11,44 +11,50 @@
 //  does a beta upload target for X have" and "is this id reserved",
 //  not "is this a folder on disk" — that's ContentFolders' job.
 //
-//  SUFFIX: `Beta`, ALNUM, NO DASH — this is dreampark-web's constant
-//  (lib/betaTargets.js BETA_SUFFIX), mirrored here so all three repos
-//  read one source instead of three string literals that happen to
-//  agree today. An earlier version of this file used `-Beta` on the
-//  reasoning that a beta target id never round-trips through
-//  ContentIdSetupPopup.ContentIdRegex, so it wouldn't need to be
-//  alnum-only. That reasoning was true for the code that existed at the
-//  time (this file only checks the *release* id against ContentIdRegex,
-//  never the derived beta id) but isn't provably true for the rest of
-//  ContentUploaderPanel.cs, which threads a single `contentId` field
-//  through hundreds of call sites — some of which gate on
-//  ContentIdSetupPopup.IsValid for local-folder validation. If a future
-//  "Upload Beta" implementation ever reuses that field for convenience,
-//  a dash would trip a validator meant for folder names, on an id that
-//  isn't one. Web's literal survives that risk by construction: it's
-//  the intersection of every validator on any side of the wire
-//  (dreampark-web's own file documents this reasoning), so nothing has
-//  to be relaxed anywhere to adopt it, including here.
+//  SUFFIX: `-Beta`, WITH THE DASH — matches dreampark-web's
+//  lib/betaTargets.js BETA_SUFFIX (settled at commit 7493bd6, after a
+//  brief detour through an alnum `Beta`). History, because this flipped
+//  twice and the reasoning matters more than the current value:
 //
-//  CONSEQUENCE: an alnum suffix means a real contentId CAN legitimately
-//  collide with a derived beta id (a creator naming their own game
-//  "CoinCollectorBeta"). Unlike a dash-based suffix this is NOT
-//  disjoint from the real-contentId charset by construction, so it
-//  needs an active reservation rule, not just a naming convention.
-//  dreampark-web enforces this at creation with a flat rule — any
-//  contentId ending in "beta" (case-insensitive) is refused by the
-//  generic POST /api/content/add path (lib/betaTargets.js
-//  isReservedBetaContentId) — accepting the known cost that nobody can
-//  ever name a title "AlphaBeta". IsReservedSuffix here mirrors that
-//  same flat rule so the SDK can give the same answer before a
-//  creator ever reaches the network round-trip; it is advisory only,
-//  the server is the real gate.
+//  Round 1: dash, on "a beta id never round-trips through
+//  ContentIdSetupPopup.ContentIdRegex, so it can't collide with a
+//  hand-typed contentId — collision-proof by construction."
+//
+//  Round 2 (this file, briefly): alnum `Beta`, on "I haven't built the
+//  real Upload Beta button yet, and ContentUploaderPanel.cs threads one
+//  `contentId` field through hundreds of call sites — some IsValid-
+//  gated. If a future implementation ever reuses that field for the
+//  beta id instead of keeping a separate one, a dash would trip a
+//  folder-name validator on an id that was never a folder." A hedge
+//  against my own future carelessness, not a proven conflict.
+//
+//  Round 3 (final): dash, because the hedge has a cheaper fix than
+//  giving up the property it was protecting. The alnum suffix has a
+//  real, permanent cost — nobody can ever title a game "AlphaBeta" —
+//  and the dash removes it while keeping the unsquattable guarantee,
+//  PROVIDED the beta target id is never threaded through the shared
+//  `contentId` field. So: use a separate field for it. When "Upload
+//  Beta" is built, the target id must NOT be assigned into
+//  ContentUploaderPanel's `contentId` — it needs its own variable,
+//  exactly the way `idForUpload`-style locals already exist for other
+//  upload-time concerns in that file. That's an engineering guarantee,
+//  not a hope, and it costs nothing the design didn't already need
+//  (the local folder id and the upload target id were always two
+//  different things here).
+//
+//  CONSEQUENCE, kept from round 1: a real, hand-typed contentId cannot
+//  contain a dash (ContentIdRegex), so it can never collide with a
+//  derived `X-Beta` id — no active reservation lookup is needed to
+//  protect a legitimately-named title. Reservation still matters for a
+//  different reason: refusing `POST /add` for anything already shaped
+//  like `*-Beta` so a malicious client can't mint one directly instead
+//  of going through the ownership-gated allocation route. IsReservedSuffix
+//  mirrors dreampark-web's isBetaContentId for that check.
 //
 //  Path-safety (Glass, DreamPark-iOS, Sep 2026): contentId is used as a
-//  filesystem path component and a JSON dictionary key on-device — an
-//  alnum suffix is trivially path-safe, so this is now a formality
-//  rather than a live constraint, but IsPathSafe still checks it
-//  explicitly rather than assuming.
+//  filesystem path component and a JSON dictionary key on-device — no
+//  '/', no ':', no leading dot. A dash satisfies all of that; IsPathSafe
+//  still checks the derived id explicitly rather than assuming.
 //
 //  SERVER-SIDE VALIDATION IS THE REAL GATE. Everything here is
 //  client-side, advisory tooling — it stops an honest creator's SDK
@@ -66,12 +72,12 @@ namespace DreamPark
     {
         /// Appended to a real contentId to name its beta upload target.
         /// Mirrors dreampark-web's lib/betaTargets.js BETA_SUFFIX — keep
-        /// these in sync; see file header for why it's alnum, not a dash.
-        public const string Suffix = "Beta";
+        /// these in sync; see file header for why it's a dash suffix.
+        public const string Suffix = "-Beta";
 
         /// True when `id` ends with the reserved suffix (case-insensitive,
         /// matching dreampark-web's isBetaContentId) and has a non-empty
-        /// stem — a bare "Beta" is not a beta target, it has no parent.
+        /// stem — a bare "-Beta" is not a beta target, it has no parent.
         public static bool IsReservedSuffix(string id)
         {
             if (string.IsNullOrEmpty(id)) return false;
@@ -86,6 +92,10 @@ namespace DreamPark
         /// contentId (a beta target can't be derived from Sample, the
         /// un-renamed placeholder, an already-invalid name, or a name
         /// that is itself already shaped like a beta target).
+        ///
+        /// CALLERS: never assign the result into ContentUploaderPanel's
+        /// `contentId` field — see file header. Keep it in its own
+        /// variable through every upload-time call site.
         public static string DeriveFrom(string releaseContentId)
         {
             if (!ContentIdSetupPopup.IsValid(releaseContentId)) return null;
@@ -94,7 +104,9 @@ namespace DreamPark
             return releaseContentId + Suffix;
         }
 
-        /// True when `id` is shaped like a beta target id.
+        /// True when `id` is shaped like a beta target id — i.e. it could
+        /// only have come from DeriveFrom, never from a real local
+        /// contentId (which can't contain a dash at all).
         public static bool IsBetaTargetId(string id)
         {
             return IsReservedSuffix(id);
