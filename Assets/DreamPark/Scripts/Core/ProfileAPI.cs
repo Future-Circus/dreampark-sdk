@@ -188,7 +188,11 @@ namespace DreamPark.API
         public static bool BindPending { get; private set; }
         const int   MaxHeldAwards   = 16;
         const float HeldAwardTtlSec = 90f;
-        struct HeldAward { public string badgeId; public Action<bool, ProfileBadge> done; public float atSec; }
+        // contentId is captured when the award is MADE, not when it is sent —
+        // see AwardBadge for why replaying it with a freshly-resolved one
+        // would attribute the badge to whatever the player wandered into
+        // while the claim was in flight.
+        struct HeldAward { public string badgeId; public string contentId; public Action<bool, ProfileBadge> done; public float atSec; }
         static readonly List<HeldAward> _heldAwards = new List<HeldAward>();
 
         /// <summary>Called by the pairing handler the moment a claim goes out,
@@ -220,7 +224,7 @@ namespace DreamPark.API
                     try { h.done?.Invoke(false, null); } catch (Exception e) { Debug.LogWarning(e); }
                     continue;
                 }
-                AwardBadge(h.badgeId, h.done);
+                AwardBadgeWithContent(h.badgeId, h.contentId, h.done);
             }
         }
 
@@ -779,14 +783,38 @@ namespace DreamPark.API
             });
         }
 
+        /// <summary>Award a badge to the bound player.
+        ///
+        /// WHICH GAME the badge belongs to is resolved HERE, at the call, and
+        /// carried through every later hop. It is deliberately not read again
+        /// at send time, because there are two gaps between the two moments
+        /// and the player can move across both:
+        ///
+        ///   • ContentGate holds the write until the player enters an
+        ///     attraction. The hold is UNSCOPED when the calling content
+        ///     can't be named, and the first attraction of ANY content
+        ///     releases it — so in a park with two games installed, a
+        ///     re-resolve at send time can name the game the player walked
+        ///     into rather than the one that awarded the badge.
+        ///   • An award made while a pairing claim is in flight is banked and
+        ///     replayed on bind, which can be seconds later and a room away.
+        ///
+        /// Empty is a legitimate answer (nobody is standing in an attraction
+        /// yet) and is sent as an omitted field, which the server must read as
+        /// "unattributed" — never as a licence to guess.</summary>
         public static void AwardBadge(string badgeId, Action<bool, ProfileBadge> done = null)
+        {
+            AwardBadgeWithContent(badgeId, CallingContentId(), done);
+        }
+
+        static void AwardBadgeWithContent(string badgeId, string contentId, Action<bool, ProfileBadge> done)
         {
             if (string.IsNullOrEmpty(badgeId)) { Debug.LogWarning("[ProfileAPI] AwardBadge with no badgeId."); done?.Invoke(false, null); return; }
             if (!IsBound)
             {
                 if (BindPending && _heldAwards.Count < MaxHeldAwards)
                 {
-                    _heldAwards.Add(new HeldAward { badgeId = badgeId, done = done, atSec = Time.realtimeSinceStartup });
+                    _heldAwards.Add(new HeldAward { badgeId = badgeId, contentId = contentId, done = done, atSec = Time.realtimeSinceStartup });
                     Debug.Log($"[ProfileAPI] AwardBadge '{badgeId}' held — identity claim in flight.");
                     return;
                 }
@@ -798,6 +826,10 @@ namespace DreamPark.API
             var body = new JSONObject();
             if (Source == ProfileSource.Headset) body.AddField("headsetId", HeadsetIdHeader());
             body.AddField("badgeId", badgeId);
+            // WHICH GAME's badge — resolved at the call (see above), so the
+            // server can scope a short id like "champion" to its own content
+            // instead of a platform-wide namespace.
+            if (!string.IsNullOrEmpty(contentId)) body.AddField("contentId", contentId);
             // WHERE it was earned. Stamped by the client because the server
             // can only infer a park from the bound session's location, which
             // the embedded iOS runtime does not have. Additive — a server that
@@ -867,9 +899,15 @@ namespace DreamPark.API
             if (!IsBound) { Debug.LogWarning("[ProfileAPI] RemoveBadge with no identity bound."); done?.Invoke(false); return; }
             if (string.IsNullOrEmpty(badgeId)) { done?.Invoke(false); return; }
 
+            // Same scoping as the award: a removal has to name the same badge
+            // the award named, or a short id resolves somewhere else — or
+            // nowhere, which is a removal that silently no-ops.
+            var contentId = CallingContentId();
+
             var body = new JSONObject(JSONObject.Type.Object);
             if (Source == ProfileSource.Headset) body.AddField("headsetId", HeadsetIdHeader());
             body.AddField("badgeId", badgeId);
+            if (!string.IsNullOrEmpty(contentId)) body.AddField("contentId", contentId);
 
             var (url, auth) = PickWrite("badges/remove");
 
