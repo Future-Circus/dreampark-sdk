@@ -618,9 +618,35 @@ namespace DreamPark.API
             return null;
         }
 
+        /// <summary>The player's earned badge with this id, or null.
+        ///
+        /// Badge ids are content-scoped, but the cache is one flat list and
+        /// there are live paths that fill it with more than one game's rows
+        /// (a consumer headset restoring a cached login binds with no content
+        /// filter at all), so a bare-id match can hand game A's "champion" to
+        /// game B. Prefer the row belonging to the game that is asking.
+        ///
+        /// The bare-id fallback is deliberate and must stay: rows awarded
+        /// before ids were scoped carry no contentId, and `GameArea.gameId` is
+        /// stamped from the local folder id — not guaranteed to equal the
+        /// contentId the package was uploaded under. Without the fallback,
+        /// either of those makes a badge the player genuinely owns read as
+        /// unowned, which is the one wrong answer with a user-visible cost
+        /// (a re-award is idempotent; a "you don't have this" is not).</summary>
         public static ProfileBadge GetBadge(string badgeId)
         {
             if (string.IsNullOrEmpty(badgeId)) return null;
+
+            var asking = CallingContentId();
+            if (!string.IsNullOrEmpty(asking))
+            {
+                for (int i = 0; i < _badges.Count; i++)
+                {
+                    var b = _badges[i];
+                    if (b.badgeId == badgeId && b.contentId == asking) return b;
+                }
+            }
+
             for (int i = 0; i < _badges.Count; i++) if (_badges[i].badgeId == badgeId) return _badges[i];
             return null;
         }
