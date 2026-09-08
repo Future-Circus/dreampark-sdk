@@ -183,7 +183,66 @@ namespace DreamPark.API
             });
         }
 
+        // ── RELEASE TOKENS — third auth branch alongside the session bearer above
+        // and GetAPIKey() below ──────────────────────────────────────────────────
+        // A release token (`rlt_...`) lets unattended/CI callers (DreamParkReleaseCommands)
+        // authenticate WITHOUT the human email-OTP round trip AuthPopup requires — that
+        // flow is deliberately un-completable by a script (dreampark_auth_open's own doc
+        // comment: "the email code stays between the human and Unity"), so release
+        // automation needs a credential a human can mint once and hand to a script.
+        //
+        // Deliberately NOT stored in EditorPrefs like the session bearer above. EditorPrefs
+        // is machine-global (see the 40 lines of comments on PrefSessionToken) — a fine
+        // trade for a human's interactive session on their own dev machine, but exactly
+        // the wrong store for a credential meant to sit on a CI box or a shared machine
+        // that other tooling also touches. Instead this is an ambient, in-memory-only
+        // override that a release command pushes for the duration of its own work via
+        // WithReleaseToken() and always pops afterward, in both the editor and player.
+        [ThreadStatic] private static string _releaseTokenOverride;
+
+        // True while a release command has an active token override — used by preflight
+        // checks so "authenticated" means "has EITHER a human session OR a release token"
+        // without those checks needing to know which one.
+        public static bool HasReleaseToken => !string.IsNullOrEmpty(_releaseTokenOverride);
+
+        // Resolves the token a release command should use, in priority order:
+        // an explicit CliArg (a caller passing a freshly minted token for one call),
+        // then the DREAMPARK_RELEASE_TOKEN environment variable (the CI/headless case —
+        // set once per job, reused across every command it runs). Returns null when
+        // neither is present, meaning the command falls back to the human session.
+        public static string ResolveReleaseToken(string explicitToken) {
+            if (!string.IsNullOrWhiteSpace(explicitToken)) return explicitToken.Trim();
+            var env = Environment.GetEnvironmentVariable("DREAMPARK_RELEASE_TOKEN");
+            return string.IsNullOrWhiteSpace(env) ? null : env.Trim();
+        }
+
+        // Pushes `token` as the bearer GetUserAuth() returns for the lifetime of the
+        // returned scope, then restores whatever was active before — safe to nest,
+        // though release commands don't currently call each other. `token` may be
+        // null/empty (ResolveReleaseToken found nothing), in which case this is a no-op
+        // that falls through to the ordinary session bearer, so callers can always wrap
+        // unconditionally: `using (AuthAPI.WithReleaseToken(ResolveReleaseToken(arg)))`.
+        public static IDisposable WithReleaseToken(string token) => new ReleaseTokenScope(token);
+
+        private sealed class ReleaseTokenScope : IDisposable {
+            private readonly string _previous;
+            private bool _disposed;
+            public ReleaseTokenScope(string token) {
+                _previous = _releaseTokenOverride;
+                _releaseTokenOverride = string.IsNullOrEmpty(token) ? null : token;
+            }
+            public void Dispose() {
+                if (_disposed) return;
+                _disposed = true;
+                _releaseTokenOverride = _previous;
+            }
+        }
+
         public static string GetUserAuth() {
+            // A release token in scope wins outright — it's a deliberate, narrow
+            // override for the one command that pushed it, never a silent fallback
+            // a human's interactive session could accidentally pick up.
+            if (HasReleaseToken) return $"Bearer {_releaseTokenOverride}";
 #if UNITY_EDITOR
             var sessionToken = GetAuthPref(PrefSessionToken, LegacySessionToken);
 #else
