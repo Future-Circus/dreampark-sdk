@@ -229,7 +229,14 @@ namespace DreamPark.API
             private bool _disposed;
             public ReleaseTokenScope(string token) {
                 _previous = _releaseTokenOverride;
-                _releaseTokenOverride = string.IsNullOrEmpty(token) ? null : token;
+                // A null/empty token means "this call isn't asking for an override" —
+                // NOT "clear whatever override is active". Release commands call each
+                // other directly (PublishSDK calls SDKPreflightInternal, PublishContent
+                // calls ContentPreflightInternal) inside the SAME scope without
+                // re-forwarding the token they already resolved; if this constructor
+                // blanked the ambient value on null, the outer command would silently
+                // drop back to the human session bearer partway through its own work.
+                if (!string.IsNullOrEmpty(token)) _releaseTokenOverride = token;
             }
             public void Dispose() {
                 if (_disposed) return;

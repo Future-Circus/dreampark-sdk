@@ -44,3 +44,29 @@ Commands are project-scoped, so multiple open Editors are safe when every invoca
 
 Publishing commands still belong behind a host-level ship approval. A successful preflight is evidence,
 not authorization to publish.
+
+## Release tokens
+
+`DreamPark ▸ Generate Release Token` (`ReleaseTokenPanel.cs`) mints an `rlt_...` bypass-login credential
+for a headless/CI caller — a human still triggers the mint from inside Unity using their own logged-in
+session, but the resulting token lets automation authenticate afterward without an interactive
+email-code sign-in. Three scopes, one window:
+
+- **core** — admin-only. Meant for the Quest APK release workflow (today driven entirely by the release
+  host's own `signed-upload` adapter against `/api/releases/apk/*`, with no live Unity process in the
+  loop — see Ship's finding in the "Release Tokens" team thread).
+- **sdk** — admin-only. Meant for `dreampark_sdk_publish`.
+- **content** — content-owner-only, scoped to one `contentId`. The backend checks `contentOwners[]`
+  membership, not `AdminState.IsAdmin`, so this scope is offered to any logged-in user and refused
+  server-side (`NOT_CONTENT_OWNER`) rather than hidden client-side.
+
+The panel calls `POST /api/release-tokens {scope, contentId?, label?, expiresInDays?}` and shows the
+returned token exactly once — the server stores only its hash, so there is no "view token" endpoint and
+never will be. `ReleaseTokenAPI.cs` and `ReleaseTokenPanel.cs` are meant to be byte-identical in
+dreampark-core, same convention as `AdminState.cs`: minting any scope's token is just an authenticated
+backend call, so it doesn't need the target repo's own code open.
+
+**Not yet wired**: `dreampark_content_publish` / `dreampark_sdk_publish` do not accept a minted token in
+place of the human session yet. Scope for this round (per Aidan) was the generator only — "no upload flow
+to add anywhere for anything here." `AuthAPI.WithReleaseToken`/`ResolveReleaseToken` exist as the
+consumption-side mechanism for a future round, but nothing calls them today.
