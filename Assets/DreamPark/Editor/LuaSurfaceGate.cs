@@ -65,7 +65,7 @@ public static class LuaSurfaceGate
     /// Called from the content upload entry point. Returns false to abort.
     /// Never throws: a broken check must not be able to block shipping.
     /// </summary>
-    public static bool PassesPreUploadCheck()
+    public static bool PassesPreUploadCheck(bool interactive = true)
     {
         // ── Codegen drift: report, never block an upload ──────────────
         try
@@ -95,16 +95,19 @@ public static class LuaSurfaceGate
         if (!result.HasBlocked) return true;
 
         Debug.LogError(result.report);
-        EditorUtility.DisplayDialog(
-            "Upload blocked — sandboxed API in Lua",
-            "Your content calls types the production sandbox denies. They work here in " +
-            "the Editor and THROW at a venue:\n\n" +
-            LuaSurfaceScanner.ScanResult.Summarize(result.blocked) +
-            "\nIf one of those files is an authoring tool that never runs at a venue, add\n" +
-            "    -- " + LuaSurfaceScanner.EditorOnlyMarker + "\n" +
-            "to it, or move it under an Editor/ folder.\n\n" +
-            "Full detail is in the Console.",
-            "OK");
+        if (interactive)
+        {
+            EditorUtility.DisplayDialog(
+                "Upload blocked — sandboxed API in Lua",
+                "Your content calls types the production sandbox denies. They work here in " +
+                "the Editor and THROW at a venue:\n\n" +
+                LuaSurfaceScanner.ScanResult.Summarize(result.blocked) +
+                "\nIf one of those files is an authoring tool that never runs at a venue, add\n" +
+                "    -- " + LuaSurfaceScanner.EditorOnlyMarker + "\n" +
+                "to it, or move it under an Editor/ folder.\n\n" +
+                "Full detail is in the Console.",
+                "OK");
+        }
         return false;
     }
 

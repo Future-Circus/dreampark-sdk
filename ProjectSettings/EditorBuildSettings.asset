@@ -9,9 +9,9 @@ EditorBuildSettings:
     path: Assets/DreamPark/Samples/Multiplayer/MultiplayerTest.unity
     guid: a4bdce31afdeb49cfb878534969e2c47
   m_configObjects:
-    Unity.XR.Oculus.Settings: {fileID: 11400000, guid: 1bb06a00ec5dec54db1d31bef6527f28, type: 2}
     UnityEditor.XR.ARKit.ARKitSettings: {fileID: 11400000, guid: 801e9723ce73545ebb5429afb5446bac, type: 2}
     com.unity.addressableassets: {fileID: 11400000, guid: 9765519cbb24e46ba94cab79c5827e74, type: 2}
     com.unity.xr.arfoundation.simulation_settings: {fileID: 11400000, guid: 55ad6c293711b4d969c62f1d586e6ef5, type: 2}
     com.unity.xr.management.loader_settings: {fileID: 11400000, guid: c2b75685dd2424a488c3e7ac94fc51fa, type: 2}
+    com.unity.xr.openxr.settings4: {fileID: 11400000, guid: 3127c02be49ed944a98131d56d33e61d, type: 2}
   m_UseUCBPForAssetBundles: 0

@@ -21,7 +21,7 @@ using UnityEngine.Networking;
 using Unity.EditorCoroutines.Editor;
 
 namespace DreamPark {
-    public class ContentUploaderPanel : EditorWindow
+    public partial class ContentUploaderPanel : EditorWindow
     {
         private string contentId = "";
         private string contentName = "";
@@ -2859,7 +2859,7 @@ namespace DreamPark {
             // creator who never opened DreamPark > Troubleshooting shipped blind. This
             // is the trigger it was missing. Sandbox-denied types hard-stop; merely
             // unregistered ones warn and let the human decide.
-            if (!LuaSurfaceGate.PassesPreUploadCheck())
+            if (!LuaSurfaceGate.PassesPreUploadCheck(interactive: !automatedReleaseMode))
             {
                 return false;
             }
@@ -2873,13 +2873,16 @@ namespace DreamPark {
                 && UploadModePrefs.RequiresSmart(mode)
                 && BundlingStrategyPrefs.Current != BundlingStrategy.Smart)
             {
-                EditorUtility.DisplayDialog(
-                    "Upload mode requires Smart bundling",
-                    $"{UploadModePrefs.ShortLabel(mode)} requires the Smart bundling strategy, " +
-                    "and this machine is on deprecated Legacy bundling. Turn Legacy off via " +
-                    "DreamPark \u25b8 Troubleshooting \u25b8 Use Legacy Bundling (deprecated), or pick " +
-                    "Upload All / Upload Patch.",
-                    "OK");
+                if (!automatedReleaseMode)
+                {
+                    EditorUtility.DisplayDialog(
+                        "Upload mode requires Smart bundling",
+                        $"{UploadModePrefs.ShortLabel(mode)} requires the Smart bundling strategy, " +
+                        "and this machine is on deprecated Legacy bundling. Turn Legacy off via " +
+                        "DreamPark \u25b8 Troubleshooting \u25b8 Use Legacy Bundling (deprecated), or pick " +
+                        "Upload All / Upload Patch.",
+                        "OK");
+                }
                 return false;
             }
 
@@ -2892,7 +2895,8 @@ namespace DreamPark {
             // checking the right bytes.
             if (build && !SaveModifiedScenesBeforeCompile())
             {
-                EditorUtility.DisplayDialog("Compile Cancelled", "Save all modified scenes before compiling.", "OK");
+                if (!automatedReleaseMode)
+                    EditorUtility.DisplayDialog("Compile Cancelled", "Save all modified scenes before compiling.", "OK");
                 return false;
             }
 
@@ -3401,7 +3405,7 @@ namespace DreamPark {
                     // attraction sits ready to be titled/described/priced.
                     // Only fires on a real successful commit — never for the
                     // zero-change short-circuit or Test Channel uploads.
-                    try
+                    if (!automatedReleaseMode) try
                     {
                         Application.OpenURL(DeveloperPortalMenuItem.AttractionsUrl(uploadContentId));
                     }
@@ -3414,7 +3418,8 @@ namespace DreamPark {
                 {
                     Debug.LogError($"❌ Content uploaded failed: {apiResponse.error}");
                     CompleteUploadStatus(false, $"Upload failed: {apiResponse.error}");
-                    EditorUtility.DisplayDialog("Error", $"Upload failed: {apiResponse.error}", "OK");
+                    if (!automatedReleaseMode)
+                        EditorUtility.DisplayDialog("Error", $"Upload failed: {apiResponse.error}", "OK");
                 }
 
                 pendingFailedOnly = false;
@@ -5595,7 +5600,7 @@ namespace DreamPark {
                                                 continue;
                                             string key = $"{s.platform}/{s.fileName}";
                                             if (!currentKeys.Contains(key)) continue;
-                                            preUploadedFiles.Add(new DreamPark.API.UploadedFileRecord(s.platform, s.fileName, s.uploadPath));
+                                            preUploadedFiles.Add(new DreamPark.API.UploadedFileRecord(s.platform, s.fileName, s.uploadPath, failedRecord.releaseId));
                                         }
 
                                         // Snapshot baseline / diff fields for

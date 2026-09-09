@@ -27,7 +27,7 @@ A fuller tour of the program lives at **[dreampark.app/developer](https://dreamp
 
 **You need:** a **Meta Quest 3S** (or Quest 3) in Developer Mode, a USB-C **data** cable, [Unity Hub](https://unity.com/download), and [Git LFS](https://git-lfs.com).
 
-1. **Install Unity `6000.0.39f1`** via Unity Hub, with **Android Build Support** (including its OpenJDK and Android SDK & NDK sub-modules) and **iOS Build Support** — the uploader builds both on every release and neither can be turned off. Add **Mac** and **Windows Build Support** too; those two editor targets are toggles in the upload window, on by default, and required for an official release.
+1. **Install Unity `6000.3.23f1`** via Unity Hub, with **Android Build Support** (including its OpenJDK and Android SDK & NDK sub-modules) and **iOS Build Support** — the uploader builds both on every release and neither can be turned off. Add **Mac** and **Windows Build Support** too; those two editor targets are toggles in the upload window, on by default, and required for an official release.
 2. **Install Git LFS, then clone this repo.** The SDK's art, audio, models and native plugins live in [Git LFS](https://git-lfs.com). Without it the clone still *appears* to work, but every binary arrives as a small text placeholder and the project opens broken.
    ```bash
    git lfs install   # once per machine — before cloning
@@ -40,6 +40,8 @@ A fuller tour of the program lives at **[dreampark.app/developer](https://dreamp
 6. **Verify your headset:** put it in Developer Mode, connect over Quest Link (USB-C data cable) or Air Link, accept the prompts in the headset, press **Play**, and confirm passthrough and hand tracking work.
 7. **Upload:** `DreamPark → Content Uploader`. Fill in the title and description there, then hit **Compile & Upload**. That opens the launch window for release notes and build targets; hit **Start · All** to ship. Your first release always uploads everything; from the second on, the **Upload Scope** picker offers **Patch** (changed files only) and **Code only** (just the Lua bundle) for much smaller uploads.
 8. **Play it:** open the DreamPark iOS app (private TestFlight beta — email **aidan@dreampark.app** for an invite) and toggle **Experimental Mode** on in your park settings.
+
+If you use ClaudeBots, this repository includes a human-readable `RELEASE.md`. Attach the project as a bot or group workspace, assign **Plan & Verify Releases**, and ask the bot to read the release file and add its workflow as drafts. The bot interprets the prose against ClaudeBots' typed target catalog; ClaudeBots verifies the exact file digest and rejects secrets, unsafe paths, and unknown settings before creating a disabled **DreamPark Content Publish** target plus a draft workflow. Select the project-specific content ID, finish email-code sign-in in Unity, verify the target, and activate the workflow when it is correct. The file cannot publish by itself. `RELEASE.json` remains available only for advanced compatibility.
 
 From there the loop is: edit → Content Uploader → Compile & Upload → Start → reopen on the Quest.
 
@@ -102,7 +104,7 @@ You don't need a finished park to publish. Every upload bundles whatever attract
 <details>
 <summary><strong>Setup and build</strong></summary>
 
-- **"Editor version not found" in Unity Hub** — `6000.0.39f1` isn't installed. Install it. Newer 6000.x releases aren't supported yet; the project is pinned to this one.
+- **"Editor version not found" in Unity Hub** — `6000.3.23f1` isn't installed. Install that exact editor; the project is pinned to it so local, CLI, and release builds use the same toolchain.
 - **Pink materials, silent audio, missing meshes, or a native plugin that won't load** — the repo was cloned without Git LFS, so those assets are text placeholders rather than real files. Run `DreamPark → Troubleshooting → Check Git LFS` to download them, or from a terminal in the project folder: `git lfs install && git lfs pull`. The SDK also checks for this automatically when the project opens.
 - **A dialog asks to send "XLua Version / Unity Version / Device Identifier"** — that's XLua's own analytics ping, and it's removed from this version of the SDK. If you're on an older clone, either button is safe; **Deny** just skips the ping and nothing in the SDK depends on it.
 - **Console errors on first open** — let Unity finish downloading packages. Still broken? Close Unity, delete the project's `Library` folder, reopen.
