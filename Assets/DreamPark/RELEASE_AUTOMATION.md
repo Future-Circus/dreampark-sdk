@@ -56,17 +56,31 @@ email-code sign-in. Three scopes, one window:
   host's own `signed-upload` adapter against `/api/releases/apk/*`, with no live Unity process in the
   loop — see Ship's finding in the "Release Tokens" team thread).
 - **sdk** — admin-only. Meant for `dreampark_sdk_publish`.
-- **content** — content-owner-only, scoped to one `contentId`. The backend checks `contentOwners[]`
-  membership, not `AdminState.IsAdmin`, so this scope is offered to any logged-in user and refused
-  server-side (`NOT_CONTENT_OWNER`) rather than hidden client-side.
+- **content** — the content's PRIMARY owner only (`content.contentOwner`, falling back to
+  `contentOwners[0]` for older docs), not `AdminState.IsAdmin` and deliberately narrower than the full
+  `contentOwners[]` collaborator list the normal release routes accept — minting a bypass-login
+  credential is a bigger blast radius than using those routes yourself while logged in. This scope is
+  offered to any logged-in user and refused server-side (`NOT_CONTENT_OWNER`) rather than hidden
+  client-side, since ownership is per-title, not a bit AdminState can cache.
 
 The panel calls `POST /api/release-tokens {scope, contentId?, label?, expiresInDays?}` and shows the
 returned token exactly once — the server stores only its hash, so there is no "view token" endpoint and
 never will be. `ReleaseTokenAPI.cs` and `ReleaseTokenPanel.cs` are meant to be byte-identical in
 dreampark-core, same convention as `AdminState.cs`: minting any scope's token is just an authenticated
-backend call, so it doesn't need the target repo's own code open.
+backend call, so it doesn't need the target repo's own code open. Contract: `docs/contracts/release-tokens.md`
+in DreamPark-Web.
 
-**Not yet wired**: `dreampark_content_publish` / `dreampark_sdk_publish` do not accept a minted token in
-place of the human session yet. Scope for this round (per Aidan) was the generator only — "no upload flow
-to add anywhere for anything here." `AuthAPI.WithReleaseToken`/`ResolveReleaseToken` exist as the
-consumption-side mechanism for a future round, but nothing calls them today.
+`dreampark_content_preflight` / `dreampark_content_publish` / `dreampark_sdk_preflight` /
+`dreampark_sdk_publish` all take an optional `--release_token` (falling back to the
+`DREAMPARK_RELEASE_TOKEN` environment variable), scoping `AuthAPI.GetUserAuth()` to that token for the
+duration of the call via `AuthAPI.WithReleaseToken`/`ResolveReleaseToken` instead of the human session —
+deliberately NOT EditorPrefs, since that store is machine-global and this credential is meant to sit on
+a CI box or shared machine other tooling also touches.
+
+**Still not end-to-end**: the backend does not yet accept a release token at the routes these commands
+call. Per `docs/contracts/release-tokens.md`: "no route resolves an `rlt_...` token to `req.user`,
+`verifySessionBearer` doesn't recognize the prefix" — the mint/list/revoke endpoints exist, but the
+`verifySessionOrReleaseToken` OR-check at the `/api/releases/*`, `/api/sdk/publish`, and
+`/api/content/*` mount points is a separate, unbuilt piece. Passing `--release_token` today reaches the
+backend and gets refused as an invalid session, same as no credential at all — this SDK-side wiring is
+necessary but not sufficient until that OR-check ships.

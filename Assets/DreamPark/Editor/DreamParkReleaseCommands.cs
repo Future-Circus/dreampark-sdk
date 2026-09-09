@@ -24,17 +24,29 @@ namespace DreamPark
         private const string SDKAssetPath = "Assets/DreamPark";
         private const string VersionResourcePath = "Assets/DreamPark/Resources/DreamParkSDKVersion.json";
 
-        [CliCommand("dreampark_auth_status", "Check the local DreamPark SDK session without returning its bearer token.", MainThreadRequired = true, Tags = new[] { "dreampark", "dreampark/auth" })]
-        public static object AuthStatus()
+        [CliCommand("dreampark_auth_status", "Check the local DreamPark SDK session or a release token without returning either's bearer value.", MainThreadRequired = true, Tags = new[] { "dreampark", "dreampark/auth" })]
+        public static object AuthStatus(
+            [CliArg("release_token", "Release token (rlt_...) to check instead of the human session. Falls back to DREAMPARK_RELEASE_TOKEN when omitted.")] string releaseToken = null)
         {
-            return new
+            string resolvedToken = AuthAPI.ResolveReleaseToken(releaseToken);
+            using (AuthAPI.WithReleaseToken(resolvedToken))
             {
-                authenticated = AuthAPI.isLoggedIn,
-                email = AuthAPI.isLoggedIn ? AuthAPI.email : null,
-                expiresAtUnixMs = AuthAPI.sessionExpiresAt > 0 ? (long?)AuthAPI.sessionExpiresAt : null,
-                expiresInHours = AuthAPI.sessionExpiresInHours >= 0 ? (double?)AuthAPI.sessionExpiresInHours : null,
-                action = AuthAPI.isLoggedIn ? "none" : "Run dreampark_auth_open, then complete the email-code sign-in in Unity."
-            };
+                bool hasToken = AuthAPI.HasReleaseToken;
+                bool authenticated = AuthAPI.isLoggedIn || hasToken;
+                return new
+                {
+                    authenticated,
+                    // "release-token" only means a token value is present locally — it has
+                    // NOT been round-tripped to the backend. A revoked/expired/wrong-scope
+                    // token still reports this until the first real call 401s/403s.
+                    authMode = hasToken ? "release-token" : (AuthAPI.isLoggedIn ? "session" : "none"),
+                    email = AuthAPI.isLoggedIn ? AuthAPI.email : null,
+                    expiresAtUnixMs = AuthAPI.sessionExpiresAt > 0 ? (long?)AuthAPI.sessionExpiresAt : null,
+                    expiresInHours = AuthAPI.sessionExpiresInHours >= 0 ? (double?)AuthAPI.sessionExpiresInHours : null,
+                    action = authenticated ? "none"
+                        : "Run dreampark_auth_open, or supply release_token / set DREAMPARK_RELEASE_TOKEN."
+                };
+            }
         }
 
         [CliCommand("dreampark_auth_open", "Open DreamPark's passwordless sign-in window in this exact Unity Editor. The email code stays between the human and Unity and is never returned to the caller.", MainThreadRequired = true, Tags = new[] { "dreampark", "dreampark/auth" })]
@@ -92,19 +104,35 @@ namespace DreamPark
             [CliArg("content_id", "Folder name under Assets/Content and backend content ID.", Required = true)] string contentId,
             [CliArg("save_scenes", "Save open scenes/assets before checks that inspect scene YAML.")] bool saveScenes = false,
             [CliArg("allow_warnings", "Allow non-blocking warnings. Requires override_reason.")] bool allowWarnings = false,
-            [CliArg("override_reason", "Human-reviewed reason for allowing warnings. Never bypasses blockers, errors, or skipped checks.")] string overrideReason = null)
+            [CliArg("override_reason", "Human-reviewed reason for allowing warnings. Never bypasses blockers, errors, or skipped checks.")] string overrideReason = null,
+            [CliArg("release_token", "Content-owner release token (rlt_...), scoped to content_id. Falls back to DREAMPARK_RELEASE_TOKEN when omitted.")] string releaseToken = null)
+        {
+            using (AuthAPI.WithReleaseToken(AuthAPI.ResolveReleaseToken(releaseToken)))
+            {
+                return ContentPreflightInternal(contentId, saveScenes, allowWarnings, overrideReason);
+            }
+        }
+
+        // Split out so PublishContent can run its own preflight from inside the SAME
+        // release-token scope it already opened, without re-resolving/re-pushing the
+        // token a second time.
+        private static DreamParkPreflightResponse ContentPreflightInternal(
+            string contentId, bool saveScenes, bool allowWarnings, string overrideReason)
         {
             contentId = NormalizeContentId(contentId);
+            bool authenticated = AuthAPI.isLoggedIn || AuthAPI.HasReleaseToken;
             var result = new DreamParkPreflightResponse
             {
                 contentId = contentId,
                 checkedAtUtc = DateTime.UtcNow.ToString("O"),
-                authenticated = AuthAPI.isLoggedIn,
+                authenticated = authenticated,
                 checks = new List<DreamParkReleaseCheck>()
             };
 
-            Add(result, "auth", AuthAPI.isLoggedIn ? "passed" : "failed",
-                AuthAPI.isLoggedIn ? "DreamPark session is available for " + AuthAPI.email + "." : "DreamPark sign-in is required. Run dreampark_auth_open.");
+            Add(result, "auth", authenticated ? "passed" : "failed",
+                AuthAPI.HasReleaseToken ? "Release token supplied."
+                    : AuthAPI.isLoggedIn ? "DreamPark session is available for " + AuthAPI.email + "."
+                    : "DreamPark sign-in is required. Run dreampark_auth_open, or supply release_token.");
 
             string contentPath = "Assets/Content/" + contentId;
             bool folderExists = AssetDatabase.IsValidFolder(contentPath);
@@ -225,7 +253,8 @@ namespace DreamPark
             [CliArg("include_windows", "Also build the Windows editor content target.")] bool includeWindows = false,
             [CliArg("clean_each_target", "Clear target-specific Addressables cache before each target.")] bool cleanEachTarget = false,
             [CliArg("allow_warnings", "Allow non-blocking checker warnings. Requires override_reason.")] bool allowWarnings = false,
-            [CliArg("override_reason", "Human-reviewed reason for allowing warnings.")] string overrideReason = null)
+            [CliArg("override_reason", "Human-reviewed reason for allowing warnings.")] string overrideReason = null,
+            [CliArg("release_token", "Content-owner release token (rlt_...), scoped to content_id. Falls back to DREAMPARK_RELEASE_TOKEN when omitted.")] string releaseToken = null)
         {
             contentId = NormalizeContentId(contentId);
             if (string.IsNullOrWhiteSpace(releaseNotes))
@@ -241,49 +270,69 @@ namespace DreamPark
                 default: return DreamParkContentReleaseResponse.Failed(contentId, "mode must be all, patch, or code-only.");
             }
 
-            var preflight = ContentPreflight(contentId, saveScenes: true, allowWarnings: allowWarnings,
-                overrideReason: overrideReason);
-            if (!preflight.ready)
-                return DreamParkContentReleaseResponse.Failed(contentId, "Strict preflight failed.", preflight);
+            // One scope for preflight + upload + verify: the backend enforces the
+            // token's content_id scope on every request it authenticates, so there's
+            // no separate client-side ownership check to duplicate here.
+            using (AuthAPI.WithReleaseToken(AuthAPI.ResolveReleaseToken(releaseToken)))
+            {
+                var preflight = ContentPreflightInternal(contentId, saveScenes: true, allowWarnings: allowWarnings,
+                    overrideReason: overrideReason);
+                if (!preflight.ready)
+                    return DreamParkContentReleaseResponse.Failed(contentId, "Strict preflight failed.", preflight);
 
-            var upload = await ContentUploaderPanel.RunAutomatedRelease(
-                contentId, releaseNotes.Trim(), uploadMode, includeMacOS, includeWindows, cleanEachTarget);
-            upload.preflight = preflight;
-            if (!upload.success) return upload;
+                var upload = await ContentUploaderPanel.RunAutomatedRelease(
+                    contentId, releaseNotes.Trim(), uploadMode, includeMacOS, includeWindows, cleanEachTarget);
+                upload.preflight = preflight;
+                if (!upload.success) return upload;
 
-            var verify = await AwaitAPI(callback => ContentAPI.GetContent(contentId, callback));
-            if (!verify.success)
-                return DreamParkContentReleaseResponse.Failed(contentId,
-                    "Upload completed but backend verification failed: " + ErrorOf(verify.response, "unknown error"), preflight);
+                var verify = await AwaitAPI(callback => ContentAPI.GetContent(contentId, callback));
+                if (!verify.success)
+                    return DreamParkContentReleaseResponse.Failed(contentId,
+                        "Upload completed but backend verification failed: " + ErrorOf(verify.response, "unknown error"), preflight);
 
-            var content = verify.response?.json?.GetField("content");
-            var versions = content?.GetField("versions");
-            bool versionFound = upload.versionNumber.HasValue && versions != null && versions.list != null
-                && versions.list.Any(v => v != null && v.HasField("versionNumber")
-                    && v.GetField("versionNumber").intValue == upload.versionNumber.Value);
-            if (!versionFound)
-                return DreamParkContentReleaseResponse.Failed(contentId,
-                    "Upload returned success, but the exact committed version was not present in the backend record.", preflight);
+                var content = verify.response?.json?.GetField("content");
+                var versions = content?.GetField("versions");
+                bool versionFound = upload.versionNumber.HasValue && versions != null && versions.list != null
+                    && versions.list.Any(v => v != null && v.HasField("versionNumber")
+                        && v.GetField("versionNumber").intValue == upload.versionNumber.Value);
+                if (!versionFound)
+                    return DreamParkContentReleaseResponse.Failed(contentId,
+                        "Upload returned success, but the exact committed version was not present in the backend record.", preflight);
 
-            upload.verified = true;
-            upload.backend = verify.response != null ? verify.response.json : null;
-            return upload;
+                upload.verified = true;
+                upload.backend = verify.response != null ? verify.response.json : null;
+                return upload;
+            }
         }
 
         [CliCommand("dreampark_sdk_preflight", "Verify SDK publish auth, version ordering, release notes, and backend admin access without exporting or uploading.", MainThreadRequired = true, Tags = new[] { "dreampark", "dreampark/sdk", "dreampark/releases" })]
         public static async Task<DreamParkPreflightResponse> SDKPreflight(
             [CliArg("version", "New MAJOR.MINOR.PATCH SDK version.", Required = true)] string version,
-            [CliArg("release_notes", "Human-readable SDK release notes.", Required = true)] string releaseNotes)
+            [CliArg("release_notes", "Human-readable SDK release notes.", Required = true)] string releaseNotes,
+            [CliArg("release_token", "Admin release token (rlt_...) for scope sdk. Falls back to DREAMPARK_RELEASE_TOKEN when omitted.")] string releaseToken = null)
         {
+            using (AuthAPI.WithReleaseToken(AuthAPI.ResolveReleaseToken(releaseToken)))
+            {
+                return await SDKPreflightInternal(version, releaseNotes);
+            }
+        }
+
+        // Split out so PublishSDK can run its own preflight from inside the SAME
+        // release-token scope it already opened, matching ContentPreflightInternal.
+        private static async Task<DreamParkPreflightResponse> SDKPreflightInternal(string version, string releaseNotes)
+        {
+            bool authenticated = AuthAPI.isLoggedIn || AuthAPI.HasReleaseToken;
             var result = new DreamParkPreflightResponse
             {
                 contentId = "sdk",
                 checkedAtUtc = DateTime.UtcNow.ToString("O"),
-                authenticated = AuthAPI.isLoggedIn,
+                authenticated = authenticated,
                 checks = new List<DreamParkReleaseCheck>()
             };
-            Add(result, "auth", AuthAPI.isLoggedIn ? "passed" : "failed",
-                AuthAPI.isLoggedIn ? "DreamPark session is available for " + AuthAPI.email + "." : "DreamPark sign-in is required. Run dreampark_auth_open.");
+            Add(result, "auth", authenticated ? "passed" : "failed",
+                AuthAPI.HasReleaseToken ? "Release token supplied."
+                    : AuthAPI.isLoggedIn ? "DreamPark session is available for " + AuthAPI.email + "."
+                    : "DreamPark sign-in is required. Run dreampark_auth_open, or supply release_token.");
             bool validVersion = SDKVersion.TryParse(version, out _, out _, out _)
                 && SDKVersion.Compare(version, SDKVersion.Current) > 0;
             Add(result, "version", validVersion ? "passed" : "failed",
@@ -294,7 +343,7 @@ namespace DreamPark
             Add(result, "sdk-assets", AssetDatabase.IsValidFolder(SDKAssetPath) ? "passed" : "failed",
                 AssetDatabase.IsValidFolder(SDKAssetPath) ? SDKAssetPath + " is exportable." : SDKAssetPath + " is missing.");
 
-            if (AuthAPI.isLoggedIn)
+            if (authenticated)
             {
                 var admin = await AwaitAPI(callback => SDKAPI.CheckCanPublish(callback));
                 bool canPublish = admin.success && admin.response != null && admin.response.json != null
@@ -311,63 +360,67 @@ namespace DreamPark
         [CliCommand("dreampark_sdk_publish", "Version, export, upload, and verify a DreamPark SDK unitypackage. Rolls the local version file back if publish or verification fails.", MainThreadRequired = true, Tags = new[] { "dreampark", "dreampark/sdk", "dreampark/releases" })]
         public static async Task<DreamParkSDKReleaseResponse> PublishSDK(
             [CliArg("version", "New MAJOR.MINOR.PATCH SDK version.", Required = true)] string version,
-            [CliArg("release_notes", "Human-readable SDK release notes.", Required = true)] string releaseNotes)
+            [CliArg("release_notes", "Human-readable SDK release notes.", Required = true)] string releaseNotes,
+            [CliArg("release_token", "Admin release token (rlt_...) for scope sdk. Falls back to DREAMPARK_RELEASE_TOKEN when omitted.")] string releaseToken = null)
         {
-            var preflight = await SDKPreflight(version, releaseNotes);
-            if (!preflight.ready)
-                return DreamParkSDKReleaseResponse.Failed(version, "SDK preflight failed.", preflight);
-
-            string previousVersion = SDKVersion.Current;
-            string tempPath = Path.Combine(Path.GetTempPath(), $"dreampark-sdk-v{version}-{Guid.NewGuid():N}.unitypackage");
-            try
+            using (AuthAPI.WithReleaseToken(AuthAPI.ResolveReleaseToken(releaseToken)))
             {
-                WriteVersion(version);
-                AssetDatabase.ExportPackage(SDKAssetPath, tempPath, ExportPackageOptions.Recurse);
-                if (!File.Exists(tempPath))
-                    throw new IOException("Unity did not create the SDK package.");
+                var preflight = await SDKPreflightInternal(version, releaseNotes);
+                if (!preflight.ready)
+                    return DreamParkSDKReleaseResponse.Failed(version, "SDK preflight failed.", preflight);
 
-                byte[] bytes = File.ReadAllBytes(tempPath);
-                string sha256 = SHA256Hex(bytes);
-                var published = await AwaitAPI(callback => SDKAPI.PublishVersion(
-                    version, releaseNotes.Trim(), bytes, Path.GetFileName(tempPath), callback));
-                if (!published.success)
-                    throw new InvalidOperationException(ErrorOf(published.response, "SDK publish failed."));
-
-                var status = await AwaitAPI(callback => SDKAPI.GetReleaseStatus(version, callback));
-                var release = status.response?.json?.GetField("release");
-                bool exact = status.success && release != null
-                    && string.Equals(release.GetField("status")?.stringValue, "completed", StringComparison.Ordinal)
-                    && string.Equals(release.GetField("sha256")?.stringValue, sha256, StringComparison.OrdinalIgnoreCase);
-                if (!exact)
-                    throw new InvalidOperationException("Upload returned success, but the exact SDK release hash/status could not be verified.");
-
-                var verified = await AwaitAPI(callback => SDKAPI.GetManifest(callback));
-                bool latest = verified.success && verified.response?.json != null
-                    && verified.response.json.HasField("latest")
-                    && string.Equals(verified.response.json.GetField("latest").stringValue, version, StringComparison.Ordinal);
-                if (!latest)
-                    throw new InvalidOperationException("Exact release exists, but the SDK manifest did not report v" + version + " as latest.");
-
-                return new DreamParkSDKReleaseResponse
+                string previousVersion = SDKVersion.Current;
+                string tempPath = Path.Combine(Path.GetTempPath(), $"dreampark-sdk-v{version}-{Guid.NewGuid():N}.unitypackage");
+                try
                 {
-                    success = true,
-                    verified = true,
-                    version = version,
-                    sizeBytes = bytes.LongLength,
-                    sha256 = sha256,
-                    preflight = preflight,
-                    backend = verified.response.json,
-                    message = "SDK v" + version + " published and verified. Commit the version resource change."
-                };
-            }
-            catch (Exception ex)
-            {
-                WriteVersion(previousVersion);
-                return DreamParkSDKReleaseResponse.Failed(version, ex.Message, preflight);
-            }
-            finally
-            {
-                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+                    WriteVersion(version);
+                    AssetDatabase.ExportPackage(SDKAssetPath, tempPath, ExportPackageOptions.Recurse);
+                    if (!File.Exists(tempPath))
+                        throw new IOException("Unity did not create the SDK package.");
+
+                    byte[] bytes = File.ReadAllBytes(tempPath);
+                    string sha256 = SHA256Hex(bytes);
+                    var published = await AwaitAPI(callback => SDKAPI.PublishVersion(
+                        version, releaseNotes.Trim(), bytes, Path.GetFileName(tempPath), callback));
+                    if (!published.success)
+                        throw new InvalidOperationException(ErrorOf(published.response, "SDK publish failed."));
+
+                    var status = await AwaitAPI(callback => SDKAPI.GetReleaseStatus(version, callback));
+                    var release = status.response?.json?.GetField("release");
+                    bool exact = status.success && release != null
+                        && string.Equals(release.GetField("status")?.stringValue, "completed", StringComparison.Ordinal)
+                        && string.Equals(release.GetField("sha256")?.stringValue, sha256, StringComparison.OrdinalIgnoreCase);
+                    if (!exact)
+                        throw new InvalidOperationException("Upload returned success, but the exact SDK release hash/status could not be verified.");
+
+                    var verified = await AwaitAPI(callback => SDKAPI.GetManifest(callback));
+                    bool latest = verified.success && verified.response?.json != null
+                        && verified.response.json.HasField("latest")
+                        && string.Equals(verified.response.json.GetField("latest").stringValue, version, StringComparison.Ordinal);
+                    if (!latest)
+                        throw new InvalidOperationException("Exact release exists, but the SDK manifest did not report v" + version + " as latest.");
+
+                    return new DreamParkSDKReleaseResponse
+                    {
+                        success = true,
+                        verified = true,
+                        version = version,
+                        sizeBytes = bytes.LongLength,
+                        sha256 = sha256,
+                        preflight = preflight,
+                        backend = verified.response.json,
+                        message = "SDK v" + version + " published and verified. Commit the version resource change."
+                    };
+                }
+                catch (Exception ex)
+                {
+                    WriteVersion(previousVersion);
+                    return DreamParkSDKReleaseResponse.Failed(version, ex.Message, preflight);
+                }
+                finally
+                {
+                    try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+                }
             }
         }
 
