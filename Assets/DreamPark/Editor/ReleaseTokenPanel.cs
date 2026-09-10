@@ -102,9 +102,32 @@ namespace DreamPark
                 status = null;
             }
 
+            string contentIdError = null;
             if (scope == ReleaseTokenAPI.Scope.Content)
             {
                 contentId = EditorGUILayout.TextField("Content ID", contentId);
+                // Same rule ContentUploaderPanel's Gate 2 already enforces for an
+                // existing folder, and the one a brand-new folder can't even be
+                // created without satisfying (ContentIdSetupPopup). A contentId
+                // typed here does not need to exist on the backend yet — minting
+                // pre-emptively for an unclaimed id is the whole point — but it
+                // still has to be a legal id, or the eventual first upload would
+                // fail regardless of what this panel does.
+                if (!string.IsNullOrEmpty(contentId))
+                {
+                    contentIdError = ContentFolders.ExplainInvalidId(contentId);
+                    if (!string.IsNullOrEmpty(contentIdError))
+                    {
+                        EditorGUILayout.HelpBox(contentIdError, MessageType.Error);
+                    }
+                    else
+                    {
+                        EditorGUILayout.HelpBox(
+                            "Doesn't need to exist on the backend yet — minting for a new contentId " +
+                            "claims it for you as its first owner.",
+                            MessageType.None);
+                    }
+                }
             }
 
             label = EditorGUILayout.TextField("Label (optional)", label);
@@ -123,8 +146,9 @@ namespace DreamPark
             GUILayout.Space(8);
 
             bool contentIdMissing = scope == ReleaseTokenAPI.Scope.Content && string.IsNullOrWhiteSpace(contentId);
+            bool contentIdInvalid = scope == ReleaseTokenAPI.Scope.Content && !string.IsNullOrEmpty(contentIdError);
             bool adminBlocked = RequiresAdmin && AdminState.IsAdmin != true;
-            GUI.enabled = !isGenerating && !contentIdMissing && !adminBlocked;
+            GUI.enabled = !isGenerating && !contentIdMissing && !contentIdInvalid && !adminBlocked;
             if (GUILayout.Button(isGenerating ? "Generating..." : "Generate Token", GUILayout.Height(32)))
             {
                 Generate();
