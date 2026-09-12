@@ -283,6 +283,16 @@ public static class DreamParkLuaConfig {
         typeof(Action<Collider>),
         typeof(Action<Collision>),
         typeof(Action<Vector3>),
+        // ScoreAPI's async reads (FetchLeaderboard/FetchMyScore) and
+        // SubmitScore hand a result back into the SAME Lua callback the
+        // script passed in — there is no local cache to poll afterward the
+        // way GameStorageAPI's onReady pattern allows, so the result MUST
+        // travel as callback arguments. This is the exact shape this file's
+        // header warns about: without this entry, dp.score.* callbacks work
+        // in the SDK Editor (Mono reflection) and silently never fire on
+        // Quest/iOS (IL2CPP/AOT) — the Zombiez failure mode, just for a
+        // different delegate shape.
+        typeof(Action<bool, LuaTable>),
         typeof(Func<bool>),
         typeof(UnityEngine.Events.UnityAction),
         typeof(UnityEngine.Events.UnityAction<bool>),

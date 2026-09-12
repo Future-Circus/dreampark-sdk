@@ -164,7 +164,12 @@ namespace DreamPark.API
         /// places, so guessing one would be inventing data.</summary>
         public static string ShardContext { get; set; }
 
-        static string CallingParkId()
+        // internal, not private: ScoreAPI stamps the same parkId onto score
+        // submissions that AwardBadge stamps onto badges (same "where was
+        // this earned" question) — reusing this method is what keeps the
+        // two from resolving park differently if the fallback rule ever
+        // changes.
+        internal static string CallingParkId()
         {
             if (!string.IsNullOrEmpty(ParkContext)) return ParkContext;
             return SessionContext.LocationId;
@@ -709,7 +714,11 @@ namespace DreamPark.API
         /// Reads are NOT gated (harmless), and neither is session playtime
         /// reporting (it's what tells the platform the guest is playing).
         /// </summary>
-        static void GatedPost(string url, string auth, JSONObject body, Action<bool, APIResponse> done)
+        // internal, not private: ScoreAPI's score submission needs the exact
+        // same consent latch as every other profile write, and reimplementing
+        // "wrap the POST in ContentGate.Run" a second time would be a place
+        // that gate policy could silently drift.
+        internal static void GatedPost(string url, string auth, JSONObject body, Action<bool, APIResponse> done)
         {
             ContentGate.Run(null, () => DreamParkAPI.POST(url, auth, body, done));
         }

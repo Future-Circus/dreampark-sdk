@@ -99,7 +99,11 @@ namespace DreamPark.API
         const int   MaxFetchRetries      = 3;
         const int   QueueWarnThreshold   = 256; // coalescing keeps real queues tiny — big = bug in the game
 
-        static readonly Regex KeyRe = new Regex("^[A-Za-z0-9_-]{1,64}$");
+        // internal, not private: ScoreAPI validates metric names against the
+        // identical charset (a metric is embedded in a server-side boardId
+        // the same way a storage key is embedded in a scope doc) — reusing
+        // this instance means the two can never drift apart.
+        internal static readonly Regex KeyRe = new Regex("^[A-Za-z0-9_-]{1,64}$");
 
         // ── State ────────────────────────────────────────────────────────
         class PendingOp
@@ -294,6 +298,30 @@ namespace DreamPark.API
         {
             return NumericOp(contentId, attraction, key, "min", value);
         }
+
+        // ── Progress convention (Docs/Game-Storage-Spec.md §5) ────────────
+        // "Progress" is NOT a second storage system — it's ONE reserved key
+        // in the existing GAME scope (never per-attraction: a title has one
+        // overall "how far along" number, the same way a title can have many
+        // high-score boards but only one progress bar). The mobile app will
+        // eventually read this key straight off the game-storage doc it
+        // already fetches — zero new endpoint, zero new cap, one convention.
+        //
+        // Recommended range is 0-100, UNENFORCED — this is a documented
+        // convention, not a server rule, same as every other storage key.
+        // Set(contentId, null, ProgressKey, ...) works identically; these
+        // exist so the convention has ONE spelling to autocomplete instead
+        // of a magic string that can silently drift ("Progress" vs
+        // "progress" is a guest-visible bug, not a compile error).
+        public const string ProgressKey = "progress";
+
+        /// <summary>Set this title's overall progress (recommended 0-100,
+        /// unenforced — see Docs/Game-Storage-Spec.md §5). Always game-scoped:
+        /// there is one progress value per title, never one per attraction.</summary>
+        public static bool SetProgress(string contentId, double value) => Set(contentId, null, ProgressKey, value);
+
+        /// <summary>Read this title's overall progress, or null if never set.</summary>
+        public static object GetProgress(string contentId) => Get(contentId, null, ProgressKey);
 
         public static void Delete(string contentId, string attraction, string key)
         {
@@ -820,7 +848,12 @@ namespace DreamPark.API
         // by walking up to the stamped template components. GameArea first
         // (attractions always carry one, and it holds BOTH ids), then
         // PropTemplate, then LevelTemplate (gameId only).
-        static LuaTable ResolveScopeTable(GameObject go)
+        // internal, not private: ScoreAPI's Lua bridge resolves the calling
+        // script's (gameId, attraction) the same way `storage` does, and
+        // duplicating this GetComponentInParent walk would risk the two
+        // resolvers drifting on which template wins (see the ordering
+        // reasoning above — GameArea first because it holds both ids).
+        internal static LuaTable ResolveScopeTable(GameObject go)
         {
             if (go == null) return null;
             string gameId = null, resourceName = null;
@@ -898,6 +931,17 @@ namespace DreamPark.API
                         s.onReady   = function(cb)          dp_storage_on_ready(gameId, cb) end
                         s.gameId     = gameId
                         s.attraction = attraction
+                        -- Progress convention (Docs/Game-Storage-Spec.md §5):
+                        -- ALWAYS game-scoped (attraction is ignored on
+                        -- purpose, even when this `storage` is an
+                        -- attraction-scoped proxy) — one progress value per
+                        -- title, not one per attraction.
+                        s.setProgress = function(value)   return dp_storage_set(gameId, nil, 'progress', value) end
+                        s.getProgress = function(default)
+                            local v = dp_storage_get(gameId, nil, 'progress')
+                            if v == nil then return default end
+                            return v
+                        end
                         return s
                     end
 
@@ -911,6 +955,8 @@ namespace DreamPark.API
                         delete    = function() dp_storage_warn_unscoped() end,
                         isReady   = function() return false end,
                         onReady   = function() dp_storage_warn_unscoped() end,
+                        setProgress = function() dp_storage_warn_unscoped() return false end,
+                        getProgress = function(default) dp_storage_warn_unscoped() return default end,
                     }
                     __dp_storage_unscoped.game = __dp_storage_unscoped
 
