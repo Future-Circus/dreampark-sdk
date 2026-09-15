@@ -1,8 +1,9 @@
 // ─────────────────────────────────────────────────────────────────────
 //  LuaSurfaceScanner.cs — SDK-synced editor tooling
 //
-//  Catches, at authoring time, the two ways creator Lua can look perfectly
-//  healthy in the Editor and then do nothing on a headset.
+//  Catches, at authoring time, the three ways creator Lua can look perfectly
+//  healthy in the Editor and then either misbehave on a headset or not ship
+//  at all — for reasons no asset-dependency graph can see.
 //
 //  1. UNREGISTERED  — the type has no XLua wrapper (it is not in
 //     DreamParkLuaConfig.LuaCallCSharp and does not carry [LuaCallCSharp]).
@@ -18,9 +19,26 @@
 //     unsandboxed, so System.IO or Resources works on their machine and then
 //     throws the moment the content runs at a venue.
 //
+//  3. OUTSIDE THE CONTENT FOLDER (added 2026-08-30, SDK builds only) — the
+//     type resolves fine (it's a real, compiled class), but its own .cs file
+//     lives outside Assets/Content/{game}/. OutsideContentFolderCheck's
+//     AssetDatabase.GetDependencies crawl (Editor/PreUploadChecks/Checks/
+//     OutsideContentFolderCheck.cs) can never see this: a .lua.txt is an
+//     opaque TextAsset, not a serialized reference to the type it names by
+//     string, so a creator's own MonoBehaviour sitting in the wrong folder
+//     and reached only via `CS.MyNamespace.MyType` is structurally invisible
+//     to that check's dependency graph. It IS visible here, because this
+//     scanner already resolves the fully-qualified name to a real Type —
+//     finding its backing script is one more index, reusing
+//     OutsideContentFolderCheck.Classify() so the two never disagree about
+//     what counts as "outside." That reuse is also why this part of the file
+//     is #if !DREAMPARKCORE: that check doesn't exist in a core build.
+//
 //  Content ships OVER THE AIR, but the wrappers are AOT code compiled INTO
 //  the app. A type nobody registered cannot be fixed by publishing content —
-//  it needs an app rebuild and a store release.
+//  it needs an app rebuild and a store release. A script outside the content
+//  folder has the opposite shape: a content-authoring mistake, fixable by
+//  moving the file, unrelated to registration or stripping.
 //
 // ─────────────────────────────────────────────────────────────────────
 //  HOW IT RESOLVES NAMES, and why the first version cried wolf
@@ -100,11 +118,17 @@ public static class LuaSurfaceScanner
         public int candidateCount;
         public List<Finding> blocked = new List<Finding>();
         public List<Finding> unregistered = new List<Finding>();
+
+        // Always present (so callers don't need to know about the
+        // DREAMPARKCORE split), just never populated outside an SDK build —
+        // see the OUTSIDE THE CONTENT FOLDER note in the file header.
+        public List<Finding> outsideContentFolder = new List<Finding>();
         public string report = "";
 
         public bool HasBlocked => blocked.Count > 0;
         public bool HasUnregistered => unregistered.Count > 0;
-        public bool IsClean => !HasBlocked && !HasUnregistered;
+        public bool HasOutsideContentFolder => outsideContentFolder.Count > 0;
+        public bool IsClean => !HasBlocked && !HasUnregistered && !HasOutsideContentFolder;
 
         /// <summary>Short list for a dialog. Unity truncates long message bodies.</summary>
         public static string Summarize(List<Finding> findings, int max = 8)
@@ -125,7 +149,7 @@ public static class LuaSurfaceScanner
         if (result == null) { Debug.Log("[LuaScan] Nothing to scan (no .lua.txt under Assets/Content)."); return; }
 
         if (result.HasBlocked) Debug.LogError(result.report);
-        else if (result.HasUnregistered) Debug.LogWarning(result.report);
+        else if (result.HasUnregistered || result.HasOutsideContentFolder) Debug.LogWarning(result.report);
         else Debug.Log(result.report);
     }
 
@@ -154,7 +178,17 @@ public static class LuaSurfaceScanner
 
         var blocked = new SortedDictionary<string, Finding>(StringComparer.Ordinal);
         var unregistered = new SortedDictionary<string, Finding>(StringComparer.Ordinal);
+        var outsideContentFolder = new SortedDictionary<string, Finding>(StringComparer.Ordinal);
         var result = new ScanResult();
+
+#if !DREAMPARKCORE
+        // Type -> the .cs asset path that declares it. Built lazily (at most
+        // once per Analyze() call, only if some file actually has a candidate
+        // worth checking) because it costs one more AssetDatabase pass on top
+        // of BuildTypeIndex's already-heavy reflection walk, and a clean scan
+        // with nothing custom referenced shouldn't pay for it.
+        Dictionary<Type, string> scriptPathByType = null;
+#endif
 
         foreach (string file in files)
         {
@@ -170,6 +204,15 @@ public static class LuaSurfaceScanner
             result.fileCount++;
             string shortName = Path.GetFileName(file);
 
+#if !DREAMPARKCORE
+            // The content package THIS lua file belongs to — "outside" only
+            // means outside its OWN package. A type properly homed in a
+            // sibling content package is a different, already-reported
+            // problem (OutsideContentFolderCheck's cross-content-folder
+            // case), not this one.
+            string homeContentRoot = ContentRootOf(file.Replace('\\', '/'));
+#endif
+
             foreach (string fqn in ResolveCandidates(src))
             {
                 result.candidateCount++;
@@ -182,13 +225,29 @@ public static class LuaSurfaceScanner
                 if (IsSandboxBlocked(fqn)) { Record(blocked, fqn, shortName); continue; }
 
                 if (!index.TryGetValue(fqn, out Type t)) continue;   // not a type — a member, or nothing
-                if (registered.Contains(t)) continue;
-                Record(unregistered, t.FullName ?? fqn, shortName);
+
+                if (!registered.Contains(t))
+                    Record(unregistered, t.FullName ?? fqn, shortName);
+
+#if !DREAMPARKCORE
+                // Independent of registration status — a type can be properly
+                // registered for XLua AND still be sitting in the wrong folder.
+                if (homeContentRoot != null)
+                {
+                    if (scriptPathByType == null) scriptPathByType = BuildScriptPathIndex();
+                    if (scriptPathByType.TryGetValue(t, out string scriptPath)
+                        && IsOutsideContentFolder(scriptPath, homeContentRoot))
+                    {
+                        Record(outsideContentFolder, t.FullName ?? fqn, shortName);
+                    }
+                }
+#endif
             }
         }
 
         result.blocked = blocked.Values.ToList();
         result.unregistered = unregistered.Values.ToList();
+        result.outsideContentFolder = outsideContentFolder.Values.ToList();
 
         var sb = new StringBuilder();
         sb.AppendLine("═══ Lua API surface scan ═══");
@@ -218,6 +277,20 @@ public static class LuaSurfaceScanner
             sb.AppendLine("    (NavMesh.SamplePosition is the known one) fails silently on a headset.");
             sb.AppendLine();
         }
+
+#if !DREAMPARKCORE
+        if (result.HasOutsideContentFolder)
+        {
+            sb.AppendLine($"⚠ REFERENCED FROM LUA BUT OUTSIDE THE CONTENT FOLDER ({result.outsideContentFolder.Count}) "
+                        + "— invisible to OutsideContentFolderCheck, won't ship in the .unitypackage or link.xml:");
+            foreach (var f in result.outsideContentFolder) sb.AppendLine("    " + f);
+            sb.AppendLine();
+            sb.AppendLine("    Move the script into Assets/Content/{yourGame}/. If it's meant to be shared SDK");
+            sb.AppendLine("    surface rather than your own content, that's a core-team registration, not");
+            sb.AppendLine("    something a folder move fixes.");
+            sb.AppendLine();
+        }
+#endif
 
         if (result.IsClean)
             sb.AppendLine("✓ Every type referenced from Lua is registered and permitted.");
@@ -362,6 +435,72 @@ public static class LuaSurfaceScanner
         }
         return index;
     }
+
+#if !DREAMPARKCORE
+    // ── Content-folder location (SDK builds only) ────────────────────
+
+    // "Assets/Content/{game}/anything" -> "Assets/Content/{game}". Null for a
+    // path that isn't under a content package at all (shouldn't happen here,
+    // since `files` was already found under Assets/Content — defensive).
+    private static string ContentRootOf(string assetPath)
+    {
+        const string prefix = "Assets/Content/";
+        if (string.IsNullOrEmpty(assetPath)
+            || !assetPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        int slash = assetPath.IndexOf('/', prefix.Length);
+        return slash > 0 ? assetPath.Substring(0, slash) : null;
+    }
+
+    // Same rule OutsideContentFolderCheck applies to an asset-dependency-graph
+    // violation, just fed a script path this scanner found through Lua text
+    // instead of through AssetDatabase.GetDependencies. Deliberately does NOT
+    // duplicate Classify()'s allow/info/violation logic — reuses it, so the
+    // two can never quietly drift apart on what counts as "outside."
+    private static bool IsOutsideContentFolder(string scriptPath, string homeContentRoot)
+    {
+        if (string.IsNullOrEmpty(scriptPath)) return false;
+        if (DreamPark.PreUploadChecks.ContentRootScanner.IsUnderContentRoot(scriptPath, homeContentRoot))
+            return false;
+
+        return DreamPark.PreUploadChecks.Checks.OutsideContentFolderCheck.Classify(scriptPath, "")
+            == DreamPark.PreUploadChecks.Checks.OutsideContentFolderCheck.Verdict.Violation;
+    }
+
+    // Type -> its own .cs asset path. There is no direct Type-to-path API in
+    // the Editor, so — same shape as BuildTypeIndex — this is a one-time scan
+    // that then answers every lookup for free. Scoped to Assets/ only:
+    // Packages/ scripts are never a "creator put this in the wrong folder"
+    // case, and scanning them would just be wasted MonoScript loads.
+    private static Dictionary<Type, string> BuildScriptPathIndex()
+    {
+        var map = new Dictionary<Type, string>();
+        string[] guids;
+        try { guids = AssetDatabase.FindAssets("t:MonoScript", new[] { "Assets" }); }
+        catch (Exception e)
+        {
+            Debug.LogWarning("[LuaScan] Couldn't index script paths: " + e.Message);
+            return map;
+        }
+
+        foreach (string guid in guids)
+        {
+            string path = AssetDatabase.GUIDToAssetPath(guid);
+            if (string.IsNullOrEmpty(path)) continue;
+
+            var script = AssetDatabase.LoadAssetAtPath<MonoScript>(path);
+            if (script == null) continue;
+
+            Type cls;
+            try { cls = script.GetClass(); } catch { continue; }
+            if (cls == null) continue;
+
+            if (!map.ContainsKey(cls)) map[cls] = path;
+        }
+        return map;
+    }
+#endif
 
     // ── Sandbox mirror ───────────────────────────────────────────────
     // Kept in sync BY HAND with LuaSecuritySandbox.GUARD. That file lives in

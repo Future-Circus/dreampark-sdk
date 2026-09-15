@@ -58,7 +58,7 @@ namespace DreamPark
             // the window header reflects the reduced scope of the run.
             string windowTitle = failedOnly
                 ? "Retry Failed Bundles"
-                : (buildBeforeUpload ? "Compile & Upload" : "Try Reupload");
+                : (buildBeforeUpload ? "Upload Release" : "Try Reupload");
 
             var existing = Resources.FindObjectsOfTypeAll<ContentUploadFlowPopup>();
             if (existing != null && existing.Length > 0)
@@ -332,7 +332,7 @@ namespace DreamPark
                 EditorGUILayout.HelpBox(
                     "Reupload uses the current ServerData/ output as-is. If the existing build " +
                     "wasn't produced by Smart bundling, the Code bundle won't be there " +
-                    "and the upload will be empty. Compile & Upload is the safer route for " +
+                    "and the upload will be empty. Upload Release is the safer route for " +
                     $"{UploadModePrefs.ShortLabel(uploadMode)}.",
                     MessageType.Info);
             }
@@ -644,7 +644,7 @@ namespace DreamPark
                 EditorGUILayout.HelpBox(
                     buildBeforeUpload
                         ? "Run Check Patch Size to compute the real patch against the latest backend version and see exactly which bundles will upload versus stay the same."
-                        : "Patch estimate breakdown is only available from the Compile & Upload flow after running Check Patch Size.",
+                        : "Patch estimate breakdown is only available from the Upload Release flow after running Check Patch Size.",
                     MessageType.None);
             }
             GUILayout.EndVertical();

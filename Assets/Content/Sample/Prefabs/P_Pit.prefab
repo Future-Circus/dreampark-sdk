@@ -132,6 +132,8 @@ MonoBehaviour:
   customFootprintMeters: {x: 1, y: 1}
   footprintOffsetMeters: {x: 0, y: 0}
   showFootprintGizmos: 1
+  wallSide: 0
+  showWallGizmo: 1
   runtimePlane: {fileID: 0}
   _isManualFootprint: 0
   _calibratedYOffset: 0

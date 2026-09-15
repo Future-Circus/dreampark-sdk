@@ -21,7 +21,7 @@ using UnityEngine.Networking;
 using Unity.EditorCoroutines.Editor;
 
 namespace DreamPark {
-    public class ContentUploaderPanel : EditorWindow
+    public partial class ContentUploaderPanel : EditorWindow
     {
         private string contentId = "";
         private string contentName = "";
@@ -61,7 +61,7 @@ namespace DreamPark {
         private bool pendingTestBuildWindows = false;
 
         // Pending production estimate state — populated when the user clicks
-        // "Check Patch Size" from the main Compile & Upload popup. This is
+        // "Check Patch Size" from the main Upload Release popup. This is
         // the production analogue of the test-build estimate flow: run the
         // full compile, diff the freshly-built ServerData bundles against the
         // latest backend version, then stop before uploading any bytes. If
@@ -239,6 +239,12 @@ namespace DreamPark {
         private List<BadgeStore.Entry> badges = new List<BadgeStore.Entry>();
         private string badgesContentId;
         private BadgeLuaScanner.Result badgeScan;
+        // Which Attraction/Prop/Player roots award each badge id, for the
+        // "Awarded by" tooltip on the card's status icon. Recomputed alongside
+        // badgeScan in RefreshBadges — see that method's comment for why this
+        // is a light enough pass to run there rather than only inside the
+        // pre-upload check.
+        private BadgeAttributionScanner.Result badgeAttribution;
         // Set when a field is edited; flushed to .badges.json on the next
         // Layout pass rather than on every keystroke.
         private bool badgesDirty;
@@ -259,6 +265,18 @@ namespace DreamPark {
         // GUI.Button's control-id stream shifts between them.
         private Dictionary<string, KeyValuePair<PreUploadChecks.CheckSeverity, string>> preUploadBadges;
         private Dictionary<string, KeyValuePair<PreUploadChecks.CheckSeverity, string>> preUploadBadgesPending;
+        // Same staged-swap rule, keyed by badge id instead of asset path — feeds
+        // the checkmark/warning icon on the Badges section's own cards (see
+        // PreUploadCheckRunner.BuildBadgeAwardMap for why this needs its own map
+        // rather than reusing preUploadBadges).
+        private Dictionary<string, KeyValuePair<PreUploadChecks.CheckSeverity, string>> preUploadBadgeAwards;
+        private Dictionary<string, KeyValuePair<PreUploadChecks.CheckSeverity, string>> preUploadBadgeAwardsPending;
+        // True once a report has actually completed for this content. Needed
+        // because "no active finding for this badge id" is ambiguous on its
+        // own — it also describes the state before the first scan has run —
+        // and a false-positive checkmark on a badge that just hasn't been
+        // checked yet would be worse than no icon at all.
+        private bool preUploadReportEverBuilt;
         private bool preUploadAdvisoryScheduled;
         private double preUploadAdvisoryDueAt;
 
@@ -420,6 +438,8 @@ namespace DreamPark {
         {
             var report = PreUploadChecks.PreUploadCheckRunner.CachedReportFor(contentId);
             preUploadBadgesPending = PreUploadChecks.PreUploadCheckRunner.BuildBadgeMap(report);
+            preUploadBadgeAwardsPending = PreUploadChecks.PreUploadCheckRunner.BuildBadgeAwardMap(report);
+            if (report != null) preUploadReportEverBuilt = true;
         }
 
         // Runs the cheap checks so the Park Assets tiles can carry warning badges the
@@ -576,6 +596,11 @@ namespace DreamPark {
             {
                 preUploadBadges = preUploadBadgesPending;
                 preUploadBadgesPending = null;
+            }
+            if (Event.current.type == EventType.Layout && preUploadBadgeAwardsPending != null)
+            {
+                preUploadBadgeAwards = preUploadBadgeAwardsPending;
+                preUploadBadgeAwardsPending = null;
             }
 
             // Same rule for the badge list: add/remove only ever happens between
@@ -972,8 +997,8 @@ namespace DreamPark {
 
             GUI.enabled = canLaunch;
             string compileLabel = shippable
-                ? "Compile & Upload"
-                : "Compile & Upload (add an Attraction or Prop first)";
+                ? "Upload Release"
+                : "Upload Release (add an Attraction or Prop first)";
             if (GUILayout.Button(compileLabel, GUILayout.Height(34)))
             {
                 SaveLogoSelection();
@@ -993,7 +1018,7 @@ namespace DreamPark {
             if (GUILayout.Button(new GUIContent(reuploadLabel,
                 hasBuildArtifacts
                     ? "Re-upload the contents of ServerData/ without rebuilding."
-                    : "Run Compile & Upload first — ServerData/ is empty."),
+                    : "Run Upload Release first — ServerData/ is empty."),
                 GUILayout.Height(28)))
             {
                 SaveLogoSelection();
@@ -1028,7 +1053,7 @@ namespace DreamPark {
                     useFailedOnly = (choice == 0);
                 }
 
-                // Same click-time version gate as Compile & Upload — a reupload
+                // Same click-time version gate as Upload Release — a reupload
                 // still publishes bundles built against the stale SDK.
                 bool failedOnlyFinal = useFailedOnly;
                 SDKUpdateChecker.EnsureUpToDateThen(() => ContentUploadFlowPopup.Show(this, false, failedOnlyFinal));
@@ -1592,6 +1617,18 @@ namespace DreamPark {
             // same call independently off the row's own kind — this flag is a
             // console nicety, never the authority.
             public bool isProp;
+            // LevelTemplate.WallsWireValue / PropTemplate.PublishedWallSideToken
+            // — comma-joined axis tokens ("+z,-x") in the prefab's own local
+            // frame, "" when no side is toggled. GENERATE_LAYOUT (dreampark-core
+            // SpaceMapPacker) parses this to auto-route items into its wall
+            // pass instead of needing them pre-sorted by the caller.
+            public string walls = "";
+            // Feet, only meaningful when walls is non-empty. 0 means "not
+            // applicable" (no wall declared) rather than "authored zero
+            // height" — omitted from the wire entirely in that case (see the
+            // AddField below) so the server's own 10ft default stays in
+            // control rather than a sentinel value trying to mean two things.
+            public float wallHeightFt;
         }
 
         // Backend catalog key derivation, shared with the preview walk: the
@@ -1640,6 +1677,8 @@ namespace DreamPark {
                 float widthFt;
                 float lengthFt;
                 bool isProp;
+                string walls;
+                float wallHeightFt = 0f;
 
                 LevelTemplate level = prefab.GetComponent<LevelTemplate>();
                 if (level != null)
@@ -1649,6 +1688,8 @@ namespace DreamPark {
                     widthFt = feet.x;
                     lengthFt = feet.y;
                     isProp = false;
+                    walls = level.WallsWireValue;
+                    if (!string.IsNullOrEmpty(walls)) wallHeightFt = level.GetWallHeightMeters() * FeetPerMeter;
                 }
                 else
                 {
@@ -1666,6 +1707,8 @@ namespace DreamPark {
                     widthFt = meters.x * FeetPerMeter;
                     lengthFt = meters.y * FeetPerMeter;
                     isProp = true;
+                    walls = prop.PublishedWallSideToken;
+                    if (!string.IsNullOrEmpty(walls)) wallHeightFt = prop.GetWallHeightMeters() * FeetPerMeter;
                 }
 
                 list.Add(new DimensionUploadRoot
@@ -1673,8 +1716,10 @@ namespace DreamPark {
                     name = Path.GetFileNameWithoutExtension(path),
                     resourceName = ResourceNameForAssetPath(path),
                     widthFt = widthFt,
+                    wallHeightFt = wallHeightFt,
                     lengthFt = lengthFt,
                     isProp = isProp,
+                    walls = walls,
                 });
             }
             return list;
@@ -1713,6 +1758,11 @@ namespace DreamPark {
                 row.AddField("resourceName", r.resourceName);
                 row.AddField("widthFt", r.widthFt);
                 row.AddField("lengthFt", r.lengthFt);
+                row.AddField("walls", r.walls);
+                // Omitted (not zero) when there's no wall to measure, so the
+                // server's own 10ft default stays in control — see the field's
+                // own comment on DimensionUploadRoot.
+                if (r.wallHeightFt > 0f) row.AddField("wallHeightFt", r.wallHeightFt);
                 arr.Add(row);
                 // The size-reference ladder bottoms out at a 4 x 4 ft phone booth,
                 // so EVERY prop would tag "fits a Phone Booth" — a line that reads
@@ -1749,10 +1799,20 @@ namespace DreamPark {
             {
                 int updated = result != null && result.GetField("updated") != null ? result.GetField("updated").intValue : roots.Count;
                 int skipped = result != null && result.GetField("skipped") != null ? result.GetField("skipped").intValue : 0;
+                // Non-zero only if the SDK and server disagree about the wall
+                // token vocabulary — the one failure mode of a two-vocabulary
+                // field, and otherwise silent everywhere (the row still
+                // uploads, just with the offending side quietly gone). Surfaced
+                // rather than logged-only so it's not missed in the common
+                // (interactive) path.
+                int droppedWallSides = result != null && result.GetField("droppedWallSides") != null ? result.GetField("droppedWallSides").intValue : 0;
                 string summary = updated + " footprint" + (updated == 1 ? "" : "s") + " updated" +
-                    (skipped > 0 ? ", " + skipped + " not in the catalog yet (upload a build first)" : "") + ".";
+                    (skipped > 0 ? ", " + skipped + " not in the catalog yet (upload a build first)" : "") +
+                    (droppedWallSides > 0 ? ", " + droppedWallSides + " wall side" + (droppedWallSides == 1 ? "" : "s") + " rejected by the server (vocabulary mismatch — check for an SDK/backend version skew)" : "") + ".";
                 if (interactive) EditorUtility.DisplayDialog("Dimensions uploaded", summary, "OK");
                 else Debug.Log("[Dimensions] auto-push: " + summary);
+                if (droppedWallSides > 0)
+                    Debug.LogWarning("[Dimensions] " + droppedWallSides + " wall side(s) were rejected by the server — the SDK and backend disagree on the wall token vocabulary.");
             }
             else
             {
@@ -1844,7 +1904,7 @@ namespace DreamPark {
         //      and commit with the final metadata + manifest.
         //
         // Wraps the whole sequence in the same isUploading guard the
-        // regular Compile & Upload flow uses, so the rest of the panel
+        // regular Upload Release flow uses, so the rest of the panel
         // stays disabled while a test compile is in flight.
         private void BeginTestBuildUpload()
         {
@@ -2304,7 +2364,7 @@ namespace DreamPark {
             Repaint();
         }
 
-        // Runs the compile half of a Compile & Upload, scoped to editor
+        // Runs the compile half of an Upload Release, scoped to editor
         // targets only and with the catalog's RemoteLoadPath pointed at
         // /api/test-content/addressables/{testBuildId} so the bundles
         // baked into the catalog match the URLs dreampark-core's
@@ -2314,7 +2374,7 @@ namespace DreamPark {
         // Deliberately a mirror of UploadContent's build steps (lines
         // ~2710-2828 in the production path) rather than calling into
         // that method directly:
-        //   • UploadContent is welded to the full Compile & Upload flow
+        //   • UploadContent is welded to the full Upload Release flow
         //     (manifest diff → skipSet → commit metadata → schema sync
         //     etc.) and reusing it would require threading a "test build"
         //     flag through dozens of conditionals.
@@ -2602,7 +2662,7 @@ namespace DreamPark {
             bool patchingEnabled = IsPatchUploadEnabled();
             if (patchCurrentSnapshot == null || patchCurrentSnapshot.TotalFileCount == 0)
             {
-                return "No build artifacts yet. Compile & Upload will create the first bundle set.";
+                return "No build artifacts yet. Upload Release will create the first bundle set.";
             }
 
             if (!patchingEnabled)
@@ -2799,7 +2859,7 @@ namespace DreamPark {
             // creator who never opened DreamPark > Troubleshooting shipped blind. This
             // is the trigger it was missing. Sandbox-denied types hard-stop; merely
             // unregistered ones warn and let the human decide.
-            if (!LuaSurfaceGate.PassesPreUploadCheck())
+            if (!LuaSurfaceGate.PassesPreUploadCheck(interactive: !automatedReleaseMode))
             {
                 return false;
             }
@@ -2813,13 +2873,16 @@ namespace DreamPark {
                 && UploadModePrefs.RequiresSmart(mode)
                 && BundlingStrategyPrefs.Current != BundlingStrategy.Smart)
             {
-                EditorUtility.DisplayDialog(
-                    "Upload mode requires Smart bundling",
-                    $"{UploadModePrefs.ShortLabel(mode)} requires the Smart bundling strategy, " +
-                    "and this machine is on deprecated Legacy bundling. Turn Legacy off via " +
-                    "DreamPark \u25b8 Troubleshooting \u25b8 Use Legacy Bundling (deprecated), or pick " +
-                    "Upload All / Upload Patch.",
-                    "OK");
+                if (!automatedReleaseMode)
+                {
+                    EditorUtility.DisplayDialog(
+                        "Upload mode requires Smart bundling",
+                        $"{UploadModePrefs.ShortLabel(mode)} requires the Smart bundling strategy, " +
+                        "and this machine is on deprecated Legacy bundling. Turn Legacy off via " +
+                        "DreamPark \u25b8 Troubleshooting \u25b8 Use Legacy Bundling (deprecated), or pick " +
+                        "Upload All / Upload Patch.",
+                        "OK");
+                }
                 return false;
             }
 
@@ -2832,7 +2895,8 @@ namespace DreamPark {
             // checking the right bytes.
             if (build && !SaveModifiedScenesBeforeCompile())
             {
-                EditorUtility.DisplayDialog("Compile Cancelled", "Save all modified scenes before compiling.", "OK");
+                if (!automatedReleaseMode)
+                    EditorUtility.DisplayDialog("Compile Cancelled", "Save all modified scenes before compiling.", "OK");
                 return false;
             }
 
@@ -3341,7 +3405,7 @@ namespace DreamPark {
                     // attraction sits ready to be titled/described/priced.
                     // Only fires on a real successful commit — never for the
                     // zero-change short-circuit or Test Channel uploads.
-                    try
+                    if (!automatedReleaseMode) try
                     {
                         Application.OpenURL(DeveloperPortalMenuItem.AttractionsUrl(uploadContentId));
                     }
@@ -3354,7 +3418,8 @@ namespace DreamPark {
                 {
                     Debug.LogError($"❌ Content uploaded failed: {apiResponse.error}");
                     CompleteUploadStatus(false, $"Upload failed: {apiResponse.error}");
-                    EditorUtility.DisplayDialog("Error", $"Upload failed: {apiResponse.error}", "OK");
+                    if (!automatedReleaseMode)
+                        EditorUtility.DisplayDialog("Error", $"Upload failed: {apiResponse.error}", "OK");
                 }
 
                 pendingFailedOnly = false;
@@ -3562,7 +3627,7 @@ namespace DreamPark {
 
         // Runs the project's actual preview-PNG generator
         // (ContentProcessor.GenerateAllLevelPreviews → PrefabPreviewRenderer)
-        // — the same pipeline that fires during Compile & Upload — and then
+        // — the same pipeline that fires during Upload Release — and then
         // re-walks the content tree so DrawCard picks up the freshly-
         // generated Previews/{name}.png files via the customPreview path.
         //
@@ -3665,7 +3730,7 @@ namespace DreamPark {
             return null;
         }
 
-        // Gate for the Compile & Upload + Build & Inspect actions: a content
+        // Gate for the Upload Release + Build & Inspect actions: a content
         // package is only meaningful if it ships at least one Attraction or
         // Prop. A bare PlayerRig isn't a complete deliverable on its own.
         /// True when the selected content ID is one the SDK ships with, so no
@@ -3873,6 +3938,7 @@ namespace DreamPark {
             badgeRemoveIndex = -1;
             badgesDirty = false;
             badgeScan = null;
+            badgeAttribution = null;
 
             if (string.IsNullOrEmpty(contentId))
             {
@@ -3892,6 +3958,36 @@ namespace DreamPark {
                 Debug.LogWarning("[Badges] Lua scan failed: " + e.Message);
                 badges = BadgeStore.Load(contentId);
             }
+
+            try
+            {
+                // Independent of the pre-upload report cache on purpose: the
+                // "Awarded by" tooltip should be current the moment a rescan
+                // runs, not wait on the (debounced) advisory check pass.
+                badgeAttribution = BadgeAttributionScanner.Scan(contentId, PreUploadChecks.ContentRootScanner.Scan(contentId));
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[Badges] Attribution scan failed: " + e.Message);
+                badgeAttribution = null;
+            }
+        }
+
+        // "Awarded by Fountain Quest (Attraction), the Player rig" — or "" when
+        // nothing (yet) awards this id, in which case the card falls back to
+        // whatever preUploadBadgeAwards says instead.
+        private string AwardedBySummary(string badgeId)
+        {
+            if (badgeAttribution == null || string.IsNullOrEmpty(badgeId)) return "";
+
+            var parts = new List<string>();
+            if (badgeAttribution.awardedByRoot.TryGetValue(badgeId, out var roots))
+            {
+                foreach (var r in roots) parts.Add(r.name + " (" + r.KindLabel + ")");
+            }
+            if (badgeAttribution.awardedByPlayer.Contains(badgeId)) parts.Add("the Player rig");
+
+            return parts.Count == 0 ? "" : "Awarded by " + string.Join(", ", parts);
         }
 
         private void ApplyQueuedBadgeMutations()
@@ -4013,7 +4109,7 @@ namespace DreamPark {
 
             GUILayout.FlexibleSpace();
 
-            // The push is deliberately available WITHOUT a full Compile & Upload.
+            // The push is deliberately available WITHOUT a full Upload Release.
             // Badge text is metadata on the backend, not bundle content, so
             // making a developer pay a multi-minute build to fix a typo in a
             // badge description would be the same mistake the logo re-upload
@@ -4106,6 +4202,54 @@ namespace DreamPark {
                     entry.IdLocked ? "● From your Lua" : "○ Added by hand",
                     entry.IdLocked ? entry.discoveredIn : "Not referenced from Lua in this content folder."),
                 EditorStyles.miniLabel);
+
+            // Readiness icon, top-right corner of the card: is this badge
+            // actually awarded anywhere, and ready to ship? Backed by
+            // BadgeAwardCheck (see PreUploadChecks/Checks/BadgeAwardCheck.cs)
+            // rather than computed inline here, so the same finding also shows
+            // up in the full Pre-Upload Checks popup and can be ignored per
+            // badge through the same ignore-store every other check uses.
+            //
+            // GUI.Label, not GUI.Button: it consumes no control id, so it is
+            // safe to draw even though its content (warning vs. checkmark vs.
+            // "not scanned yet") can legitimately differ between this frame's
+            // Layout and Repaint passes — unlike GUI.Button, there is no id
+            // stream here to shift.
+            if (!string.IsNullOrEmpty(entry.badgeId))
+            {
+                var statusRect = new Rect(card.xMax - 20f, card.y + 4f, 16f, 16f);
+
+                KeyValuePair<PreUploadChecks.CheckSeverity, string> award = default;
+                bool hasWarning = preUploadBadgeAwards != null
+                                && preUploadBadgeAwards.TryGetValue(entry.badgeId, out award);
+
+                if (hasWarning)
+                {
+                    var warnIcon = EditorGUIUtility.IconContent("console.warnicon.sml");
+                    GUI.Label(statusRect, new GUIContent(warnIcon != null ? warnIcon.image : null, award.Value));
+                }
+                else if (!preUploadReportEverBuilt)
+                {
+                    // Neither "warning" nor "clean" is known yet — the advisory
+                    // scan is debounced ~1.5s behind opening the panel. Say so
+                    // rather than guess.
+                    GUI.Label(statusRect, new GUIContent("…",
+                        "Pre-upload checks haven't run for this content yet."), EditorStyles.centeredGreyMiniLabel);
+                }
+                else
+                {
+                    string summary = AwardedBySummary(entry.badgeId);
+                    var checkStyle = new GUIStyle(EditorStyles.boldLabel)
+                    {
+                        alignment = TextAnchor.MiddleCenter,
+                        fontSize = 13,
+                    };
+                    checkStyle.normal.textColor = new Color(0.35f, 0.82f, 0.4f);
+                    GUI.Label(statusRect, new GUIContent("✓",
+                        string.IsNullOrEmpty(summary) ? "Awarded somewhere in this package's scripts." : summary),
+                        checkStyle);
+                }
+            }
 
             // Removing a discovered badge would be a lie: the next scan puts it
             // straight back, because the reason it is here is a line of the
@@ -4895,7 +5039,7 @@ namespace DreamPark {
 
                 // Build only the active target — keep the diagnostic fast.
                 // The URL is a placeholder since these bundles will never be
-                // uploaded; if the user later decides to ship, Compile & Upload
+                // uploaded; if the user later decides to ship, Upload Release
                 // does its own clean build with the real per-platform URLs.
                 BuildTarget activeTarget = EditorUserBuildSettings.activeBuildTarget;
                 BuildTargetGroup activeGroup = BuildPipeline.GetBuildTargetGroup(activeTarget);
@@ -5200,7 +5344,7 @@ namespace DreamPark {
                                 message,
                                 stageProgress);
                             EditorUtility.DisplayProgressBar(
-                                "Compile & Upload",
+                                "Upload Release",
                                 $"({currentStep}/{totalSteps}) {message}",
                                 stageProgress);
                         };
@@ -5254,7 +5398,7 @@ namespace DreamPark {
                                 // references e.g. a Models or Textures asset still
                                 // sitting in ThirdPartyLocal would either ship a
                                 // broken bundle or skip the asset entirely. Running
-                                // the sync here makes "Compile & Upload" the one-
+                                // the sync here makes "Upload Release" the one-
                                 // button flow it's meant to be — the previously-
                                 // manual Manage Third Party Assets step is folded in.
                                 reportStep("Syncing third-party assets...");
@@ -5456,7 +5600,7 @@ namespace DreamPark {
                                                 continue;
                                             string key = $"{s.platform}/{s.fileName}";
                                             if (!currentKeys.Contains(key)) continue;
-                                            preUploadedFiles.Add(new DreamPark.API.UploadedFileRecord(s.platform, s.fileName, s.uploadPath));
+                                            preUploadedFiles.Add(new DreamPark.API.UploadedFileRecord(s.platform, s.fileName, s.uploadPath, failedRecord.releaseId));
                                         }
 
                                         // Snapshot baseline / diff fields for

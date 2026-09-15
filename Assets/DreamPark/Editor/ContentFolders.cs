@@ -47,6 +47,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text.RegularExpressions;
 using UnityEditor;
 
 namespace DreamPark
@@ -54,6 +55,49 @@ namespace DreamPark
     public static class ContentFolders
     {
         public const string Root = "Assets/Content";
+
+        // The one place that answers "is this string a legal contentId", same
+        // rationale as the rest of this file: ContentIdSetupPopup originally
+        // owned this (folder-rename gate), but a contentId is also typed
+        // straight into ReleaseTokenPanel — which must compile in dreampark-core,
+        // where ContentIdSetupPopup does not exist (it's #if !DREAMPARKCORE,
+        // a folder-rename UI core has no folders to rename). Putting the rule
+        // itself here — already the shared, no-DREAMPARKCORE-guard home for
+        // "what counts as the creator's content" — means both callers use the
+        // exact same rule instead of two copies quietly drifting apart.
+        // ContentIdSetupPopup keeps its own IsValid/ExplainInvalid/ContentIdRegex
+        // as thin aliases so its existing callers (BetaContentId.cs,
+        // ContentUploaderPanel.cs) don't need to change.
+        //
+        // ^[A-Za-z]    must start with a letter (no leading digits — Addressables choke)
+        // [A-Za-z0-9]* only letters and digits afterwards
+        // length 2-64  enforced separately in IsValidId, for a clearer error message
+        public static readonly Regex ContentIdRegex = new Regex(@"^[A-Za-z][A-Za-z0-9]*$");
+
+        public static bool IsValidId(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            if (name.Length < 2 || name.Length > 64) return false;
+            return ContentIdRegex.IsMatch(name);
+        }
+
+        /// User-friendly explanation of why `name` is not a legal contentId, or
+        /// null if it is. Callers show this string verbatim.
+        public static string ExplainInvalidId(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return "Enter a name (e.g. SuperAdventureLand).";
+            if (name.Length < 2) return "Must be at least 2 characters.";
+            if (name.Length > 64) return "Must be 64 characters or fewer.";
+            if (!char.IsLetter(name[0])) return "Must start with a letter.";
+            foreach (char c in name)
+            {
+                if (!char.IsLetterOrDigit(c) || c > 127)
+                {
+                    return $"'{c}' is not allowed. Use only letters (a-z, A-Z) and digits (0-9).";
+                }
+            }
+            return null;
+        }
 
         /// The folder name the SDK template ships with. Creators are prompted
         /// to rename it; until they do, it still counts as THEIR folder.

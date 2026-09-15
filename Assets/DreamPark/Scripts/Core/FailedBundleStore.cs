@@ -56,8 +56,9 @@ namespace DreamPark
     [Serializable]
     public class FailedBundleRecord
     {
-        public int schemaVersion = 1;
+        public int schemaVersion = 2;
         public string contentId;
+        public string releaseId;            // Immutable backend reservation reused by Failed-Only retries.
         public string failedAtUtc;          // ISO-8601, for "X hours ago" display.
         public int totalFiles;              // Total file count of the failed run (for the dialog).
         public List<FailedBundleEntry> succeeded = new List<FailedBundleEntry>();

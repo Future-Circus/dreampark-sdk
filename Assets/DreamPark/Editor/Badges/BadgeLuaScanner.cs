@@ -54,14 +54,20 @@ namespace DreamPark.Badges
         // The four Lua entry points that name a badge id. Awards and removes are
         // the obvious ones; has/get are included because a game that only CHECKS
         // a badge in one script still names an id its developer has to define.
-        private static readonly Regex CallRegex = new Regex(
+        //
+        // internal, not private: BadgeAttributionScanner re-runs this exact
+        // resolution PER CONTENT ROOT (to work out which Attraction/Prop/Player
+        // actually awards a given id) and must not carry a second copy of this
+        // grammar — a second copy is exactly how the four IsUserFacingRoot
+        // copies ContentRootScanner's own header warns about drift.
+        internal static readonly Regex CallRegex = new Regex(
             @"\b(?:awardBadge|removeBadge|hasBadge|getBadge)\s*\(\s*([^,()]*)",
             RegexOptions.Compiled);
 
-        private static readonly Regex StringLiteralRegex = new Regex(
+        internal static readonly Regex StringLiteralRegex = new Regex(
             @"^(?:""([^""]*)""|'([^']*)')$", RegexOptions.Compiled);
 
-        private static readonly Regex IdentifierRegex = new Regex(
+        internal static readonly Regex IdentifierRegex = new Regex(
             @"^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
 
         // `local id = badgeId` / `id = badgeId`. The RHS must be a BARE
@@ -312,7 +318,10 @@ namespace DreamPark.Badges
         // Delegates the @var grammar to the shipped parser (the one the Lua
         // Inspector itself uses) and keeps only the string-typed declarations,
         // which is the only type a badge id can be.
-        private static Dictionary<string, string> ParseStringVarDefaults(string luaSource)
+        //
+        // internal: shared with BadgeAttributionScanner for the same reason the
+        // regexes above are.
+        internal static Dictionary<string, string> ParseStringVarDefaults(string luaSource)
         {
             var map = new Dictionary<string, string>(StringComparer.Ordinal);
             try
@@ -332,7 +341,8 @@ namespace DreamPark.Badges
             return map;
         }
 
-        private static Dictionary<string, string> BuildAliasMap(string strippedSource)
+        // internal: shared with BadgeAttributionScanner.
+        internal static Dictionary<string, string> BuildAliasMap(string strippedSource)
         {
             var aliases = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var rawLine in strippedSource.Split('\n'))
@@ -350,7 +360,8 @@ namespace DreamPark.Badges
             return aliases;
         }
 
-        private static string ResolveAlias(string name, Dictionary<string, string> aliases)
+        // internal: shared with BadgeAttributionScanner.
+        internal static string ResolveAlias(string name, Dictionary<string, string> aliases)
         {
             var visited = new HashSet<string>(StringComparer.Ordinal) { name };
             string current = name;

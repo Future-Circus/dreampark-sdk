@@ -56,6 +56,12 @@ namespace DreamPark.PreUploadChecks
                     // which silently repoints that variant's revenue at its
                     // base prefab's key. Nothing errors; it looks like a tidy-up.
                     new Checks.ResourceNameAddressCheck(),
+
+                    // Warning. Flags a badge the Badges panel knows about that
+                    // no script in the package currently awards — either never
+                    // wired up, or wired to Lua that isn't attached to any
+                    // Attraction/Prop/Player root.
+                    new Checks.BadgeAwardCheck(),
                 };
             }
         }
@@ -116,6 +122,49 @@ namespace DreamPark.PreUploadChecks
             }
 
             return map;
+        }
+
+        // Badge id → worst active BadgeAwardCheck severity + tooltip, for the
+        // checkmark/warning icon on the Badges section's own cards.
+        //
+        // Deliberately its own method rather than a filter callers apply to
+        // BuildBadgeMap's output: BuildBadgeMap groups by assetPath, and every
+        // BadgeAwardCheck finding shares the SAME assetPath (BadgeStore.PathFor
+        // — a badge is a data record, not a prefab, so there is no per-badge
+        // asset to key on). Grouping those by assetPath would merge every
+        // badge's findings into one entry; this groups by Finding.subKey
+        // instead, which BadgeAwardCheck sets to "<mode>:<badgeId>".
+        public static Dictionary<string, KeyValuePair<CheckSeverity, string>> BuildBadgeAwardMap(
+            PreUploadReport report)
+        {
+            var map = new Dictionary<string, KeyValuePair<CheckSeverity, string>>(StringComparer.Ordinal);
+            if (report == null) return map;
+
+            foreach (var group in report.ActiveFindings
+                         .Where(f => f.checkId == Checks.BadgeAwardCheck.CheckId
+                                  && !string.IsNullOrEmpty(f.subKey)
+                                  && f.severity >= CheckSeverity.Warning)
+                         .GroupBy(f => BadgeIdFromSubKey(f.subKey), StringComparer.Ordinal))
+            {
+                if (string.IsNullOrEmpty(group.Key)) continue;
+
+                var findings = group.ToList();
+                var worst = findings.Max(f => f.severity);
+                var first = findings.OrderByDescending(f => f.severity).First();
+                map[group.Key] = new KeyValuePair<CheckSeverity, string>(worst, first.detail ?? first.title);
+            }
+
+            return map;
+        }
+
+        // subKey is "<mode>:<badgeId>" (see BadgeAwardCheck.ModeUnwired /
+        // ModeUnplaced); the badge id is everything after the first colon, not
+        // a naive Split('.')[1], because a badge id can itself legally contain
+        // no colon but the split must still tolerate one that somehow does.
+        private static string BadgeIdFromSubKey(string subKey)
+        {
+            int i = subKey.IndexOf(':');
+            return i < 0 ? "" : subKey.Substring(i + 1);
         }
 
         private static string Truncate(string s, int max)

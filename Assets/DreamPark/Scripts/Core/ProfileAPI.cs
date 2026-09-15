@@ -137,6 +137,110 @@ namespace DreamPark.API
         public enum ProfileSource { Headset, LoggedInUser }
         public static ProfileSource Source { get; private set; } = ProfileSource.Headset;
 
+        /// <summary>Where the player physically is, stamped onto badge awards
+        /// so the platform can answer "which park did I earn this at" — the
+        /// question that makes a badge shelf worth having.
+        ///
+        /// The SDK's own park id (SessionContext.LocationId) is written by the
+        /// kiosk check-in and is EMPTY in the embedded iOS runtime, which
+        /// learns its park from the Swift LOAD_PARK bridge instead. So the host
+        /// app supplies the truth here and SessionContext is only the fallback
+        /// — one property that is right on both platforms beats two award
+        /// paths. Core sets it from AdventureLedger's park poll, the same
+        /// resolution that opens a visit.
+        ///
+        /// Null/empty means "don't know" and the award omits the field; the
+        /// server then falls back to the bound session's location.</summary>
+        public static string ParkContext { get; set; }
+
+        /// <summary>Which PLACE inside that park, when the park has more than
+        /// one. Set alongside ParkContext by the host; ALREADY NORMALISED by
+        /// the caller, so empty/null means the default place and the award
+        /// omits the field entirely — absent is how the platform spells "the
+        /// default place", and sending an empty string instead would make a
+        /// sharded read and an unsharded one look different on the wire.
+        ///
+        /// No SessionContext fallback: the kiosk session has no notion of
+        /// places, so guessing one would be inventing data.</summary>
+        public static string ShardContext { get; set; }
+
+        static string CallingParkId()
+        {
+            if (!string.IsNullOrEmpty(ParkContext)) return ParkContext;
+            return SessionContext.LocationId;
+        }
+
+        // ── Awards earned in the gap before an identity lands ─────────────
+        // A write with no binding used to be dropped with a warning. On iOS
+        // that gap is routine, not exotic: the Swift app sends PROFILE_PAIR and
+        // the claim round-trips while the player is already standing in a park,
+        // so a badge earned in the first seconds of a session was simply lost.
+        //
+        // Held ONLY while a claim for a KNOWN identity is in flight, and that
+        // restriction is the entire safety argument: on an LBE headset a guest
+        // who never pairs must not have their award replayed onto whoever pairs
+        // next, and "a claim is already running" is the one signal saying the
+        // person about to bind is the person who just earned it. A guest with
+        // no claim keeps today's behaviour — dropped, and warned about.
+        // Widening this to unpaired guests is a product rule, not a code
+        // change: it is the same question as the ledger's adoptedGuestId gap
+        // and needs an explicit call before anyone implements it.
+        public static bool BindPending { get; private set; }
+        const int   MaxHeldAwards   = 16;
+        const float HeldAwardTtlSec = 90f;
+        // contentId is captured when the award is MADE, not when it is sent —
+        // see AwardBadge for why replaying it with a freshly-resolved one
+        // would attribute the badge to whatever the player wandered into
+        // while the claim was in flight.
+        struct HeldAward { public string badgeId; public string contentId; public Action<bool, ProfileBadge> done; public float atSec; }
+        static readonly List<HeldAward> _heldAwards = new List<HeldAward>();
+
+        /// <summary>Called by the pairing handler the moment a claim goes out,
+        /// so awards earned before it returns are held rather than lost.</summary>
+        public static void BeginPendingBind() { BindPending = true; }
+
+        /// <summary>Called when a claim fails — the identity is not coming, so
+        /// nothing held for it may sit waiting for a later, possibly different,
+        /// player.</summary>
+        public static void CancelPendingBind(string reason = null) => DropHeldAwards(reason ?? "pending bind cancelled");
+
+        // Replay awards banked while the claim was in flight. Called at the end
+        // of BindIdentity, where BoundUserId is already set, so each replayed
+        // AwardBadge takes the ordinary path (including the ContentGate latch —
+        // consent is a separate question from identity and still applies).
+        static void FlushHeldAwards()
+        {
+            BindPending = false;
+            if (_heldAwards.Count == 0) return;
+            var held = _heldAwards.ToArray();
+            _heldAwards.Clear();
+            float now = Time.realtimeSinceStartup;
+            for (int i = 0; i < held.Length; i++)
+            {
+                var h = held[i];
+                if (now - h.atSec > HeldAwardTtlSec)
+                {
+                    Debug.LogWarning($"[ProfileAPI] Dropped held badge award '{h.badgeId}' — identity took longer than {HeldAwardTtlSec:0}s to bind.");
+                    try { h.done?.Invoke(false, null); } catch (Exception e) { Debug.LogWarning(e); }
+                    continue;
+                }
+                AwardBadgeWithContent(h.badgeId, h.contentId, h.done);
+            }
+        }
+
+        static void DropHeldAwards(string why)
+        {
+            BindPending = false;
+            if (_heldAwards.Count == 0) return;
+            Debug.LogWarning($"[ProfileAPI] Dropping {_heldAwards.Count} held badge award(s) — {why}.");
+            var held = _heldAwards.ToArray();
+            _heldAwards.Clear();
+            for (int i = 0; i < held.Length; i++)
+            {
+                try { held[i].done?.Invoke(false, null); } catch (Exception e) { Debug.LogWarning(e); }
+            }
+        }
+
         // ── Cache ────────────────────────────────────────────────────────
         static readonly List<ProfileItem>        _items        = new List<ProfileItem>();
         static readonly List<ProfileAchievement> _achievements = new List<ProfileAchievement>();
@@ -187,6 +291,11 @@ namespace DreamPark.API
             {
                 FetchProfile(ContentFilter, null);
             }
+
+            // Anything earned while this claim was in flight belongs to the
+            // identity that just landed. Replayed AFTER the snapshot call so
+            // the award's own refetch is the later of the two writes.
+            FlushHeldAwards();
         }
 
         /// <summary>
@@ -285,6 +394,9 @@ namespace DreamPark.API
             // the binding can still authorize them — the OnIdentityCleared
             // handler in GameStorageAPI wipes cache + queue right after.
             try { GameStorageAPI.FlushAll(); } catch (Exception e) { Debug.LogWarning($"[ProfileAPI] pre-clear storage flush threw: {e}"); }
+            // The player left. A held award must never survive into whoever
+            // picks the headset up next.
+            DropHeldAwards("identity cleared");
             BoundUserId = null;
             BoundDreamId = null;
             _previewKey = null;
@@ -506,9 +618,35 @@ namespace DreamPark.API
             return null;
         }
 
+        /// <summary>The player's earned badge with this id, or null.
+        ///
+        /// Badge ids are content-scoped, but the cache is one flat list and
+        /// there are live paths that fill it with more than one game's rows
+        /// (a consumer headset restoring a cached login binds with no content
+        /// filter at all), so a bare-id match can hand game A's "champion" to
+        /// game B. Prefer the row belonging to the game that is asking.
+        ///
+        /// The bare-id fallback is deliberate and must stay: rows awarded
+        /// before ids were scoped carry no contentId, and `GameArea.gameId` is
+        /// stamped from the local folder id — not guaranteed to equal the
+        /// contentId the package was uploaded under. Without the fallback,
+        /// either of those makes a badge the player genuinely owns read as
+        /// unowned, which is the one wrong answer with a user-visible cost
+        /// (a re-award is idempotent; a "you don't have this" is not).</summary>
         public static ProfileBadge GetBadge(string badgeId)
         {
             if (string.IsNullOrEmpty(badgeId)) return null;
+
+            var asking = CallingContentId();
+            if (!string.IsNullOrEmpty(asking))
+            {
+                for (int i = 0; i < _badges.Count; i++)
+                {
+                    var b = _badges[i];
+                    if (b.badgeId == badgeId && b.contentId == asking) return b;
+                }
+            }
+
             for (int i = 0; i < _badges.Count; i++) if (_badges[i].badgeId == badgeId) return _badges[i];
             return null;
         }
@@ -671,13 +809,60 @@ namespace DreamPark.API
             });
         }
 
+        /// <summary>Award a badge to the bound player.
+        ///
+        /// WHICH GAME the badge belongs to is resolved HERE, at the call, and
+        /// carried through every later hop. It is deliberately not read again
+        /// at send time, because there are two gaps between the two moments
+        /// and the player can move across both:
+        ///
+        ///   • ContentGate holds the write until the player enters an
+        ///     attraction. The hold is UNSCOPED when the calling content
+        ///     can't be named, and the first attraction of ANY content
+        ///     releases it — so in a park with two games installed, a
+        ///     re-resolve at send time can name the game the player walked
+        ///     into rather than the one that awarded the badge.
+        ///   • An award made while a pairing claim is in flight is banked and
+        ///     replayed on bind, which can be seconds later and a room away.
+        ///
+        /// Empty is a legitimate answer (nobody is standing in an attraction
+        /// yet) and is sent as an omitted field, which the server must read as
+        /// "unattributed" — never as a licence to guess.</summary>
         public static void AwardBadge(string badgeId, Action<bool, ProfileBadge> done = null)
         {
-            if (!IsBound) { Debug.LogWarning("[ProfileAPI] AwardBadge with no identity bound."); done?.Invoke(false, null); return; }
+            AwardBadgeWithContent(badgeId, CallingContentId(), done);
+        }
+
+        static void AwardBadgeWithContent(string badgeId, string contentId, Action<bool, ProfileBadge> done)
+        {
+            if (string.IsNullOrEmpty(badgeId)) { Debug.LogWarning("[ProfileAPI] AwardBadge with no badgeId."); done?.Invoke(false, null); return; }
+            if (!IsBound)
+            {
+                if (BindPending && _heldAwards.Count < MaxHeldAwards)
+                {
+                    _heldAwards.Add(new HeldAward { badgeId = badgeId, contentId = contentId, done = done, atSec = Time.realtimeSinceStartup });
+                    Debug.Log($"[ProfileAPI] AwardBadge '{badgeId}' held — identity claim in flight.");
+                    return;
+                }
+                Debug.LogWarning("[ProfileAPI] AwardBadge with no identity bound.");
+                done?.Invoke(false, null);
+                return;
+            }
 
             var body = new JSONObject();
             if (Source == ProfileSource.Headset) body.AddField("headsetId", HeadsetIdHeader());
             body.AddField("badgeId", badgeId);
+            // WHICH GAME's badge — resolved at the call (see above), so the
+            // server can scope a short id like "champion" to its own content
+            // instead of a platform-wide namespace.
+            if (!string.IsNullOrEmpty(contentId)) body.AddField("contentId", contentId);
+            // WHERE it was earned. Stamped by the client because the server
+            // can only infer a park from the bound session's location, which
+            // the embedded iOS runtime does not have. Additive — a server that
+            // doesn't read it drops the field.
+            var parkId = CallingParkId();
+            if (!string.IsNullOrEmpty(parkId)) body.AddField("parkId", parkId);
+            if (!string.IsNullOrEmpty(ShardContext)) body.AddField("shardId", ShardContext);
 
             var (url, auth) = PickWrite("badges/award");
             GatedPost(url, auth, body, (ok, resp) =>
@@ -685,7 +870,13 @@ namespace DreamPark.API
                 if (!ok) { done?.Invoke(false, null); return; }
                 FetchProfile(ContentFilter, (_, __) =>
                 {
-                    var b = GetBadge(badgeId);
+                    // The refetch is CONTENT-FILTERED, so a badge belonging to
+                    // other content is on the profile server-side but absent
+                    // from this snapshot. Firing null there would silently cost
+                    // the adventure timeline its badge_earned event (the ledger
+                    // drops a null badge) — so fall back to the id we know is
+                    // true. Subscribers get a thin badge rather than none.
+                    var b = GetBadge(badgeId) ?? new ProfileBadge { badgeId = badgeId };
                     try { OnBadgeAwarded?.Invoke(b); } catch (Exception e) { Debug.LogWarning(e); }
                     done?.Invoke(true, b);
                 });
@@ -734,9 +925,15 @@ namespace DreamPark.API
             if (!IsBound) { Debug.LogWarning("[ProfileAPI] RemoveBadge with no identity bound."); done?.Invoke(false); return; }
             if (string.IsNullOrEmpty(badgeId)) { done?.Invoke(false); return; }
 
+            // Same scoping as the award: a removal has to name the same badge
+            // the award named, or a short id resolves somewhere else — or
+            // nowhere, which is a removal that silently no-ops.
+            var contentId = CallingContentId();
+
             var body = new JSONObject(JSONObject.Type.Object);
             if (Source == ProfileSource.Headset) body.AddField("headsetId", HeadsetIdHeader());
             body.AddField("badgeId", badgeId);
+            if (!string.IsNullOrEmpty(contentId)) body.AddField("contentId", contentId);
 
             var (url, auth) = PickWrite("badges/remove");
 

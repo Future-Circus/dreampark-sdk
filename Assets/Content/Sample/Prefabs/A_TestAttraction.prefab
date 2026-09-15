@@ -72,6 +72,11 @@ MonoBehaviour:
   gridX: 0
   gridY: 0
   floorMaterial: {fileID: 2100000, guid: 92daadbc9f8904f32a8d780277254506, type: 2}
+  wallFront: 0
+  wallBack: 0
+  wallRight: 0
+  wallLeft: 0
+  showWallGizmos: 1
 --- !u!114 &742819564840612202
 MonoBehaviour:
   m_ObjectHideFlags: 0

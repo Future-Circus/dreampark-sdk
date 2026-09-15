@@ -112,6 +112,9 @@ TagManager:
   - Metallic
   - Paddle
   - Wall
+  - QDSUIBackplate
+  - QDSUILineDrawing
+  - QDSUIToggleThumbnail
   layers:
   - Default
   - TransparentFX

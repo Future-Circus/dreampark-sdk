@@ -16,7 +16,7 @@ MonoBehaviour:
   m_AutomaticLoading: 0
   m_AutomaticRunning: 0
   m_Loaders:
-  - {fileID: 11400000, guid: b4d01f16055b6a342acd171a9a6af223, type: 2}
+  - {fileID: 11400000, guid: 691b35d0c1358c44e860a6253a9c3fba, type: 2}
 --- !u!114 &-8545116121635861856
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -29,7 +29,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d236b7d11115f2143951f1e14045df39, type: 3}
   m_Name: Android Settings
   m_EditorClassIdentifier: 
-  m_LoaderManagerInstance: {fileID: -8803931472582305394}
+  m_Manager: {fileID: -8803931472582305394}
   m_InitManagerOnStart: 1
 --- !u!114 &-8142685864079082800
 MonoBehaviour:
@@ -43,7 +43,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d236b7d11115f2143951f1e14045df39, type: 3}
   m_Name: iPhone Settings
   m_EditorClassIdentifier: 
-  m_LoaderManagerInstance: {fileID: 98670313827021620}
+  m_Manager: {fileID: 98670313827021620}
   m_InitManagerOnStart: 1
 --- !u!114 &-5425264788538820599
 MonoBehaviour:
@@ -74,11 +74,15 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d2dc886499c26824283350fa532d087d, type: 3}
   m_Name: XRGeneralSettingsPerBuildTarget
   m_EditorClassIdentifier: 
-  Keys: 070000000100000004000000
-  Values:
-  - {fileID: -8545116121635861856}
-  - {fileID: 123180733184247616}
-  - {fileID: -8142685864079082800}
+  Keys: 
+  Values: []
+  m_SettingsPerBuildTarget:
+  - buildTarget: 7
+    settings: {fileID: -8545116121635861856}
+  - buildTarget: 1
+    settings: {fileID: 123180733184247616}
+  - buildTarget: 4
+    settings: {fileID: -8142685864079082800}
 --- !u!114 &98670313827021620
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -108,7 +112,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d236b7d11115f2143951f1e14045df39, type: 3}
   m_Name: Standalone Settings
   m_EditorClassIdentifier: 
-  m_LoaderManagerInstance: {fileID: 4647619753041503020}
+  m_Manager: {fileID: 4647619753041503020}
   m_InitManagerOnStart: 1
 --- !u!114 &4647619753041503020
 MonoBehaviour:
@@ -139,5 +143,5 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d236b7d11115f2143951f1e14045df39, type: 3}
   m_Name: iPhone Settings
   m_EditorClassIdentifier: 
-  m_LoaderManagerInstance: {fileID: -5425264788538820599}
+  m_Manager: {fileID: -5425264788538820599}
   m_InitManagerOnStart: 1

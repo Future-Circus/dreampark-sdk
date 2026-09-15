@@ -90,6 +90,41 @@ namespace DreamPark.PreUploadChecks.Checks
     // subtly wrong — which is the exact class of bug this suite exists to catch, so
     // authoring more of it as a "fix" would be self-defeating. Navigate plus a clear
     // instruction is the honest offer.
+    //
+    // A SECOND MECHANISM WAS PROPOSED AND ALSO REJECTED (2026-08-30)
+    //
+    // Not "move the component" — instead: create a new empty GameObject as the
+    // prefab's new root, move the TEMPLATE component (PropTemplate/
+    // AttractionTemplate/etc.) onto it, and reparent the entire ORIGINAL root
+    // (runtime components unmoved relative to each other and to their own
+    // GameObject) as a child of the new one. It sounded safe because nothing on the
+    // old root moves relative to anything it was already relative to — only the
+    // GameObject's depth in the hierarchy changes.
+    //
+    // It reopens the same class of bug via a different door. RegisterLevelObject
+    // (LevelObjectManager.cs:962) only takes the "register children individually,
+    // leave the root alone" branch when THIS GameObject carries PropTemplate /
+    // LevelTemplate (obj.GetComponent<PropTemplate>(), :959 — same GameObject, not
+    // GetComponentInParent). After this restructure the template lives on the NEW
+    // root; the recursive call on the demoted OLD root finds no template on it and
+    // falls into the ordinary LevelObject path instead — which snapshots and parks
+    // whatever colliders sit on that GameObject via GetComponentsInChildren. That is
+    // precisely the carve-out LevelObjectManager.cs:1022-1025 exists to prevent
+    // ("Colliders on the root are deliberately left ALONE. Build Mode raycasts
+    // against them to select and drag the prop; parking them would make a
+    // freshly-spawned prop unselectable.") — the demoted root's collider now gets
+    // parked like any other child collider, and a freshly-spawned prop becomes
+    // unselectable in Build Mode again.
+    //
+    // Fixing that would mean also teaching RegisterLevelObject to recognize a
+    // template on a PARENT, not just restructuring the prefab — a change to
+    // LevelObjectManager itself, out of scope for a pre-upload-check fix action.
+    // Not reinvestigated: whether Build Mode's own raycast/selection code (closed
+    // source, DREAMPARKCORE-gated — not present in this SDK checkout) resolves by
+    // literal root-ness or by walking up to the nearest template, and whether
+    // PrefabUtility.SaveAsPrefabAsset preserves existing scene/nested-prefab
+    // instances cleanly across a root-of-hierarchy restructure this large — both
+    // moot once the LevelObjectManager regression alone rules it out.
     public sealed class RootComponentsCheck : IPreUploadCheck
     {
         public const string CheckId = "root-components";
