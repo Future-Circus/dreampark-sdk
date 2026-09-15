@@ -1,6 +1,6 @@
 {
 	"version":1,
-	"generatedFromSdkVersion":"1.7.8",
+	"generatedFromSdkVersion":"1.7.9",
 	"packages":{
 		"com.cysharp.unitask":"https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask#f213ff497e4ff462a77319cf677cf20cc0860ca9",
 		"com.meta.xr.mrutilitykit":"205.0.0",
