@@ -6,6 +6,7 @@ using Unity.EditorCoroutines.Editor;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.Networking;
+using System.Security.Cryptography;
 using APIResponse = DreamPark.API.DreamParkAPI.APIResponse;
 
 namespace DreamPark.API
@@ -26,6 +27,14 @@ namespace DreamPark.API
         public static void GetDownloadUrl(string version, Action<bool, APIResponse> callback)
         {
             DreamParkAPI.GET($"/api/sdk/download/{version}", AuthAPI.GetUserAuth(), (success, response) =>
+            {
+                callback?.Invoke(success, response);
+            });
+        }
+
+        public static void GetReleaseStatus(string version, Action<bool, APIResponse> callback)
+        {
+            DreamParkAPI.GET($"/api/sdk/releases/{UnityWebRequest.EscapeURL(version ?? "")}", AuthAPI.GetUserAuth(), (success, response) =>
             {
                 callback?.Invoke(success, response);
             });
@@ -63,6 +72,11 @@ namespace DreamPark.API
             var form = new WWWForm();
             form.AddField("version", version ?? "");
             form.AddField("releaseNotes", releaseNotes ?? "");
+            string sha256;
+            using (var sha = SHA256.Create())
+                sha256 = BitConverter.ToString(sha.ComputeHash(packageBytes)).Replace("-", "").ToLowerInvariant();
+            form.AddField("sha256", sha256);
+            form.AddField("idempotencyKey", $"sdk:{version}:{sha256}");
             form.AddBinaryData("package", packageBytes, fileName ?? "sdk.unitypackage", "application/octet-stream");
 
             string url = DreamParkAPI.baseUrl + "/api/sdk/publish";

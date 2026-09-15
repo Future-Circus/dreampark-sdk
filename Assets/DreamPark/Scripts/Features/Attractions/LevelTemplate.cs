@@ -320,6 +320,20 @@ public class LevelTemplateEditor : Editor {
     MeshCollider mc = runtimePlane.AddComponent<MeshCollider>();
     MeshRenderer mr = runtimePlane.AddComponent<MeshRenderer>();
     mr.material = floorMaterial ? floorMaterial : Resources.Load<Material>("Materials/Occlusion");
+    // && DREAMPARKCORE added porting this from dreampark-core (Grid,
+    // feat/grid-portal-yaw @ 2e1e940e): PlaceHasScanForFloorHiding() below
+    // calls DreamPark.EnvironmentDust.EnvironmentDustManager, which lives
+    // under core's Assets/Scripts/ (not Assets/DreamPark/) and does not
+    // exist in this SDK repo. Core's own commit used bare UNITY_IOS, which
+    // compiles fine there but would fail here — same reason isBuildMode's
+    // NativeInterfaceManager reference below is UNITY_IOS && DREAMPARKCORE
+    // instead of UNITY_IOS alone. Do not drop DREAMPARKCORE re-syncing this.
+#if UNITY_IOS && DREAMPARKCORE
+    if (PlaceHasScanForFloorHiding()) {
+        mr.enabled = false;
+        Debug.Log("[LevelTemplate] Place has a scan — attraction floor renderer hidden so the scan renders (collider kept)");
+    }
+#endif
 
     // Grid setup (same logic as before)
     gridWidth  = width;
@@ -779,6 +793,44 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
     #endif
             }
         }
+
+#if UNITY_IOS && DREAMPARKCORE
+    /// && DREAMPARKCORE: EnvironmentDustManager below lives under core's
+    /// Assets/Scripts/ (not Assets/DreamPark/) and does not exist in this SDK
+    /// repo — see isBuildMode's NativeInterfaceManager reference above for
+    /// the same pattern. Core's own commit (feat/grid-portal-yaw @ 2e1e940e)
+    /// used bare UNITY_IOS; do not drop DREAMPARKCORE re-syncing this.
+    ///
+    /// THE SCAN OWNS THE FLOOR ON MOBILE (Aidan, Sep 1 2026: "if the place has
+    /// a scan I'd like the generated floor and gap filler to have the invisible
+    /// material instead of the occluder").
+    ///
+    /// The occluder writes depth so real-world geometry hides content behind
+    /// it. With no scan that is the whole point — it is the only floor there
+    /// is. With a scan it competes with the mesh the operator walked, and the
+    /// scan is the better answer: it is measured, the generated plane is
+    /// inferred.
+    ///
+    /// DISABLING THE RENDERER, not swapping the material, and deliberately:
+    /// `Materials/InvisibleOccluder` sits next to `Materials/Occlusion` in the
+    /// same Resources folder and uses the IDENTICAL shader guid — swapping to
+    /// it changes nothing while looking like the fix. The one genuinely
+    /// different material (`DreamPark/Materials/Invisible.mat`) is not under a
+    /// Resources folder, so Resources.Load returns null and the floor falls
+    /// back to Unity's default: magenta over the scan. A disabled renderer is
+    /// what "invisible" means, cannot fail to load, and leaves the collider —
+    /// so placement raycasts and physics are untouched.
+    ///
+    /// MESH **OR** DUST. Zero of 32 stored environments carry a mesh today
+    /// (Web, measured), so a mesh-only test would never fire on any real park.
+    private static bool PlaceHasScanForFloorHiding()
+    {
+        var mesh = DreamPark.EnvironmentDust.EnvironmentDustManager.ActiveMeshStore;
+        if (mesh != null && mesh.HasMesh) return true;
+        var dust = DreamPark.EnvironmentDust.EnvironmentDustManager.ActiveGrid;
+        return dust != null && dust.Count > 0;
+    }
+#endif
 
     #if UNITY_EDITOR
         public void OnDrawGizmos()

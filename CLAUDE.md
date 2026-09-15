@@ -1,7 +1,17 @@
 # DreamPark SDK — Content Creator Template
 
 ## What This Is
-SDK template for third-party game developers. A complete Unity 6 project cloned from dreampark-core. Creators fork this repo and place their game content in Assets/Content/{GameName}/.
+SDK template for third-party game developers. A complete Unity 6.3 LTS (6000.3.23f1) project cloned from dreampark-core. Creators fork this repo and place their game content in Assets/Content/{GameName}/.
+
+## Unity CLI
+The template uses Unity's standard `com.unity.pipeline` package. Coplay UnityMCP and fixed
+`.mcp-port` routing are intentionally absent. Multiple Editors are selected through
+`unity ... --project-path <project>`; use `unity status` to verify the target before any
+authoring command.
+
+Meta XR SDK 205's experimental Agent Bridge/DevAgent is separate and must remain disabled.
+`DreamParkOpenXRSetup` clears its machine-local address and token during setup and immediately
+before/after builds so those values cannot enter shipped content.
 
 ## Template Structure
 ```
