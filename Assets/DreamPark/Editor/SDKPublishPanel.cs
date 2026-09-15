@@ -258,7 +258,7 @@ namespace DreamPark
                 //     place can be brought up to date too — see
                 //     DreamParkPackageSync.cs for why this exists at all and
                 //     what it can and cannot guarantee.
-                RefreshRequiredPackagesFile();
+                RefreshRequiredPackagesFile(newVersion);
 
                 // 2. Export as .unitypackage to Temp/.
                 string tempPath = Path.Combine(Path.GetTempPath(), $"dreampark-sdk-v{newVersion}.unitypackage");
@@ -367,7 +367,7 @@ namespace DreamPark
         // Best-effort and non-fatal: a failure here must not be able to block a
         // publish over a nice-to-have. Logs a warning and leaves whatever
         // RequiredPackages.json already exists (possibly none) untouched.
-        private static void RefreshRequiredPackagesFile()
+        private static void RefreshRequiredPackagesFile(string sdkVersion)
         {
             try
             {
@@ -401,7 +401,7 @@ namespace DreamPark
 
                 var required = new JSONObject(JSONObject.Type.Object);
                 required.AddField("version", 1);
-                required.AddField("generatedFromSdkVersion", newVersion);
+                required.AddField("generatedFromSdkVersion", sdkVersion);
                 required.AddField("packages", packages);
 
                 string dir = Path.GetDirectoryName(RequiredPackagesAssetPath);
