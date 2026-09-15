@@ -128,6 +128,30 @@ namespace XLua.CSObjectWrap
                     
 					return 1;
 				}
+				if(LuaAPI.lua_gettop(L) == 5 && translator.Assignable<UnityEngine.Vector4>(L, 2) && translator.Assignable<UnityEngine.Vector4>(L, 3) && translator.Assignable<UnityEngine.Vector4>(L, 4) && translator.Assignable<UnityEngine.Vector4>(L, 5))
+				{
+					UnityEngine.Vector4 _column0;translator.Get(L, 2, out _column0);
+					UnityEngine.Vector4 _column1;translator.Get(L, 3, out _column1);
+					UnityEngine.Vector4 _column2;translator.Get(L, 4, out _column2);
+					UnityEngine.Vector4 _column3;translator.Get(L, 5, out _column3);
+					
+					var gen_ret = new UnityEngine.Matrix4x4(_column0, _column1, _column2, _column3);
+					translator.Push(L, gen_ret);
+                    translator.PushUnityEngineVector4(L, _column0);
+                        translator.UpdateUnityEngineVector4(L, 2, _column0);
+                        
+                    translator.PushUnityEngineVector4(L, _column1);
+                        translator.UpdateUnityEngineVector4(L, 3, _column1);
+                        
+                    translator.PushUnityEngineVector4(L, _column2);
+                        translator.UpdateUnityEngineVector4(L, 4, _column2);
+                        
+                    translator.PushUnityEngineVector4(L, _column3);
+                        translator.UpdateUnityEngineVector4(L, 5, _column3);
+                        
+                    
+					return 5;
+				}
 				
 				if (LuaAPI.lua_gettop(L) == 1)
 				{
@@ -303,7 +327,9 @@ namespace XLua.CSObjectWrap
             
             
             
-                
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 1&& translator.Assignable<UnityEngine.Matrix4x4>(L, 1)) 
                 {
                     UnityEngine.Matrix4x4 _m;translator.Get(L, 1, out _m);
                     
@@ -314,10 +340,26 @@ namespace XLua.CSObjectWrap
                     
                     return 1;
                 }
+                if(gen_param_count == 1&& translator.Assignable<UnityEngine.Matrix4x4>(L, 1)) 
+                {
+                    UnityEngine.Matrix4x4 _m;translator.Get(L, 1, out _m);
+                    
+                        var gen_ret = UnityEngine.Matrix4x4.Determinant( _m );
+                        LuaAPI.lua_pushnumber(L, gen_ret);
+                    translator.Push(L, _m);
+                        translator.Update(L, 1, _m);
+                        
+                    
+                    
+                    
+                    return 2;
+                }
                 
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to UnityEngine.Matrix4x4.Determinant!");
             
         }
         
@@ -330,7 +372,9 @@ namespace XLua.CSObjectWrap
             
             
             
-                
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 3&& translator.Assignable<UnityEngine.Vector3>(L, 1)&& translator.Assignable<UnityEngine.Quaternion>(L, 2)&& translator.Assignable<UnityEngine.Vector3>(L, 3)) 
                 {
                     UnityEngine.Vector3 _pos;translator.Get(L, 1, out _pos);
                     UnityEngine.Quaternion _q;translator.Get(L, 2, out _q);
@@ -343,10 +387,34 @@ namespace XLua.CSObjectWrap
                     
                     return 1;
                 }
+                if(gen_param_count == 3&& translator.Assignable<UnityEngine.Vector3>(L, 1)&& translator.Assignable<UnityEngine.Quaternion>(L, 2)&& translator.Assignable<UnityEngine.Vector3>(L, 3)) 
+                {
+                    UnityEngine.Vector3 _pos;translator.Get(L, 1, out _pos);
+                    UnityEngine.Quaternion _q;translator.Get(L, 2, out _q);
+                    UnityEngine.Vector3 _s;translator.Get(L, 3, out _s);
+                    
+                        var gen_ret = UnityEngine.Matrix4x4.TRS( _pos, _q, _s );
+                        translator.Push(L, gen_ret);
+                    translator.PushUnityEngineVector3(L, _pos);
+                        translator.UpdateUnityEngineVector3(L, 1, _pos);
+                        
+                    translator.PushUnityEngineQuaternion(L, _q);
+                        translator.UpdateUnityEngineQuaternion(L, 2, _q);
+                        
+                    translator.PushUnityEngineVector3(L, _s);
+                        translator.UpdateUnityEngineVector3(L, 3, _s);
+                        
+                    
+                    
+                    
+                    return 4;
+                }
                 
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to UnityEngine.Matrix4x4.TRS!");
             
         }
         
@@ -361,7 +429,9 @@ namespace XLua.CSObjectWrap
                 UnityEngine.Matrix4x4 gen_to_be_invoked;translator.Get(L, 1, out gen_to_be_invoked);
             
             
-                
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 4&& translator.Assignable<UnityEngine.Vector3>(L, 2)&& translator.Assignable<UnityEngine.Quaternion>(L, 3)&& translator.Assignable<UnityEngine.Vector3>(L, 4)) 
                 {
                     UnityEngine.Vector3 _pos;translator.Get(L, 2, out _pos);
                     UnityEngine.Quaternion _q;translator.Get(L, 3, out _q);
@@ -375,10 +445,35 @@ namespace XLua.CSObjectWrap
                     
                     return 0;
                 }
+                if(gen_param_count == 4&& translator.Assignable<UnityEngine.Vector3>(L, 2)&& translator.Assignable<UnityEngine.Quaternion>(L, 3)&& translator.Assignable<UnityEngine.Vector3>(L, 4)) 
+                {
+                    UnityEngine.Vector3 _pos;translator.Get(L, 2, out _pos);
+                    UnityEngine.Quaternion _q;translator.Get(L, 3, out _q);
+                    UnityEngine.Vector3 _s;translator.Get(L, 4, out _s);
+                    
+                    gen_to_be_invoked.SetTRS( _pos, _q, _s );
+                    translator.PushUnityEngineVector3(L, _pos);
+                        translator.UpdateUnityEngineVector3(L, 2, _pos);
+                        
+                    translator.PushUnityEngineQuaternion(L, _q);
+                        translator.UpdateUnityEngineQuaternion(L, 3, _q);
+                        
+                    translator.PushUnityEngineVector3(L, _s);
+                        translator.UpdateUnityEngineVector3(L, 4, _s);
+                        
+                    
+                    
+                        translator.Update(L, 1, gen_to_be_invoked);
+                    
+                    
+                    return 3;
+                }
                 
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to UnityEngine.Matrix4x4.SetTRS!");
             
         }
         
@@ -391,7 +486,9 @@ namespace XLua.CSObjectWrap
             
             
             
-                
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 2&& translator.Assignable<UnityEngine.Matrix4x4>(L, 1)&& translator.Assignable<UnityEngine.Matrix4x4>(L, 2)) 
                 {
                     UnityEngine.Matrix4x4 _input;translator.Get(L, 1, out _input);
                     UnityEngine.Matrix4x4 _result;translator.Get(L, 2, out _result);
@@ -406,10 +503,30 @@ namespace XLua.CSObjectWrap
                     
                     return 2;
                 }
+                if(gen_param_count == 2&& translator.Assignable<UnityEngine.Matrix4x4>(L, 1)&& translator.Assignable<UnityEngine.Matrix4x4>(L, 2)) 
+                {
+                    UnityEngine.Matrix4x4 _input;translator.Get(L, 1, out _input);
+                    UnityEngine.Matrix4x4 _result;translator.Get(L, 2, out _result);
+                    
+                        var gen_ret = UnityEngine.Matrix4x4.Inverse3DAffine( _input, ref _result );
+                        LuaAPI.lua_pushboolean(L, gen_ret);
+                    translator.Push(L, _input);
+                        translator.Update(L, 1, _input);
+                        
+                    translator.Push(L, _result);
+                        translator.Update(L, 2, _result);
+                        
+                    
+                    
+                    
+                    return 3;
+                }
                 
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to UnityEngine.Matrix4x4.Inverse3DAffine!");
             
         }
         
@@ -422,7 +539,9 @@ namespace XLua.CSObjectWrap
             
             
             
-                
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 1&& translator.Assignable<UnityEngine.Matrix4x4>(L, 1)) 
                 {
                     UnityEngine.Matrix4x4 _m;translator.Get(L, 1, out _m);
                     
@@ -433,10 +552,26 @@ namespace XLua.CSObjectWrap
                     
                     return 1;
                 }
+                if(gen_param_count == 1&& translator.Assignable<UnityEngine.Matrix4x4>(L, 1)) 
+                {
+                    UnityEngine.Matrix4x4 _m;translator.Get(L, 1, out _m);
+                    
+                        var gen_ret = UnityEngine.Matrix4x4.Inverse( _m );
+                        translator.Push(L, gen_ret);
+                    translator.Push(L, _m);
+                        translator.Update(L, 1, _m);
+                        
+                    
+                    
+                    
+                    return 2;
+                }
                 
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to UnityEngine.Matrix4x4.Inverse!");
             
         }
         
@@ -449,7 +584,9 @@ namespace XLua.CSObjectWrap
             
             
             
-                
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 1&& translator.Assignable<UnityEngine.Matrix4x4>(L, 1)) 
                 {
                     UnityEngine.Matrix4x4 _m;translator.Get(L, 1, out _m);
                     
@@ -460,10 +597,26 @@ namespace XLua.CSObjectWrap
                     
                     return 1;
                 }
+                if(gen_param_count == 1&& translator.Assignable<UnityEngine.Matrix4x4>(L, 1)) 
+                {
+                    UnityEngine.Matrix4x4 _m;translator.Get(L, 1, out _m);
+                    
+                        var gen_ret = UnityEngine.Matrix4x4.Transpose( _m );
+                        translator.Push(L, gen_ret);
+                    translator.Push(L, _m);
+                        translator.Update(L, 1, _m);
+                        
+                    
+                    
+                    
+                    return 2;
+                }
                 
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to UnityEngine.Matrix4x4.Transpose!");
             
         }
         
@@ -538,7 +691,9 @@ namespace XLua.CSObjectWrap
             
             
             
-                
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 3&& translator.Assignable<UnityEngine.Vector3>(L, 1)&& translator.Assignable<UnityEngine.Vector3>(L, 2)&& translator.Assignable<UnityEngine.Vector3>(L, 3)) 
                 {
                     UnityEngine.Vector3 _from;translator.Get(L, 1, out _from);
                     UnityEngine.Vector3 _to;translator.Get(L, 2, out _to);
@@ -551,10 +706,34 @@ namespace XLua.CSObjectWrap
                     
                     return 1;
                 }
+                if(gen_param_count == 3&& translator.Assignable<UnityEngine.Vector3>(L, 1)&& translator.Assignable<UnityEngine.Vector3>(L, 2)&& translator.Assignable<UnityEngine.Vector3>(L, 3)) 
+                {
+                    UnityEngine.Vector3 _from;translator.Get(L, 1, out _from);
+                    UnityEngine.Vector3 _to;translator.Get(L, 2, out _to);
+                    UnityEngine.Vector3 _up;translator.Get(L, 3, out _up);
+                    
+                        var gen_ret = UnityEngine.Matrix4x4.LookAt( _from, _to, _up );
+                        translator.Push(L, gen_ret);
+                    translator.PushUnityEngineVector3(L, _from);
+                        translator.UpdateUnityEngineVector3(L, 1, _from);
+                        
+                    translator.PushUnityEngineVector3(L, _to);
+                        translator.UpdateUnityEngineVector3(L, 2, _to);
+                        
+                    translator.PushUnityEngineVector3(L, _up);
+                        translator.UpdateUnityEngineVector3(L, 3, _up);
+                        
+                    
+                    
+                    
+                    return 4;
+                }
                 
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to UnityEngine.Matrix4x4.LookAt!");
             
         }
         
@@ -595,6 +774,20 @@ namespace XLua.CSObjectWrap
                     
                     
                     return 1;
+                }
+                if(gen_param_count == 1&& translator.Assignable<UnityEngine.FrustumPlanes>(L, 1)) 
+                {
+                    UnityEngine.FrustumPlanes _fp;translator.Get(L, 1, out _fp);
+                    
+                        var gen_ret = UnityEngine.Matrix4x4.Frustum( _fp );
+                        translator.Push(L, gen_ret);
+                    translator.Push(L, _fp);
+                        translator.Update(L, 1, _fp);
+                        
+                    
+                    
+                    
+                    return 2;
                 }
                 
             } catch(System.Exception gen_e) {
@@ -673,6 +866,22 @@ namespace XLua.CSObjectWrap
                     
                     
                     return 1;
+                }
+                if(gen_param_count == 2&& translator.Assignable<UnityEngine.Matrix4x4>(L, 2)) 
+                {
+                    UnityEngine.Matrix4x4 _other;translator.Get(L, 2, out _other);
+                    
+                        var gen_ret = gen_to_be_invoked.Equals( _other );
+                        LuaAPI.lua_pushboolean(L, gen_ret);
+                    translator.Push(L, _other);
+                        translator.Update(L, 2, _other);
+                        
+                    
+                    
+                        translator.Update(L, 1, gen_to_be_invoked);
+                    
+                    
+                    return 2;
                 }
                 
             } catch(System.Exception gen_e) {
@@ -786,7 +995,9 @@ namespace XLua.CSObjectWrap
                 UnityEngine.Matrix4x4 gen_to_be_invoked;translator.Get(L, 1, out gen_to_be_invoked);
             
             
-                
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 3&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 2)&& translator.Assignable<UnityEngine.Vector4>(L, 3)) 
                 {
                     int _index = LuaAPI.xlua_tointeger(L, 2);
                     UnityEngine.Vector4 _column;translator.Get(L, 3, out _column);
@@ -799,10 +1010,28 @@ namespace XLua.CSObjectWrap
                     
                     return 0;
                 }
+                if(gen_param_count == 3&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 2)&& translator.Assignable<UnityEngine.Vector4>(L, 3)) 
+                {
+                    int _index = LuaAPI.xlua_tointeger(L, 2);
+                    UnityEngine.Vector4 _column;translator.Get(L, 3, out _column);
+                    
+                    gen_to_be_invoked.SetColumn( _index, _column );
+                    translator.PushUnityEngineVector4(L, _column);
+                        translator.UpdateUnityEngineVector4(L, 3, _column);
+                        
+                    
+                    
+                        translator.Update(L, 1, gen_to_be_invoked);
+                    
+                    
+                    return 1;
+                }
                 
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to UnityEngine.Matrix4x4.SetColumn!");
             
         }
         
@@ -817,7 +1046,9 @@ namespace XLua.CSObjectWrap
                 UnityEngine.Matrix4x4 gen_to_be_invoked;translator.Get(L, 1, out gen_to_be_invoked);
             
             
-                
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 3&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 2)&& translator.Assignable<UnityEngine.Vector4>(L, 3)) 
                 {
                     int _index = LuaAPI.xlua_tointeger(L, 2);
                     UnityEngine.Vector4 _row;translator.Get(L, 3, out _row);
@@ -830,10 +1061,28 @@ namespace XLua.CSObjectWrap
                     
                     return 0;
                 }
+                if(gen_param_count == 3&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 2)&& translator.Assignable<UnityEngine.Vector4>(L, 3)) 
+                {
+                    int _index = LuaAPI.xlua_tointeger(L, 2);
+                    UnityEngine.Vector4 _row;translator.Get(L, 3, out _row);
+                    
+                    gen_to_be_invoked.SetRow( _index, _row );
+                    translator.PushUnityEngineVector4(L, _row);
+                        translator.UpdateUnityEngineVector4(L, 3, _row);
+                        
+                    
+                    
+                        translator.Update(L, 1, gen_to_be_invoked);
+                    
+                    
+                    return 1;
+                }
                 
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to UnityEngine.Matrix4x4.SetRow!");
             
         }
         
@@ -848,7 +1097,9 @@ namespace XLua.CSObjectWrap
                 UnityEngine.Matrix4x4 gen_to_be_invoked;translator.Get(L, 1, out gen_to_be_invoked);
             
             
-                
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 2&& translator.Assignable<UnityEngine.Vector3>(L, 2)) 
                 {
                     UnityEngine.Vector3 _point;translator.Get(L, 2, out _point);
                     
@@ -861,10 +1112,28 @@ namespace XLua.CSObjectWrap
                     
                     return 1;
                 }
+                if(gen_param_count == 2&& translator.Assignable<UnityEngine.Vector3>(L, 2)) 
+                {
+                    UnityEngine.Vector3 _point;translator.Get(L, 2, out _point);
+                    
+                        var gen_ret = gen_to_be_invoked.MultiplyPoint( _point );
+                        translator.PushUnityEngineVector3(L, gen_ret);
+                    translator.PushUnityEngineVector3(L, _point);
+                        translator.UpdateUnityEngineVector3(L, 2, _point);
+                        
+                    
+                    
+                        translator.Update(L, 1, gen_to_be_invoked);
+                    
+                    
+                    return 2;
+                }
                 
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to UnityEngine.Matrix4x4.MultiplyPoint!");
             
         }
         
@@ -879,7 +1148,9 @@ namespace XLua.CSObjectWrap
                 UnityEngine.Matrix4x4 gen_to_be_invoked;translator.Get(L, 1, out gen_to_be_invoked);
             
             
-                
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 2&& translator.Assignable<UnityEngine.Vector3>(L, 2)) 
                 {
                     UnityEngine.Vector3 _point;translator.Get(L, 2, out _point);
                     
@@ -892,10 +1163,28 @@ namespace XLua.CSObjectWrap
                     
                     return 1;
                 }
+                if(gen_param_count == 2&& translator.Assignable<UnityEngine.Vector3>(L, 2)) 
+                {
+                    UnityEngine.Vector3 _point;translator.Get(L, 2, out _point);
+                    
+                        var gen_ret = gen_to_be_invoked.MultiplyPoint3x4( _point );
+                        translator.PushUnityEngineVector3(L, gen_ret);
+                    translator.PushUnityEngineVector3(L, _point);
+                        translator.UpdateUnityEngineVector3(L, 2, _point);
+                        
+                    
+                    
+                        translator.Update(L, 1, gen_to_be_invoked);
+                    
+                    
+                    return 2;
+                }
                 
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to UnityEngine.Matrix4x4.MultiplyPoint3x4!");
             
         }
         
@@ -910,7 +1199,9 @@ namespace XLua.CSObjectWrap
                 UnityEngine.Matrix4x4 gen_to_be_invoked;translator.Get(L, 1, out gen_to_be_invoked);
             
             
-                
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 2&& translator.Assignable<UnityEngine.Vector3>(L, 2)) 
                 {
                     UnityEngine.Vector3 _vector;translator.Get(L, 2, out _vector);
                     
@@ -923,10 +1214,28 @@ namespace XLua.CSObjectWrap
                     
                     return 1;
                 }
+                if(gen_param_count == 2&& translator.Assignable<UnityEngine.Vector3>(L, 2)) 
+                {
+                    UnityEngine.Vector3 _vector;translator.Get(L, 2, out _vector);
+                    
+                        var gen_ret = gen_to_be_invoked.MultiplyVector( _vector );
+                        translator.PushUnityEngineVector3(L, gen_ret);
+                    translator.PushUnityEngineVector3(L, _vector);
+                        translator.UpdateUnityEngineVector3(L, 2, _vector);
+                        
+                    
+                    
+                        translator.Update(L, 1, gen_to_be_invoked);
+                    
+                    
+                    return 2;
+                }
                 
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to UnityEngine.Matrix4x4.MultiplyVector!");
             
         }
         
@@ -941,7 +1250,9 @@ namespace XLua.CSObjectWrap
                 UnityEngine.Matrix4x4 gen_to_be_invoked;translator.Get(L, 1, out gen_to_be_invoked);
             
             
-                
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 2&& translator.Assignable<UnityEngine.Plane>(L, 2)) 
                 {
                     UnityEngine.Plane _plane;translator.Get(L, 2, out _plane);
                     
@@ -954,10 +1265,28 @@ namespace XLua.CSObjectWrap
                     
                     return 1;
                 }
+                if(gen_param_count == 2&& translator.Assignable<UnityEngine.Plane>(L, 2)) 
+                {
+                    UnityEngine.Plane _plane;translator.Get(L, 2, out _plane);
+                    
+                        var gen_ret = gen_to_be_invoked.TransformPlane( _plane );
+                        translator.Push(L, gen_ret);
+                    translator.Push(L, _plane);
+                        translator.Update(L, 2, _plane);
+                        
+                    
+                    
+                        translator.Update(L, 1, gen_to_be_invoked);
+                    
+                    
+                    return 2;
+                }
                 
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to UnityEngine.Matrix4x4.TransformPlane!");
             
         }
         
@@ -970,7 +1299,9 @@ namespace XLua.CSObjectWrap
             
             
             
-                
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 1&& translator.Assignable<UnityEngine.Vector3>(L, 1)) 
                 {
                     UnityEngine.Vector3 _vector;translator.Get(L, 1, out _vector);
                     
@@ -981,10 +1312,26 @@ namespace XLua.CSObjectWrap
                     
                     return 1;
                 }
+                if(gen_param_count == 1&& translator.Assignable<UnityEngine.Vector3>(L, 1)) 
+                {
+                    UnityEngine.Vector3 _vector;translator.Get(L, 1, out _vector);
+                    
+                        var gen_ret = UnityEngine.Matrix4x4.Scale( _vector );
+                        translator.Push(L, gen_ret);
+                    translator.PushUnityEngineVector3(L, _vector);
+                        translator.UpdateUnityEngineVector3(L, 1, _vector);
+                        
+                    
+                    
+                    
+                    return 2;
+                }
                 
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to UnityEngine.Matrix4x4.Scale!");
             
         }
         
@@ -997,7 +1344,9 @@ namespace XLua.CSObjectWrap
             
             
             
-                
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 1&& translator.Assignable<UnityEngine.Vector3>(L, 1)) 
                 {
                     UnityEngine.Vector3 _vector;translator.Get(L, 1, out _vector);
                     
@@ -1008,10 +1357,26 @@ namespace XLua.CSObjectWrap
                     
                     return 1;
                 }
+                if(gen_param_count == 1&& translator.Assignable<UnityEngine.Vector3>(L, 1)) 
+                {
+                    UnityEngine.Vector3 _vector;translator.Get(L, 1, out _vector);
+                    
+                        var gen_ret = UnityEngine.Matrix4x4.Translate( _vector );
+                        translator.Push(L, gen_ret);
+                    translator.PushUnityEngineVector3(L, _vector);
+                        translator.UpdateUnityEngineVector3(L, 1, _vector);
+                        
+                    
+                    
+                    
+                    return 2;
+                }
                 
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to UnityEngine.Matrix4x4.Translate!");
             
         }
         
@@ -1024,7 +1389,9 @@ namespace XLua.CSObjectWrap
             
             
             
-                
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 1&& translator.Assignable<UnityEngine.Quaternion>(L, 1)) 
                 {
                     UnityEngine.Quaternion _q;translator.Get(L, 1, out _q);
                     
@@ -1035,10 +1402,26 @@ namespace XLua.CSObjectWrap
                     
                     return 1;
                 }
+                if(gen_param_count == 1&& translator.Assignable<UnityEngine.Quaternion>(L, 1)) 
+                {
+                    UnityEngine.Quaternion _q;translator.Get(L, 1, out _q);
+                    
+                        var gen_ret = UnityEngine.Matrix4x4.Rotate( _q );
+                        translator.Push(L, gen_ret);
+                    translator.PushUnityEngineQuaternion(L, _q);
+                        translator.UpdateUnityEngineQuaternion(L, 1, _q);
+                        
+                    
+                    
+                    
+                    return 2;
+                }
                 
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to UnityEngine.Matrix4x4.Rotate!");
             
         }
         

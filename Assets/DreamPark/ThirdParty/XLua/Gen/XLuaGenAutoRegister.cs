@@ -390,6 +390,12 @@ namespace XLua.CSObjectWrap
             translator.DelayWrapLoader(typeof(HandTracker), HandTrackerWrap.__Register);
         
         
+            translator.DelayWrapLoader(typeof(DreamBoxClient), DreamBoxClientWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.NetSessionArbiter), DreamParkNetSessionArbiterWrap.__Register);
+        
+        
             translator.DelayWrapLoader(typeof(EasyLua), EasyLuaWrap.__Register);
         
         

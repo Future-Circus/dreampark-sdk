@@ -154,7 +154,9 @@ namespace XLua.CSObjectWrap
             
             
             
-                
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 3&& translator.Assignable<UnityEngine.Color32>(L, 1)&& translator.Assignable<UnityEngine.Color32>(L, 2)&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 3)) 
                 {
                     UnityEngine.Color32 _a;translator.Get(L, 1, out _a);
                     UnityEngine.Color32 _b;translator.Get(L, 2, out _b);
@@ -167,10 +169,31 @@ namespace XLua.CSObjectWrap
                     
                     return 1;
                 }
+                if(gen_param_count == 3&& translator.Assignable<UnityEngine.Color32>(L, 1)&& translator.Assignable<UnityEngine.Color32>(L, 2)&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 3)) 
+                {
+                    UnityEngine.Color32 _a;translator.Get(L, 1, out _a);
+                    UnityEngine.Color32 _b;translator.Get(L, 2, out _b);
+                    float _t = (float)LuaAPI.lua_tonumber(L, 3);
+                    
+                        var gen_ret = UnityEngine.Color32.Lerp( _a, _b, _t );
+                        translator.PushUnityEngineColor32(L, gen_ret);
+                    translator.PushUnityEngineColor32(L, _a);
+                        translator.UpdateUnityEngineColor32(L, 1, _a);
+                        
+                    translator.PushUnityEngineColor32(L, _b);
+                        translator.UpdateUnityEngineColor32(L, 2, _b);
+                        
+                    
+                    
+                    
+                    return 3;
+                }
                 
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to UnityEngine.Color32.Lerp!");
             
         }
         
@@ -183,7 +206,9 @@ namespace XLua.CSObjectWrap
             
             
             
-                
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 3&& translator.Assignable<UnityEngine.Color32>(L, 1)&& translator.Assignable<UnityEngine.Color32>(L, 2)&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 3)) 
                 {
                     UnityEngine.Color32 _a;translator.Get(L, 1, out _a);
                     UnityEngine.Color32 _b;translator.Get(L, 2, out _b);
@@ -196,10 +221,31 @@ namespace XLua.CSObjectWrap
                     
                     return 1;
                 }
+                if(gen_param_count == 3&& translator.Assignable<UnityEngine.Color32>(L, 1)&& translator.Assignable<UnityEngine.Color32>(L, 2)&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 3)) 
+                {
+                    UnityEngine.Color32 _a;translator.Get(L, 1, out _a);
+                    UnityEngine.Color32 _b;translator.Get(L, 2, out _b);
+                    float _t = (float)LuaAPI.lua_tonumber(L, 3);
+                    
+                        var gen_ret = UnityEngine.Color32.LerpUnclamped( _a, _b, _t );
+                        translator.PushUnityEngineColor32(L, gen_ret);
+                    translator.PushUnityEngineColor32(L, _a);
+                        translator.UpdateUnityEngineColor32(L, 1, _a);
+                        
+                    translator.PushUnityEngineColor32(L, _b);
+                        translator.UpdateUnityEngineColor32(L, 2, _b);
+                        
+                    
+                    
+                    
+                    return 3;
+                }
                 
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to UnityEngine.Color32.LerpUnclamped!");
             
         }
         
@@ -271,6 +317,22 @@ namespace XLua.CSObjectWrap
                     
                     
                     return 1;
+                }
+                if(gen_param_count == 2&& translator.Assignable<UnityEngine.Color32>(L, 2)) 
+                {
+                    UnityEngine.Color32 _other;translator.Get(L, 2, out _other);
+                    
+                        var gen_ret = gen_to_be_invoked.Equals( _other );
+                        LuaAPI.lua_pushboolean(L, gen_ret);
+                    translator.PushUnityEngineColor32(L, _other);
+                        translator.UpdateUnityEngineColor32(L, 2, _other);
+                        
+                    
+                    
+                        translator.UpdateUnityEngineColor32(L, 1, gen_to_be_invoked);
+                    
+                    
+                    return 2;
                 }
                 
             } catch(System.Exception gen_e) {

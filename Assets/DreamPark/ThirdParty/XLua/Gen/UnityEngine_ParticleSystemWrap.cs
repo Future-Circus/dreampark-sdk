@@ -30,7 +30,7 @@ namespace XLua.CSObjectWrap
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "GetPlaybackState", _m_GetPlaybackState);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "SetPlaybackState", _m_SetPlaybackState);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "GetTrails", _m_GetTrails);
-			Utils.RegisterFunc(L, Utils.METHOD_IDX, "SetTrails", _m_SetTrails);
+			Utils.RegisterFunc(L, Utils.METHOD_IDX, "SetParticlesAndTrails", _m_SetParticlesAndTrails);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "Simulate", _m_Simulate);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "Play", _m_Play);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "Pause", _m_Pause);
@@ -474,7 +474,7 @@ namespace XLua.CSObjectWrap
         }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
-        static int _m_SetTrails(RealStatePtr L)
+        static int _m_SetParticlesAndTrails(RealStatePtr L)
         {
 		    try {
             
@@ -484,20 +484,86 @@ namespace XLua.CSObjectWrap
                 UnityEngine.ParticleSystem gen_to_be_invoked = (UnityEngine.ParticleSystem)translator.FastGetCSObj(L, 1);
             
             
-                
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 3&& translator.Assignable<UnityEngine.ParticleSystem.Particle[]>(L, 2)&& translator.Assignable<UnityEngine.ParticleSystem.Trails>(L, 3)) 
                 {
-                    UnityEngine.ParticleSystem.Trails _trailData;translator.Get(L, 2, out _trailData);
+                    UnityEngine.ParticleSystem.Particle[] _particles = (UnityEngine.ParticleSystem.Particle[])translator.GetObject(L, 2, typeof(UnityEngine.ParticleSystem.Particle[]));
+                    UnityEngine.ParticleSystem.Trails _trailData;translator.Get(L, 3, out _trailData);
                     
-                    gen_to_be_invoked.SetTrails( _trailData );
+                    gen_to_be_invoked.SetParticlesAndTrails( _particles, _trailData );
                     
                     
                     
-                    return 0;
+                    return 1;
+                }
+                if(gen_param_count == 3&& translator.Assignable<Unity.Collections.NativeArray<UnityEngine.ParticleSystem.Particle>>(L, 2)&& translator.Assignable<UnityEngine.ParticleSystem.Trails>(L, 3)) 
+                {
+                    Unity.Collections.NativeArray<UnityEngine.ParticleSystem.Particle> _particles;translator.Get(L, 2, out _particles);
+                    UnityEngine.ParticleSystem.Trails _trailData;translator.Get(L, 3, out _trailData);
+                    
+                    gen_to_be_invoked.SetParticlesAndTrails( _particles, _trailData );
+                    
+                    
+                    
+                    return 1;
+                }
+                if(gen_param_count == 4&& translator.Assignable<UnityEngine.ParticleSystem.Particle[]>(L, 2)&& translator.Assignable<UnityEngine.ParticleSystem.Trails>(L, 3)&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 4)) 
+                {
+                    UnityEngine.ParticleSystem.Particle[] _particles = (UnityEngine.ParticleSystem.Particle[])translator.GetObject(L, 2, typeof(UnityEngine.ParticleSystem.Particle[]));
+                    UnityEngine.ParticleSystem.Trails _trailData;translator.Get(L, 3, out _trailData);
+                    int _size = LuaAPI.xlua_tointeger(L, 4);
+                    
+                    gen_to_be_invoked.SetParticlesAndTrails( _particles, _trailData, _size );
+                    
+                    
+                    
+                    return 1;
+                }
+                if(gen_param_count == 4&& translator.Assignable<Unity.Collections.NativeArray<UnityEngine.ParticleSystem.Particle>>(L, 2)&& translator.Assignable<UnityEngine.ParticleSystem.Trails>(L, 3)&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 4)) 
+                {
+                    Unity.Collections.NativeArray<UnityEngine.ParticleSystem.Particle> _particles;translator.Get(L, 2, out _particles);
+                    UnityEngine.ParticleSystem.Trails _trailData;translator.Get(L, 3, out _trailData);
+                    int _size = LuaAPI.xlua_tointeger(L, 4);
+                    
+                    gen_to_be_invoked.SetParticlesAndTrails( _particles, _trailData, _size );
+                    
+                    
+                    
+                    return 1;
+                }
+                if(gen_param_count == 5&& translator.Assignable<UnityEngine.ParticleSystem.Particle[]>(L, 2)&& translator.Assignable<UnityEngine.ParticleSystem.Trails>(L, 3)&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 4)&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 5)) 
+                {
+                    UnityEngine.ParticleSystem.Particle[] _particles = (UnityEngine.ParticleSystem.Particle[])translator.GetObject(L, 2, typeof(UnityEngine.ParticleSystem.Particle[]));
+                    UnityEngine.ParticleSystem.Trails _trailData;translator.Get(L, 3, out _trailData);
+                    int _size = LuaAPI.xlua_tointeger(L, 4);
+                    int _offset = LuaAPI.xlua_tointeger(L, 5);
+                    
+                    gen_to_be_invoked.SetParticlesAndTrails( _particles, _trailData, _size, _offset );
+                    
+                    
+                    
+                    return 1;
+                }
+                if(gen_param_count == 5&& translator.Assignable<Unity.Collections.NativeArray<UnityEngine.ParticleSystem.Particle>>(L, 2)&& translator.Assignable<UnityEngine.ParticleSystem.Trails>(L, 3)&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 4)&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 5)) 
+                {
+                    Unity.Collections.NativeArray<UnityEngine.ParticleSystem.Particle> _particles;translator.Get(L, 2, out _particles);
+                    UnityEngine.ParticleSystem.Trails _trailData;translator.Get(L, 3, out _trailData);
+                    int _size = LuaAPI.xlua_tointeger(L, 4);
+                    int _offset = LuaAPI.xlua_tointeger(L, 5);
+                    
+                    gen_to_be_invoked.SetParticlesAndTrails( _particles, _trailData, _size, _offset );
+                    
+                    
+                    
+                    return 1;
                 }
                 
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to UnityEngine.ParticleSystem.SetParticlesAndTrails!");
             
         }
         

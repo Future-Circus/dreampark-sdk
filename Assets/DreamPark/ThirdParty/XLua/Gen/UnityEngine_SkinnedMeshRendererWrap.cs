@@ -21,13 +21,15 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(UnityEngine.SkinnedMeshRenderer);
-			Utils.BeginObjectRegister(type, L, translator, 0, 5, 8, 8);
+			Utils.BeginObjectRegister(type, L, translator, 0, 7, 8, 8);
 			
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "GetBlendShapeWeight", _m_GetBlendShapeWeight);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "SetBlendShapeWeight", _m_SetBlendShapeWeight);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "BakeMesh", _m_BakeMesh);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "GetVertexBuffer", _m_GetVertexBuffer);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "GetPreviousVertexBuffer", _m_GetPreviousVertexBuffer);
+			Utils.RegisterFunc(L, Utils.METHOD_IDX, "SetShaderUserValue", _m_SetShaderUserValue);
+			Utils.RegisterFunc(L, Utils.METHOD_IDX, "GetShaderUserValue", _m_GetShaderUserValue);
 			
 			
 			Utils.RegisterFunc(L, Utils.GETTER_IDX, "quality", _g_get_quality);
@@ -237,6 +239,62 @@ namespace XLua.CSObjectWrap
                     
                         var gen_ret = gen_to_be_invoked.GetPreviousVertexBuffer(  );
                         translator.Push(L, gen_ret);
+                    
+                    
+                    
+                    return 1;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_SetShaderUserValue(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+                UnityEngine.SkinnedMeshRenderer gen_to_be_invoked = (UnityEngine.SkinnedMeshRenderer)translator.FastGetCSObj(L, 1);
+            
+            
+                
+                {
+                    uint _v = LuaAPI.xlua_touint(L, 2);
+                    
+                    gen_to_be_invoked.SetShaderUserValue( _v );
+                    
+                    
+                    
+                    return 0;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_GetShaderUserValue(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+                UnityEngine.SkinnedMeshRenderer gen_to_be_invoked = (UnityEngine.SkinnedMeshRenderer)translator.FastGetCSObj(L, 1);
+            
+            
+                
+                {
+                    
+                        var gen_ret = gen_to_be_invoked.GetShaderUserValue(  );
+                        LuaAPI.xlua_pushuint(L, gen_ret);
                     
                     
                     

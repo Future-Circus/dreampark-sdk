@@ -21,7 +21,7 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(DreamPark.PlayerRig);
-			Utils.BeginObjectRegister(type, L, translator, 0, 3, 1, 1);
+			Utils.BeginObjectRegister(type, L, translator, 0, 3, 2, 2);
 			
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "Show", _m_Show);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "Hide", _m_Hide);
@@ -29,8 +29,10 @@ namespace XLua.CSObjectWrap
 			
 			
 			Utils.RegisterFunc(L, Utils.GETTER_IDX, "gameId", _g_get_gameId);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "remoteRigTemplate", _g_get_remoteRigTemplate);
             
 			Utils.RegisterFunc(L, Utils.SETTER_IDX, "gameId", _s_set_gameId);
+            Utils.RegisterFunc(L, Utils.SETTER_IDX, "remoteRigTemplate", _s_set_remoteRigTemplate);
             
 			
 			Utils.EndObjectRegister(type, L, translator, null, null,
@@ -202,6 +204,20 @@ namespace XLua.CSObjectWrap
             return 1;
         }
         
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_remoteRigTemplate(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                DreamPark.PlayerRig gen_to_be_invoked = (DreamPark.PlayerRig)translator.FastGetCSObj(L, 1);
+                translator.Push(L, gen_to_be_invoked.remoteRigTemplate);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
         
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
@@ -238,6 +254,21 @@ namespace XLua.CSObjectWrap
 			
                 DreamPark.PlayerRig gen_to_be_invoked = (DreamPark.PlayerRig)translator.FastGetCSObj(L, 1);
                 gen_to_be_invoked.gameId = LuaAPI.lua_tostring(L, 2);
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_remoteRigTemplate(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                DreamPark.PlayerRig gen_to_be_invoked = (DreamPark.PlayerRig)translator.FastGetCSObj(L, 1);
+                gen_to_be_invoked.remoteRigTemplate = (UnityEngine.Transform)translator.GetObject(L, 2, typeof(UnityEngine.Transform));
             
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);

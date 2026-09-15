@@ -21,9 +21,8 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(UnityEngine.Rigidbody);
-			Utils.BeginObjectRegister(type, L, translator, 0, 23, 28, 27);
+			Utils.BeginObjectRegister(type, L, translator, 0, 22, 28, 27);
 			
-			Utils.RegisterFunc(L, Utils.METHOD_IDX, "SetDensity", _m_SetDensity);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "MovePosition", _m_MovePosition);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "MoveRotation", _m_MoveRotation);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "Move", _m_Move);
@@ -150,34 +149,6 @@ namespace XLua.CSObjectWrap
         
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
-        static int _m_SetDensity(RealStatePtr L)
-        {
-		    try {
-            
-                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
-            
-            
-                UnityEngine.Rigidbody gen_to_be_invoked = (UnityEngine.Rigidbody)translator.FastGetCSObj(L, 1);
-            
-            
-                
-                {
-                    float _density = (float)LuaAPI.lua_tonumber(L, 2);
-                    
-                    gen_to_be_invoked.SetDensity( _density );
-                    
-                    
-                    
-                    return 0;
-                }
-                
-            } catch(System.Exception gen_e) {
-                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
-            }
-            
-        }
-        
-        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
         static int _m_MovePosition(RealStatePtr L)
         {
 		    try {
@@ -218,9 +189,9 @@ namespace XLua.CSObjectWrap
             
                 
                 {
-                    UnityEngine.Quaternion _rot;translator.Get(L, 2, out _rot);
+                    UnityEngine.Quaternion _rotation;translator.Get(L, 2, out _rotation);
                     
-                    gen_to_be_invoked.MoveRotation( _rot );
+                    gen_to_be_invoked.MoveRotation( _rotation );
                     
                     
                     
