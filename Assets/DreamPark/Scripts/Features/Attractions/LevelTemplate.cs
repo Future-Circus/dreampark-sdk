@@ -823,11 +823,22 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
     ///
     /// MESH **OR** DUST. Zero of 32 stored environments carry a mesh today
     /// (Web, measured), so a mesh-only test would never fire on any real park.
+    /// `global::` IS LOAD-BEARING, do not "tidy" it away. This file opens with
+    /// `namespace DreamPark {`, and core also has a CLASS named `DreamPark`
+    /// inside that same namespace (core's Assets/Scripts/DreamPark.cs). From
+    /// in here the bare name binds to the sibling CLASS, not the namespace, so
+    /// `DreamPark.EnvironmentDust...` fails core's iOS compile with CS0117
+    /// "'DreamPark' does not contain a definition for 'EnvironmentDust'".
+    /// Harmless in this repo — DREAMPARKCORE is undefined here so the body
+    /// never compiles — which is exactly why it keeps getting lost: it costs
+    /// nothing here and breaks core on the next import. It has already been
+    /// fixed in core once and reverted by a sync; the prefix lives HERE so it
+    /// survives.
     private static bool PlaceHasScanForFloorHiding()
     {
-        var mesh = DreamPark.EnvironmentDust.EnvironmentDustManager.ActiveMeshStore;
+        var mesh = global::DreamPark.EnvironmentDust.EnvironmentDustManager.ActiveMeshStore;
         if (mesh != null && mesh.HasMesh) return true;
-        var dust = DreamPark.EnvironmentDust.EnvironmentDustManager.ActiveGrid;
+        var dust = global::DreamPark.EnvironmentDust.EnvironmentDustManager.ActiveGrid;
         return dust != null && dust.Count > 0;
     }
 #endif
