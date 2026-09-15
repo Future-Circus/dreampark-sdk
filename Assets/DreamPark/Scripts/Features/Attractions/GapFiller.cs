@@ -1983,11 +1983,18 @@ namespace DreamPark {
         /// SDK repo — see IsBuildMode()/IsLeavingBuildTransition() above for
         /// the same pattern with NativeInterfaceManager. Core's own commit
         /// used bare UNITY_IOS; do not drop DREAMPARKCORE re-syncing this.
+        /// `global::` IS LOAD-BEARING, do not "tidy" it away — same reason as
+        /// LevelTemplate.PlaceHasScanForFloorHiding. This file opens with
+        /// `namespace DreamPark {`, and core has a CLASS named `DreamPark`
+        /// inside that namespace, so the bare name binds to the class and
+        /// core's iOS compile fails with CS0117. Costs nothing in this repo
+        /// (DREAMPARKCORE undefined, body never compiles), which is precisely
+        /// why it keeps getting dropped on the way back in.
         private static bool PlaceHasScanForFloorHiding()
         {
-            var mesh = DreamPark.EnvironmentDust.EnvironmentDustManager.ActiveMeshStore;
+            var mesh = global::DreamPark.EnvironmentDust.EnvironmentDustManager.ActiveMeshStore;
             if (mesh != null && mesh.HasMesh) return true;
-            var dust = DreamPark.EnvironmentDust.EnvironmentDustManager.ActiveGrid;
+            var dust = global::DreamPark.EnvironmentDust.EnvironmentDustManager.ActiveGrid;
             return dust != null && dust.Count > 0;
         }
 #endif
