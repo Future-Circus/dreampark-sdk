@@ -18,11 +18,13 @@ namespace DreamPark
     // PascalCase conventions ("CoinCollector") while still allowing camelCase/lowercase.
     public class ContentIdSetupPopup : EditorWindow
     {
-        // Public so ContentUploaderPanel can use the same regex for inline gating.
-        // ^[A-Za-z]    must start with a letter (no leading digits — Addressables choke)
-        // [A-Za-z0-9]* only letters and digits afterwards
-        // {2,64}       length 2-64 (enforced separately to give a clearer error message)
-        public static readonly Regex ContentIdRegex = new Regex(@"^[A-Za-z][A-Za-z0-9]*$");
+        // Aliases ContentFolders' copy — that class is the shared, no-
+        // !DREAMPARKCORE-guard home for "is this string a legal contentId"
+        // (ReleaseTokenPanel, which must compile in dreampark-core where this
+        // popup does not exist, reads ContentFolders directly). Kept as public
+        // members here so this popup's own existing callers (BetaContentId.cs,
+        // ContentUploaderPanel.cs) don't need to change.
+        public static readonly Regex ContentIdRegex = ContentFolders.ContentIdRegex;
 
         // Defined in ContentFolders, which is not gated on !DREAMPARKCORE —
         // the optimizer windows and the addressable janitor need it too.
@@ -35,31 +37,11 @@ namespace DreamPark
         private bool isCheckingBackend = false;
         private Action<string> onRenamed;
 
-        public static bool IsValid(string name)
-        {
-            if (string.IsNullOrEmpty(name)) return false;
-            if (name.Length < 2 || name.Length > 64) return false;
-            return ContentIdRegex.IsMatch(name);
-        }
+        public static bool IsValid(string name) => ContentFolders.IsValidId(name);
 
         // Returns a user-friendly explanation of why a name is invalid, or null
         // if it's valid. The popup's live feedback uses this string verbatim.
-        public static string ExplainInvalid(string name)
-        {
-            if (string.IsNullOrEmpty(name)) return "Enter a name (e.g. SuperAdventureLand).";
-            if (name.Length < 2) return "Must be at least 2 characters.";
-            if (name.Length > 64) return "Must be 64 characters or fewer.";
-            if (!char.IsLetter(name[0])) return "Must start with a letter.";
-            // Find the first offending character so the error points at it.
-            foreach (char c in name)
-            {
-                if (!char.IsLetterOrDigit(c) || c > 127)
-                {
-                    return $"'{c}' is not allowed. Use only letters (a-z, A-Z) and digits (0-9).";
-                }
-            }
-            return null;
-        }
+        public static string ExplainInvalid(string name) => ContentFolders.ExplainInvalidId(name);
 
         public static void Show(string oldFolderName, Action<string> onRenamed)
         {
