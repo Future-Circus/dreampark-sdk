@@ -25,11 +25,8 @@ namespace DreamPark
         private const string VersionResourcePath = "Assets/DreamPark/Resources/DreamParkSDKVersion.json";
 
         [CliCommand("dreampark_auth_status", "Check the local DreamPark SDK session without returning its bearer token.", MainThreadRequired = true, Tags = new[] { "dreampark", "dreampark/auth" })]
-        public static object AuthStatus(
-            [CliArg("release_auth_token_file", "Owner-only file containing a scoped release agent token. The token is loaded into memory and never returned.")] string releaseAuthTokenFile = null)
+        public static object AuthStatus()
         {
-            if (!string.IsNullOrWhiteSpace(releaseAuthTokenFile))
-                AuthAPI.SetReleaseAgentTokenForAutomation(ReadReleaseAgentToken(releaseAuthTokenFile));
             return new
             {
                 authenticated = AuthAPI.isLoggedIn,
@@ -40,19 +37,9 @@ namespace DreamPark
             };
         }
 
-        [CliCommand("dreampark_auth_clear_agent_token", "Clear the in-memory release agent token after an automated operation.", MainThreadRequired = true, Tags = new[] { "dreampark", "dreampark/auth" })]
-        public static object ClearAgentToken()
-        {
-            AuthAPI.ClearReleaseAgentTokenForAutomation();
-            return new { success = true, cleared = true };
-        }
-
         [CliCommand("dreampark_auth_open", "Open DreamPark's passwordless sign-in window in this exact Unity Editor. The email code stays between the human and Unity and is never returned to the caller.", MainThreadRequired = true, Tags = new[] { "dreampark", "dreampark/auth" })]
         public static object OpenAuth()
         {
-            // Interactive account authentication must never inherit a token left in memory by an interrupted
-            // automation client.
-            AuthAPI.ClearReleaseAgentTokenForAutomation();
             if (AuthAPI.isLoggedIn)
                 return new { opened = false, authenticated = true, email = AuthAPI.email };
 
@@ -392,21 +379,6 @@ namespace DreamPark
                 ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
             AssetDatabase.SaveAssets();
             SDKVersion.Reload();
-        }
-
-        private static string ReadReleaseAgentToken(string path)
-        {
-            if (string.IsNullOrWhiteSpace(path) || !Path.IsPathRooted(path))
-                throw new ArgumentException("release_auth_token_file must be an absolute path.");
-            var info = new FileInfo(path);
-            if (!info.Exists || info.Length <= 0 || info.Length > 64 * 1024)
-                throw new ArgumentException("release_auth_token_file must be a non-empty file no larger than 64 KiB.");
-            string token = File.ReadAllText(info.FullName).Trim();
-            if (token.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-                token = token.Substring("Bearer ".Length).Trim();
-            if (string.IsNullOrEmpty(token))
-                throw new ArgumentException("release_auth_token_file did not contain a token.");
-            return token;
         }
 
         private static string SHA256Hex(byte[] bytes)
