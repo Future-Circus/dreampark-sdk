@@ -7,6 +7,26 @@ namespace DreamPark.API
 {
     public class AuthAPI : MonoBehaviour
     {
+        // A release host may supply a short-lived agent token for one automation operation. It is held only in
+        // memory, takes precedence over the human Editor session, and is cleared by the release command adapter
+        // in a finally-equivalent cleanup path. It is never written to EditorPrefs or PlayerPrefs.
+        private static string _releaseAgentToken = "";
+
+#if UNITY_EDITOR
+        public static void SetReleaseAgentTokenForAutomation(string token)
+        {
+            token = (token ?? "").Trim();
+            if (token.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+                token = token.Substring("Bearer ".Length).Trim();
+            _releaseAgentToken = token;
+        }
+
+        public static void ClearReleaseAgentTokenForAutomation()
+        {
+            _releaseAgentToken = "";
+        }
+#endif
+
         // Fires whenever login state may have changed (login, logout, or a refresh
         // probe revealing the session is invalid). Subscribers should call Repaint().
         // bool argument = current isLoggedIn value.
@@ -184,6 +204,8 @@ namespace DreamPark.API
         }
 
         public static string GetUserAuth() {
+            if (!string.IsNullOrEmpty(_releaseAgentToken))
+                return $"Bearer {_releaseAgentToken}";
 #if UNITY_EDITOR
             var sessionToken = GetAuthPref(PrefSessionToken, LegacySessionToken);
 #else
@@ -223,6 +245,7 @@ namespace DreamPark.API
 
         public static bool isLoggedIn {
             get {
+                if (!string.IsNullOrEmpty(_releaseAgentToken)) return true;
 #if UNITY_EDITOR
                 var sessionToken = GetAuthPref(PrefSessionToken, LegacySessionToken);
 #else
@@ -242,6 +265,7 @@ namespace DreamPark.API
         }
         public static string sessionToken {
             get {
+                if (!string.IsNullOrEmpty(_releaseAgentToken)) return _releaseAgentToken;
 #if UNITY_EDITOR
                 return GetAuthPref(PrefSessionToken, LegacySessionToken);
 #else
@@ -252,6 +276,7 @@ namespace DreamPark.API
         // Cached email from the most recent login response. Used purely for display.
         public static string email {
             get {
+                if (!string.IsNullOrEmpty(_releaseAgentToken)) return "Release agent";
 #if UNITY_EDITOR
                 return GetAuthPref(PrefUserEmail, LegacyUserEmail);
 #else
@@ -293,6 +318,7 @@ namespace DreamPark.API
         // creator who is not told will find out when a 40-minute upload 401s at the end.
         public static long sessionExpiresAt {
             get {
+                if (!string.IsNullOrEmpty(_releaseAgentToken)) return 0;
 #if UNITY_EDITOR
                 var raw = UnityEditor.EditorPrefs.GetString(PrefExpiresAt, "");
 #else

@@ -16,7 +16,8 @@ MonoBehaviour:
     keys:
     - OVRProjectSetup.OVRProjectSetup.OVRConfigurationTask.036219cd00a72d42e6e9e6851dd66259.Ignored.Standalone
     - Meta.XR.SDK.273239371d15de7de486e6996e3c0bdd.Ignored.Android
-    values: 0101
+    - Meta.XR.SDK.02ea7d67ac3690556fd74295df61450b.Ignored.Android
+    values: 010101
   intProperties:
     keys: []
     values: 

@@ -1464,6 +1464,22 @@ namespace DreamPark {
                 mr.material = floorMaterial;
             else
                 mr.material = Resources.Load<Material>("Materials/Occlusion");
+            // && DREAMPARKCORE added porting this from dreampark-core (Grid,
+            // feat/grid-portal-yaw @ 2e1e940e): PlaceHasScanForFloorHiding()
+            // below calls DreamPark.EnvironmentDust.EnvironmentDustManager,
+            // which lives under core's Assets/Scripts/ (not Assets/DreamPark/)
+            // and does not exist in this SDK repo at all. Core's own commit
+            // used bare UNITY_IOS, which is safe there but would fail to
+            // compile here — same reason IsBuildMode()/IsLeavingBuildTransition()
+            // just above gate their own NativeInterfaceManager reference behind
+            // #if DREAMPARKCORE. Do not drop the DREAMPARKCORE half when
+            // re-syncing this block from core.
+#if UNITY_IOS && DREAMPARKCORE
+            if (PlaceHasScanForFloorHiding()) {
+                mr.enabled = false;
+                Debug.Log("[GapFiller] Place has a scan — gap-filler renderer hidden so the scan renders (collider kept)");
+            }
+#endif
 
             // Create mesh
             Mesh mesh = new Mesh();
@@ -1927,6 +1943,52 @@ namespace DreamPark {
                     Gizmos.DrawLine(worldA, worldB);
                 }
             }
+        }
+#endif
+
+        // Moved INSIDE the class relative to how dreampark-core's
+        // feat/grid-portal-yaw @ 2e1e940e committed this: that commit placed
+        // this method after the class's own closing brace but before the
+        // namespace's closing brace, which makes it a member of nothing and
+        // does not compile — confirmed against the pre-commit file (the
+        // class closes the same way there too) and consistent with that
+        // commit's own "Not Unity-compiled" note. Worth flagging back to
+        // Grid/core, since core has the identical bug sitting unbuilt.
+#if UNITY_IOS && DREAMPARKCORE
+        /// THE SCAN OWNS THE FLOOR ON MOBILE (Aidan, Sep 1 2026: "if the place has
+        /// a scan I'd like the generated floor and gap filler to have the invisible
+        /// material instead of the occluder").
+        ///
+        /// The occluder writes depth so real-world geometry hides content behind
+        /// it. With no scan that is the whole point — it is the only floor there
+        /// is. With a scan it competes with the mesh the operator walked, and the
+        /// scan is the better answer: it is measured, the generated plane is
+        /// inferred.
+        ///
+        /// DISABLING THE RENDERER, not swapping the material, and deliberately:
+        /// `Materials/InvisibleOccluder` sits next to `Materials/Occlusion` in the
+        /// same Resources folder and uses the IDENTICAL shader guid — swapping to
+        /// it changes nothing while looking like the fix. The one genuinely
+        /// different material (`DreamPark/Materials/Invisible.mat`) is not under a
+        /// Resources folder, so Resources.Load returns null and the floor falls
+        /// back to Unity's default: magenta over the scan. A disabled renderer is
+        /// what "invisible" means, cannot fail to load, and leaves the collider —
+        /// so placement raycasts and physics are untouched.
+        ///
+        /// MESH **OR** DUST. Zero of 32 stored environments carry a mesh today
+        /// (Web, measured), so a mesh-only test would never fire on any real park.
+        ///
+        /// && DREAMPARKCORE: EnvironmentDustManager lives under core's
+        /// Assets/Scripts/ (not Assets/DreamPark/) and does not exist in this
+        /// SDK repo — see IsBuildMode()/IsLeavingBuildTransition() above for
+        /// the same pattern with NativeInterfaceManager. Core's own commit
+        /// used bare UNITY_IOS; do not drop DREAMPARKCORE re-syncing this.
+        private static bool PlaceHasScanForFloorHiding()
+        {
+            var mesh = DreamPark.EnvironmentDust.EnvironmentDustManager.ActiveMeshStore;
+            if (mesh != null && mesh.HasMesh) return true;
+            var dust = DreamPark.EnvironmentDust.EnvironmentDustManager.ActiveGrid;
+            return dust != null && dust.Count > 0;
         }
 #endif
     }

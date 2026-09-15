@@ -40,11 +40,16 @@ namespace DreamPark
     //      contributes the content hash. Two builds with identical content
     //      produce identical bundle filenames.
     //
-    // Status: EXPERIMENTAL. Run behind the BundlingStrategy.Smart toggle. The
-    // first build after switching to Smart will look like a full re-upload
-    // because every asset moves to a new group.
+    // Status: DEFAULT as of August 2026 (BundlingStrategy.Smart). Legacy
+    // folder-based grouping is deprecated and reachable only via
+    // DreamPark > Troubleshooting > Use Legacy Bundling (deprecated). The
+    // first build on a machine that just moved to Smart will look like a full
+    // re-upload because every asset moves to a new group — that is a one-off.
     //
-    // Open edge cases worth validating before flipping default:
+    // Edge cases this partitioning deliberately accepts. They were open
+    // questions while Smart was opt-in and are listed here as the behaviour
+    // to expect, not as unfinished work — but they are the first places to
+    // look if a creator reports surprising bundle churn:
     //   - Materials shared by many props: should land in Shared (typically a
     //     few hundred KB total). Verify by running and inspecting groups.
     //   - Shaders: will be heavily shared, will land in Shared. Same.

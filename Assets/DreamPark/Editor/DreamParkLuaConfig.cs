@@ -253,6 +253,17 @@ public static class DreamParkLuaConfig {
         // July 2026.
         typeof(global::DreamPark.FloorAnchor),
         typeof(HandTracker),               // global namespace
+
+        // mp_kit.lua.txt's relay_ping/relay_state/relay_messages/session_state
+        // diagnostics read these singletons directly (Samples/Multiplayer/
+        // mp_kit.lua.txt). Every call site wraps them in pcall, so an
+        // unregistered type here fails exactly like the Zombiez bug: silent
+        // no-op on device, not an error anyone sees. Found dormant (2026-08-30)
+        // — nothing calls these four functions yet, but mp_kit.lua.txt is
+        // reference material every project's `kit` injection copies from, so
+        // the first project that reaches for them would hit this blind.
+        typeof(DreamBoxClient),                    // global namespace
+        typeof(global::DreamPark.NetSessionArbiter),
     };
 
     /// <summary>

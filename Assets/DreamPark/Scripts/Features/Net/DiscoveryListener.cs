@@ -32,6 +32,21 @@ public class DiscoveryListener : IDisposable
         public int v;             // peer protocol version (0 = pre-versioning/kiosk)
         public string channel;    // "prod" (core builds) / "sdk" (creator projects) — peer sessions don't cross channels
         public int msgCap;        // messages/sec/peer this relay enforces; 0 = not advertised
+
+        /// <summary>
+        /// Where the datagram actually came from, which is not the same claim as
+        /// <see cref="host"/> and is worth strictly more. `host` is the sender's
+        /// guess at its own LAN address — one interface out of however many it
+        /// has, chosen without knowing who is listening. `sourceHost` is the
+        /// address a packet demonstrably just arrived from, on a path that
+        /// demonstrably works, because we are holding the packet.
+        ///
+        /// They agree on a healthy network. When they disagree, the advertised
+        /// one is the one that is wrong, and a joiner that only knows `host`
+        /// will connect into a black hole with no way to tell that is what
+        /// happened. Carry both; let the arbiter fall back.
+        /// </summary>
+        public string sourceHost;
     }
 
     /// <summary>Fired on background thread when a valid beacon is received.</summary>
@@ -103,6 +118,8 @@ public class DiscoveryListener : IDisposable
             try
             {
                 byte[] data = _udp.Receive(ref remoteEP);
+                // Capture before anything else can reassign remoteEP.
+                string sourceHost = remoteEP.Address?.ToString() ?? "";
                 string json = Encoding.UTF8.GetString(data);
 
                 var obj = new JSONObject(json);
@@ -142,7 +159,8 @@ public class DiscoveryListener : IDisposable
                     seq = seqField != null ? seqField.intValue : 0,
                     v = vField != null ? vField.intValue : 0,
                     channel = channelField != null ? channelField.stringValue : "",
-                    msgCap = capField != null ? capField.intValue : 0
+                    msgCap = capField != null ? capField.intValue : 0,
+                    sourceHost = sourceHost
                 };
 
                 // Unfiltered feed for the arbiter (every valid beacon).
@@ -156,7 +174,8 @@ public class DiscoveryListener : IDisposable
                 }
 
                 // Per-beacon (1 Hz per host on the LAN) — verbose only.
-                global::DreamPark.NetLog.V($"[DreamBox] Discovery: found relay at {info.host}:{info.port} (dreamboxId={info.dreamboxId}, hostType={info.hostType}, hostId={info.hostId}, ch={info.channel})");
+                global::DreamPark.NetLog.V($"[DreamBox] Discovery: found relay at {info.host}:{info.port} (dreamboxId={info.dreamboxId}, hostType={info.hostType}, hostId={info.hostId}, ch={info.channel})"
+                    + (info.sourceHost != info.host ? $" ⚠ beacon came from {info.sourceHost}, not the advertised {info.host}" : ""));
                 OnRelayDiscovered?.Invoke(info);
             }
             catch (SocketException) when (!_running)

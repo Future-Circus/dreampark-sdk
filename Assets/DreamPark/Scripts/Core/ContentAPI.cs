@@ -26,12 +26,14 @@ namespace DreamPark.API
         public string platform;
         public string fileName;   // Relative to ServerData/{platform}/, forward-slash normalized.
         public string uploadPath; // Storage key the backend handed back from /uploadUrl in the prior run.
+        public string releaseId;  // Immutable content release reservation for Failed-Only retries.
 
         public UploadedFileRecord() {}
-        public UploadedFileRecord(string platform, string fileName, string uploadPath) {
+        public UploadedFileRecord(string platform, string fileName, string uploadPath, string releaseId = null) {
             this.platform = platform;
             this.fileName = fileName;
             this.uploadPath = uploadPath;
+            this.releaseId = releaseId;
         }
     }
 
@@ -1433,8 +1435,44 @@ namespace DreamPark.API
             int uploaded = 0;
             int failed = 0;
             int versionNumber = 1;
+            string releaseId = null;
             var uploadTasks = new List<UniTask>();
             var uploadedFilesDict = new Dictionary<string, List<string>>();
+
+            // Reserve one immutable server version before requesting any
+            // signed URLs. The key lives only for this upload attempt; every
+            // per-file retry shares the same releaseId/version.
+            var priorReleaseId = preUploadedFiles?.FirstOrDefault(r => !string.IsNullOrEmpty(r?.releaseId))?.releaseId;
+            var prepareTcs = new UniTaskCompletionSource<(bool success, DreamParkAPI.APIResponse response)>();
+            if (!string.IsNullOrEmpty(priorReleaseId))
+            {
+                DreamParkAPI.GET($"/api/content/{contentId}/releases/{priorReleaseId}/status", AuthAPI.GetUserAuth(),
+                    (success, response) => prepareTcs.TrySetResult((success, response)));
+            }
+            else
+            {
+                var prepareBody = new JSONObject(JSONObject.Type.Object);
+                prepareBody.AddField("releaseNotes", releaseNotes ?? "");
+                prepareBody.AddField("idempotencyKey", $"unity-{contentId}-{Guid.NewGuid():N}");
+                DreamParkAPI.POST($"/api/content/{contentId}/releases/prepare", AuthAPI.GetUserAuth(), prepareBody,
+                    (success, response) => prepareTcs.TrySetResult((success, response)));
+            }
+            var prepared = await prepareTcs.Task;
+            if (!prepared.success || prepared.response == null || prepared.response.json == null)
+            {
+                callback?.Invoke(false, prepared.response ?? new DreamParkAPI.APIResponse(false, 0,
+                    "Could not prepare an immutable content release."));
+                return;
+            }
+            var releaseJson = prepared.response.json.GetField("release");
+            releaseId = releaseJson?.GetField("releaseId")?.stringValue;
+            versionNumber = releaseJson?.GetField("versionNumber")?.intValue ?? 0;
+            if (string.IsNullOrEmpty(releaseId) || versionNumber <= 0)
+            {
+                callback?.Invoke(false, new DreamParkAPI.APIResponse(false, 0,
+                    "Release prepare response was missing releaseId/versionNumber."));
+                return;
+            }
 
             // Track per-(platform, fileName) success so we can record the
             // full set of uploaded bundles into FailedBundleStore on a
@@ -1484,7 +1522,7 @@ namespace DreamPark.API
                     string platform = kvp.Key;
                     UploadContentData file = kvp.Value;
 
-                    uploadTasks.Add(GatedUpload(uploadGate, contentId, platform, file,
+                    uploadTasks.Add(GatedUpload(uploadGate, contentId, releaseId, platform, file,
                         uploadedFilesDict, thisRunSucceeded, thisRunFailed));
                 }
 
@@ -1536,6 +1574,7 @@ namespace DreamPark.API
                     var record = new global::DreamPark.FailedBundleRecord
                     {
                         contentId = contentId,
+                        releaseId = releaseId,
                         failedAtUtc = DateTime.UtcNow.ToString("o"),
                         totalFiles = totalFiles,
                     };
@@ -1601,6 +1640,7 @@ namespace DreamPark.API
 
             commitBody.AddField("uploadedFiles", uploadedFilesJson);
             commitBody.AddField("versionNumber", versionNumber);
+            commitBody.AddField("releaseId", releaseId);
             commitBody.AddField("releaseNotes", releaseNotes ?? "");
             if (inheritedBundles != null && inheritedBundles.Count > 0) {
                 JSONObject inheritedJson = new JSONObject(JSONObject.Type.Array);
@@ -1671,6 +1711,7 @@ namespace DreamPark.API
         private static async UniTask GatedUpload(
             SemaphoreSlim gate,
             string contentId,
+            string releaseId,
             string platform,
             UploadContentData file,
             Dictionary<string, List<string>> uploadedFilesDict,
@@ -1680,7 +1721,7 @@ namespace DreamPark.API
             await gate.WaitAsync();
             try
             {
-                var result = await HandleFileUpload(contentId, platform, file);
+                var result = await HandleFileUpload(contentId, releaseId, platform, file);
                 if (result.success)
                 {
                     lock (uploadedFilesDict)
@@ -1688,14 +1729,14 @@ namespace DreamPark.API
                         if (!uploadedFilesDict.ContainsKey(platform))
                             uploadedFilesDict[platform] = new List<string>();
                         uploadedFilesDict[platform].Add(result.uploadPath);
-                        thisRunSucceeded.Add(new UploadedFileRecord(platform, file.fileName, result.uploadPath));
+                        thisRunSucceeded.Add(new UploadedFileRecord(platform, file.fileName, result.uploadPath, releaseId));
                     }
                 }
                 else
                 {
                     lock (uploadedFilesDict)
                     {
-                        thisRunFailed.Add(new UploadedFileRecord(platform, file.fileName, null));
+                        thisRunFailed.Add(new UploadedFileRecord(platform, file.fileName, null, releaseId));
                     }
                 }
             }
@@ -1708,13 +1749,13 @@ namespace DreamPark.API
             }
         }
 
-        private static async UniTask<(bool success, string uploadPath)> HandleFileUpload(string contentId, string platform, UploadContentData file)
+        private static async UniTask<(bool success, string uploadPath)> HandleFileUpload(string contentId, string releaseId, string platform, UploadContentData file)
         {
             for (int attempt = 1; attempt <= MaxFileUploadAttempts; attempt++)
             {
                 try
                 {
-                    var (ok, path) = await TryUploadOnce(contentId, platform, file, attempt);
+                    var (ok, path) = await TryUploadOnce(contentId, releaseId, platform, file, attempt);
                     if (ok)
                     {
                         if (attempt > 1)
@@ -1750,13 +1791,14 @@ namespace DreamPark.API
         // One attempt at the two-step "request presigned URL → PUT to GCS"
         // dance. Returns (success, uploadPath) — uploadPath is the storage
         // key the backend records for commitUpload.
-        private static async UniTask<(bool success, string uploadPath)> TryUploadOnce(string contentId, string platform, UploadContentData file, int attempt)
+        private static async UniTask<(bool success, string uploadPath)> TryUploadOnce(string contentId, string releaseId, string platform, UploadContentData file, int attempt)
         {
             // Step 1: request presigned URL
             var body = new JSONObject();
             body.AddField("platform", platform);
             body.AddField("filename", file.fileName);
             body.AddField("contentType", file.mimeType);
+            body.AddField("releaseId", releaseId);
 
             var tcs = new UniTaskCompletionSource<(bool success, string url, string uploadPath)>();
             DreamParkAPI.POST($"/api/content/{contentId}/uploadUrl", AuthAPI.GetUserAuth(), body, (success, response) =>
@@ -2160,6 +2202,11 @@ namespace DreamPark.API
 
             Debug.Log($"[ContentAPI] GetAppContent - contentId: {contentId}, beta: {betaMode}, url: {url}");
             DreamParkAPI.GET(url, AuthAPI.GetAPIKey(), (success, response) => {
+                // 404 is ambiguous (banned / no platform / never existed). Presence
+                // is the only safe gate — never prune on this 404 alone.
+                if (!success && response != null && response.statusCode == 404) {
+                    _ = GhostContentPruner.ConsiderAfterFailedPackAsync(contentId);
+                }
                 callback?.Invoke(success, response);
             });
         }

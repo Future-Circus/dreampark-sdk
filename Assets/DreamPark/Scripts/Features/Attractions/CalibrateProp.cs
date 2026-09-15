@@ -12,6 +12,10 @@ namespace DreamPark
         /// Rematerialized floor prior (Auto-Calibration-Spec §5.3). Separate
         /// mask, not merged into arMeshLayer, so live mesh always wins.
         [NonSerialized] private LayerMask arMeshPriorLayer;
+        /// Third ranked source: live ARKit planes as colliders (non-LiDAR).
+        /// Kept SEPARATE from the two above rather than OR'd in — GroundProbe
+        /// ranks its masks, and merging them throws the ranking away.
+        [NonSerialized] private LayerMask arMeshEstimateLayer;
 
         // ── Search volume ────────────────────────────────────────────────
         // Same contract as CalibrateLevel: these are the MINIMUM reach, and
@@ -39,6 +43,9 @@ namespace DreamPark
             if (arMeshLayer == -1)
                 arMeshLayer = LayerMask.GetMask("ARMesh");
             arMeshPriorLayer = LayerMask.GetMask("ARMeshPrior");
+            // Plane-derived ground, non-LiDAR devices only. Resolves to 0 where
+            // the layer is undefined, which makes every probe skip it.
+            arMeshEstimateLayer = LayerMask.GetMask("ARMeshEstimate");
 
 #if DREAMPARKCORE
             if (pointData != null)
@@ -75,9 +82,11 @@ namespace DreamPark
             Bounds footprint = new Bounds(source, new Vector3(1f, 0.01f, 1f));
             GroundProbe.Span span = GroundProbe.MeasureSpan(
                 footprint, arMeshLayer, arMeshPriorLayer,
-                raycastHeight, Mathf.Max(0f, raycastLength - raycastHeight));
+                raycastHeight, Mathf.Max(0f, raycastLength - raycastHeight),
+                arMeshEstimateLayer);
 
-            if (GroundProbe.TryFindGround(source, span, arMeshLayer, arMeshPriorLayer, out RaycastHit hit))
+            if (GroundProbe.TryFindGround(source, span, arMeshLayer, arMeshPriorLayer,
+                                          arMeshEstimateLayer, out RaycastHit hit))
             {
                 float yOffset = hit.point.y - propTemplate.transform.position.y;
                 propTemplate.ApplyCalibrationYOffset(yOffset);

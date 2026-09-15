@@ -99,7 +99,32 @@ public class LevelTemplateEditor : Editor {
         [ShowIf("_isCustom")] public Vector2 customSize = new Vector2(10f, 10f);
         public Vector2 defaultAnchorPosition;
         public bool generateFloor = true;
+        [Tooltip("LEGACY. The rig's DepthMaskCeiling plane replaces per-attraction ceilings, " +
+                 "and DepthMaskCeiling.AllowTemplateCeilings gates this whatever it is set to.")]
         public bool generateCeiling = true;
+
+        /// <summary>
+        /// Extra metres of depth-mask ceiling on every side, beyond the attraction's own
+        /// footprint. The mask only helps where it covers, and authored content routinely
+        /// leans, swings or spills past the footprint it was sized against, so the ceiling
+        /// is deliberately larger than the attraction.
+        ///
+        /// A CONSTANT RATHER THAN A SERIALIZED FIELD, and that is the whole point. The path
+        /// it feeds is gated off by DepthMaskCeiling.AllowTemplateCeilings, so no author can
+        /// reach this number — but a public field is still written into every attraction
+        /// prefab the moment ContentProcessor re-saves one, which re-bundles the entire
+        /// catalog to carry a value nothing reads. Tune here if the legacy path is revived.
+        /// </summary>
+        private const float CeilingPadding = 3f;
+
+        /// <summary>
+        /// Height of the depth-mask ceiling above the attraction origin. LOWER IS STRONGER:
+        /// it lowers the distance at which real geometry stops occluding. Content height is
+        /// irrelevant — the mask edits the real-world depth map, not the content.
+        /// A constant for the same reason as CeilingPadding above.
+        /// </summary>
+        private const float CeilingHeight = 2.4f;
+
         [HideInInspector] public GameObject runtimePlane;
         [HideInInspector] public GameObject runtimeCeiling;
         [SerializeField, HideInInspector]
@@ -116,6 +141,45 @@ public class LevelTemplateEditor : Editor {
         [HideInInspector] public int gridY;
         [HideInInspector] public JSONObject floorData;
         public Material floorMaterial;
+
+        [Tooltip("This attraction needs a real wall behind its FORWARD edge (local +Z) — e.g. a portal window or a wall-mounted sign. Published with the attraction's dimensions so layout/AI tools can place it against a real wall.")]
+        public bool wallFront = false;
+        [Tooltip("...its BACK edge (local -Z).")]
+        public bool wallBack = false;
+        [Tooltip("...its RIGHT edge (local +X).")]
+        public bool wallRight = false;
+        [Tooltip("...its LEFT edge (local -X).")]
+        public bool wallLeft = false;
+        [Tooltip("Draw the required wall(s) as a gizmo plane, 10ft tall by default and taller if this attraction's own content reaches higher.")]
+        public bool showWallGizmos = true;
+
+        /// <summary>
+        /// Wire format for the dimensions upload's "walls" field: comma-joined
+        /// axis tokens in this attraction's own local frame ("+z,-x"), empty
+        /// when no side is toggled. Any combination is valid — two adjacent
+        /// sides describe a corner, two opposite sides describe a through-wall
+        /// (e.g. a portal). Kept here rather than in the uploader so the token
+        /// spelling has exactly one source.
+        ///
+        /// Always read and uploaded — never omitted from the row — because the
+        /// backend treats an ABSENT "walls" field as "don't touch the stored
+        /// value" and "" as the explicit clear. Untoggling every side has to
+        /// still publish "" or the old value would stick forever.
+        /// </summary>
+        public string WallsWireValue
+        {
+            get
+            {
+                var sides = new List<string>(4);
+                if (wallFront) sides.Add("+z");
+                if (wallBack) sides.Add("-z");
+                if (wallRight) sides.Add("+x");
+                if (wallLeft) sides.Add("-x");
+                return string.Join(",", sides);
+            }
+        }
+
+        private bool HasAnyWall => wallFront || wallBack || wallRight || wallLeft;
         #if UNITY_EDITOR
         public void OnValidate()
         {
@@ -128,7 +192,9 @@ public class LevelTemplateEditor : Editor {
         void Start()
         {
             if (generateFloor) GenerateFloorWithHoles();
-            if (generateCeiling) GenerateDepthCeiling();
+            // The unified overhead plane on the rig replaces this. Off unless the legacy
+            // master switch is deliberately flipped — see DepthMaskCeiling.
+            if (generateCeiling && DepthMaskCeiling.AllowTemplateCeilings) GenerateDepthCeiling();
             SetFloorVisibilityForMode(isBuildMode);
             NotifyLevelTemplateChanged();
         }
@@ -145,53 +211,41 @@ public class LevelTemplateEditor : Editor {
             NotifyLevelTemplateChanged();
         } 
 
+        /// <summary>
+        /// Rebuild the attraction's depth-mask ceiling. Public so a tool or a script that
+        /// resizes or re-fills an attraction at runtime can re-fit the mask to it.
+        /// </summary>
+        public void RegenerateCeiling() {
+            if (generateCeiling && DepthMaskCeiling.AllowTemplateCeilings) GenerateDepthCeiling();
+        }
+
+        /// <summary>
+        /// The horizontal quad handed to Meta's environment-depth mask, which switches
+        /// OFF depth occlusion over the attraction so its content is not eaten by the
+        /// depth of the real room behind it. See DepthCeiling for what the object is.
+        ///
+        /// Sized to the attraction footprint PLUS CeilingPadding on every side, because
+        /// the mask only does anything where it actually covers and authored content
+        /// routinely leans or spills past the footprint it was sized against.
+        ///
+        /// LEGACY PATH. The single head-anchored plane on the rig replaces this; see
+        /// DepthMaskCeiling for why a patchwork of small ceilings is the wrong shape for
+        /// the flicker this trick exists to kill. Runs only when that plane is absent.
+        /// </summary>
         private void GenerateDepthCeiling() {
+            // Feeds a runtime manager, and Destroy() is illegal in edit mode — the public
+            // RegenerateCeiling entry point makes that reachable from tooling.
+            if (!Application.isPlaying) return;
+
             if (runtimeCeiling != null) Destroy(runtimeCeiling);
+            runtimeCeiling = null;
 
             Vector2 dims = _isCustom ? GameLevelDimensions.GetDimensionsInMeters(new Vector2(customSize.x, customSize.y)) : GameLevelDimensions.GetDimensionsInMeters(size);
-            float width = dims.x;
-            float height = dims.y;
+            float pad = Mathf.Max(0f, CeilingPadding);
+            float width = dims.x + pad * 2f;
+            float height = dims.y + pad * 2f;
 
-            runtimeCeiling = new GameObject("LevelCeiling");
-            runtimeCeiling.transform.localPosition = new Vector3(0, 2.4f, 0);
-            runtimeCeiling.layer = LayerMask.NameToLayer("Triggers");
-            runtimeCeiling.transform.SetParent(transform, false);
-            runtimeCeiling.AddComponent<OptimizedAFIgnore>();
-
-            MeshFilter mf = runtimeCeiling.AddComponent<MeshFilter>();
-            runtimeCeiling.AddComponent<MeshRenderer>().enabled = false;
-
-            Mesh mesh = new Mesh();
-
-            Vector3[] vertices = new Vector3[4] {
-                new Vector3(-width/2f, 0, -height/2f),
-                new Vector3(-width/2f, 0,  height/2f),
-                new Vector3( width/2f, 0,  height/2f),
-                new Vector3( width/2f, 0, -height/2f)
-            };
-
-            // Flip normals by reversing the winding order
-            int[] triangles = new int[6] {
-                0, 2, 1,
-                0, 3, 2
-            };
-
-            Vector2[] uv = new Vector2[4] {
-                new Vector2(0,0),
-                new Vector2(0,1),
-                new Vector2(1,1),
-                new Vector2(1,0)
-            };
-
-            mesh.vertices = vertices;
-            mesh.triangles = triangles;
-            mesh.uv = uv;
-            mesh.RecalculateNormals();
-
-            mf.sharedMesh = mesh;
-            var depthMask = runtimeCeiling.AddComponent<DepthMask>();
-            depthMask.myMeshFilters.Add(mf);
-            depthMask._someOffsetFloatValue = 0.6f;
+            runtimeCeiling = DepthCeiling.Create(transform, "LevelCeiling", width, height, new Vector3(0f, CeilingHeight, 0f));
         }
 
         /// <summary>
@@ -266,6 +320,20 @@ public class LevelTemplateEditor : Editor {
     MeshCollider mc = runtimePlane.AddComponent<MeshCollider>();
     MeshRenderer mr = runtimePlane.AddComponent<MeshRenderer>();
     mr.material = floorMaterial ? floorMaterial : Resources.Load<Material>("Materials/Occlusion");
+    // && DREAMPARKCORE added porting this from dreampark-core (Grid,
+    // feat/grid-portal-yaw @ 2e1e940e): PlaceHasScanForFloorHiding() below
+    // calls DreamPark.EnvironmentDust.EnvironmentDustManager, which lives
+    // under core's Assets/Scripts/ (not Assets/DreamPark/) and does not
+    // exist in this SDK repo. Core's own commit used bare UNITY_IOS, which
+    // compiles fine there but would fail here — same reason isBuildMode's
+    // NativeInterfaceManager reference below is UNITY_IOS && DREAMPARKCORE
+    // instead of UNITY_IOS alone. Do not drop DREAMPARKCORE re-syncing this.
+#if UNITY_IOS && DREAMPARKCORE
+    if (PlaceHasScanForFloorHiding()) {
+        mr.enabled = false;
+        Debug.Log("[LevelTemplate] Place has a scan — attraction floor renderer hidden so the scan renders (collider kept)");
+    }
+#endif
 
     // Grid setup (same logic as before)
     gridWidth  = width;
@@ -726,6 +794,44 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
             }
         }
 
+#if UNITY_IOS && DREAMPARKCORE
+    /// && DREAMPARKCORE: EnvironmentDustManager below lives under core's
+    /// Assets/Scripts/ (not Assets/DreamPark/) and does not exist in this SDK
+    /// repo — see isBuildMode's NativeInterfaceManager reference above for
+    /// the same pattern. Core's own commit (feat/grid-portal-yaw @ 2e1e940e)
+    /// used bare UNITY_IOS; do not drop DREAMPARKCORE re-syncing this.
+    ///
+    /// THE SCAN OWNS THE FLOOR ON MOBILE (Aidan, Sep 1 2026: "if the place has
+    /// a scan I'd like the generated floor and gap filler to have the invisible
+    /// material instead of the occluder").
+    ///
+    /// The occluder writes depth so real-world geometry hides content behind
+    /// it. With no scan that is the whole point — it is the only floor there
+    /// is. With a scan it competes with the mesh the operator walked, and the
+    /// scan is the better answer: it is measured, the generated plane is
+    /// inferred.
+    ///
+    /// DISABLING THE RENDERER, not swapping the material, and deliberately:
+    /// `Materials/InvisibleOccluder` sits next to `Materials/Occlusion` in the
+    /// same Resources folder and uses the IDENTICAL shader guid — swapping to
+    /// it changes nothing while looking like the fix. The one genuinely
+    /// different material (`DreamPark/Materials/Invisible.mat`) is not under a
+    /// Resources folder, so Resources.Load returns null and the floor falls
+    /// back to Unity's default: magenta over the scan. A disabled renderer is
+    /// what "invisible" means, cannot fail to load, and leaves the collider —
+    /// so placement raycasts and physics are untouched.
+    ///
+    /// MESH **OR** DUST. Zero of 32 stored environments carry a mesh today
+    /// (Web, measured), so a mesh-only test would never fire on any real park.
+    private static bool PlaceHasScanForFloorHiding()
+    {
+        var mesh = DreamPark.EnvironmentDust.EnvironmentDustManager.ActiveMeshStore;
+        if (mesh != null && mesh.HasMesh) return true;
+        var dust = DreamPark.EnvironmentDust.EnvironmentDustManager.ActiveGrid;
+        return dust != null && dust.Count > 0;
+    }
+#endif
+
     #if UNITY_EDITOR
         public void OnDrawGizmos()
         {
@@ -817,8 +923,57 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
             unlitMat.SetPass(0);
             Gizmos.DrawMesh(humanMesh, bodyPosition);
             Graphics.DrawMeshNow(quadMesh, matrix);
+
+            // Gated on HasAnyWall (not just showWallGizmos) so the
+            // GetComponentsInChildren<Collider> walk inside
+            // GetWallHeightMeters only runs for attractions that actually
+            // declare a wall — the common no-wall case costs one bool check,
+            // not the per-frame tax PropTemplate's own footprint gizmo was
+            // moved off OnDrawGizmos for.
+            if (showWallGizmos && HasAnyWall)
+            {
+                DrawWallGizmos(dimensions);
+            }
+
             Gizmos.matrix = oldMatrix;
         }
+
+        private static readonly Color WallGizmoColor = new Color(0.1f, 0.6f, 1f, 1f);
+        private static readonly Color WallGizmoFill = new Color(0.1f, 0.6f, 1f, 0.15f);
+
+        // Called with Gizmos.matrix already set to transform.localToWorldMatrix
+        // by the caller (OnDrawGizmos) — dimensions is local X = width, Y =
+        // length in meters, the same frame the floor rectangle above is drawn
+        // in.
+        private void DrawWallGizmos(Vector2 dimensions)
+        {
+            float height = GetWallHeightMeters();
+
+            DrawWallIfSet(wallFront, new Vector3(0f, height * 0.5f, dimensions.y * 0.5f), new Vector3(dimensions.x, height, 0.05f));
+            DrawWallIfSet(wallBack, new Vector3(0f, height * 0.5f, -dimensions.y * 0.5f), new Vector3(dimensions.x, height, 0.05f));
+            DrawWallIfSet(wallRight, new Vector3(dimensions.x * 0.5f, height * 0.5f, 0f), new Vector3(0.05f, height, dimensions.y));
+            DrawWallIfSet(wallLeft, new Vector3(-dimensions.x * 0.5f, height * 0.5f, 0f), new Vector3(0.05f, height, dimensions.y));
+        }
+
+        private static void DrawWallIfSet(bool set, Vector3 center, Vector3 size)
+        {
+            if (!set) return;
+            Gizmos.color = WallGizmoFill;
+            Gizmos.DrawCube(center, size);
+            Gizmos.color = WallGizmoColor;
+            Gizmos.DrawWireCube(center, size);
+        }
+
+        /// <summary>
+        /// The wall height this attraction needs, in meters: the 10 ft
+        /// default, or taller if the attraction's own content reaches higher
+        /// (e.g. a tall portal frame) — never shorter. See
+        /// WallHeightMeasurement for why this is collider-shape based rather
+        /// than Renderer.bounds, which is also what makes it safe for the
+        /// Content Uploader to call on a disk-loaded prefab asset (it does
+        /// not, today, but could).
+        /// </summary>
+        public float GetWallHeightMeters() => WallHeightMeasurement.GetWallHeightMeters(transform, transform.position.y);
     #endif
     }
 }

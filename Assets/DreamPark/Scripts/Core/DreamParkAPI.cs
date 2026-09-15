@@ -21,6 +21,10 @@ namespace DreamPark.API
             public long statusCode;
             public string rawText;
             public string error;
+            /// The response's ETag header verbatim (quoted, per RFC 7232),
+            /// null when the server sent none. Opaque — store it, offer it
+            /// back via GET's ifNoneMatch, never inspect it.
+            public string etag;
 
                 public APIResponse(bool success, long code, string error, string rawText = "", byte[] data = null)
                 {
@@ -101,19 +105,27 @@ namespace DreamPark.API
         {
             var url = endpoint.StartsWith("http") ? endpoint : baseUrl + endpoint;
             #if UNITY_EDITOR
-            EditorCoroutineUtility.StartCoroutineOwnerless(PutRequest(url, data, contentType, progressCallback, callback));
+            EditorCoroutineUtility.StartCoroutineOwnerless(PutRequest(url, authToken, data, contentType, progressCallback, callback));
             #else
-            CoroutineRunner.Run(PutRequest(url, data, contentType, progressCallback, callback));
+            CoroutineRunner.Run(PutRequest(url, authToken, data, contentType, progressCallback, callback));
             #endif
         }
 
         public static void GET(string endpoint, string authToken, Action<bool, APIResponse> callback)
         {
+            GET(endpoint, authToken, null, callback);
+        }
+
+        /// `ifNoneMatch` — a previously stored ETag, offered back verbatim.
+        /// A 304 comes back as success with an empty body and statusCode 304:
+        /// the caller keeps whatever it cached.
+        public static void GET(string endpoint, string authToken, string ifNoneMatch, Action<bool, APIResponse> callback)
+        {
             var url = baseUrl + endpoint;
             #if UNITY_EDITOR
-            EditorCoroutineUtility.StartCoroutineOwnerless(GetRequest(url, authToken, callback));
+            EditorCoroutineUtility.StartCoroutineOwnerless(GetRequest(url, authToken, ifNoneMatch, callback));
             #else
-            CoroutineRunner.Run(GetRequest(url, authToken, callback));
+            CoroutineRunner.Run(GetRequest(url, authToken, ifNoneMatch, callback));
             #endif
         }
         // UnityWebRequest's default timeout is 0 — WAIT FOREVER. A server
@@ -144,7 +156,7 @@ namespace DreamPark.API
             }
         }
 
-        private static IEnumerator GetRequest(string url, string authToken, Action<bool, APIResponse> callback)
+        private static IEnumerator GetRequest(string url, string authToken, string ifNoneMatch, Action<bool, APIResponse> callback)
         {
             using (UnityWebRequest req = new UnityWebRequest(url, UnityWebRequest.kHttpVerbGET))
             {
@@ -152,6 +164,8 @@ namespace DreamPark.API
                 req.timeout = RequestTimeoutSeconds;
                 if (!string.IsNullOrEmpty(authToken))
                     req.SetRequestHeader("Authorization", authToken);
+                if (!string.IsNullOrEmpty(ifNoneMatch))
+                    req.SetRequestHeader("If-None-Match", ifNoneMatch);
 
                 yield return req.SendWebRequest();
 
@@ -189,7 +203,7 @@ namespace DreamPark.API
             }
         }
 
-        private static IEnumerator PutRequest(string url, byte[] data, string contentType, Action<float> progressCallback, Action<bool, string> callback)
+        private static IEnumerator PutRequest(string url, string authToken, byte[] data, string contentType, Action<float> progressCallback, Action<bool, string> callback)
         {
             using (UnityWebRequest req = new UnityWebRequest(url, "PUT"))
             {
@@ -197,6 +211,12 @@ namespace DreamPark.API
                 req.downloadHandler = new DownloadHandlerBuffer();
                 req.timeout = UploadTimeoutSeconds;
                 req.SetRequestHeader("Content-Type", contentType);
+                // Only when a token is actually supplied: every presigned-URL
+                // caller (screenshots, content bundles) passes "" — a GCS
+                // signed URL REJECTS a request that also carries Authorization,
+                // so this must never send an empty or unasked-for header.
+                if (!string.IsNullOrEmpty(authToken))
+                    req.SetRequestHeader("Authorization", authToken);
 
                 var op = req.SendWebRequest();
                 while (!op.isDone)
@@ -234,13 +254,15 @@ namespace DreamPark.API
             }
             byte[] data = req.downloadHandler != null ? req.downloadHandler.data : null;
 
-            return new APIResponse(
+            var response = new APIResponse(
                 success,
                 req.responseCode,
                 success ? null : req.error,
                 rawText,
                 data
             );
+            response.etag = req.GetResponseHeader("ETag");
+            return response;
         }
     }
 }

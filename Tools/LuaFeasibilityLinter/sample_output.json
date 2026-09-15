@@ -1,0 +1,4366 @@
+[
+  {
+    "path": "Assets/DreamPark/Scripts/Compatibility/Meta/PassthroughCameraRouter.cs",
+    "class": "PassthroughCameraRouter",
+    "base": "MonoBehaviour",
+    "classification": "CLEAN_WARN",
+    "loc": 35,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Renderer targetRenderer \u2192 componentInjections",
+        "line": 6
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string texturePropertyName \u2192 stringInjections",
+        "line": 7
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "PassthroughCameraAccess cameraAccess \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 8
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Debug",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Core/AnimationExtensions.cs",
+    "class": "AnimationExtensions",
+    "base": "",
+    "classification": "KEEP_CSHARP",
+    "loc": 59,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "No base type (static/utility class) \u2014 nothing to host on a LuaBehaviour",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Core/AuthAPI.cs",
+    "class": "AuthAPI",
+    "base": "MonoBehaviour",
+    "classification": "KEEP_CSHARP",
+    "loc": 343,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "core-conditional",
+        "detail": "Contains #if DREAMPARKCORE \u2014 SDK-synced core file, not creator content",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Debug",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "static-state",
+        "detail": "Static fields \u2014 Lua scripts share one global env; emulate via a registered global table, beware name collisions",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Core/CollideAudio.cs",
+    "class": "CollideAudio",
+    "base": "MonoBehaviour",
+    "classification": "CLEAN",
+    "loc": 27,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "AudioClip audioClip \u2192 audioClipInjections",
+        "line": 7
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Mathf, Random",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Core/ContentAPI.cs",
+    "class": "UploadedFileRecord",
+    "base": "",
+    "classification": "KEEP_CSHARP",
+    "loc": 2186,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "No base type (static/utility class) \u2014 nothing to host on a LuaBehaviour",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Core/DreamParkAPI.cs",
+    "class": "DreamParkAPI",
+    "base": "",
+    "classification": "KEEP_CSHARP",
+    "loc": 247,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "No base type (static/utility class) \u2014 nothing to host on a LuaBehaviour",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Core/FailedBundleStore.cs",
+    "class": "FailedBundleStore",
+    "base": "",
+    "classification": "KEEP_CSHARP",
+    "loc": 221,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "No base type (static/utility class) \u2014 nothing to host on a LuaBehaviour",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Core/GameStorageAPI.cs",
+    "class": "GameStorageAPI",
+    "base": "",
+    "classification": "KEEP_CSHARP",
+    "loc": 870,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "No base type (static/utility class) \u2014 nothing to host on a LuaBehaviour",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Core/OptimizedAF/FPSDisplay.cs",
+    "class": "FPSDisplay",
+    "base": "MonoBehaviour",
+    "classification": "CLEAN_WARN",
+    "loc": 35,
+    "findings": [
+      {
+        "severity": "WARN",
+        "rule": "aot-ungenerated",
+        "detail": "Types used but NOT in DreamParkLuaConfig.LuaCallCSharp: Camera \u2014 works in Editor (reflection), risks AOT stripping on Quest/iOS. Add to config + XLua \u25b8 Generate Code.",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Time",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Core/OptimizedAF/LevelObjectManager.cs",
+    "class": "LevelObjectManager",
+    "base": "MonoBehaviour",
+    "classification": "KEEP_CSHARP",
+    "loc": 556,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "core-conditional",
+        "detail": "Contains #if DREAMPARKCORE \u2014 SDK-synced core file, not creator content",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "GameObject gameObject \u2192 injections (GameObject)",
+        "line": 11
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "ColliderSettings[] colliders \u2014 only GameObject[] lists are injectable",
+        "line": 12
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "RigidbodySettings[] rigidbodies \u2014 only GameObject[] lists are injectable",
+        "line": 13
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "ComponentSettings[] components \u2014 only GameObject[] lists are injectable",
+        "line": 14
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "Animator[] animators \u2014 only GameObject[] lists are injectable",
+        "line": 15
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "RendererSettings[] renderers \u2014 only GameObject[] lists are injectable",
+        "line": 16
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "ParticleSystemSettings[] particleSystems \u2014 only GameObject[] lists are injectable",
+        "line": 17
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool isRendererDisabled \u2192 boolInjections",
+        "line": 18
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool enabled \u2192 boolInjections",
+        "line": 19
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string name \u2192 stringInjections",
+        "line": 20
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string tag \u2192 stringInjections",
+        "line": 21
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "int layer \u2192 intInjections",
+        "line": 22
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool isPriority \u2192 boolInjections",
+        "line": 23
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool ignoreOptimization \u2192 boolInjections",
+        "line": 24
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Rigidbody rigidbody \u2192 componentInjections",
+        "line": 69
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "Joint joint \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 70
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool isKinematic \u2192 boolInjections",
+        "line": 71
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool detectCollisions \u2192 boolInjections",
+        "line": 72
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool useGravity \u2192 boolInjections",
+        "line": 73
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Vector3 linearVelocity \u2192 vector3Injections",
+        "line": 74
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Vector3 angularVelocity \u2192 vector3Injections",
+        "line": 75
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Collider collider \u2192 componentInjections",
+        "line": 140
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool enabled \u2192 boolInjections",
+        "line": 141
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "ParticleSystem particleSystem \u2192 componentInjections",
+        "line": 158
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool enabled \u2192 boolInjections",
+        "line": 159
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Component component \u2192 componentInjections",
+        "line": 181
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool enabled \u2192 boolInjections",
+        "line": 182
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Renderer renderer \u2192 componentInjections",
+        "line": 220
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool enabled \u2192 boolInjections",
+        "line": 225
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool enableOptimizedMaterial \u2192 boolInjections",
+        "line": 226
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool gatherChildren \u2192 boolInjections",
+        "line": 465
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "List<LevelObject> levelObjects \u2014 only GameObject[] lists are injectable",
+        "line": 466
+      },
+      {
+        "severity": "WARN",
+        "rule": "aot-ungenerated",
+        "detail": "Types used but NOT in DreamParkLuaConfig.LuaCallCSharp: LayerMask \u2014 works in Editor (reflection), risks AOT stripping on Quest/iOS. Add to config + XLua \u25b8 Generate Code.",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Mathf",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "static-state",
+        "detail": "Static fields \u2014 Lua scripts share one global env; emulate via a registered global table, beware name collisions",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Core/OptimizedAF/OptimizationSettings.cs",
+    "class": "OptimizationSettings",
+    "base": "ScriptableObject",
+    "classification": "KEEP_CSHARP",
+    "loc": 22,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "scriptable-object",
+        "detail": "ScriptableObject \u2014 no Lua equivalent; keep as C# data",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Core/OptimizedAF/OptimizedAF.cs",
+    "class": "OptimizedAF",
+    "base": "MonoBehaviour",
+    "classification": "KEEP_CSHARP",
+    "loc": 130,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "core-conditional",
+        "detail": "Contains #if DREAMPARKCORE \u2014 SDK-synced core file, not creator content",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "editor-only-message",
+        "detail": "OnDrawGizmos() is editor-only \u2014 dropped in translation",
+        "line": 109
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "OptimizationSettings settings \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 10
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool showFPS \u2192 boolInjections",
+        "line": 11
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool showGizmos \u2192 boolInjections",
+        "line": 12
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool disable \u2192 boolInjections",
+        "line": 13
+      },
+      {
+        "severity": "WARN",
+        "rule": "aot-ungenerated",
+        "detail": "Types used but NOT in DreamParkLuaConfig.LuaCallCSharp: Camera \u2014 works in Editor (reflection), risks AOT stripping on Quest/iOS. Add to config + XLua \u25b8 Generate Code.",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Application, Debug",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Core/OptimizedAF/OptimizedAFIgnore.cs",
+    "class": "OptimizedAFIgnore",
+    "base": "MonoBehaviour",
+    "classification": "CLEAN",
+    "loc": 10,
+    "findings": []
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Core/ProfileAPI.cs",
+    "class": "ProfileItem",
+    "base": "",
+    "classification": "KEEP_CSHARP",
+    "loc": 1135,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "No base type (static/utility class) \u2014 nothing to host on a LuaBehaviour",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Core/Reset.cs",
+    "class": "Reset",
+    "base": "MonoBehaviour",
+    "classification": "NEEDS_RUNTIME",
+    "loc": 27,
+    "findings": [
+      {
+        "severity": "RUNTIME",
+        "rule": "unsupported-message",
+        "detail": "OnApplicationQuit() has no Lua relay \u2014 needs a new relay class + delegate sig in DreamParkLuaConfig",
+        "line": 19
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Application",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Core/SDKAPI.cs",
+    "class": "SDKAPI",
+    "base": "",
+    "classification": "KEEP_CSHARP",
+    "loc": 99,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "No base type (static/utility class) \u2014 nothing to host on a LuaBehaviour",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Core/SDKVersion.cs",
+    "class": "SDKVersion",
+    "base": "",
+    "classification": "KEEP_CSHARP",
+    "loc": 90,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "No base type (static/utility class) \u2014 nothing to host on a LuaBehaviour",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Attractions/AttractionTemplate.cs",
+    "class": "AttractionTemplate",
+    "base": "LevelTemplate",
+    "classification": "KEEP_CSHARP",
+    "loc": 10,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "sdk-base-class",
+        "detail": "Inherits SDK type 'LevelTemplate' \u2014 SDK component, not creator gameplay code",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Attractions/CalibrateLevel.cs",
+    "class": "CalibrateLevel",
+    "base": "MonoBehaviour",
+    "classification": "KEEP_CSHARP",
+    "loc": 450,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "core-conditional",
+        "detail": "Contains #if DREAMPARKCORE \u2014 SDK-synced core file, not creator content",
+        "line": 0
+      },
+      {
+        "severity": "WARN",
+        "rule": "unknown-on-method",
+        "detail": "OnMeshesChanged() \u2014 if this is a Unity message it has no relay; if a plain method, ignore",
+        "line": 434
+      },
+      {
+        "severity": "WARN",
+        "rule": "event-subscription",
+        "detail": "Subscribes to event 'meshesChanged' \u2014 Lua can only receive Action/Action<bool|string|Collider|Collision>; other signatures need CSharpCallLua additions",
+        "line": 425
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "ARMeshManager arMeshManager \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 12
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float updateInterval \u2192 floatInjections",
+        "line": 15
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float surfaceFollowSpeed \u2192 floatInjections",
+        "line": 16
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "LayerMask arMeshLayer \u2014 no injection slot for LayerMask; add an injection type or encode as floats/string",
+        "line": 17
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool calibrated \u2192 boolInjections",
+        "line": 24
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool EditorOverride \u2192 boolInjections",
+        "line": 25
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "LevelTemplate levelTemplate \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 27
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "JSONObject floorData \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 28
+      },
+      {
+        "severity": "WARN",
+        "rule": "aot-ungenerated",
+        "detail": "Types used but NOT in DreamParkLuaConfig.LuaCallCSharp: Camera, LayerMask, MeshCollider, MeshFilter \u2014 works in Editor (reflection), risks AOT stripping on Quest/iOS. Add to config + XLua \u25b8 Generate Code.",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Application, Debug, Mathf, Physics, Time",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "require-component",
+        "detail": "[RequireComponent] \u2014 LuaBehaviour won't auto-add; converter must add components to the prefab explicitly",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Attractions/CalibrateProp.cs",
+    "class": "CalibrateProp",
+    "base": "MonoBehaviour",
+    "classification": "KEEP_CSHARP",
+    "loc": 106,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "core-conditional",
+        "detail": "Contains #if DREAMPARKCORE \u2014 SDK-synced core file, not creator content",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float updateInterval \u2192 floatInjections",
+        "line": 10
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "LayerMask arMeshLayer \u2014 no injection slot for LayerMask; add an injection type or encode as floats/string",
+        "line": 11
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float raycastHeight \u2192 floatInjections",
+        "line": 12
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float raycastLength \u2192 floatInjections",
+        "line": 13
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "PropTemplate propTemplate \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 16
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "JSONObject pointData \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 17
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool calibrated \u2192 boolInjections",
+        "line": 18
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool EditorOverride \u2192 boolInjections",
+        "line": 19
+      },
+      {
+        "severity": "WARN",
+        "rule": "aot-ungenerated",
+        "detail": "Types used but NOT in DreamParkLuaConfig.LuaCallCSharp: LayerMask \u2014 works in Editor (reflection), risks AOT stripping on Quest/iOS. Add to config + XLua \u25b8 Generate Code.",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Mathf, Physics, Time",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Attractions/FloorAnchor.cs",
+    "class": "FloorAnchor",
+    "base": "MonoBehaviour",
+    "classification": "KEEP_CSHARP",
+    "loc": 920,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "execute-in-editmode",
+        "detail": "ExecuteInEditMode/ExecuteAlways \u2014 LuaBehaviour only runs in play mode",
+        "line": 65
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "core-conditional",
+        "detail": "Contains #if DREAMPARKCORE \u2014 SDK-synced core file, not creator content",
+        "line": 0
+      },
+      {
+        "severity": "WARN",
+        "rule": "unknown-on-method",
+        "detail": "OnCalibrationChanged() \u2014 if this is a Unity message it has no relay; if a plain method, ignore",
+        "line": 257
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "coroutine",
+        "detail": "Coroutines \u2014 no Lua coroutine bridge wired up; rewrite as update() state machine or add util.cs_generator bridge",
+        "line": 245
+      },
+      {
+        "severity": "WARN",
+        "rule": "event-subscription",
+        "detail": "Subscribes to event 'OnAnyLevelTemplateChanged' \u2014 Lua can only receive Action/Action<bool|string|Collider|Collision>; other signatures need CSharpCallLua additions",
+        "line": 249
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "MeshFilter floorMeshFilter \u2192 componentInjections",
+        "line": 69
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Transform floorTransform \u2192 transformInjections",
+        "line": 70
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "CalibrateLevel calibrator \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 71
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Vector3 localOffset \u2192 vector3Injections",
+        "line": 74
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool autoFindFloor \u2192 boolInjections",
+        "line": 75
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool matchGrade \u2192 boolInjections",
+        "line": 76
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool debugDrawBounds \u2192 boolInjections",
+        "line": 79
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool debugLogValues \u2192 boolInjections",
+        "line": 80
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float fixedHeightOffset \u2192 floatInjections",
+        "line": 81
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool useFixedHeight \u2192 boolInjections",
+        "line": 82
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string excludeLayerName \u2192 stringInjections",
+        "line": 85
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool includeInactiveRenderers \u2192 boolInjections",
+        "line": 86
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float maxHeightDeviation \u2192 floatInjections",
+        "line": 90
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float maxVertexDistance \u2192 floatInjections",
+        "line": 92
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool debugOutlierFiltering \u2192 boolInjections",
+        "line": 94
+      },
+      {
+        "severity": "WARN",
+        "rule": "aot-ungenerated",
+        "detail": "Types used but NOT in DreamParkLuaConfig.LuaCallCSharp: MeshFilter \u2014 works in Editor (reflection), risks AOT stripping on Quest/iOS. Add to config + XLua \u25b8 Generate Code.",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Debug, Mathf, Time",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Attractions/FloorCutout.cs",
+    "class": "FloorCutout",
+    "base": "MonoBehaviour",
+    "classification": "NEEDS_RUNTIME",
+    "loc": 108,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "List<Vector3> points \u2014 only GameObject[] lists are injectable",
+        "line": 99
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Transform ogPosition \u2192 transformInjections",
+        "line": 100
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Attractions/GameArea.cs",
+    "class": "GameArea",
+    "base": "MonoBehaviour",
+    "classification": "CLEAN_WARN",
+    "loc": 357,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string gameId \u2192 stringInjections",
+        "line": 38
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string resourceName \u2192 stringInjections",
+        "line": 39
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "int priority \u2192 intInjections",
+        "line": 41
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool isPlaying \u2192 boolInjections",
+        "line": 42
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float padding \u2192 floatInjections",
+        "line": 47
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool showPaddingGizmo \u2192 boolInjections",
+        "line": 51
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Vector3 halfExtents \u2192 vector3Injections",
+        "line": 57
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Vector3 unpaddedHalfExtents \u2192 vector3Injections",
+        "line": 64
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Color zoneColor \u2192 colorInjections",
+        "line": 69
+      },
+      {
+        "severity": "WARN",
+        "rule": "aot-ungenerated",
+        "detail": "Types used but NOT in DreamParkLuaConfig.LuaCallCSharp: Camera \u2014 works in Editor (reflection), risks AOT stripping on Quest/iOS. Add to config + XLua \u25b8 Generate Code.",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Debug, Mathf",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "static-state",
+        "detail": "Static fields \u2014 Lua scripts share one global env; emulate via a registered global table, beware name collisions",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Attractions/GapFiller.cs",
+    "class": "GapFiller",
+    "base": "MonoBehaviour",
+    "classification": "KEEP_CSHARP",
+    "loc": 1385,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "threading",
+        "detail": "Threading \u2014 Lua env is single-threaded main-thread only",
+        "line": 483
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "core-conditional",
+        "detail": "Contains #if DREAMPARKCORE \u2014 SDK-synced core file, not creator content",
+        "line": 0
+      },
+      {
+        "severity": "WARN",
+        "rule": "unknown-on-method",
+        "detail": "OnLevelTemplateChanged() \u2014 if this is a Unity message it has no relay; if a plain method, ignore",
+        "line": 182
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "coroutine",
+        "detail": "Coroutines \u2014 no Lua coroutine bridge wired up; rewrite as update() state machine or add util.cs_generator bridge",
+        "line": 463
+      },
+      {
+        "severity": "WARN",
+        "rule": "event-subscription",
+        "detail": "Subscribes to event 'OnAnyLevelTemplateChanged' \u2014 Lua can only receive Action/Action<bool|string|Collider|Collision>; other signatures need CSharpCallLua additions",
+        "line": 111
+      },
+      {
+        "severity": "WARN",
+        "rule": "event-subscription",
+        "detail": "Subscribes to event 'OnAnyPropTemplateChanged' \u2014 Lua can only receive Action/Action<bool|string|Collider|Collision>; other signatures need CSharpCallLua additions",
+        "line": 112
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float verticesPerMeter \u2192 floatInjections",
+        "line": 67
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float boundsPadding \u2192 floatInjections",
+        "line": 70
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float edgeBlendDistance \u2192 floatInjections",
+        "line": 73
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Material floorMaterial \u2192 materialInjections",
+        "line": 76
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool autoRegenerate \u2192 boolInjections",
+        "line": 80
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float regenerateDelay \u2192 floatInjections",
+        "line": 83
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool debugLog \u2192 boolInjections",
+        "line": 86
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool showGizmos \u2192 boolInjections",
+        "line": 87
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "GameObject runtimeFloor \u2192 injections (GameObject)",
+        "line": 204
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string sourceName \u2192 stringInjections",
+        "line": 205
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "FloorHeightSampler heightSampler \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 211
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "Vector2[] worldFootprint \u2014 only GameObject[] lists are injectable",
+        "line": 212
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "List<Vector2[]> holePolygons \u2014 only GameObject[] lists are injectable",
+        "line": 213
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "float[] cornerHeights \u2014 only GameObject[] lists are injectable",
+        "line": 214
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "Vector2 center \u2014 no injection slot for Vector2; add an injection type or encode as floats/string",
+        "line": 215
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool cutsHole \u2192 boolInjections",
+        "line": 216
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "Vector3[] vertices \u2014 only GameObject[] lists are injectable",
+        "line": 829
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "Vector2[] uv \u2014 only GameObject[] lists are injectable",
+        "line": 830
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "int[] triangles \u2014 only GameObject[] lists are injectable",
+        "line": 831
+      },
+      {
+        "severity": "WARN",
+        "rule": "aot-ungenerated",
+        "detail": "Types used but NOT in DreamParkLuaConfig.LuaCallCSharp: LayerMask, MeshFilter, Resources \u2014 works in Editor (reflection), risks AOT stripping on Quest/iOS. Add to config + XLua \u25b8 Generate Code.",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Application, Debug, Mathf, Time",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "static-state",
+        "detail": "Static fields \u2014 Lua scripts share one global env; emulate via a registered global table, beware name collisions",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Attractions/LevelTemplate.cs",
+    "class": "LevelTemplate",
+    "base": "MonoBehaviour",
+    "classification": "NEEDS_RUNTIME",
+    "loc": 736,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string gameId \u2192 stringInjections",
+        "line": 90
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "enum GameLevelSize size \u2014 no enum injection; use intInjections + named constants",
+        "line": 91
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "Vector2 customSize \u2014 no injection slot for Vector2; add an injection type or encode as floats/string",
+        "line": 92
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "Vector2 defaultAnchorPosition \u2014 no injection slot for Vector2; add an injection type or encode as floats/string",
+        "line": 93
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool generateFloor \u2192 boolInjections",
+        "line": 94
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool generateCeiling \u2192 boolInjections",
+        "line": 95
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "GameObject runtimePlane \u2192 injections (GameObject)",
+        "line": 96
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "GameObject runtimeCeiling \u2192 injections (GameObject)",
+        "line": 97
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool renderDimensions \u2192 boolInjections",
+        "line": 100
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool showCutoutGizmos \u2192 boolInjections",
+        "line": 101
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool showGridGizmo \u2192 boolInjections",
+        "line": 104
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "int gridDensity \u2192 intInjections",
+        "line": 105
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float gridWidth \u2192 floatInjections",
+        "line": 106
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float gridHeight \u2192 floatInjections",
+        "line": 107
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "int gridX \u2192 intInjections",
+        "line": 108
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "int gridY \u2192 intInjections",
+        "line": 109
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "JSONObject floorData \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 110
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Material floorMaterial \u2192 materialInjections",
+        "line": 111
+      },
+      {
+        "severity": "WARN",
+        "rule": "aot-ungenerated",
+        "detail": "Types used but NOT in DreamParkLuaConfig.LuaCallCSharp: LayerMask, LineRenderer, Resources \u2014 works in Editor (reflection), risks AOT stripping on Quest/iOS. Add to config + XLua \u25b8 Generate Code.",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Application, Debug, Mathf",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "require-component",
+        "detail": "[RequireComponent] \u2014 LuaBehaviour won't auto-add; converter must add components to the prefab explicitly",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Attractions/MusicArea.cs",
+    "class": "MusicArea",
+    "base": "MonoBehaviour",
+    "classification": "NEEDS_RUNTIME",
+    "loc": 294,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "coroutine",
+        "detail": "Coroutines \u2014 no Lua coroutine bridge wired up; rewrite as update() state machine or add util.cs_generator bridge",
+        "line": 262
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "int activeMusicAreas \u2192 intInjections",
+        "line": 19
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "MusicArea currentMusicArea \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 21
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "AudioClip musicTrack \u2192 audioClipInjections",
+        "line": 47
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float volume \u2192 floatInjections",
+        "line": 48
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "int priority \u2192 intInjections",
+        "line": 49
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool isPlaying \u2192 boolInjections",
+        "line": 50
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool isFocused \u2192 boolInjections",
+        "line": 57
+      },
+      {
+        "severity": "WARN",
+        "rule": "aot-ungenerated",
+        "detail": "Types used but NOT in DreamParkLuaConfig.LuaCallCSharp: Camera \u2014 works in Editor (reflection), risks AOT stripping on Quest/iOS. Add to config + XLua \u25b8 Generate Code.",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Mathf, Time",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "static-state",
+        "detail": "Static fields \u2014 Lua scripts share one global env; emulate via a registered global table, beware name collisions",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Attractions/PropTemplate.cs",
+    "class": "PropTemplate",
+    "base": "MonoBehaviour",
+    "classification": "NEEDS_RUNTIME",
+    "loc": 420,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "unsupported-message",
+        "detail": "OnTransformChildrenChanged() has no Lua relay \u2014 needs a new relay class + delegate sig in DreamParkLuaConfig",
+        "line": 113
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string gameId \u2192 stringInjections",
+        "line": 26
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string resourceName \u2192 stringInjections",
+        "line": 27
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "enum PropCategory category \u2014 no enum injection; use intInjections + named constants",
+        "line": 28
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool affectsGapFiller \u2192 boolInjections",
+        "line": 30
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool cutGapFillerHole \u2192 boolInjections",
+        "line": 32
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool useColliderBounds \u2192 boolInjections",
+        "line": 33
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "Vector2 customFootprintMeters \u2014 no injection slot for Vector2; add an injection type or encode as floats/string",
+        "line": 34
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "Vector2 footprintOffsetMeters \u2014 no injection slot for Vector2; add an injection type or encode as floats/string",
+        "line": 35
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool showFootprintGizmos \u2192 boolInjections",
+        "line": 36
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "JSONObject pointData \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 37
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "GameObject runtimePlane \u2192 injections (GameObject)",
+        "line": 38
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float SurfaceHeight \u2192 floatInjections",
+        "line": 47
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Application, Mathf",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "require-component",
+        "detail": "[RequireComponent] \u2014 LuaBehaviour won't auto-add; converter must add components to the prefab explicitly",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Attractions/RealisticRolloff.cs",
+    "class": "RealisticRolloff",
+    "base": "MonoBehaviour",
+    "classification": "CLEAN_WARN",
+    "loc": 46,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool DestroyOnStart \u2192 boolInjections",
+        "line": 7
+      },
+      {
+        "severity": "WARN",
+        "rule": "aot-ungenerated",
+        "detail": "Types used but NOT in DreamParkLuaConfig.LuaCallCSharp: AnimationCurve \u2014 works in Editor (reflection), risks AOT stripping on Quest/iOS. Add to config + XLua \u25b8 Generate Code.",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Debug",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyAnimation.cs",
+    "class": "EasyAnimation",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 154,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 6
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyAnimationEvent.cs",
+    "class": "EasyAnimationEvent",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 267,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 14
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyAudio.cs",
+    "class": "EasyAudio",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 145,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 5
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyBend.cs",
+    "class": "EasyBend",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 151,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 3
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyBroadcast.cs",
+    "class": "EasyBroadcast",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 26,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 4
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyCall.cs",
+    "class": "EasyCall",
+    "base": "EasyEvent",
+    "classification": "CLEAN_WARN",
+    "loc": 112,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "WARN",
+        "rule": "unknown-on-method",
+        "detail": "OnEvent() \u2014 if this is a Unity message it has no relay; if a plain method, ignore",
+        "line": 58
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "MonoBehaviour target \u2192 componentInjections",
+        "line": 55
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string methodName \u2192 stringInjections",
+        "line": 56
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Debug",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyChase.cs",
+    "class": "EasyChase",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 152,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 7
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyCollision.cs",
+    "class": "EasyCollision",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 96,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 5
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyCounter.cs",
+    "class": "EasyCounter",
+    "base": "EasyEvent",
+    "classification": "NEEDS_RUNTIME",
+    "loc": 134,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "WARN",
+        "rule": "unknown-on-method",
+        "detail": "OnEvent() \u2014 if this is a Unity message it has no relay; if a plain method, ignore",
+        "line": 114
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "enum VariableType variableType \u2014 no enum injection; use intInjections + named constants",
+        "line": 43
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "int count \u2192 intInjections",
+        "line": 44
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string variableName \u2192 stringInjections",
+        "line": 45
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "enum VariableType totalCountSource \u2014 no enum injection; use intInjections + named constants",
+        "line": 46
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "int totalCount \u2192 intInjections",
+        "line": 47
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string totalCountVariableName \u2192 stringInjections",
+        "line": 48
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "int runtimeTotalCountValue \u2192 intInjections",
+        "line": 49
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "EasyEvent onNotEqual \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 52
+      },
+      {
+        "severity": "INFO",
+        "rule": "static-state",
+        "detail": "Static fields \u2014 Lua scripts share one global env; emulate via a registered global table, beware name collisions",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyDelay.cs",
+    "class": "EasyDelay",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 32,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 5
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyDestroy.cs",
+    "class": "EasyDestroy",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 9,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 3
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyDetect.cs",
+    "class": "EasyDetect",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 250,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 91
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyDisable.cs",
+    "class": "EasyDisable",
+    "base": "EasyEvent",
+    "classification": "NEEDS_RUNTIME",
+    "loc": 121,
+    "findings": [
+      {
+        "severity": "WARN",
+        "rule": "unknown-on-method",
+        "detail": "OnEvent() \u2014 if this is a Unity message it has no relay; if a plain method, ignore",
+        "line": 33
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "enum DisableType disableType \u2014 no enum injection; use intInjections + named constants",
+        "line": 14
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "GameObject gameObjectToDisable \u2192 injections (GameObject)",
+        "line": 16
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "MonoBehaviour componentToDisable \u2192 componentInjections",
+        "line": 17
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "GameObject componentsTarget \u2192 injections (GameObject)",
+        "line": 19
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool disableRenderers \u2192 boolInjections",
+        "line": 20
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool disableColliders \u2192 boolInjections",
+        "line": 21
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool disableRigidbodies \u2192 boolInjections",
+        "line": 22
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool disableBehaviours \u2192 boolInjections",
+        "line": 23
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "GameObject childrenParent \u2192 injections (GameObject)",
+        "line": 25
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "GameObject childrenComponentsParent \u2192 injections (GameObject)",
+        "line": 27
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool childDisableRenderers \u2192 boolInjections",
+        "line": 28
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool childDisableColliders \u2192 boolInjections",
+        "line": 29
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool childDisableRigidbodies \u2192 boolInjections",
+        "line": 30
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool childDisableBehaviours \u2192 boolInjections",
+        "line": 31
+      },
+      {
+        "severity": "WARN",
+        "rule": "aot-ungenerated",
+        "detail": "Types used but NOT in DreamParkLuaConfig.LuaCallCSharp: Animator \u2014 works in Editor (reflection), risks AOT stripping on Quest/iOS. Add to config + XLua \u25b8 Generate Code.",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Debug",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyDisableAboveActive.cs",
+    "class": "EasyDisableAboveActive",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 35,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 4
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyEnable.cs",
+    "class": "EasyEnable",
+    "base": "EasyEvent",
+    "classification": "NEEDS_RUNTIME",
+    "loc": 128,
+    "findings": [
+      {
+        "severity": "WARN",
+        "rule": "unknown-on-method",
+        "detail": "OnEvent() \u2014 if this is a Unity message it has no relay; if a plain method, ignore",
+        "line": 40
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "enum EnableType enableType \u2014 no enum injection; use intInjections + named constants",
+        "line": 14
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool enable \u2192 boolInjections",
+        "line": 17
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool toggleOnNext \u2192 boolInjections",
+        "line": 20
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "GameObject gameObjectToEnable \u2192 injections (GameObject)",
+        "line": 22
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "MonoBehaviour componentToEnable \u2192 componentInjections",
+        "line": 23
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Animator animatorToEnable \u2192 componentInjections",
+        "line": 24
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "GameObject componentsTarget \u2192 injections (GameObject)",
+        "line": 26
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool enableRenderers \u2192 boolInjections",
+        "line": 27
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool enableColliders \u2192 boolInjections",
+        "line": 28
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool enableRigidbodies \u2192 boolInjections",
+        "line": 29
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool enableBehaviours \u2192 boolInjections",
+        "line": 30
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "GameObject childrenParent \u2192 injections (GameObject)",
+        "line": 32
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "GameObject childrenComponentsParent \u2192 injections (GameObject)",
+        "line": 34
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool childEnableRenderers \u2192 boolInjections",
+        "line": 35
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool childEnableColliders \u2192 boolInjections",
+        "line": 36
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool childEnableRigidbodies \u2192 boolInjections",
+        "line": 37
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool childEnableBehaviours \u2192 boolInjections",
+        "line": 38
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Debug",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyEnemy.cs",
+    "class": "EasyEnemy",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 53,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 7
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyEvent.cs",
+    "class": "EasyEvent",
+    "base": "MonoBehaviour",
+    "classification": "CLEAN_WARN",
+    "loc": 271,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "WARN",
+        "rule": "unknown-on-method",
+        "detail": "OnEvent() \u2014 if this is a Unity message it has no relay; if a plain method, ignore",
+        "line": 29
+      },
+      {
+        "severity": "WARN",
+        "rule": "unknown-on-method",
+        "detail": "OnEventDisable() \u2014 if this is a Unity message it has no relay; if a plain method, ignore",
+        "line": 35
+      },
+      {
+        "severity": "INFO",
+        "rule": "editor-only-message",
+        "detail": "OnValidate() is editor-only \u2014 dropped in translation",
+        "line": 49
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "UnityEvent<object> onEvent \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 11
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "EasyEvent aboveEvent \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 12
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "EasyEvent belowEvent \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 13
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool eventOnStart \u2192 boolInjections",
+        "line": 14
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool isEnabled \u2192 boolInjections",
+        "line": 15
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float lastDisabledAtRealtime \u2192 floatInjections",
+        "line": 16
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Application, Time",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyForce.cs",
+    "class": "EasyForce",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 51,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 4
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyForceFilter.cs",
+    "class": "EasyForceFilter",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 24,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 3
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyInteraction.cs",
+    "class": "EasyInteraction",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 131,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 6
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyLayer.cs",
+    "class": "EasyLayer",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 41,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 23
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyLog.cs",
+    "class": "EasyLog",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 12,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 3
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyLookAt.cs",
+    "class": "EasyLookAt",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 70,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 8
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyLoop.cs",
+    "class": "EasyLoop",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 15,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 3
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyLua.cs",
+    "class": "EasyLua",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 226,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 22
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyMaterial.cs",
+    "class": "EasyMaterial",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 30,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 3
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyMath.cs",
+    "class": "EasyMath",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 188,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 4
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyMove.cs",
+    "class": "EasyMove",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 360,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 6
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyMovementAnimation.cs",
+    "class": "EasyMovementAnimation",
+    "base": "EasyAnimation",
+    "classification": "KEEP_CSHARP",
+    "loc": 56,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyAnimation' is not a MonoBehaviour",
+        "line": 5
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyMusicArea.cs",
+    "class": "EasyMusicArea",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 71,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 4
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyNoise.cs",
+    "class": "EasyNoise",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 64,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 4
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyObject.cs",
+    "class": "EasyObject",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 251,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 10
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyOffScreen.cs",
+    "class": "EasyOffScreen",
+    "base": "EasyOnScreen",
+    "classification": "KEEP_CSHARP",
+    "loc": 17,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyOnScreen' is not a MonoBehaviour",
+        "line": 5
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyOnScreen.cs",
+    "class": "EasyOnScreen",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 74,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 5
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyParent.cs",
+    "class": "EasyParent",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 29,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 5
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyParticle.cs",
+    "class": "EasyParticle",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 88,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 10
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyPhysics.cs",
+    "class": "EasyPhysics",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 42,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 3
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyPicker.cs",
+    "class": "EasyPicker",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 203,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 11
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyPlatformRouter.cs",
+    "class": "EasyPlatformRouter",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 54,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 4
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyReceiver.cs",
+    "class": "EasyReceiver",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 178,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 7
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyRouter.cs",
+    "class": "EasyRouter",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 48,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 2
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyScale.cs",
+    "class": "EasyScale",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 61,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 5
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyShake.cs",
+    "class": "EasyShake",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 65,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 4
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyShatter.cs",
+    "class": "EasyShatter",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 77,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 21
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasySpawn.cs",
+    "class": "EasySpawn",
+    "base": "EasyEvent",
+    "classification": "CLEAN_WARN",
+    "loc": 74,
+    "findings": [
+      {
+        "severity": "WARN",
+        "rule": "unknown-on-method",
+        "detail": "OnEvent() \u2014 if this is a Unity message it has no relay; if a plain method, ignore",
+        "line": 20
+      },
+      {
+        "severity": "WARN",
+        "rule": "unknown-on-method",
+        "detail": "OnSpawnedObjectDestroyed() \u2014 if this is a Unity message it has no relay; if a plain method, ignore",
+        "line": 38
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "GameObject spawnPrefab \u2192 injections (GameObject)",
+        "line": 5
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Transform spawnPoint \u2192 transformInjections",
+        "line": 6
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "int amount \u2192 intInjections",
+        "line": 7
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool copyRotation \u2192 boolInjections",
+        "line": 8
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool waitForDestroyed \u2192 boolInjections",
+        "line": 9
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "System.Action onDestroyed \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 68
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasySpin.cs",
+    "class": "EasySpin",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 310,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 5
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyStart.cs",
+    "class": "EasyStart",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 11,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 3
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyStop.cs",
+    "class": "EasyStop",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 14,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 5
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyTag.cs",
+    "class": "EasyTag",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 33,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 23
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyTarget.cs",
+    "class": "EasyTarget",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 41,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 5
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyThrow.cs",
+    "class": "EasyThrow",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 134,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 7
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyUV.cs",
+    "class": "EasyUV",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 86,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 5
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyUndetect.cs",
+    "class": "EasyUndetect",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 412,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 85
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyUnparent.cs",
+    "class": "EasyUnparent",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 11,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 3
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyVariantPicker.cs",
+    "class": "EasyVariantPicker",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 17,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 3
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyVars.cs",
+    "class": "EasyVars",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 5,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 2
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyVelocityTrigger.cs",
+    "class": "EasyVelocityTrigger",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 61,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 3
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/EasyEvent/EasyVoice.cs",
+    "class": "EasyVoice",
+    "base": "EasyEvent",
+    "classification": "KEEP_CSHARP",
+    "loc": 250,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'EasyEvent' is not a MonoBehaviour",
+        "line": 5
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Entity/AnimationEventRouter.cs",
+    "class": "AnimationEventRouter",
+    "base": "MonoBehaviour",
+    "classification": "CLEAN_WARN",
+    "loc": 54,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "GameObject target \u2192 injections (GameObject)",
+        "line": 11
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "EasyAnimationEvent linkedEvent \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 12
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Debug",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Entity/Entity.cs",
+    "class": "Entity",
+    "base": "",
+    "classification": "KEEP_CSHARP",
+    "loc": 178,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "No base type (static/utility class) \u2014 nothing to host on a LuaBehaviour",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Entity/Interactable.cs",
+    "class": "Interactable",
+    "base": "MonoBehaviour",
+    "classification": "NEEDS_RUNTIME",
+    "loc": 367,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float mass \u2192 floatInjections",
+        "line": 84
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool useGravity \u2192 boolInjections",
+        "line": 85
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool isKinematic \u2192 boolInjections",
+        "line": 86
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "RigidbodyInterpolation interpolation \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 87
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "CollisionDetectionMode collisionDetectionMode \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 88
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "RigidbodyConstraints constraints \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 89
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "string[] layers \u2014 only GameObject[] lists are injectable",
+        "line": 190
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "string[] tags \u2014 only GameObject[] lists are injectable",
+        "line": 191
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "UnityEvent<CollisionWrapper> onInteractionEnter \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 192
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "UnityEvent<CollisionWrapper> onInteractionStay \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 193
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "UnityEvent<CollisionWrapper> onInteractionExit \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 194
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "InteractionFilter[] interactionFilters \u2014 only GameObject[] lists are injectable",
+        "line": 196
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool debugger \u2192 boolInjections",
+        "line": 245
+      },
+      {
+        "severity": "WARN",
+        "rule": "aot-ungenerated",
+        "detail": "Types used but NOT in DreamParkLuaConfig.LuaCallCSharp: LayerMask \u2014 works in Editor (reflection), risks AOT stripping on Quest/iOS. Add to config + XLua \u25b8 Generate Code.",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Debug",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Entity/StandardEntity.cs",
+    "class": "StandardEntity",
+    "base": "",
+    "classification": "KEEP_CSHARP",
+    "loc": 669,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "No base type (static/utility class) \u2014 nothing to host on a LuaBehaviour",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Lua/Editor/EasyLuaEditor.cs",
+    "class": "EasyLuaEditor",
+    "base": "",
+    "classification": "KEEP_CSHARP",
+    "loc": 62,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "editor-code",
+        "detail": "Editor script / uses UnityEditor \u2014 not a runtime transpile target",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Lua/Editor/LuaBehaviourEditor.cs",
+    "class": "LuaBehaviourEditor",
+    "base": "Editor",
+    "classification": "KEEP_CSHARP",
+    "loc": 51,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "editor-code",
+        "detail": "Editor script / uses UnityEditor \u2014 not a runtime transpile target",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Lua/Editor/LuaInjectionEditorGUI.cs",
+    "class": "LuaInjectionEditorGUI",
+    "base": "",
+    "classification": "KEEP_CSHARP",
+    "loc": 727,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "editor-code",
+        "detail": "Editor script / uses UnityEditor \u2014 not a runtime transpile target",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Lua/ILuaInjectable.cs",
+    "class": "ILuaInjectable",
+    "base": "",
+    "classification": "KEEP_CSHARP",
+    "loc": 25,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "No base type (static/utility class) \u2014 nothing to host on a LuaBehaviour",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Lua/LuaBehaviour.cs",
+    "class": "LuaBehaviour",
+    "base": "MonoBehaviour",
+    "classification": "KEEP_CSHARP",
+    "loc": 439,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "core-conditional",
+        "detail": "Contains #if DREAMPARKCORE \u2014 SDK-synced core file, not creator content",
+        "line": 0
+      },
+      {
+        "severity": "WARN",
+        "rule": "event-subscription",
+        "detail": "Subscribes to event 'OnNetEvent' \u2014 Lua can only receive Action/Action<bool|string|Collider|Collision>; other signatures need CSharpCallLua additions",
+        "line": 372
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string name \u2192 stringInjections",
+        "line": 9
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "GameObject value \u2192 injections (GameObject)",
+        "line": 10
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string name \u2192 stringInjections",
+        "line": 15
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float value \u2192 floatInjections",
+        "line": 16
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string name \u2192 stringInjections",
+        "line": 21
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string value \u2192 stringInjections",
+        "line": 22
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string name \u2192 stringInjections",
+        "line": 27
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool value \u2192 boolInjections",
+        "line": 28
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string name \u2192 stringInjections",
+        "line": 33
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "int value \u2192 intInjections",
+        "line": 34
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string name \u2192 stringInjections",
+        "line": 39
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "LuaBehaviour value \u2192 componentInjections",
+        "line": 40
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string name \u2192 stringInjections",
+        "line": 45
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "AudioClip value \u2192 audioClipInjections",
+        "line": 46
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string name \u2192 stringInjections",
+        "line": 51
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Vector3 value \u2192 vector3Injections",
+        "line": 52
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string name \u2192 stringInjections",
+        "line": 57
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Color value \u2192 colorInjections",
+        "line": 58
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string name \u2192 stringInjections",
+        "line": 63
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Transform value \u2192 transformInjections",
+        "line": 64
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string name \u2192 stringInjections",
+        "line": 69
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Material value \u2192 materialInjections",
+        "line": 70
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string name \u2192 stringInjections",
+        "line": 75
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Sprite value \u2192 spriteInjections",
+        "line": 76
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string name \u2192 stringInjections",
+        "line": 81
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Texture value \u2192 textureInjections",
+        "line": 82
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string name \u2192 stringInjections",
+        "line": 87
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Component value \u2192 componentInjections",
+        "line": 88
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string name \u2192 stringInjections",
+        "line": 93
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "GameObject[] value \u2192 gameObjectListInjections",
+        "line": 94
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "TextAsset luaScript \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 100
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "Injection[] injections \u2014 only GameObject[] lists are injectable",
+        "line": 101
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "FloatInjection[] floatInjections \u2014 only GameObject[] lists are injectable",
+        "line": 102
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "StringInjection[] stringInjections \u2014 only GameObject[] lists are injectable",
+        "line": 103
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "BoolInjection[] boolInjections \u2014 only GameObject[] lists are injectable",
+        "line": 104
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "IntInjection[] intInjections \u2014 only GameObject[] lists are injectable",
+        "line": 105
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "ScriptInjection[] scriptInjections \u2014 only GameObject[] lists are injectable",
+        "line": 106
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "AudioClipInjection[] audioClipInjections \u2014 only GameObject[] lists are injectable",
+        "line": 107
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "Vector3Injection[] vector3Injections \u2014 only GameObject[] lists are injectable",
+        "line": 108
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "ColorInjection[] colorInjections \u2014 only GameObject[] lists are injectable",
+        "line": 109
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "TransformInjection[] transformInjections \u2014 only GameObject[] lists are injectable",
+        "line": 110
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "MaterialInjection[] materialInjections \u2014 only GameObject[] lists are injectable",
+        "line": 111
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "SpriteInjection[] spriteInjections \u2014 only GameObject[] lists are injectable",
+        "line": 112
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "TextureInjection[] textureInjections \u2014 only GameObject[] lists are injectable",
+        "line": 113
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "ComponentInjection[] componentInjections \u2014 only GameObject[] lists are injectable",
+        "line": 114
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "GameObjectListInjection[] gameObjectListInjections \u2014 only GameObject[] lists are injectable",
+        "line": 115
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "LuaTable ScriptScope \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 245
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Time",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "static-state",
+        "detail": "Static fields \u2014 Lua scripts share one global env; emulate via a registered global table, beware name collisions",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Lua/LuaMessageRelays.cs",
+    "class": "LuaVoidRelay",
+    "base": "MonoBehaviour",
+    "classification": "CLEAN_WARN",
+    "loc": 125,
+    "findings": [
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "Action cb \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 105
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "Action<Collider> cb \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 106
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "Action<Collision> cb \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 107
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "Action<bool> cb \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 108
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Net/BeaconBroadcaster.cs",
+    "class": "BeaconBroadcaster",
+    "base": "IDisposable",
+    "classification": "KEEP_CSHARP",
+    "loc": 131,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'IDisposable' is not a MonoBehaviour",
+        "line": 22
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Net/DiscoveryListener.cs",
+    "class": "DiscoveryListener",
+    "base": "IDisposable",
+    "classification": "KEEP_CSHARP",
+    "loc": 170,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'IDisposable' is not a MonoBehaviour",
+        "line": 13
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Net/DreamBoxClient.cs",
+    "class": "DreamBoxClient",
+    "base": "MonoBehaviour",
+    "classification": "CLEAN_WARN",
+    "loc": 637,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "WARN",
+        "rule": "unknown-on-method",
+        "detail": "OnRelayDiscovered() \u2014 if this is a Unity message it has no relay; if a plain method, ignore",
+        "line": 277
+      },
+      {
+        "severity": "WARN",
+        "rule": "unknown-on-method",
+        "detail": "OnSessionPaired() \u2014 if this is a Unity message it has no relay; if a plain method, ignore",
+        "line": 367
+      },
+      {
+        "severity": "WARN",
+        "rule": "event-subscription",
+        "detail": "Subscribes to event 'OnSessionPaired' \u2014 Lua can only receive Action/Action<bool|string|Collider|Collision>; other signatures need CSharpCallLua additions",
+        "line": 167
+      },
+      {
+        "severity": "WARN",
+        "rule": "event-subscription",
+        "detail": "Subscribes to event 'OnRelayDiscovered' \u2014 Lua can only receive Action/Action<bool|string|Collider|Collision>; other signatures need CSharpCallLua additions",
+        "line": 262
+      },
+      {
+        "severity": "WARN",
+        "rule": "event-subscription",
+        "detail": "Subscribes to event 'PeerConnectedEvent' \u2014 Lua can only receive Action/Action<bool|string|Collider|Collision>; other signatures need CSharpCallLua additions",
+        "line": 386
+      },
+      {
+        "severity": "WARN",
+        "rule": "event-subscription",
+        "detail": "Subscribes to event 'PeerDisconnectedEvent' \u2014 Lua can only receive Action/Action<bool|string|Collider|Collision>; other signatures need CSharpCallLua additions",
+        "line": 397
+      },
+      {
+        "severity": "WARN",
+        "rule": "event-subscription",
+        "detail": "Subscribes to event 'NetworkReceiveEvent' \u2014 Lua can only receive Action/Action<bool|string|Collider|Collision>; other signatures need CSharpCallLua additions",
+        "line": 424
+      },
+      {
+        "severity": "WARN",
+        "rule": "event-subscription",
+        "detail": "Subscribes to event 'NetworkErrorEvent' \u2014 Lua can only receive Action/Action<bool|string|Collider|Collision>; other signatures need CSharpCallLua additions",
+        "line": 458
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string serverIP \u2192 stringInjections",
+        "line": 73
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "int serverPort \u2192 intInjections",
+        "line": 74
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string connectionKey \u2192 stringInjections",
+        "line": 75
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool autoReconnect \u2192 boolInjections",
+        "line": 78
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float reconnectBaseDelay \u2192 floatInjections",
+        "line": 79
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float reconnectMaxDelay \u2192 floatInjections",
+        "line": 80
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "int maxReconnectAttempts \u2192 intInjections",
+        "line": 81
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool connectOnStart \u2192 boolInjections",
+        "line": 85
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool verboseNetLogs \u2192 boolInjections",
+        "line": 89
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "NetId _testNetId \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 91
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "int Ping \u2192 intInjections",
+        "line": 98
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "int RTT \u2192 intInjections",
+        "line": 99
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string ServerAddress \u2192 stringInjections",
+        "line": 101
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Debug, Mathf, Time",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Net/NetId.cs",
+    "class": "NetId",
+    "base": "MonoBehaviour",
+    "classification": "CLEAN_WARN",
+    "loc": 136,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "uint explicitId \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 29
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Debug",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Net/NetLog.cs",
+    "class": "NetLog",
+    "base": "",
+    "classification": "KEEP_CSHARP",
+    "loc": 26,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "No base type (static/utility class) \u2014 nothing to host on a LuaBehaviour",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Net/NetPlatform.cs",
+    "class": "NetPlatform",
+    "base": "",
+    "classification": "KEEP_CSHARP",
+    "loc": 157,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "No base type (static/utility class) \u2014 nothing to host on a LuaBehaviour",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Net/NetRegistry.cs",
+    "class": "NetRegistry",
+    "base": "",
+    "classification": "KEEP_CSHARP",
+    "loc": 82,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "No base type (static/utility class) \u2014 nothing to host on a LuaBehaviour",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Net/NetScope.cs",
+    "class": "NetScope",
+    "base": "MonoBehaviour",
+    "classification": "CLEAN",
+    "loc": 25,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string scopeKey \u2192 stringInjections",
+        "line": 22
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Net/NetSessionArbiter.cs",
+    "class": "NetSessionArbiter",
+    "base": "MonoBehaviour",
+    "classification": "KEEP_CSHARP",
+    "loc": 619,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "threading",
+        "detail": "Threading \u2014 Lua env is single-threaded main-thread only",
+        "line": 210
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "core-conditional",
+        "detail": "Contains #if DREAMPARKCORE \u2014 SDK-synced core file, not creator content",
+        "line": 0
+      },
+      {
+        "severity": "WARN",
+        "rule": "unknown-on-method",
+        "detail": "OnGlobalEvent() \u2014 if this is a Unity message it has no relay; if a plain method, ignore",
+        "line": 449
+      },
+      {
+        "severity": "WARN",
+        "rule": "unknown-on-method",
+        "detail": "OnSessionPaired() \u2014 if this is a Unity message it has no relay; if a plain method, ignore",
+        "line": 192
+      },
+      {
+        "severity": "WARN",
+        "rule": "event-subscription",
+        "detail": "Subscribes to event 'OnGlobalEvent' \u2014 Lua can only receive Action/Action<bool|string|Collider|Collision>; other signatures need CSharpCallLua additions",
+        "line": 172
+      },
+      {
+        "severity": "WARN",
+        "rule": "event-subscription",
+        "detail": "Subscribes to event 'OnSessionPaired' \u2014 Lua can only receive Action/Action<bool|string|Collider|Collision>; other signatures need CSharpCallLua additions",
+        "line": 173
+      },
+      {
+        "severity": "WARN",
+        "rule": "event-subscription",
+        "detail": "Subscribes to event 'OnBeacon' \u2014 Lua can only receive Action/Action<bool|string|Collider|Collision>; other signatures need CSharpCallLua additions",
+        "line": 498
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string parkId \u2192 stringInjections",
+        "line": 34
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool allowHosting \u2192 boolInjections",
+        "line": 37
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float listenBaseSeconds \u2192 floatInjections",
+        "line": 40
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float beaconStaleSeconds \u2192 floatInjections",
+        "line": 41
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float reelectionStepSeconds \u2192 floatInjections",
+        "line": 42
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float joinTimeoutSeconds \u2192 floatInjections",
+        "line": 43
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float kioskGraceSeconds \u2192 floatInjections",
+        "line": 44
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool IsHost \u2192 boolInjections",
+        "line": 49
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "int HostedPeerCount \u2192 intInjections",
+        "line": 50
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool CanHost \u2192 boolInjections",
+        "line": 97
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string channelOverride \u2192 stringInjections",
+        "line": 110
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string Channel \u2192 stringInjections",
+        "line": 117
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "DiscoveryListener.BeaconInfo info \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 134
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float seenAt \u2192 floatInjections",
+        "line": 134
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Debug, Mathf, Time",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "require-component",
+        "detail": "[RequireComponent] \u2014 LuaBehaviour won't auto-add; converter must add components to the prefab explicitly",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Net/PeerRelayServer.cs",
+    "class": "PeerRelayServer",
+    "base": "",
+    "classification": "KEEP_CSHARP",
+    "loc": 226,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "No base type (static/utility class) \u2014 nothing to host on a LuaBehaviour",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Net/SessionContext.cs",
+    "class": "SessionContext",
+    "base": "",
+    "classification": "KEEP_CSHARP",
+    "loc": 85,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "No base type (static/utility class) \u2014 nothing to host on a LuaBehaviour",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Player/BodyTracker.cs",
+    "class": "BodyTracker",
+    "base": "MonoBehaviour",
+    "classification": "CLEAN_WARN",
+    "loc": 51,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float yOffset \u2192 floatInjections",
+        "line": 11
+      },
+      {
+        "severity": "WARN",
+        "rule": "aot-ungenerated",
+        "detail": "Types used but NOT in DreamParkLuaConfig.LuaCallCSharp: Camera \u2014 works in Editor (reflection), risks AOT stripping on Quest/iOS. Add to config + XLua \u25b8 Generate Code.",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Player/FeetTracker.cs",
+    "class": "FeetTracker",
+    "base": "MonoBehaviour",
+    "classification": "CLEAN_WARN",
+    "loc": 71,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-only-message",
+        "detail": "OnDrawGizmos() is editor-only \u2014 dropped in translation",
+        "line": 62
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Transform head \u2192 transformInjections",
+        "line": 10
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Rigidbody rb \u2192 componentInjections",
+        "line": 11
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float yOffset \u2192 floatInjections",
+        "line": 12
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float kickMultiplier \u2192 floatInjections",
+        "line": 13
+      },
+      {
+        "severity": "WARN",
+        "rule": "aot-ungenerated",
+        "detail": "Types used but NOT in DreamParkLuaConfig.LuaCallCSharp: Camera \u2014 works in Editor (reflection), risks AOT stripping on Quest/iOS. Add to config + XLua \u25b8 Generate Code.",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Mathf",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Player/HandTracker.cs",
+    "class": "HandTracker",
+    "base": "MonoBehaviour",
+    "classification": "NEEDS_RUNTIME",
+    "loc": 293,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "WARN",
+        "rule": "invoke-timer",
+        "detail": "Invoke/InvokeRepeating \u2014 translate to timer accumulation in update()",
+        "line": 177
+      },
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "enum HandPreference handPreference \u2014 no enum injection; use intInjections + named constants",
+        "line": 27
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "bool flipVisual \u2192 boolInjections",
+        "line": 29
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Vector3 flipVisualRotation \u2192 vector3Injections",
+        "line": 31
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Vector3 flipVisualPosition \u2192 vector3Injections",
+        "line": 33
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float enableDelay \u2192 floatInjections",
+        "line": 41
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Debug",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "static-state",
+        "detail": "Static fields \u2014 Lua scripts share one global env; emulate via a registered global table, beware name collisions",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Player/HeadTracker.cs",
+    "class": "HeadTracker",
+    "base": "MonoBehaviour",
+    "classification": "CLEAN_WARN",
+    "loc": 48,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Transform head \u2192 transformInjections",
+        "line": 10
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Rigidbody rb \u2192 componentInjections",
+        "line": 11
+      },
+      {
+        "severity": "WARN",
+        "rule": "aot-ungenerated",
+        "detail": "Types used but NOT in DreamParkLuaConfig.LuaCallCSharp: Camera \u2014 works in Editor (reflection), risks AOT stripping on Quest/iOS. Add to config + XLua \u25b8 Generate Code.",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Features/Player/PlayerRig.cs",
+    "class": "PlayerRig",
+    "base": "MonoBehaviour",
+    "classification": "KEEP_CSHARP",
+    "loc": 101,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "core-conditional",
+        "detail": "Contains #if DREAMPARKCORE \u2014 SDK-synced core file, not creator content",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "string gameId \u2192 stringInjections",
+        "line": 10
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Debug",
+        "line": 0
+      },
+      {
+        "severity": "INFO",
+        "rule": "static-state",
+        "detail": "Static fields \u2014 Lua scripts share one global env; emulate via a registered global table, beware name collisions",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Utils/Componentizer.cs",
+    "class": "Componentizer",
+    "base": "MonoBehaviour",
+    "classification": "CLEAN_WARN",
+    "loc": 107,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "WARN",
+        "rule": "unityevent-listener",
+        "detail": "UnityEvent.AddListener \u2014 verify the event's arg types map to a supported delegate signature",
+        "line": 104
+      },
+      {
+        "severity": "INFO",
+        "rule": "aot-static-utility",
+        "detail": "Static utility types via reflection (usually fine): Application",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Utils/CoreExtensions.cs",
+    "class": "CoreExtensions",
+    "base": "",
+    "classification": "KEEP_CSHARP",
+    "loc": 323,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "No base type (static/utility class) \u2014 nothing to host on a LuaBehaviour",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Utils/CoroutineRunner.cs",
+    "class": "CoroutineRunner",
+    "base": "MonoBehaviour",
+    "classification": "NEEDS_RUNTIME",
+    "loc": 22,
+    "findings": [
+      {
+        "severity": "RUNTIME",
+        "rule": "coroutine",
+        "detail": "Coroutines \u2014 no Lua coroutine bridge wired up; rewrite as update() state machine or add util.cs_generator bridge",
+        "line": 19
+      },
+      {
+        "severity": "INFO",
+        "rule": "static-state",
+        "detail": "Static fields \u2014 Lua scripts share one global env; emulate via a registered global table, beware name collisions",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Utils/DepthMask.cs",
+    "class": "DepthMask",
+    "base": "MonoBehaviour",
+    "classification": "NEEDS_RUNTIME",
+    "loc": 96,
+    "findings": [
+      {
+        "severity": "RUNTIME",
+        "rule": "no-injection-type",
+        "detail": "List<MeshFilter> myMeshFilters \u2014 only GameObject[] lists are injectable",
+        "line": 9
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "float _someOffsetFloatValue \u2192 floatInjections",
+        "line": 10
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Utils/Extensions.cs",
+    "class": "Extensions",
+    "base": "",
+    "classification": "KEEP_CSHARP",
+    "loc": 1325,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "No base type (static/utility class) \u2014 nothing to host on a LuaBehaviour",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Utils/MainThreadDispatcher.cs",
+    "class": "MainThreadDispatcher",
+    "base": "MonoBehaviour",
+    "classification": "KEEP_CSHARP",
+    "loc": 55,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "threading",
+        "detail": "Threading \u2014 Lua env is single-threaded main-thread only",
+        "line": 3
+      },
+      {
+        "severity": "INFO",
+        "rule": "static-state",
+        "detail": "Static fields \u2014 Lua scripts share one global env; emulate via a registered global table, beware name collisions",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Utils/MeshGizmoRenderer.cs",
+    "class": "MeshGizmoRenderer",
+    "base": "MonoBehaviour",
+    "classification": "CLEAN_WARN",
+    "loc": 27,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "WARN",
+        "rule": "field-unknown-type",
+        "detail": "Mesh mesh \u2014 unknown type; verify an injection slot exists or pass via script injection",
+        "line": 5
+      },
+      {
+        "severity": "INFO",
+        "rule": "field-maps",
+        "detail": "Color color \u2192 colorInjections",
+        "line": 6
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Utils/ReadyOnlyAtrribute.cs",
+    "class": "ReadOnlyAttribute",
+    "base": "PropertyAttribute",
+    "classification": "KEEP_CSHARP",
+    "loc": 25,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'PropertyAttribute' is not a MonoBehaviour",
+        "line": 6
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Utils/ShowIf.cs",
+    "class": "ShowIfAttribute",
+    "base": "PropertyAttribute",
+    "classification": "KEEP_CSHARP",
+    "loc": 104,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      },
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "Base 'PropertyAttribute' is not a MonoBehaviour",
+        "line": 11
+      }
+    ]
+  },
+  {
+    "path": "Assets/DreamPark/Scripts/Utils/Simulator.cs",
+    "class": "Simulator",
+    "base": "MonoBehaviour",
+    "classification": "CLEAN",
+    "loc": 186,
+    "findings": [
+      {
+        "severity": "INFO",
+        "rule": "editor-region-dropped",
+        "detail": "#if UNITY_EDITOR region(s) ignored \u2014 never ship on device; converter drops them",
+        "line": 0
+      }
+    ]
+  },
+  {
+    "path": "Assets/Content/YOUR_GAME_HERE/Scripts/CoreExtensionsInterface.cs",
+    "class": "CoreExtensionsInterface",
+    "base": "",
+    "classification": "KEEP_CSHARP",
+    "loc": 59,
+    "findings": [
+      {
+        "severity": "BLOCKER",
+        "rule": "not-monobehaviour",
+        "detail": "No base type (static/utility class) \u2014 nothing to host on a LuaBehaviour",
+        "line": 0
+      }
+    ]
+  }
+]

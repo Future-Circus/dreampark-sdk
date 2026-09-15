@@ -41,6 +41,14 @@
 //        build NAMES every type that fell back to reflection — observed rather
 //        than predicted, which beats a static guess.
 //
+//    OUTSIDE THE CONTENT       → console warning only. No dialog. Same tier
+//    FOLDER (added 2026-08-30,   as UNREGISTERED, for the same crying-wolf
+//    a Lua-string reference     reason — it reuses OutsideContentFolderCheck's
+//    to a type whose script     own allowlist (LuaSurfaceScanner.cs), which
+//    lives outside the          that check's own severity note already flags
+//    content folder)            as needing a release of real-world data before
+//                                it's trusted enough to block anything.
+//
 //  Editor-only.
 // ─────────────────────────────────────────────────────────────────────
 
@@ -57,7 +65,7 @@ public static class LuaSurfaceGate
     /// Called from the content upload entry point. Returns false to abort.
     /// Never throws: a broken check must not be able to block shipping.
     /// </summary>
-    public static bool PassesPreUploadCheck()
+    public static bool PassesPreUploadCheck(bool interactive = true)
     {
         // ── Codegen drift: report, never block an upload ──────────────
         try
@@ -81,28 +89,32 @@ public static class LuaSurfaceGate
 
         if (result == null || result.IsClean) return true;
 
-        if (result.HasUnregistered)
+        if (result.HasUnregistered || result.HasOutsideContentFolder)
             Debug.LogWarning(result.report);
 
         if (!result.HasBlocked) return true;
 
         Debug.LogError(result.report);
-        EditorUtility.DisplayDialog(
-            "Upload blocked — sandboxed API in Lua",
-            "Your content calls types the production sandbox denies. They work here in " +
-            "the Editor and THROW at a venue:\n\n" +
-            LuaSurfaceScanner.ScanResult.Summarize(result.blocked) +
-            "\nIf one of those files is an authoring tool that never runs at a venue, add\n" +
-            "    -- " + LuaSurfaceScanner.EditorOnlyMarker + "\n" +
-            "to it, or move it under an Editor/ folder.\n\n" +
-            "Full detail is in the Console.",
-            "OK");
+        if (interactive)
+        {
+            EditorUtility.DisplayDialog(
+                "Upload blocked — sandboxed API in Lua",
+                "Your content calls types the production sandbox denies. They work here in " +
+                "the Editor and THROW at a venue:\n\n" +
+                LuaSurfaceScanner.ScanResult.Summarize(result.blocked) +
+                "\nIf one of those files is an authoring tool that never runs at a venue, add\n" +
+                "    -- " + LuaSurfaceScanner.EditorOnlyMarker + "\n" +
+                "to it, or move it under an Editor/ folder.\n\n" +
+                "Full detail is in the Console.",
+                "OK");
+        }
         return false;
     }
 
     /// <summary>
     /// Player builds. Sandbox-denied types and codegen drift both fail the build;
-    /// unregistered types are a console warning.
+    /// unregistered types and outside-the-content-folder types are a console
+    /// warning only.
     /// </summary>
     public class BuildCheck : IPreprocessBuildWithReport
     {
@@ -139,7 +151,7 @@ public static class LuaSurfaceGate
             }
             if (result == null || result.IsClean) return;
 
-            if (result.HasUnregistered) Debug.LogWarning(result.report);
+            if (result.HasUnregistered || result.HasOutsideContentFolder) Debug.LogWarning(result.report);
 
             if (result.HasBlocked)
             {
