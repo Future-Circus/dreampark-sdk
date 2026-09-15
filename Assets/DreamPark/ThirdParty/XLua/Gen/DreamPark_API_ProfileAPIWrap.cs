@@ -31,8 +31,10 @@ namespace XLua.CSObjectWrap
 			Utils.EndObjectRegister(type, L, translator, null, null,
 			    null, null, null);
 
-		    Utils.BeginClassRegister(type, L, __CreateInstance, 35, 13, 0);
-			Utils.RegisterFunc(L, Utils.CLS_IDX, "BindIdentity", _m_BindIdentity_xlua_st_);
+		    Utils.BeginClassRegister(type, L, __CreateInstance, 37, 16, 2);
+			Utils.RegisterFunc(L, Utils.CLS_IDX, "BeginPendingBind", _m_BeginPendingBind_xlua_st_);
+            Utils.RegisterFunc(L, Utils.CLS_IDX, "CancelPendingBind", _m_CancelPendingBind_xlua_st_);
+            Utils.RegisterFunc(L, Utils.CLS_IDX, "BindIdentity", _m_BindIdentity_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "BindToLoggedInUser", _m_BindToLoggedInUser_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "ClearIdentity", _m_ClearIdentity_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "IdentitySegment", _m_IdentitySegment_xlua_st_);
@@ -79,11 +81,16 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "IsAnonymous", _g_get_IsAnonymous);
             Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "DreamPoints", _g_get_DreamPoints);
             Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "Source", _g_get_Source);
+            Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "ParkContext", _g_get_ParkContext);
+            Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "ShardContext", _g_get_ShardContext);
+            Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "BindPending", _g_get_BindPending);
             Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "Items", _g_get_Items);
             Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "Achievements", _g_get_Achievements);
             Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "Badges", _g_get_Badges);
             
-			
+			Utils.RegisterFunc(L, Utils.CLS_SETTER_IDX, "ParkContext", _s_set_ParkContext);
+            Utils.RegisterFunc(L, Utils.CLS_SETTER_IDX, "ShardContext", _s_set_ShardContext);
+            
 			
 			Utils.EndClassRegister(type, L, translator);
         }
@@ -100,6 +107,66 @@ namespace XLua.CSObjectWrap
         
         
         
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_BeginPendingBind_xlua_st_(RealStatePtr L)
+        {
+		    try {
+            
+            
+            
+                
+                {
+                    
+                    DreamPark.API.ProfileAPI.BeginPendingBind(  );
+                    
+                    
+                    
+                    return 0;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_CancelPendingBind_xlua_st_(RealStatePtr L)
+        {
+		    try {
+            
+            
+            
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 1&& (LuaAPI.lua_isnil(L, 1) || LuaAPI.lua_type(L, 1) == LuaTypes.LUA_TSTRING)) 
+                {
+                    string _reason = LuaAPI.lua_tostring(L, 1);
+                    
+                    DreamPark.API.ProfileAPI.CancelPendingBind( _reason );
+                    
+                    
+                    
+                    return 0;
+                }
+                if(gen_param_count == 0) 
+                {
+                    
+                    DreamPark.API.ProfileAPI.CancelPendingBind(  );
+                    
+                    
+                    
+                    return 0;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to DreamPark.API.ProfileAPI.CancelPendingBind!");
+            
+        }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
         static int _m_BindIdentity_xlua_st_(RealStatePtr L)
@@ -1237,6 +1304,42 @@ namespace XLua.CSObjectWrap
         }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_ParkContext(RealStatePtr L)
+        {
+		    try {
+            
+			    LuaAPI.lua_pushstring(L, DreamPark.API.ProfileAPI.ParkContext);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_ShardContext(RealStatePtr L)
+        {
+		    try {
+            
+			    LuaAPI.lua_pushstring(L, DreamPark.API.ProfileAPI.ShardContext);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_BindPending(RealStatePtr L)
+        {
+		    try {
+            
+			    LuaAPI.lua_pushboolean(L, DreamPark.API.ProfileAPI.BindPending);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
         static int _g_get_Items(RealStatePtr L)
         {
 		    try {
@@ -1273,6 +1376,32 @@ namespace XLua.CSObjectWrap
         }
         
         
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_ParkContext(RealStatePtr L)
+        {
+		    try {
+                
+			    DreamPark.API.ProfileAPI.ParkContext = LuaAPI.lua_tostring(L, 1);
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_ShardContext(RealStatePtr L)
+        {
+		    try {
+                
+			    DreamPark.API.ProfileAPI.ShardContext = LuaAPI.lua_tostring(L, 1);
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
         
 		
 		

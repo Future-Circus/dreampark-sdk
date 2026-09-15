@@ -21,8 +21,9 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(DreamPark.PropTemplate);
-			Utils.BeginObjectRegister(type, L, translator, 0, 6, 13, 11);
+			Utils.BeginObjectRegister(type, L, translator, 0, 7, 17, 13);
 			
+			Utils.RegisterFunc(L, Utils.METHOD_IDX, "GetWallHeightMeters", _m_GetWallHeightMeters);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "NotifyChanged", _m_NotifyChanged);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "ApplyCalibrationYOffset", _m_ApplyCalibrationYOffset);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "CompileCalibrationData", _m_CompileCalibrationData);
@@ -32,7 +33,9 @@ namespace XLua.CSObjectWrap
 			
 			
 			Utils.RegisterFunc(L, Utils.GETTER_IDX, "SurfaceHeight", _g_get_SurfaceHeight);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "PublishedWallSideToken", _g_get_PublishedWallSideToken);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "IsNestedUnderTemplate", _g_get_IsNestedUnderTemplate);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "FootprintMeters", _g_get_FootprintMeters);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "gameId", _g_get_gameId);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "resourceName", _g_get_resourceName);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "category", _g_get_category);
@@ -42,6 +45,8 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "customFootprintMeters", _g_get_customFootprintMeters);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "footprintOffsetMeters", _g_get_footprintOffsetMeters);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "showFootprintGizmos", _g_get_showFootprintGizmos);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "wallSide", _g_get_wallSide);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "showWallGizmo", _g_get_showWallGizmo);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "pointData", _g_get_pointData);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "runtimePlane", _g_get_runtimePlane);
             
@@ -54,6 +59,8 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "customFootprintMeters", _s_set_customFootprintMeters);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "footprintOffsetMeters", _s_set_footprintOffsetMeters);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "showFootprintGizmos", _s_set_showFootprintGizmos);
+            Utils.RegisterFunc(L, Utils.SETTER_IDX, "wallSide", _s_set_wallSide);
+            Utils.RegisterFunc(L, Utils.SETTER_IDX, "showWallGizmo", _s_set_showWallGizmo);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "pointData", _s_set_pointData);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "runtimePlane", _s_set_runtimePlane);
             
@@ -61,11 +68,12 @@ namespace XLua.CSObjectWrap
 			Utils.EndObjectRegister(type, L, translator, null, null,
 			    null, null, null);
 
-		    Utils.BeginClassRegister(type, L, __CreateInstance, 3, 0, 0);
+		    Utils.BeginClassRegister(type, L, __CreateInstance, 4, 0, 0);
 			Utils.RegisterFunc(L, Utils.CLS_IDX, "NotifyPropTemplateChanged", _m_NotifyPropTemplateChanged_xlua_st_);
             
 			Utils.RegisterFunc(L, Utils.CLS_IDX, "OnAnyPropTemplateChanged", _e_OnAnyPropTemplateChanged);
 			
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "DefaultFootprintMeters", DreamPark.PropTemplate.DefaultFootprintMeters);
             
 			
 			
@@ -102,6 +110,34 @@ namespace XLua.CSObjectWrap
         
         
         
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_GetWallHeightMeters(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+                DreamPark.PropTemplate gen_to_be_invoked = (DreamPark.PropTemplate)translator.FastGetCSObj(L, 1);
+            
+            
+                
+                {
+                    
+                        var gen_ret = gen_to_be_invoked.GetWallHeightMeters(  );
+                        LuaAPI.lua_pushnumber(L, gen_ret);
+                    
+                    
+                    
+                    return 1;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
         static int _m_NotifyPropTemplateChanged_xlua_st_(RealStatePtr L)
@@ -320,6 +356,20 @@ namespace XLua.CSObjectWrap
         }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_PublishedWallSideToken(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                DreamPark.PropTemplate gen_to_be_invoked = (DreamPark.PropTemplate)translator.FastGetCSObj(L, 1);
+                LuaAPI.lua_pushstring(L, gen_to_be_invoked.PublishedWallSideToken);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
         static int _g_get_IsNestedUnderTemplate(RealStatePtr L)
         {
 		    try {
@@ -327,6 +377,20 @@ namespace XLua.CSObjectWrap
 			
                 DreamPark.PropTemplate gen_to_be_invoked = (DreamPark.PropTemplate)translator.FastGetCSObj(L, 1);
                 LuaAPI.lua_pushboolean(L, gen_to_be_invoked.IsNestedUnderTemplate);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_FootprintMeters(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                DreamPark.PropTemplate gen_to_be_invoked = (DreamPark.PropTemplate)translator.FastGetCSObj(L, 1);
+                translator.PushUnityEngineVector2(L, gen_to_be_invoked.FootprintMeters);
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
@@ -453,6 +517,34 @@ namespace XLua.CSObjectWrap
 			
                 DreamPark.PropTemplate gen_to_be_invoked = (DreamPark.PropTemplate)translator.FastGetCSObj(L, 1);
                 LuaAPI.lua_pushboolean(L, gen_to_be_invoked.showFootprintGizmos);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_wallSide(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                DreamPark.PropTemplate gen_to_be_invoked = (DreamPark.PropTemplate)translator.FastGetCSObj(L, 1);
+                translator.Push(L, gen_to_be_invoked.wallSide);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_showWallGizmo(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                DreamPark.PropTemplate gen_to_be_invoked = (DreamPark.PropTemplate)translator.FastGetCSObj(L, 1);
+                LuaAPI.lua_pushboolean(L, gen_to_be_invoked.showWallGizmo);
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
@@ -620,6 +712,37 @@ namespace XLua.CSObjectWrap
 			
                 DreamPark.PropTemplate gen_to_be_invoked = (DreamPark.PropTemplate)translator.FastGetCSObj(L, 1);
                 gen_to_be_invoked.showFootprintGizmos = LuaAPI.lua_toboolean(L, 2);
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_wallSide(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                DreamPark.PropTemplate gen_to_be_invoked = (DreamPark.PropTemplate)translator.FastGetCSObj(L, 1);
+                DreamPark.PropWallSide gen_value;translator.Get(L, 2, out gen_value);
+				gen_to_be_invoked.wallSide = gen_value;
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_showWallGizmo(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                DreamPark.PropTemplate gen_to_be_invoked = (DreamPark.PropTemplate)translator.FastGetCSObj(L, 1);
+                gen_to_be_invoked.showWallGizmo = LuaAPI.lua_toboolean(L, 2);
             
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);

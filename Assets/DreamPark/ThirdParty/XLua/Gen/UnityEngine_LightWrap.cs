@@ -64,7 +64,7 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "shadowStrength", _g_get_shadowStrength);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "shadowResolution", _g_get_shadowResolution);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "layerShadowCullDistances", _g_get_layerShadowCullDistances);
-            Utils.RegisterFunc(L, Utils.GETTER_IDX, "cookieSize", _g_get_cookieSize);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "cookieSize2D", _g_get_cookieSize2D);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "cookie", _g_get_cookie);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "renderMode", _g_get_renderMode);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "commandBufferCount", _g_get_commandBufferCount);
@@ -100,7 +100,7 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "shadowStrength", _s_set_shadowStrength);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "shadowResolution", _s_set_shadowResolution);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "layerShadowCullDistances", _s_set_layerShadowCullDistances);
-            Utils.RegisterFunc(L, Utils.SETTER_IDX, "cookieSize", _s_set_cookieSize);
+            Utils.RegisterFunc(L, Utils.SETTER_IDX, "cookieSize2D", _s_set_cookieSize2D);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "cookie", _s_set_cookie);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "renderMode", _s_set_renderMode);
             
@@ -832,13 +832,13 @@ namespace XLua.CSObjectWrap
         }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
-        static int _g_get_cookieSize(RealStatePtr L)
+        static int _g_get_cookieSize2D(RealStatePtr L)
         {
 		    try {
                 ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			
                 UnityEngine.Light gen_to_be_invoked = (UnityEngine.Light)translator.FastGetCSObj(L, 1);
-                LuaAPI.lua_pushnumber(L, gen_to_be_invoked.cookieSize);
+                translator.PushUnityEngineVector2(L, gen_to_be_invoked.cookieSize2D);
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
@@ -1364,13 +1364,14 @@ namespace XLua.CSObjectWrap
         }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
-        static int _s_set_cookieSize(RealStatePtr L)
+        static int _s_set_cookieSize2D(RealStatePtr L)
         {
 		    try {
                 ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			
                 UnityEngine.Light gen_to_be_invoked = (UnityEngine.Light)translator.FastGetCSObj(L, 1);
-                gen_to_be_invoked.cookieSize = (float)LuaAPI.lua_tonumber(L, 2);
+                UnityEngine.Vector2 gen_value;translator.Get(L, 2, out gen_value);
+				gen_to_be_invoked.cookieSize2D = gen_value;
             
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);

@@ -21,7 +21,7 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(TMPro.TMP_Text);
-			Utils.BeginObjectRegister(type, L, translator, 0, 16, 89, 67);
+			Utils.BeginObjectRegister(type, L, translator, 0, 16, 90, 68);
 			
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "ForceMeshUpdate", _m_ForceMeshUpdate);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "UpdateGeometry", _m_UpdateGeometry);
@@ -74,6 +74,7 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "verticalAlignment", _g_get_verticalAlignment);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "alignment", _g_get_alignment);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "characterSpacing", _g_get_characterSpacing);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "characterHorizontalScale", _g_get_characterHorizontalScale);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "wordSpacing", _g_get_wordSpacing);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "lineSpacing", _g_get_lineSpacing);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "lineSpacingAdjustment", _g_get_lineSpacingAdjustment);
@@ -162,6 +163,7 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "verticalAlignment", _s_set_verticalAlignment);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "alignment", _s_set_alignment);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "characterSpacing", _s_set_characterSpacing);
+            Utils.RegisterFunc(L, Utils.SETTER_IDX, "characterHorizontalScale", _s_set_characterHorizontalScale);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "wordSpacing", _s_set_wordSpacing);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "lineSpacing", _s_set_lineSpacing);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "lineSpacingAdjustment", _s_set_lineSpacingAdjustment);
@@ -1386,6 +1388,20 @@ namespace XLua.CSObjectWrap
 			
                 TMPro.TMP_Text gen_to_be_invoked = (TMPro.TMP_Text)translator.FastGetCSObj(L, 1);
                 LuaAPI.lua_pushnumber(L, gen_to_be_invoked.characterSpacing);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_characterHorizontalScale(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                TMPro.TMP_Text gen_to_be_invoked = (TMPro.TMP_Text)translator.FastGetCSObj(L, 1);
+                LuaAPI.lua_pushnumber(L, gen_to_be_invoked.characterHorizontalScale);
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
@@ -2645,6 +2661,21 @@ namespace XLua.CSObjectWrap
 			
                 TMPro.TMP_Text gen_to_be_invoked = (TMPro.TMP_Text)translator.FastGetCSObj(L, 1);
                 gen_to_be_invoked.characterSpacing = (float)LuaAPI.lua_tonumber(L, 2);
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_characterHorizontalScale(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                TMPro.TMP_Text gen_to_be_invoked = (TMPro.TMP_Text)translator.FastGetCSObj(L, 1);
+                gen_to_be_invoked.characterHorizontalScale = (float)LuaAPI.lua_tonumber(L, 2);
             
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);

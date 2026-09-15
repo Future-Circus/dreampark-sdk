@@ -31,8 +31,9 @@ namespace XLua.CSObjectWrap
 			Utils.EndObjectRegister(type, L, translator, null, null,
 			    null, null, null);
 
-		    Utils.BeginClassRegister(type, L, __CreateInstance, 38, 20, 19);
-			Utils.RegisterFunc(L, Utils.CLS_IDX, "IgnoreCollision", _m_IgnoreCollision_xlua_st_);
+		    Utils.BeginClassRegister(type, L, __CreateInstance, 40, 19, 18);
+			Utils.RegisterFunc(L, Utils.CLS_IDX, "GetCurrentIntegrationInfo", _m_GetCurrentIntegrationInfo_xlua_st_);
+            Utils.RegisterFunc(L, Utils.CLS_IDX, "IgnoreCollision", _m_IgnoreCollision_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "IgnoreLayerCollision", _m_IgnoreLayerCollision_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "GetIgnoreLayerCollision", _m_GetIgnoreLayerCollision_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "GetIgnoreCollision", _m_GetIgnoreCollision_xlua_st_);
@@ -62,6 +63,7 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.CLS_IDX, "BoxCastNonAlloc", _m_BoxCastNonAlloc_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "BoxCastAll", _m_BoxCastAll_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "OverlapCapsuleNonAlloc", _m_OverlapCapsuleNonAlloc_xlua_st_);
+            Utils.RegisterFunc(L, Utils.CLS_IDX, "RebuildBroadphaseRegions", _m_RebuildBroadphaseRegions_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "BakeMesh", _m_BakeMesh_xlua_st_);
             
 			Utils.RegisterFunc(L, Utils.CLS_IDX, "ContactModifyEvent", _e_ContactModifyEvent);
@@ -86,7 +88,6 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "improvedPatchFriction", _g_get_improvedPatchFriction);
             Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "invokeCollisionCallbacks", _g_get_invokeCollisionCallbacks);
             Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "defaultPhysicsScene", _g_get_defaultPhysicsScene);
-            Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "autoSyncTransforms", _g_get_autoSyncTransforms);
             Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "reuseCollisionCallbacks", _g_get_reuseCollisionCallbacks);
             Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "interCollisionDistance", _g_get_interCollisionDistance);
             Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "interCollisionStiffness", _g_get_interCollisionStiffness);
@@ -106,7 +107,6 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.CLS_SETTER_IDX, "defaultMaxAngularSpeed", _s_set_defaultMaxAngularSpeed);
             Utils.RegisterFunc(L, Utils.CLS_SETTER_IDX, "improvedPatchFriction", _s_set_improvedPatchFriction);
             Utils.RegisterFunc(L, Utils.CLS_SETTER_IDX, "invokeCollisionCallbacks", _s_set_invokeCollisionCallbacks);
-            Utils.RegisterFunc(L, Utils.CLS_SETTER_IDX, "autoSyncTransforms", _s_set_autoSyncTransforms);
             Utils.RegisterFunc(L, Utils.CLS_SETTER_IDX, "reuseCollisionCallbacks", _s_set_reuseCollisionCallbacks);
             Utils.RegisterFunc(L, Utils.CLS_SETTER_IDX, "interCollisionDistance", _s_set_interCollisionDistance);
             Utils.RegisterFunc(L, Utils.CLS_SETTER_IDX, "interCollisionStiffness", _s_set_interCollisionStiffness);
@@ -146,6 +146,32 @@ namespace XLua.CSObjectWrap
         
         
         
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_GetCurrentIntegrationInfo_xlua_st_(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+            
+                
+                {
+                    
+                        var gen_ret = UnityEngine.Physics.GetCurrentIntegrationInfo(  );
+                        translator.Push(L, gen_ret);
+                    
+                    
+                    
+                    return 1;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
         static int _m_IgnoreCollision_xlua_st_(RealStatePtr L)
@@ -2797,6 +2823,33 @@ namespace XLua.CSObjectWrap
         }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_RebuildBroadphaseRegions_xlua_st_(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+            
+                
+                {
+                    UnityEngine.Bounds _worldBounds;translator.Get(L, 1, out _worldBounds);
+                    int _subdivisions = LuaAPI.xlua_tointeger(L, 2);
+                    
+                    UnityEngine.Physics.RebuildBroadphaseRegions( _worldBounds, _subdivisions );
+                    
+                    
+                    
+                    return 0;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
         static int _m_BakeMesh_xlua_st_(RealStatePtr L)
         {
 		    try {
@@ -2807,24 +2860,24 @@ namespace XLua.CSObjectWrap
             
 			    int gen_param_count = LuaAPI.lua_gettop(L);
             
-                if(gen_param_count == 2&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 1)&& LuaTypes.LUA_TBOOLEAN == LuaAPI.lua_type(L, 2)) 
+                if(gen_param_count == 2&& translator.Assignable<UnityEngine.EntityId>(L, 1)&& LuaTypes.LUA_TBOOLEAN == LuaAPI.lua_type(L, 2)) 
                 {
-                    int _meshID = LuaAPI.xlua_tointeger(L, 1);
+                    UnityEngine.EntityId _meshEntityId;translator.Get(L, 1, out _meshEntityId);
                     bool _convex = LuaAPI.lua_toboolean(L, 2);
                     
-                    UnityEngine.Physics.BakeMesh( _meshID, _convex );
+                    UnityEngine.Physics.BakeMesh( _meshEntityId, _convex );
                     
                     
                     
                     return 0;
                 }
-                if(gen_param_count == 3&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 1)&& LuaTypes.LUA_TBOOLEAN == LuaAPI.lua_type(L, 2)&& translator.Assignable<UnityEngine.MeshColliderCookingOptions>(L, 3)) 
+                if(gen_param_count == 3&& translator.Assignable<UnityEngine.EntityId>(L, 1)&& LuaTypes.LUA_TBOOLEAN == LuaAPI.lua_type(L, 2)&& translator.Assignable<UnityEngine.MeshColliderCookingOptions>(L, 3)) 
                 {
-                    int _meshID = LuaAPI.xlua_tointeger(L, 1);
+                    UnityEngine.EntityId _meshEntityId;translator.Get(L, 1, out _meshEntityId);
                     bool _convex = LuaAPI.lua_toboolean(L, 2);
                     UnityEngine.MeshColliderCookingOptions _cookingOptions;translator.Get(L, 3, out _cookingOptions);
                     
-                    UnityEngine.Physics.BakeMesh( _meshID, _convex, _cookingOptions );
+                    UnityEngine.Physics.BakeMesh( _meshEntityId, _convex, _cookingOptions );
                     
                     
                     
@@ -3004,18 +3057,6 @@ namespace XLua.CSObjectWrap
 		    try {
                 ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			    translator.Push(L, UnityEngine.Physics.defaultPhysicsScene);
-            } catch(System.Exception gen_e) {
-                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
-            }
-            return 1;
-        }
-        
-        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
-        static int _g_get_autoSyncTransforms(RealStatePtr L)
-        {
-		    try {
-            
-			    LuaAPI.lua_pushboolean(L, UnityEngine.Physics.autoSyncTransforms);
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
@@ -3248,19 +3289,6 @@ namespace XLua.CSObjectWrap
 		    try {
                 
 			    UnityEngine.Physics.invokeCollisionCallbacks = LuaAPI.lua_toboolean(L, 1);
-            
-            } catch(System.Exception gen_e) {
-                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
-            }
-            return 0;
-        }
-        
-        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
-        static int _s_set_autoSyncTransforms(RealStatePtr L)
-        {
-		    try {
-                
-			    UnityEngine.Physics.autoSyncTransforms = LuaAPI.lua_toboolean(L, 1);
             
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);

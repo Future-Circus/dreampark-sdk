@@ -21,7 +21,7 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(UnityEngine.ParticleSystemRenderer);
-			Utils.BeginObjectRegister(type, L, translator, 0, 12, 24, 21);
+			Utils.BeginObjectRegister(type, L, translator, 0, 12, 25, 22);
 			
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "GetMeshes", _m_GetMeshes);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "SetMeshes", _m_SetMeshes);
@@ -57,6 +57,7 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "allowRoll", _g_get_allowRoll);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "freeformStretching", _g_get_freeformStretching);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "rotateWithStretchDirection", _g_get_rotateWithStretchDirection);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "applyActiveColorSpace", _g_get_applyActiveColorSpace);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "mesh", _g_get_mesh);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "meshCount", _g_get_meshCount);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "activeVertexStreamsCount", _g_get_activeVertexStreamsCount);
@@ -82,6 +83,7 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "allowRoll", _s_set_allowRoll);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "freeformStretching", _s_set_freeformStretching);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "rotateWithStretchDirection", _s_set_rotateWithStretchDirection);
+            Utils.RegisterFunc(L, Utils.SETTER_IDX, "applyActiveColorSpace", _s_set_applyActiveColorSpace);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "mesh", _s_set_mesh);
             
 			
@@ -901,6 +903,20 @@ namespace XLua.CSObjectWrap
         }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_applyActiveColorSpace(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                UnityEngine.ParticleSystemRenderer gen_to_be_invoked = (UnityEngine.ParticleSystemRenderer)translator.FastGetCSObj(L, 1);
+                LuaAPI.lua_pushboolean(L, gen_to_be_invoked.applyActiveColorSpace);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
         static int _g_get_mesh(RealStatePtr L)
         {
 		    try {
@@ -1258,6 +1274,21 @@ namespace XLua.CSObjectWrap
 			
                 UnityEngine.ParticleSystemRenderer gen_to_be_invoked = (UnityEngine.ParticleSystemRenderer)translator.FastGetCSObj(L, 1);
                 gen_to_be_invoked.rotateWithStretchDirection = LuaAPI.lua_toboolean(L, 2);
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_applyActiveColorSpace(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                UnityEngine.ParticleSystemRenderer gen_to_be_invoked = (UnityEngine.ParticleSystemRenderer)translator.FastGetCSObj(L, 1);
+                gen_to_be_invoked.applyActiveColorSpace = LuaAPI.lua_toboolean(L, 2);
             
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);

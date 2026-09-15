@@ -159,6 +159,8 @@
 		<type fullname="DreamPark.MusicArea" preserve="all"/>
 		<type fullname="DreamPark.FloorAnchor" preserve="all"/>
 		<type fullname="HandTracker" preserve="all"/>
+		<type fullname="DreamBoxClient" preserve="all"/>
+		<type fullname="DreamPark.NetSessionArbiter" preserve="all"/>
 		<type fullname="EasyLua" preserve="all"/>
 		<type fullname="LuaBehaviour" preserve="all"/>
 		<type fullname="DreamPark.DreamParkLuaAPI" preserve="all"/>

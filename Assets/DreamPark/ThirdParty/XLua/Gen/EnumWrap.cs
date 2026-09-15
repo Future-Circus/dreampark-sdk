@@ -1308,7 +1308,7 @@ namespace XLua.CSObjectWrap
 		    Utils.BeginObjectRegister(typeof(UnityEngine.RuntimePlatform), L, translator, 0, 0, 0, 0);
 			Utils.EndObjectRegister(typeof(UnityEngine.RuntimePlatform), L, translator, null, null, null, null, null);
 			
-			Utils.BeginClassRegister(typeof(UnityEngine.RuntimePlatform), L, null, 56, 0, 0);
+			Utils.BeginClassRegister(typeof(UnityEngine.RuntimePlatform), L, null, 58, 0, 0);
 
             Utils.RegisterEnumType(L, typeof(UnityEngine.RuntimePlatform));
 

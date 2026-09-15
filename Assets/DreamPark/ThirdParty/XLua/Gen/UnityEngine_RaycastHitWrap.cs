@@ -26,7 +26,7 @@ namespace XLua.CSObjectWrap
 			
 			
 			Utils.RegisterFunc(L, Utils.GETTER_IDX, "collider", _g_get_collider);
-            Utils.RegisterFunc(L, Utils.GETTER_IDX, "colliderInstanceID", _g_get_colliderInstanceID);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "colliderEntityId", _g_get_colliderEntityId);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "point", _g_get_point);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "normal", _g_get_normal);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "barycentricCoordinate", _g_get_barycentricCoordinate);
@@ -104,13 +104,13 @@ namespace XLua.CSObjectWrap
         }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
-        static int _g_get_colliderInstanceID(RealStatePtr L)
+        static int _g_get_colliderEntityId(RealStatePtr L)
         {
 		    try {
                 ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			
                 UnityEngine.RaycastHit gen_to_be_invoked;translator.Get(L, 1, out gen_to_be_invoked);
-                LuaAPI.xlua_pushinteger(L, gen_to_be_invoked.colliderInstanceID);
+                translator.Push(L, gen_to_be_invoked.colliderEntityId);
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
