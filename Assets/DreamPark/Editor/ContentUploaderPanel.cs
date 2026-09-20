@@ -40,6 +40,13 @@ namespace DreamPark {
         private bool uploadSucceeded = false;
         private bool uploadBuildMode = true;
 
+        // Suppresses UI-only dialogs/browser launches while the optional Unity
+        // Pipeline integration owns the upload lifecycle. This field must live
+        // in the package-independent half of the partial class: during a fresh
+        // SDK import DreamParkReleaseCommands.cs is intentionally compiled out
+        // until its UPM dependency has resolved.
+        private bool automatedReleaseMode = false;
+
         // Pending test build state — populated when the user clicks "Check
         // Patch Size" from the test build dialog and a one-shot estimate
         // runs (compile + diff, no upload). The bundles sit in ServerData/

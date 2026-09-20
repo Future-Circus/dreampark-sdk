@@ -476,10 +476,6 @@ namespace DreamPark
 
     public partial class ContentUploaderPanel
     {
-        // Suppresses UI-only dialogs/browser launches while a CLI command owns the lifecycle.
-        // The command returns every failure as structured JSON instead.
-        private bool automatedReleaseMode;
-
         internal static async Task<DreamParkContentReleaseResponse> RunAutomatedRelease(
             string contentId, string notes, UploadMode mode, bool includeMacOS,
             bool includeWindows, bool cleanEachTarget)
