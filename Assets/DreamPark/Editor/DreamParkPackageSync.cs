@@ -38,9 +38,9 @@ namespace DreamPark
     // ordering matters: the original 1.7.9 implementation let those integrations
     // fail Assembly-CSharp-Editor before this watcher could ever execute.
     //
-    // NEVER touches or downgrades a package a creator's project already has for
-    // its own reasons — only adds keys that are missing entirely. Never rewrites
-    // unrelated parts of the manifest, only patches the specific missing keys.
+    // Never downgrades a creator's project or replaces a custom Git/file source.
+    // Missing packages are added, and ordinary registry versions below the SDK's
+    // declared minimum are raised to that minimum. Newer versions stay untouched.
     internal static class DreamParkPackageSync
     {
         private const string RequiredPackagesAssetPath = "Assets/DreamPark/Resources/RequiredPackages.json";
@@ -137,25 +137,38 @@ namespace DreamPark
                 return;
             }
 
-            // Only ADD keys that are entirely missing. Never touch an existing
-            // entry — a creator may have a newer or differently-sourced version
-            // for their own reasons, and this tool's job is "make it compile,"
-            // not "make it match."
+            // Add missing dependencies and raise older registry versions to the
+            // SDK minimum. Preserve newer versions and non-registry sources (Git,
+            // file:, tarballs): comparing or replacing those would be guesswork.
             var added = new List<string>();
+            var upgraded = new List<string>();
+            var changedValues = new Dictionary<string, string>(StringComparer.Ordinal);
             for (int i = 0; i < packages.keys.Count; i++)
             {
                 string id = packages.keys[i];
                 if (string.IsNullOrEmpty(id)) continue;
-                if (deps.HasField(id)) continue;
 
                 string value = packages.list[i] != null ? packages.list[i].stringValue : null;
                 if (string.IsNullOrEmpty(value)) continue;
 
-                deps.AddField(id, value);
-                added.Add(id);
+                if (!deps.HasField(id))
+                {
+                    deps.AddField(id, value);
+                    added.Add(id);
+                    changedValues[id] = value;
+                    continue;
+                }
+
+                var existingField = deps.GetField(id);
+                string existingValue = existingField != null ? existingField.stringValue : null;
+                if (!IsOlderRegistryVersion(existingValue, value)) continue;
+
+                deps.SetField(id, value);
+                upgraded.Add($"{id} ({existingValue} → {value})");
+                changedValues[id] = value;
             }
 
-            if (added.Count == 0)
+            if (changedValues.Count == 0)
             {
                 EnablePackageIntegrationsIfReady();
                 if (interactive)
@@ -178,9 +191,11 @@ namespace DreamPark
                 return;
             }
             var verifyDeps = verify.GetField("dependencies");
-            if (verifyDeps == null || added.Any(id => !verifyDeps.HasField(id)))
+            if (verifyDeps == null || changedValues.Any(change =>
+                    !verifyDeps.HasField(change.Key)
+                    || verifyDeps.GetField(change.Key).stringValue != change.Value))
             {
-                Debug.LogWarning("[DreamPark] Package sync aborted — the merged manifest is missing an added key after re-parse.");
+                Debug.LogWarning("[DreamPark] Package sync aborted — a changed dependency did not survive manifest re-parse.");
                 return;
             }
 
@@ -201,8 +216,10 @@ namespace DreamPark
 
             File.WriteAllText(manifestFullPath, newManifestText);
 
-            Debug.Log($"[DreamPark] Added {added.Count} missing package(s) to {ManifestRelativePath}: "
-                    + string.Join(", ", added) + ". Resolving...");
+            var summary = new List<string>();
+            if (added.Count > 0) summary.Add($"added {added.Count}: {string.Join(", ", added)}");
+            if (upgraded.Count > 0) summary.Add($"upgraded {upgraded.Count}: {string.Join(", ", upgraded)}");
+            Debug.Log($"[DreamPark] Synced required packages in {ManifestRelativePath} ({string.Join("; ", summary)}). Resolving...");
 
             // Kick the resolver so the added dependencies actually get fetched
             // rather than sitting unresolved in the manifest until some unrelated
@@ -219,10 +236,45 @@ namespace DreamPark
             if (interactive)
             {
                 EditorUtility.DisplayDialog("DreamPark",
-                    $"Added {added.Count} missing package(s):\n\n" + string.Join("\n", added)
+                    $"Synced {changedValues.Count} required package(s):\n\n"
+                    + string.Join("\n", added.Concat(upgraded))
                     + "\n\nResolving now — the project will recompile once packages finish fetching.",
                     "OK");
             }
+        }
+
+        private static bool IsOlderRegistryVersion(string installed, string required)
+        {
+            if (!TryParseRegistryVersion(installed, out var installedVersion, out bool installedPrerelease)
+                || !TryParseRegistryVersion(required, out var requiredVersion, out bool requiredPrerelease))
+                return false;
+
+            int comparison = installedVersion.CompareTo(requiredVersion);
+            if (comparison != 0) return comparison < 0;
+
+            // At the same numeric version, a stable release is newer than a
+            // prerelease. We deliberately do not try to order two different
+            // prerelease labels; UPM's full SemVer rules are richer than a safe
+            // bootstrapper needs, and guessing could replace a creator's choice.
+            return installedPrerelease && !requiredPrerelease;
+        }
+
+        private static bool TryParseRegistryVersion(
+            string value, out Version version, out bool prerelease)
+        {
+            version = null;
+            prerelease = false;
+            if (string.IsNullOrWhiteSpace(value)) return false;
+
+            int dash = value.IndexOf('-');
+            string numeric = dash >= 0 ? value.Substring(0, dash) : value;
+            prerelease = dash >= 0;
+
+            // Reject Git URLs, file paths, ranges, and other UPM source syntax.
+            if (numeric.Any(c => !char.IsDigit(c) && c != '.')) return false;
+            int componentCount = numeric.Count(c => c == '.') + 1;
+            if (componentCount < 2 || componentCount > 4) return false;
+            return Version.TryParse(numeric, out version);
         }
 
         private static void EnablePackageIntegrationsIfReady()
