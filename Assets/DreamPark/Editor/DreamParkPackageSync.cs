@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using Defective.JSON;
 using UnityEditor;
+using UnityEditor.Build;
 using UnityEditor.PackageManager;
 using UnityEngine;
 
@@ -27,20 +28,15 @@ namespace DreamPark
     // compile error takes out the whole Assembly-CSharp-Editor assembly, not just
     // the one file that needed the package. Confirmed against a real import.
     //
-    // HOW THIS ACTUALLY HELPS, AND ITS REAL LIMIT
+    // BOOTSTRAP ORDER
     //
-    // A .unitypackage import ALWAYS leaves the editor mid-compile by the time any
-    // AssetPostprocessor callback fires — see DreamParkPackageSyncWatcher.Settle
-    // below and SDKVersionWatcher's own comment, which established this for real in
-    // this codebase, not as an assumption. So this cannot prevent the FIRST
-    // compile-error flash if new package-dependent files land before their package
-    // does. What it does do: once that broken compile settles, patch
-    // Packages/manifest.json with whatever is missing and kick off a package
-    // resolve, so the NEXT recompile — automatic, no human involved — succeeds. A
-    // permanently broken import becomes a self-healing one instead. Whether Unity's
-    // resolve-then-recompile ordering actually plays out this cleanly needs a
-    // live-Editor test to be certain; this is the theoretically-correct mechanism
-    // and matches SDKVersionWatcher's proven shape, but has not been run for real.
+    // Package-dependent editor integrations are guarded by
+    // DREAMPARK_SDK_PACKAGES_READY. That lets this package-free bootstrap compile
+    // first in an older consumer project, add the missing manifest entries, and
+    // resolve them. On the next domain reload it verifies that Unity has actually
+    // registered every compile-time package before enabling the integrations. This
+    // ordering matters: the original 1.7.9 implementation let those integrations
+    // fail Assembly-CSharp-Editor before this watcher could ever execute.
     //
     // NEVER touches or downgrades a package a creator's project already has for
     // its own reasons — only adds keys that are missing entirely. Never rewrites
@@ -49,6 +45,17 @@ namespace DreamPark
     {
         private const string RequiredPackagesAssetPath = "Assets/DreamPark/Resources/RequiredPackages.json";
         private const string ManifestRelativePath = "Packages/manifest.json";
+        private const string PackagesReadyDefine = "DREAMPARK_SDK_PACKAGES_READY";
+
+        // Keep this deliberately narrower than RequiredPackages.json. Most entries
+        // there are runtime dependencies already present in established projects;
+        // these are the packages referenced directly by guarded editor source.
+        private static readonly string[] CompileTimePackageIds =
+        {
+            "com.unity.xr.openxr",
+            "com.unity.xr.meta-openxr",
+            "com.unity.pipeline",
+        };
 
         [MenuItem("DreamPark/Sync Required Packages", false, 3)]
         public static void SyncFromMenu()
@@ -150,6 +157,7 @@ namespace DreamPark
 
             if (added.Count == 0)
             {
+                EnablePackageIntegrationsIfReady();
                 if (interactive)
                     EditorUtility.DisplayDialog("DreamPark", "Already in sync — nothing to add.", "OK");
                 return;
@@ -202,6 +210,12 @@ namespace DreamPark
             try { Client.Resolve(); }
             catch (Exception e) { Debug.LogWarning($"[DreamPark] Client.Resolve() after package sync failed: {e.Message}"); }
 
+            // This succeeds immediately when the packages were already registered,
+            // and otherwise intentionally waits for the domain reload caused by the
+            // package resolve. DreamParkPackageSyncWatcher schedules another pass on
+            // every reload.
+            EnablePackageIntegrationsIfReady();
+
             if (interactive)
             {
                 EditorUtility.DisplayDialog("DreamPark",
@@ -210,21 +224,73 @@ namespace DreamPark
                     "OK");
             }
         }
+
+        private static void EnablePackageIntegrationsIfReady()
+        {
+            UnityEditor.PackageManager.PackageInfo[] registered;
+            try { registered = UnityEditor.PackageManager.PackageInfo.GetAllRegisteredPackages(); }
+            catch { return; }
+
+            if (registered == null) return;
+            var registeredIds = new HashSet<string>(
+                registered.Where(p => p != null && !string.IsNullOrEmpty(p.name)).Select(p => p.name),
+                StringComparer.Ordinal);
+            if (CompileTimePackageIds.Any(id => !registeredIds.Contains(id))) return;
+
+            foreach (var namedTarget in AllNamedBuildTargets())
+            {
+                try
+                {
+                    string defines = PlayerSettings.GetScriptingDefineSymbols(namedTarget);
+                    var defineList = defines.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries)
+                        .Select(s => s.Trim())
+                        .Where(s => s.Length > 0)
+                        .ToList();
+                    if (defineList.Contains(PackagesReadyDefine)) continue;
+
+                    defineList.Add(PackagesReadyDefine);
+                    PlayerSettings.SetScriptingDefineSymbols(namedTarget, string.Join(";", defineList));
+                    Debug.Log($"[DreamPark] Required packages resolved — enabled SDK package integrations for {namedTarget.TargetName}.");
+                }
+                catch
+                {
+                    // Unity throws for targets whose platform module is not installed.
+                }
+            }
+        }
+
+        private static IEnumerable<NamedBuildTarget> AllNamedBuildTargets()
+        {
+            var fields = typeof(NamedBuildTarget).GetFields(
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+            foreach (var field in fields)
+            {
+                if (field.FieldType != typeof(NamedBuildTarget)) continue;
+
+                NamedBuildTarget target;
+                try { target = (NamedBuildTarget)field.GetValue(null); }
+                catch { continue; }
+
+                if (!string.IsNullOrEmpty(target.TargetName)) yield return target;
+            }
+        }
     }
 
-    // Fires when RequiredPackages.json is (re)imported — an SDK update — or on
-    // every domain reload, so an import that already recompiled without this file
-    // present (e.g. a .unitypackage import that dropped straight into a broken
-    // compile before any of this could run) still gets a chance to self-heal once
-    // that compile settles. Same 4-arg shape as SDKVersionWatcher and
-    // ContentFolderWatchdog.AssetPostprocessorWatcher, the two existing
-    // precedents for this exact pattern in this file family.
+    // Fires when RequiredPackages.json is (re)imported and after every domain
+    // reload. The reload pass is what enables the guarded integrations after UPM
+    // finishes resolving packages added by the import pass.
+    [InitializeOnLoad]
     internal class DreamParkPackageSyncWatcher : AssetPostprocessor
     {
         private const string RequiredPackagesFileName = "RequiredPackages.json";
 
         private static bool suppressReentrancy;
         private static bool pending;
+
+        static DreamParkPackageSyncWatcher()
+        {
+            Schedule();
+        }
 
         private static void OnPostprocessAllAssets(
             string[] importedAssets,
@@ -235,6 +301,11 @@ namespace DreamPark
             if (suppressReentrancy) return;
             if (!Touches(importedAssets) && !Touches(movedAssets)) return;
 
+            Schedule();
+        }
+
+        private static void Schedule()
+        {
             pending = true;
             EditorApplication.delayCall += Settle;
         }
@@ -256,11 +327,8 @@ namespace DreamPark
         {
             if (!pending) return;
 
-            // Same reasoning as SDKVersionWatcher.Settle: an import that dropped
-            // this file in almost certainly also dropped in whatever new script
-            // needs the packages it lists, and that script is very likely still
-            // compiling — or has already failed to — by the time this callback
-            // fires at all. Re-arm rather than act mid-compile.
+            // Do not edit the package manifest while Unity is compiling or while
+            // Package Manager is already refreshing the asset database.
             if (EditorApplication.isCompiling || EditorApplication.isUpdating)
             {
                 EditorApplication.delayCall += Settle;

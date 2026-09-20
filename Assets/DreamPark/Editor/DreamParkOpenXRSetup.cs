@@ -1,4 +1,4 @@
-#if UNITY_EDITOR
+#if UNITY_EDITOR && DREAMPARK_SDK_PACKAGES_READY
 using System;
 using System.Collections.Generic;
 using System.Linq;

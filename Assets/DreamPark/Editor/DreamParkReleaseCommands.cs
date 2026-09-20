@@ -1,4 +1,4 @@
-#if UNITY_EDITOR && !DREAMPARKCORE
+#if UNITY_EDITOR && !DREAMPARKCORE && DREAMPARK_SDK_PACKAGES_READY
 using System;
 using System.Collections.Generic;
 using System.IO;
