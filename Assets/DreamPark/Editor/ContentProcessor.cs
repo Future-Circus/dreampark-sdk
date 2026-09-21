@@ -731,6 +731,11 @@ namespace DreamPark {
         {
             assetPath = assetPath.Replace("\\", "/");
 
+            // Version-controlled uploader metadata is published through the content
+            // API / release manifest, not shipped as a runtime Addressable.
+            if (assetPath.EndsWith("/.dreampark-sequence.json", StringComparison.OrdinalIgnoreCase))
+                return true;
+
             if (disallowedExtensionsList.Any(ext => assetPath.EndsWith(ext, StringComparison.OrdinalIgnoreCase)))
             {
                 Debug.LogWarning($"⏭️ Skipped disallowed extension asset: {assetPath}");
@@ -827,6 +832,7 @@ namespace DreamPark {
         {
             if (string.IsNullOrEmpty(assetPath)) return true;
             assetPath = assetPath.Replace("\\", "/");
+            if (assetPath.EndsWith("/.dreampark-sequence.json", StringComparison.OrdinalIgnoreCase)) return true;
             if (disallowedExtensionsList.Any(ext => assetPath.EndsWith(ext, StringComparison.OrdinalIgnoreCase))) return true;
             if (assetPath.Contains("/Editor/")) return true;
             if (assetPath.IndexOf("/ThirdPartyLocal/", StringComparison.OrdinalIgnoreCase) >= 0) return true;

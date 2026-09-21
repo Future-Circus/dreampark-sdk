@@ -199,6 +199,7 @@ namespace DreamPark {
         private enum ContentRootKind { Attraction, Prop, Player }
         private class ContentRootEntry
         {
+            public string guid;
             public string assetPath;
             public string name;
             public ContentRootKind kind;
@@ -225,10 +226,22 @@ namespace DreamPark {
             // burning CPU on repaints.
             public double firstPollTime;
             public string subLabel;
+            public bool requiredForGame;
+            public bool sequenceCompatible;
+            public bool isDreamSequence;
         }
         private List<ContentRootEntry> contentRoots = new List<ContentRootEntry>();
         private string contentRootsContentId;
         private bool contentRootsDirty;
+        [SerializeField] private ContentSequenceStore.Data sequenceLayout;
+        [SerializeField] private string sequenceUndoContentId;
+        private string editingSequencePosition;
+        private string sequencePositionText = "";
+        private string pendingSequenceDrag;
+        private Vector2 pendingSequenceDragStart;
+        private bool sequenceDragWasStarted;
+        private string firstSequenceAttractionGuid;
+        private string lastSequenceAttractionGuid;
 
         // ── Badges ──────────────────────────────────────────────────────
         // The badge cards this content package defines. Unlike contentRoots,
@@ -357,6 +370,7 @@ namespace DreamPark {
             // user clicks the panel and forces a repaint).
             AdminState.AdminStateChanged += Repaint;
             PreUploadChecks.PreUploadCheckRunner.ReportChanged += OnPreUploadReportChanged;
+            Undo.undoRedoPerformed += OnSequenceUndoRedo;
 
             preUploadChecksCleared = false;
 
@@ -413,6 +427,7 @@ namespace DreamPark {
             PreviewEditorWindow.PreviewSaved -= OnPreviewSaved;
             AdminState.AdminStateChanged -= Repaint;
             PreUploadChecks.PreUploadCheckRunner.ReportChanged -= OnPreUploadReportChanged;
+            Undo.undoRedoPerformed -= OnSequenceUndoRedo;
             EditorApplication.update -= PumpAdvisoryPreUploadScan;
             preUploadAdvisoryScheduled = false;
         }
@@ -1609,6 +1624,7 @@ namespace DreamPark {
         // Troubleshooting → Update Attraction Dimensions (all content folders).
         private class DimensionUploadRoot
         {
+            public string guid;
             public string name;
             public string resourceName;
             public float widthFt;
@@ -1617,7 +1633,7 @@ namespace DreamPark {
             // same call independently off the row's own kind — this flag is a
             // console nicety, never the authority.
             public bool isProp;
-            // LevelTemplate.WallsWireValue / PropTemplate.PublishedWallSideToken
+            // LevelTemplate.WallsWireValue / PropTemplate.WallsWireValue
             // — comma-joined axis tokens ("+z,-x") in the prefab's own local
             // frame, "" when no side is toggled. GENERATE_LAYOUT (dreampark-core
             // SpaceMapPacker) parses this to auto-route items into its wall
@@ -1629,6 +1645,14 @@ namespace DreamPark {
             // AddField below) so the server's own 10ft default stays in
             // control rather than a sentinel value trying to mean two things.
             public float wallHeightFt;
+            // Optional flexible-packing metadata. Kept off prop rows: this is
+            // an AttractionTemplate layout family, not a generic collider size.
+            public AttractionPackingBake packingBake;
+            public float safeArea;
+            public bool requiredForGame;
+            public bool sequenceCompatible;
+            public bool hidden;
+            public bool participatesInSequence;
         }
 
         // Backend catalog key derivation, shared with the preview walk: the
@@ -1679,6 +1703,11 @@ namespace DreamPark {
                 bool isProp;
                 string walls;
                 float wallHeightFt = 0f;
+                AttractionPackingBake packingBake = null;
+                float safeArea = 0f;
+                bool requiredForGame = false;
+                bool sequenceCompatible = false;
+                bool participatesInSequence = false;
 
                 LevelTemplate level = prefab.GetComponent<LevelTemplate>();
                 if (level != null)
@@ -1690,6 +1719,18 @@ namespace DreamPark {
                     isProp = false;
                     walls = level.WallsWireValue;
                     if (!string.IsNullOrEmpty(walls)) wallHeightFt = level.GetWallHeightMeters() * FeetPerMeter;
+                    var attraction = level as AttractionTemplate;
+                    if (attraction != null && attraction.HasPackingBake)
+                    {
+                        packingBake = attraction.PackingBake;
+                        safeArea = attraction.safeArea;
+                    }
+                    if (attraction != null)
+                    {
+                        requiredForGame = attraction.gameRequiresAttraction;
+                        sequenceCompatible = DreamSequenceCompatibility.IsCompatible(attraction);
+                        participatesInSequence = prefab.GetComponent<DreamSequenceTemplate>() == null;
+                    }
                 }
                 else
                 {
@@ -1707,12 +1748,13 @@ namespace DreamPark {
                     widthFt = meters.x * FeetPerMeter;
                     lengthFt = meters.y * FeetPerMeter;
                     isProp = true;
-                    walls = prop.PublishedWallSideToken;
+                    walls = prop.WallsWireValue;
                     if (!string.IsNullOrEmpty(walls)) wallHeightFt = prop.GetWallHeightMeters() * FeetPerMeter;
                 }
 
                 list.Add(new DimensionUploadRoot
                 {
+                    guid = guid,
                     name = Path.GetFileNameWithoutExtension(path),
                     resourceName = ResourceNameForAssetPath(path),
                     widthFt = widthFt,
@@ -1720,7 +1762,24 @@ namespace DreamPark {
                     lengthFt = lengthFt,
                     isProp = isProp,
                     walls = walls,
+                    packingBake = packingBake,
+                    safeArea = safeArea,
+                    requiredForGame = requiredForGame,
+                    sequenceCompatible = sequenceCompatible,
+                    participatesInSequence = participatesInSequence,
                 });
+            }
+
+            var layout = ContentSequenceStore.LoadAndReconcile(idForUpload,
+                list.Where(root => root.participatesInSequence).Select(root => root.guid));
+            ContentSequenceStore.Save(idForUpload, layout);
+            string[] active = ContentSequenceStore.Flatten(layout).ToArray();
+            string first = active.FirstOrDefault();
+            string last = active.LastOrDefault();
+            foreach (DimensionUploadRoot root in list.Where(root => root.participatesInSequence))
+            {
+                root.hidden = ContentSequenceStore.IsHidden(layout, root.guid);
+                root.requiredForGame = root.requiredForGame || root.guid == first || root.guid == last;
             }
             return list;
         }
@@ -1763,6 +1822,14 @@ namespace DreamPark {
                 // server's own 10ft default stays in control — see the field's
                 // own comment on DimensionUploadRoot.
                 if (r.wallHeightFt > 0f) row.AddField("wallHeightFt", r.wallHeightFt);
+                if (r.packingBake != null && r.packingBake.IsValid)
+                    row.AddField("packing", BuildPackingUpload(r.packingBake, r.safeArea));
+                if (!r.isProp)
+                {
+                    row.AddField("requiredForGame", r.requiredForGame);
+                    row.AddField("sequenceCompatible", r.sequenceCompatible);
+                    row.AddField("hidden", r.hidden);
+                }
                 arr.Add(row);
                 // The size-reference ladder bottoms out at a 4 x 4 ft phone booth,
                 // so EVERY prop would tag "fits a Phone Booth" — a line that reads
@@ -1819,6 +1886,54 @@ namespace DreamPark {
                 Debug.LogWarning("[Dimensions] upload failed for " + idForUpload + ": " + err);
                 if (interactive) EditorUtility.DisplayDialog("Dimensions upload failed", err, "OK");
             }
+        }
+
+        private static JSONObject BuildPackingUpload(AttractionPackingBake bake, float safeArea)
+        {
+            var packing = new JSONObject(JSONObject.Type.Object);
+            packing.AddField("schemaVersion", AttractionPackingBake.CurrentVersion);
+            packing.AddField("safeAreaInset", Mathf.Clamp(safeArea, 0f, 0.49f));
+            packing.AddField("authored", PackingDimensions(bake.AuthoredFootprintMeters));
+            packing.AddField("safe", PackingDimensions(bake.SafeFootprintMeters));
+            packing.AddField("shrink", PackingDimensions(bake.ShrinkFootprintMeters));
+            packing.AddField("grow", PackingDimensions(bake.GrowFootprintMeters));
+            packing.AddField("essentialShrink", PackingDimensions(bake.EssentialShrinkFootprintMeters));
+            packing.AddField("shrinkScale", PackingScale(bake.ShrinkScale));
+            packing.AddField("growScale", PackingScale(bake.GrowScale));
+            packing.AddField("essentialShrinkScale", PackingScale(bake.EssentialShrinkScale));
+
+            var essential = new JSONObject(JSONObject.Type.Array);
+            var props = bake.Props;
+            for (int i = 0; i < props.Count; i++)
+            {
+                AttractionPropPackingPose prop = props[i];
+                if (prop == null || !prop.Essential) continue;
+                var item = new JSONObject(JSONObject.Type.Object);
+                item.AddField("name", prop.DisplayName);
+                item.AddField("resourceName", prop.ResourceName);
+                item.AddField("hierarchyPath", prop.HierarchyPath);
+                item.AddField("widthFt", prop.FootprintMeters.x * FeetPerMeter);
+                item.AddField("lengthFt", prop.FootprintMeters.y * FeetPerMeter);
+                essential.Add(item);
+            }
+            packing.AddField("essentialProps", essential);
+            return packing;
+        }
+
+        private static JSONObject PackingDimensions(Vector2 meters)
+        {
+            var dimensions = new JSONObject(JSONObject.Type.Object);
+            dimensions.AddField("widthFt", meters.x * FeetPerMeter);
+            dimensions.AddField("lengthFt", meters.y * FeetPerMeter);
+            return dimensions;
+        }
+
+        private static JSONObject PackingScale(Vector2 scale)
+        {
+            var value = new JSONObject(JSONObject.Type.Object);
+            value.AddField("x", scale.x);
+            value.AddField("z", scale.y);
+            return value;
         }
 
         // DreamPark → Troubleshooting: push dimensions for EVERY content
@@ -3508,7 +3623,7 @@ namespace DreamPark {
             return BundlingStrategyPrefs.Current == BundlingStrategy.Smart;
         }
 
-        private static JSONObject BuildUploaderMetadata(UploadMode effectiveMode)
+        private JSONObject BuildUploaderMetadata(UploadMode effectiveMode)
         {
             var bundlingStrategy = BundlingStrategyPrefs.Current;
 
@@ -3542,7 +3657,47 @@ namespace DreamPark {
             // a specific SDK release, and the backend can flag releases built
             // against EOL SDK versions for forced re-upload before they break.
             uploaderMetadata.AddField("sdkVersion", SDKVersion.Current ?? "");
+            uploaderMetadata.AddField("sequenceLayout", BuildSequenceLayoutJson());
             return uploaderMetadata;
+        }
+
+        private JSONObject BuildSequenceLayoutJson()
+        {
+            var result = new JSONObject(JSONObject.Type.Object);
+            result.AddField("schemaVersion", ContentSequenceStore.CurrentVersion);
+            var items = new JSONObject(JSONObject.Type.Array);
+            foreach (var item in sequenceLayout?.items ?? new List<ContentSequenceStore.Entry>())
+            {
+                if (item == null) continue;
+                var node = new JSONObject(JSONObject.Type.Object);
+                node.AddField("kind", item.IsWorld ? "world" : "attraction");
+                if (item.IsWorld)
+                {
+                    node.AddField("id", item.id ?? "");
+                    node.AddField("name", item.name ?? "");
+                    var children = new JSONObject(JSONObject.Type.Array);
+                    foreach (string guid in item.attractionGuids ?? new List<string>())
+                        children.Add(SequenceAttractionJson(guid, false));
+                    node.AddField("attractions", children);
+                }
+                else node.AddField("attraction", SequenceAttractionJson(item.attractionGuid, item.hidden));
+                items.Add(node);
+            }
+            result.AddField("items", items);
+            return result;
+        }
+
+        private JSONObject SequenceAttractionJson(string guid, bool hidden)
+        {
+            var node = new JSONObject(JSONObject.Type.Object);
+            ContentRootEntry entry = contentRoots.FirstOrDefault(e => e.guid == guid);
+            node.AddField("guid", guid ?? "");
+            node.AddField("name", entry?.name ?? "");
+            node.AddField("assetPath", entry?.assetPath ?? AssetDatabase.GUIDToAssetPath(guid));
+            node.AddField("hidden", hidden);
+            node.AddField("required", entry != null && IsEffectivelyRequired(entry));
+            node.AddField("sequenceCompatible", entry != null && entry.sequenceCompatible);
+            return node;
         }
 
         // ── "What you're uploading" preview ──────────────────────────────
@@ -3604,12 +3759,17 @@ namespace DreamPark {
 
                 contentRoots.Add(new ContentRootEntry
                 {
+                    guid = guid,
                     assetPath = path,
                     name = name,
                     kind = kind.Value,
                     customPreview = preview,
                     cachedAsset = prefab,
                     subLabel = subLabel,
+                    requiredForGame = prefab.GetComponent<AttractionTemplate>()?.gameRequiresAttraction ?? false,
+                    sequenceCompatible = DreamSequenceCompatibility.IsCompatible(prefab.GetComponent<AttractionTemplate>()),
+                    isDreamSequence = prefab.GetComponent<DreamSequenceTemplate>() != null
+                        || name.IndexOf("DreamSequence", StringComparison.OrdinalIgnoreCase) >= 0,
                 });
             }
 
@@ -3618,6 +3778,11 @@ namespace DreamPark {
                 .OrderBy(e => (int)e.kind)
                 .ThenBy(e => e.name, StringComparer.OrdinalIgnoreCase)
                 .ToList();
+
+            sequenceLayout = ContentSequenceStore.LoadAndReconcile(contentId,
+                contentRoots.Where(e => e.kind == ContentRootKind.Attraction && !e.isDreamSequence).Select(e => e.guid));
+            sequenceUndoContentId = contentId;
+            ContentSequenceStore.Save(contentId, sequenceLayout);
 
             // Make sure Unity's preview cache has room for everything we're
             // about to ask for. Default cache size (≈100) is fine for a
@@ -3662,8 +3827,15 @@ namespace DreamPark {
             {
                 EditorUtility.DisplayProgressBar(
                     "Rebuilding Previews",
-                    $"Rendering preview PNGs for {contentId}...",
+                    $"Baking packing variants for {contentId}...",
                     0f);
+
+                int baked = AttractionPackingBaker.BakeAllInContent(contentId);
+                Debug.Log($"[ContentUploader] Refreshed packing data for {baked} attraction prefab(s).");
+                EditorUtility.DisplayProgressBar(
+                    "Rebuilding Previews",
+                    $"Rendering preview PNGs for {contentId}...",
+                    0.15f);
 
                 // The real deal: renders each Attraction/Prop prefab into a
                 // PNG file at Assets/Content/{contentId}/Previews/{name}.png.
@@ -3831,7 +4003,8 @@ namespace DreamPark {
                         MessageType.Warning);
                 }
 
-                DrawContentGroup("Attractions", ContentRootKind.Attraction, ref foldAttractions, ParkAssetsAttractionsPrefKey);
+                DrawDreamsGroup();
+                DrawAttractionSequenceGroup();
                 DrawContentGroup("Props",       ContentRootKind.Prop,       ref foldProps,       ParkAssetsPropsPrefKey);
                 DrawContentGroup("Player",      ContentRootKind.Player,     ref foldPlayer,      ParkAssetsPlayerPrefKey);
             }
@@ -3909,6 +4082,657 @@ namespace DreamPark {
                 GUILayout.Space(CardSpacing);
             }
             EditorGUI.indentLevel--;
+        }
+
+        private const string SequenceDragKey = "DreamPark.SequenceDrag";
+
+        private void DrawAttractionSequenceGroup()
+        {
+            var attractions = contentRoots.Where(e => e.kind == ContentRootKind.Attraction && !e.isDreamSequence).ToList();
+            if (attractions.Count == 0) return;
+            if (sequenceLayout == null)
+            {
+                sequenceLayout = ContentSequenceStore.LoadAndReconcile(contentId, attractions.Select(e => e.guid));
+                sequenceUndoContentId = contentId;
+            }
+            string[] flattenedAttractions = ContentSequenceStore.Flatten(sequenceLayout).ToArray();
+            firstSequenceAttractionGuid = flattenedAttractions.FirstOrDefault();
+            lastSequenceAttractionGuid = flattenedAttractions.LastOrDefault();
+
+            GUILayout.Space(4);
+            bool next = EditorGUILayout.Foldout(foldAttractions, $"Attractions & Worlds ({attractions.Count})", true);
+            if (next != foldAttractions)
+            {
+                foldAttractions = next;
+                EditorPrefs.SetBool(ParkAssetsAttractionsPrefKey, next);
+            }
+            if (!foldAttractions) return;
+
+            EditorGUILayout.HelpBox(
+                "This order is published as progression metadata. Drag cards and World headers to reorder them. Drop an attraction anywhere inside an expanded World to place and sort it there.",
+                MessageType.None);
+
+            var gridRun = new List<int>();
+            for (int i = 0; i < sequenceLayout.items.Count; i++)
+            {
+                var item = sequenceLayout.items[i];
+                if (item.hidden) continue;
+                if (item.IsWorld)
+                {
+                    DrawTopLevelGridRun(gridRun, attractions);
+                    gridRun.Clear();
+                    DrawWorldSection(item, i, attractions);
+                }
+                else gridRun.Add(i);
+            }
+            DrawAttractionGridTail(gridRun, attractions);
+        }
+
+        private int SequenceCardsPerRow()
+        {
+            float panelWidth = Mathf.Max(position.width - 24f, CardWidth);
+            return Mathf.Max(1, Mathf.FloorToInt((panelWidth + CardSpacing) / (CardWidth + CardSpacing)));
+        }
+
+        private void DrawTopLevelGridRun(List<int> itemIndices, List<ContentRootEntry> attractions)
+        {
+            if (itemIndices == null || itemIndices.Count == 0) return;
+            int perRow = SequenceCardsPerRow();
+            EditorGUI.indentLevel++;
+            for (int start = 0; start < itemIndices.Count; start += perRow)
+            {
+                GUILayout.BeginHorizontal();
+                GUILayout.Space(EditorGUI.indentLevel * 12f);
+                int rowEnd = Mathf.Min(start + perRow, itemIndices.Count);
+                for (int slot = start; slot < rowEnd; slot++)
+                {
+                    int itemIndex = itemIndices[slot];
+                    var item = sequenceLayout.items[itemIndex];
+                    ContentRootEntry entry = attractions.FirstOrDefault(e => e.guid == item.attractionGuid);
+                    if (entry != null)
+                    {
+                        Rect card = DrawCard(entry, true);
+                        DrawSequenceCardDecorations(card, itemIndex + 1, entry, "a:" + entry.guid);
+                        DrawSequenceDrag(card, "a:" + entry.guid);
+                        HandleTopLevelCardDrop(card, ContentSequenceStore.EntryToken(item));
+                        DrawAttractionContextMenu(card, entry, false);
+                    }
+                    if (slot + 1 < rowEnd) GUILayout.Space(CardSpacing);
+                }
+                GUILayout.FlexibleSpace();
+                GUILayout.EndHorizontal();
+                GUILayout.Space(CardSpacing);
+            }
+            EditorGUI.indentLevel--;
+        }
+
+        private void DrawWorldSection(ContentSequenceStore.Entry world, int topIndex, List<ContentRootEntry> attractions)
+        {
+            string foldKey = "DreamPark.ContentUploader.World." + contentId + "." + world.id;
+            bool expanded = EditorPrefs.GetBool(foldKey, true);
+
+            Rect header = GUILayoutUtility.GetRect(0f, 30f, GUILayout.ExpandWidth(true));
+            GUI.Box(header, GUIContent.none, EditorStyles.helpBox);
+            // Register the whole header before its controls draw. A click still
+            // edits/toggles the control under it, while a 3 px movement turns
+            // the same gesture into a World drag from anywhere on the bar.
+            DrawSequenceDrag(header, "w:" + world.id);
+            Rect numberRect = new Rect(header.x + 5f, header.y + 3f, 24f, 24f);
+            DrawPositionEditor(numberRect, "w:" + world.id, topIndex + 1);
+
+            Rect foldRect = new Rect(header.x + 34f, header.y + 5f, 80f, 20f);
+            bool nextExpanded = EditorGUI.Foldout(foldRect, expanded, "WORLD", true, EditorStyles.foldout);
+            if (nextExpanded != expanded) EditorPrefs.SetBool(foldKey, nextExpanded);
+
+            Rect removeRect = new Rect(header.xMax - 58f, header.y + 5f, 52f, 20f);
+            Rect dragRect = new Rect(removeRect.x - 28f, header.y + 5f, 24f, 20f);
+            GUI.Label(dragRect, new GUIContent("≡", "Drag to reorder this World"), EditorStyles.centeredGreyMiniLabel);
+            Rect nameRect = new Rect(foldRect.xMax + 4f, header.y + 4f,
+                Mathf.Max(60f, dragRect.x - foldRect.xMax - 8f), 21f);
+            string nextName = EditorGUI.TextField(nameRect, world.name ?? "New World");
+            if (nextName != world.name)
+            {
+                BeginSequenceChange("Rename World");
+                world.name = nextName;
+                SaveSequenceLayout();
+            }
+
+            if (GUI.Button(removeRect, new GUIContent("Remove", "Remove the World but keep its attractions at this position."), EditorStyles.miniButton))
+            {
+                BeginSequenceChange("Remove World");
+                int insert = topIndex;
+                sequenceLayout.items.RemoveAt(topIndex);
+                foreach (string guid in world.attractionGuids ?? new List<string>())
+                    sequenceLayout.items.Insert(insert++, new ContentSequenceStore.Entry { attractionGuid = guid });
+                SaveSequenceLayout();
+                return;
+            }
+
+            // A World is a full-width line break. Attractions dropped on its header
+            // enter at the start; a dragged World reorders at the same top-level slot.
+            HandleWorldHeaderDrop(header, world.id, topIndex);
+
+            if (!nextExpanded)
+            {
+                GUILayout.Space(CardSpacing * 2f);
+                return;
+            }
+
+            var children = world.attractionGuids ?? (world.attractionGuids = new List<string>());
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            if (children.Count == 0)
+            {
+                Rect empty = GUILayoutUtility.GetRect(0f, 52f, GUILayout.ExpandWidth(true));
+                GUI.Label(empty, "Drop attractions anywhere in this World", EditorStyles.centeredGreyMiniLabel);
+                HandleSequenceDrop(empty, "world|" + world.id + "|0");
+            }
+            else
+            {
+                DrawWorldGrid(world, topIndex, attractions);
+                Rect dropRect = GUILayoutUtility.GetRect(0f, 18f, GUILayout.ExpandWidth(true));
+                GUI.Label(dropRect, new GUIContent("Drop anywhere here to add at the end", "Drop directly on a card to insert at that exact position."), EditorStyles.centeredGreyMiniLabel);
+                HandleSequenceDrop(dropRect, $"world|{world.id}|{children.Count}");
+            }
+            EditorGUILayout.EndVertical();
+            GUILayout.Space(CardSpacing * 2f);
+        }
+
+        private void DrawWorldGrid(ContentSequenceStore.Entry world, int topIndex, List<ContentRootEntry> attractions)
+        {
+            List<string> children = world.attractionGuids;
+            int perRow = SequenceCardsPerRow();
+            for (int start = 0; start < children.Count; start += perRow)
+            {
+                GUILayout.BeginHorizontal();
+                GUILayout.Space(12f);
+                int rowEnd = Mathf.Min(start + perRow, children.Count);
+                for (int childIndex = start; childIndex < rowEnd; childIndex++)
+                {
+                    ContentRootEntry entry = attractions.FirstOrDefault(e => e.guid == children[childIndex]);
+                    if (entry != null)
+                    {
+                        Rect card = DrawCard(entry, true);
+                        DrawSequenceCardDecorations(card, childIndex + 1, entry, "a:" + entry.guid);
+                        DrawSequenceDrag(card, "a:" + entry.guid);
+                        HandleWorldCardDrop(card, world.id, childIndex, entry.guid);
+                        DrawAttractionContextMenu(card, entry, false);
+                    }
+                    if (childIndex + 1 < rowEnd) GUILayout.Space(CardSpacing);
+                }
+                GUILayout.FlexibleSpace();
+                GUILayout.EndHorizontal();
+                GUILayout.Space(CardSpacing);
+            }
+        }
+
+        private void DrawAttractionGridTail(List<int> activeItemIndices, List<ContentRootEntry> attractions)
+        {
+            List<ContentRootEntry> hidden = sequenceLayout.items
+                .Where(item => item != null && !item.IsWorld && item.hidden)
+                .Select(item => attractions.FirstOrDefault(entry => entry.guid == item.attractionGuid))
+                .Where(entry => entry != null).ToList();
+            int activeCount = activeItemIndices?.Count ?? 0;
+            int total = activeCount + hidden.Count + 2;
+            int perRow = SequenceCardsPerRow();
+            EditorGUI.indentLevel++;
+            for (int start = 0; start < total; start += perRow)
+            {
+                GUILayout.BeginHorizontal();
+                GUILayout.Space(EditorGUI.indentLevel * 12f);
+                int rowEnd = Mathf.Min(start + perRow, total);
+                for (int slot = start; slot < rowEnd; slot++)
+                {
+                    if (slot < activeCount)
+                    {
+                        int itemIndex = activeItemIndices[slot];
+                        ContentSequenceStore.Entry item = sequenceLayout.items[itemIndex];
+                        ContentRootEntry entry = attractions.FirstOrDefault(e => e.guid == item.attractionGuid);
+                        if (entry != null)
+                        {
+                            Rect card = DrawCard(entry, true);
+                            DrawSequenceCardDecorations(card, itemIndex + 1, entry, "a:" + entry.guid);
+                            DrawSequenceDrag(card, "a:" + entry.guid);
+                            HandleTopLevelCardDrop(card, ContentSequenceStore.EntryToken(item));
+                            DrawAttractionContextMenu(card, entry, false);
+                        }
+                    }
+                    else if (slot < activeCount + hidden.Count)
+                    {
+                        ContentRootEntry entry = hidden[slot - activeCount];
+                        Color previous = GUI.color;
+                        GUI.color = new Color(previous.r, previous.g, previous.b, previous.a * 0.5f);
+                        Rect card = DrawCard(entry, true);
+                        GUI.color = previous;
+                        DrawAttractionContextMenu(card, entry, true);
+                    }
+                    else if (slot == activeCount + hidden.Count)
+                    {
+                        Rect tile = DrawAddGridTile("Add Attraction", "Create a new Attraction prefab.");
+                        if (GUI.Button(tile, GUIContent.none, GUIStyle.none))
+                            CreateAttractionPrefab();
+                        HandleSequenceDrop(tile, "top-end");
+                    }
+                    else
+                    {
+                        Rect tile = DrawAddGridTile("Add World", "Create a new World at the end of the progression.");
+                        if (GUI.Button(tile, GUIContent.none, GUIStyle.none))
+                            AddWorldAtEnd();
+                        HandleSequenceDrop(tile, "top-end");
+                    }
+                    if (slot + 1 < rowEnd) GUILayout.Space(CardSpacing);
+                }
+                GUILayout.FlexibleSpace();
+                GUILayout.EndHorizontal();
+                GUILayout.Space(CardSpacing);
+            }
+            EditorGUI.indentLevel--;
+        }
+
+        private Rect DrawAddGridTile(string label, string tooltip)
+        {
+            float totalHeight = CardImageSize + CardLabelHeight + 2f;
+            Rect card = GUILayoutUtility.GetRect(CardWidth, totalHeight,
+                GUILayout.Width(CardWidth), GUILayout.Height(totalHeight));
+            Rect image = new Rect(card.x, card.y, CardWidth, CardImageSize);
+            Rect text = new Rect(card.x, card.y + CardImageSize + 2f, CardWidth, CardLabelHeight);
+            GUI.Box(image, new GUIContent("", tooltip), EditorStyles.helpBox);
+            var plus = new GUIStyle(EditorStyles.boldLabel)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = 28,
+            };
+            GUI.Label(image, new GUIContent("+", tooltip), plus);
+            var labelStyle = new GUIStyle(EditorStyles.miniLabel)
+            {
+                alignment = TextAnchor.UpperCenter,
+                fontStyle = FontStyle.Bold,
+                wordWrap = true,
+            };
+            GUI.Label(text, new GUIContent(label, tooltip), labelStyle);
+            return card;
+        }
+
+        private void AddWorldAtEnd()
+        {
+            BeginSequenceChange("Add World");
+            int firstHidden = sequenceLayout.items.FindIndex(item => item.hidden);
+            var world = new ContentSequenceStore.Entry
+            {
+                kind = "world", id = Guid.NewGuid().ToString("N"), name = "New World"
+            };
+            if (firstHidden >= 0) sequenceLayout.items.Insert(firstHidden, world);
+            else sequenceLayout.items.Add(world);
+            SaveSequenceLayout();
+        }
+
+        private void CreateAttractionPrefab()
+        {
+            string folder = "Assets/Content/" + contentId;
+            string path = EditorUtility.SaveFilePanelInProject(
+                "Add Attraction", "A_", "prefab", "Choose a name for the new Attraction.", folder);
+            if (string.IsNullOrEmpty(path)) return;
+
+            var root = new GameObject(Path.GetFileNameWithoutExtension(path));
+            root.AddComponent<AttractionTemplate>();
+            GameObject prefab = null;
+            try
+            {
+                prefab = PrefabUtility.SaveAsPrefabAsset(root, path);
+            }
+            finally
+            {
+                DestroyImmediate(root);
+            }
+            AssetDatabase.SaveAssets();
+            RefreshContentRoots();
+            if (prefab != null)
+            {
+                Selection.activeObject = prefab;
+                EditorGUIUtility.PingObject(prefab);
+            }
+        }
+
+        private void DrawAttractionContextMenu(Rect card, ContentRootEntry entry, bool hidden)
+        {
+            Event evt = Event.current;
+            if (evt.type != EventType.ContextClick || !card.Contains(evt.mousePosition)) return;
+
+            var menu = new GenericMenu();
+            menu.AddItem(new GUIContent(hidden ? "Unhide" : "Hidden"), false, () =>
+            {
+                BeginSequenceChange(hidden ? "Unhide Attraction" : "Hide Attraction");
+                if (ContentSequenceStore.SetHidden(sequenceLayout, entry.guid, !hidden)) SaveSequenceLayout();
+            });
+            bool positionRequiresAttraction = !hidden
+                && (entry.guid == firstSequenceAttractionGuid || entry.guid == lastSequenceAttractionGuid);
+            if (positionRequiresAttraction)
+                menu.AddDisabledItem(new GUIContent("Is Required"), true);
+            else if (entry.requiredForGame)
+                menu.AddItem(new GUIContent("Make Optional"), false, () => SetManualRequired(entry, false));
+            else
+                menu.AddItem(new GUIContent("Make Required"), false, () => SetManualRequired(entry, true));
+            menu.ShowAsContext();
+            evt.Use();
+        }
+
+        private void SetManualRequired(ContentRootEntry entry, bool required)
+        {
+            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(entry.assetPath);
+            AttractionTemplate template = prefab != null ? prefab.GetComponent<AttractionTemplate>() : null;
+            if (template == null) return;
+            Undo.RegisterCompleteObjectUndo(template, required ? "Make Attraction Required" : "Make Attraction Optional");
+            template.gameRequiresAttraction = required;
+            EditorUtility.SetDirty(template);
+            AssetDatabase.SaveAssets();
+            entry.requiredForGame = required;
+            Repaint();
+        }
+
+        private bool IsEffectivelyRequired(ContentRootEntry entry)
+        {
+            if (entry == null) return false;
+            if (entry.requiredForGame) return true;
+            string[] active = ContentSequenceStore.Flatten(sequenceLayout).ToArray();
+            return active.Length > 0 && (entry.guid == active[0] || entry.guid == active[active.Length - 1]);
+        }
+
+        private static void MoveListItem<T>(List<T> list, int from, int to)
+        {
+            if (from < 0 || from >= list.Count || to < 0 || to >= list.Count || from == to) return;
+            T value = list[from]; list.RemoveAt(from); list.Insert(to, value);
+        }
+
+        private void DrawSequenceCardDecorations(Rect card, int position, ContentRootEntry entry, string token)
+        {
+            var numberRect = new Rect(card.x + 4f, card.y + 4f, 24f, 24f);
+            DrawPositionEditor(numberRect, token, position,
+                entry.guid == firstSequenceAttractionGuid,
+                entry.guid == lastSequenceAttractionGuid,
+                IsEffectivelyRequired(entry));
+        }
+
+        private void DrawPositionEditor(Rect rect, string token, int currentPosition,
+            bool isStarter = false, bool isFinal = false, bool isRequired = false)
+        {
+            if (editingSequencePosition == token)
+            {
+                GUI.SetNextControlName("SequencePositionField");
+                sequencePositionText = GUI.TextField(rect, sequencePositionText, 3);
+                EditorGUI.FocusTextInControl("SequencePositionField");
+                if (Event.current.type == EventType.KeyDown
+                    && (Event.current.keyCode == KeyCode.Return || Event.current.keyCode == KeyCode.KeypadEnter))
+                {
+                    CommitSequencePosition(token);
+                    Event.current.Use();
+                }
+                else if (Event.current.type == EventType.MouseDown && !rect.Contains(Event.current.mousePosition))
+                {
+                    CommitSequencePosition(token);
+                }
+                return;
+            }
+
+            Handles.BeginGUI();
+            Color badgeColor = isFinal
+                ? new Color(0.78f, 0.16f, 0.16f, 0.98f)
+                : isStarter || isRequired
+                    ? new Color(0.95f, 0.7f, 0.08f, 0.98f)
+                    : new Color(0.38f, 0.4f, 0.43f, 0.96f);
+            Handles.color = badgeColor;
+            if (isRequired) DrawSequenceStar(rect);
+            else Handles.DrawSolidDisc(rect.center, Vector3.forward, rect.width * 0.5f);
+            Handles.EndGUI();
+            var numberStyle = new GUIStyle(EditorStyles.whiteBoldLabel)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = currentPosition >= 100 ? 8 : 10,
+            };
+            string label = currentPosition.ToString();
+            string tooltip = isStarter && isFinal
+                ? "This is both the starting area and final screen, and is required"
+                : isStarter
+                ? "This is the starting area for the game and is required"
+                : isFinal
+                    ? "This is the final screen and is required"
+                    : isRequired
+                        ? "This attraction is required for the game to function"
+                    : "Click to enter a new position";
+            GUI.Label(rect, new GUIContent(label, tooltip), numberStyle);
+            if (GUI.Button(rect, new GUIContent("", tooltip), GUIStyle.none))
+            {
+                editingSequencePosition = token;
+                sequencePositionText = currentPosition.ToString();
+                EditorGUI.FocusTextInControl("SequencePositionField");
+                Repaint();
+            }
+        }
+
+        private static void DrawSequenceStar(Rect rect)
+        {
+            const int pointCount = 10;
+            var points = new Vector3[pointCount];
+            float outerRadius = Mathf.Min(rect.width, rect.height) * 0.62f;
+            float innerRadius = outerRadius * 0.46f;
+            for (int i = 0; i < pointCount; i++)
+            {
+                float angle = -Mathf.PI * 0.5f + i * Mathf.PI / 5f;
+                float radius = (i & 1) == 0 ? outerRadius : innerRadius;
+                points[i] = new Vector3(
+                    rect.center.x + Mathf.Cos(angle) * radius,
+                    rect.center.y + Mathf.Sin(angle) * radius,
+                    0f);
+            }
+
+            // Draw as ten center triangles so the concave five-point outline
+            // remains exact; Handles.DrawAAConvexPolygon expects convex input.
+            Vector3 center = rect.center;
+            for (int i = 0; i < pointCount; i++)
+                Handles.DrawAAConvexPolygon(center, points[i], points[(i + 1) % pointCount]);
+        }
+
+        private void CommitSequencePosition(string token)
+        {
+            if (int.TryParse(sequencePositionText, out int requested))
+            {
+                requested = Mathf.Max(1, requested);
+                BeginSequenceChange("Change Sequence Position");
+                if (token.StartsWith("w:", StringComparison.Ordinal))
+                {
+                    int from = sequenceLayout.items.FindIndex(x => x.IsWorld && x.id == token.Substring(2));
+                    if (from >= 0) MoveListItem(sequenceLayout.items, from, Mathf.Clamp(requested - 1, 0, sequenceLayout.items.Count - 1));
+                }
+                else if (token.StartsWith("a:", StringComparison.Ordinal))
+                {
+                    string guid = token.Substring(2);
+                    int top = sequenceLayout.items.FindIndex(x => !x.IsWorld && x.attractionGuid == guid);
+                    if (top >= 0) MoveListItem(sequenceLayout.items, top, Mathf.Clamp(requested - 1, 0, sequenceLayout.items.Count - 1));
+                    else
+                    {
+                        var world = sequenceLayout.items.FirstOrDefault(x => x.IsWorld && x.attractionGuids.Contains(guid));
+                        if (world != null)
+                        {
+                            int from = world.attractionGuids.IndexOf(guid);
+                            MoveListItem(world.attractionGuids, from, Mathf.Clamp(requested - 1, 0, world.attractionGuids.Count - 1));
+                        }
+                    }
+                }
+                SaveSequenceLayout();
+            }
+            editingSequencePosition = null;
+            sequencePositionText = "";
+            GUI.FocusControl(null);
+        }
+
+        private void DrawSequenceDrag(Rect rect, string source)
+        {
+            Event evt = Event.current;
+            if (evt.type == EventType.MouseDown && evt.button == 0 && rect.Contains(evt.mousePosition))
+            {
+                pendingSequenceDrag = source;
+                pendingSequenceDragStart = evt.mousePosition;
+                sequenceDragWasStarted = false;
+            }
+            else if (evt.type == EventType.MouseDrag
+                && pendingSequenceDrag == source
+                && Vector2.Distance(pendingSequenceDragStart, evt.mousePosition) >= 3f)
+            {
+                DragAndDrop.PrepareStartDrag();
+                DragAndDrop.SetGenericData(SequenceDragKey, source);
+                DragAndDrop.StartDrag(source.StartsWith("w:", StringComparison.Ordinal)
+                    ? "Reorder World" : "Reorder attraction");
+                pendingSequenceDrag = null;
+                sequenceDragWasStarted = true;
+                evt.Use();
+            }
+            else if (evt.rawType == EventType.MouseUp
+                && (pendingSequenceDrag == source || sequenceDragWasStarted))
+            {
+                pendingSequenceDrag = null;
+                // Keep the drag-click suppression true for the rest of this IMGUI
+                // event; later cards have not drawn yet and must not open Preview.
+                EditorApplication.delayCall += () => sequenceDragWasStarted = false;
+            }
+        }
+
+        private void HandleTopLevelCardDrop(Rect rect, string anchor)
+        {
+            string source = DragAndDrop.GetGenericData(SequenceDragKey) as string;
+            bool after = SourceComesBeforeTarget(source, anchor);
+            HandleSequenceDrop(rect, (after ? "top-after|" : "top-before|") + anchor);
+            DrawSequenceInsertionCue(rect, after, true);
+        }
+
+        private void HandleWorldCardDrop(Rect rect, string worldId, int childIndex, string targetGuid)
+        {
+            string source = DragAndDrop.GetGenericData(SequenceDragKey) as string;
+            bool after = SourceComesBeforeTarget(source, "a:" + targetGuid);
+            HandleSequenceDrop(rect, $"world|{worldId}|{childIndex + (after ? 1 : 0)}");
+            DrawSequenceInsertionCue(rect, after, false);
+        }
+
+        private bool SourceComesBeforeTarget(string source, string target)
+        {
+            if (string.IsNullOrEmpty(source) || string.IsNullOrEmpty(target) || source == target) return false;
+
+            if (source.StartsWith("w:", StringComparison.Ordinal))
+            {
+                string worldId = source.Substring(2);
+                int sourceTop = sequenceLayout.items.FindIndex(item => item.IsWorld && item.id == worldId);
+                int targetTop = sequenceLayout.items.FindIndex(item => ContentSequenceStore.EntryToken(item) == target);
+                return sourceTop >= 0 && targetTop >= 0 && sourceTop < targetTop;
+            }
+
+            if (source.StartsWith("a:", StringComparison.Ordinal) && target.StartsWith("a:", StringComparison.Ordinal))
+            {
+                string sourceGuid = source.Substring(2);
+                string targetGuid = target.Substring(2);
+                List<string> flattened = ContentSequenceStore.Flatten(sequenceLayout).ToList();
+                int sourceIndex = flattened.IndexOf(sourceGuid);
+                int targetIndex = flattened.IndexOf(targetGuid);
+                return sourceIndex >= 0 && targetIndex >= 0 && sourceIndex < targetIndex;
+            }
+            return false;
+        }
+
+        private void DrawSequenceInsertionCue(Rect rect, bool after, bool acceptsWorld)
+        {
+            if (Event.current.type != EventType.Repaint || !rect.Contains(Event.current.mousePosition)) return;
+            string source = DragAndDrop.GetGenericData(SequenceDragKey) as string;
+            if (string.IsNullOrEmpty(source) || (!acceptsWorld && source.StartsWith("w:", StringComparison.Ordinal))) return;
+            float x = after ? rect.xMax - 2f : rect.x;
+            EditorGUI.DrawRect(new Rect(x, rect.y, 3f, rect.height), new Color(0.2f, 0.7f, 1f, 0.95f));
+        }
+
+        private void HandleSequenceDrop(Rect rect, string target)
+        {
+            Event evt = Event.current;
+            if ((evt.type != EventType.DragUpdated && evt.type != EventType.DragPerform) || !rect.Contains(evt.mousePosition)) return;
+            if (!(DragAndDrop.GetGenericData(SequenceDragKey) is string source)) return;
+            DragAndDrop.visualMode = DragAndDropVisualMode.Move;
+            if (evt.type == EventType.DragPerform)
+            {
+                DragAndDrop.AcceptDrag();
+                QueueSequenceMove(source, target);
+                DragAndDrop.SetGenericData(SequenceDragKey, null);
+            }
+            evt.Use();
+        }
+
+        private void HandleWorldHeaderDrop(Rect rect, string worldId, int topIndex)
+        {
+            string source = DragAndDrop.GetGenericData(SequenceDragKey) as string;
+            string target;
+            if (source != null && source.StartsWith("w:", StringComparison.Ordinal))
+            {
+                string anchor = "w:" + worldId;
+                target = (SourceComesBeforeTarget(source, anchor) ? "top-after|" : "top-before|") + anchor;
+            }
+            else target = "world|" + worldId + "|0";
+            HandleSequenceDrop(rect, target);
+        }
+
+        private void QueueSequenceMove(string source, string target)
+        {
+            // Changing the serialized collection during an IMGUI traversal leaves
+            // the remainder of that frame holding stale indices. That was the cause
+            // of Worlds apparently scrambling attractions when dropped.
+            string scheduledContentId = contentId;
+            EditorApplication.delayCall += () =>
+            {
+                if (this == null || sequenceLayout == null
+                    || !string.Equals(contentId, scheduledContentId, StringComparison.Ordinal)) return;
+                ContentSequenceStore.Data nextLayout = ContentSequenceStore.Clone(sequenceLayout);
+                if (!ContentSequenceStore.TryMove(nextLayout, source, target)) return;
+                BeginSequenceChange(source.StartsWith("w:", StringComparison.Ordinal)
+                    ? "Reorder World" : "Reorder Attraction");
+                sequenceLayout = nextLayout;
+                SaveSequenceLayout();
+            };
+        }
+
+        private void BeginSequenceChange(string undoName)
+        {
+            Undo.RegisterCompleteObjectUndo(this, undoName);
+        }
+
+        private void OnSequenceUndoRedo()
+        {
+            if (sequenceLayout == null || string.IsNullOrEmpty(contentId)) return;
+            if (!string.Equals(sequenceUndoContentId, contentId, StringComparison.Ordinal))
+            {
+                RefreshContentRoots();
+                return;
+            }
+            ContentSequenceStore.Save(contentId, sequenceLayout);
+            Repaint();
+        }
+
+        private void SaveSequenceLayout()
+        {
+            ContentSequenceStore.Save(contentId, sequenceLayout);
+            EditorUtility.SetDirty(this);
+            Repaint();
+        }
+
+        private void DrawDreamsGroup()
+        {
+            var dreams = contentRoots.Where(e => e.kind == ContentRootKind.Attraction && e.isDreamSequence).ToList();
+            GUILayout.Space(4);
+            EditorGUILayout.LabelField($"Dreams ({dreams.Count})", EditorStyles.boldLabel);
+            EditorGUILayout.BeginHorizontal();
+            foreach (var dream in dreams) { DrawCard(dream); GUILayout.Space(CardSpacing); }
+            Rect addDreamTile = DrawAddGridTile(
+                "Add Dream Sequence", "Generate the required single-room fallback sequence.");
+            if (GUI.Button(addDreamTile, GUIContent.none, GUIStyle.none))
+            {
+                var byGuid = contentRoots.Where(e => e.kind == ContentRootKind.Attraction && !e.isDreamSequence)
+                    .ToDictionary(e => e.guid, e => e.assetPath, StringComparer.Ordinal);
+                string[] orderedPaths = ContentSequenceStore.Flatten(sequenceLayout, includeHidden: true)
+                    .Where(byGuid.ContainsKey).Select(guid => byGuid[guid]).ToArray();
+                DreamSequenceWizard.Show(contentId, orderedPaths, RefreshContentRoots);
+            }
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndHorizontal();
         }
 
         // ── Badges ──────────────────────────────────────────────────────
@@ -4315,7 +5139,7 @@ namespace DreamPark {
         // repaint forever waiting for something that's never coming.
         private const double PreviewPollTimeoutSeconds = 5.0;
 
-        private void DrawCard(ContentRootEntry entry)
+        private Rect DrawCard(ContentRootEntry entry, bool sequenceInteraction = false)
         {
             // Resolve which texture to draw on this paint. Priority:
             //   1. Hand-curated Previews/{name}.png (if user provided one)
@@ -4457,9 +5281,13 @@ namespace DreamPark {
             // on MouseUp — two different passes — so a Use() inside its true branch
             // would never run during the pass this handler reads. Rect exclusion is
             // event-phase-independent.
-            if (Event.current.type == EventType.MouseDown
+            EventType previewClickEvent = sequenceInteraction ? EventType.MouseUp : EventType.MouseDown;
+            var sequenceOrderRect = new Rect(cardRect.x + 2f, cardRect.y + 2f, 30f, 30f);
+            if (Event.current.type == previewClickEvent
                 && Event.current.button == 0
+                && (!sequenceInteraction || !sequenceDragWasStarted)
                 && cardRect.Contains(Event.current.mousePosition)
+                && (!sequenceInteraction || !sequenceOrderRect.Contains(Event.current.mousePosition))
                 && !(hasBadge && badgeRect.Contains(Event.current.mousePosition)))
             {
                 PreviewEditorWindow.Open(contentId, entry.assetPath, entry.name, entry.subLabel);
@@ -4467,6 +5295,7 @@ namespace DreamPark {
                 if (asset != null) EditorGUIUtility.PingObject(asset);
                 Event.current.Use();
             }
+            return cardRect;
         }
 
         // The set of platforms to include in the manifest. Mirrors the build-
@@ -5946,6 +6775,7 @@ namespace DreamPark {
                         JSONObject metadataUpdate = new JSONObject();
                         metadataUpdate.AddField("contentName", contentName);
                         metadataUpdate.AddField("contentDescription", contentDescription);
+                        metadataUpdate.AddField("sequenceLayout", BuildSequenceLayoutJson());
                         // logoAddress (the Addressables key) is deliberately NOT
                         // sent any more — July 2026 the logo stopped shipping in
                         // a bundle. content.logoImageUrl, pushed by

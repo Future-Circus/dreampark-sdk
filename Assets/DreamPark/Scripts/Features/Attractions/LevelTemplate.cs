@@ -19,10 +19,6 @@ public class LevelTemplateEditor : Editor {
             Vector2 feet = template.DimensionsInFeet;
             EditorGUILayout.HelpBox(AttractionSizeReference.Describe(feet.x, feet.y), MessageType.None);
         }
-        if (GUILayout.Button("Test Real World Calibration")) {
-            var levelTemplate = target as LevelTemplate;
-            levelTemplate.TestRealWorldCalibration();
-        }
     }
 }
 
@@ -38,6 +34,23 @@ public class LevelTemplateEditor : Editor {
         MallCorridor,
         Custom
     }
+
+    /// <summary>
+    /// Footprint edges that must sit against a real wall, in the template's
+    /// local frame. Flags make Unity render this as one multi-select dropdown
+    /// and allow both attractions and props to describe corners, alcoves, or
+    /// pass-throughs with the same authoring model.
+    /// </summary>
+    [System.Flags]
+    public enum WallSide
+    {
+        None = 0,
+        Front = 1 << 0,
+        Back = 1 << 1,
+        Right = 1 << 2,
+        Left = 1 << 3
+    }
+
     public static class GameLevelDimensions
     {
         public static Vector2 GetDimensions(GameLevelSize size)
@@ -142,16 +155,30 @@ public class LevelTemplateEditor : Editor {
         [HideInInspector] public JSONObject floorData;
         public Material floorMaterial;
 
-        [Tooltip("This attraction needs a real wall behind its FORWARD edge (local +Z) — e.g. a portal window or a wall-mounted sign. Published with the attraction's dimensions so layout/AI tools can place it against a real wall.")]
-        public bool wallFront = false;
-        [Tooltip("...its BACK edge (local -Z).")]
-        public bool wallBack = false;
-        [Tooltip("...its RIGHT edge (local +X).")]
-        public bool wallRight = false;
-        [Tooltip("...its LEFT edge (local -X).")]
-        public bool wallLeft = false;
+        [Tooltip("Which footprint edges need a real wall behind them. Select any combination: Front/Back are local +/-Z and Right/Left are local +/-X.")]
+        public WallSide walls = WallSide.None;
         [Tooltip("Draw the required wall(s) as a gizmo plane, 10ft tall by default and taller if this attraction's own content reaches higher.")]
         public bool showWallGizmos = true;
+
+        // The four booleans shipped before walls became a flags dropdown. Keep
+        // their serialized values long enough to migrate existing prefabs, but
+        // hide them so there is only one wall control in the inspector.
+        [SerializeField, HideInInspector, UnityEngine.Serialization.FormerlySerializedAs("wallFront")]
+        private bool _legacyWallFront;
+        [SerializeField, HideInInspector, UnityEngine.Serialization.FormerlySerializedAs("wallBack")]
+        private bool _legacyWallBack;
+        [SerializeField, HideInInspector, UnityEngine.Serialization.FormerlySerializedAs("wallRight")]
+        private bool _legacyWallRight;
+        [SerializeField, HideInInspector, UnityEngine.Serialization.FormerlySerializedAs("wallLeft")]
+        private bool _legacyWallLeft;
+        [SerializeField, HideInInspector] private bool _wallSidesMigrated;
+
+        // Source compatibility for scripts and generated bindings that used
+        // the old booleans. New authoring code should use walls.
+        public bool wallFront { get => HasWall(WallSide.Front); set => SetWall(WallSide.Front, value); }
+        public bool wallBack { get => HasWall(WallSide.Back); set => SetWall(WallSide.Back, value); }
+        public bool wallRight { get => HasWall(WallSide.Right); set => SetWall(WallSide.Right, value); }
+        public bool wallLeft { get => HasWall(WallSide.Left); set => SetWall(WallSide.Left, value); }
 
         /// <summary>
         /// Wire format for the dimensions upload's "walls" field: comma-joined
@@ -171,18 +198,43 @@ public class LevelTemplateEditor : Editor {
             get
             {
                 var sides = new List<string>(4);
-                if (wallFront) sides.Add("+z");
-                if (wallBack) sides.Add("-z");
-                if (wallRight) sides.Add("+x");
-                if (wallLeft) sides.Add("-x");
+                WallSide selected = EffectiveWalls;
+                if ((selected & WallSide.Front) != 0) sides.Add("+z");
+                if ((selected & WallSide.Back) != 0) sides.Add("-z");
+                if ((selected & WallSide.Right) != 0) sides.Add("+x");
+                if ((selected & WallSide.Left) != 0) sides.Add("-x");
                 return string.Join(",", sides);
             }
         }
 
-        private bool HasAnyWall => wallFront || wallBack || wallRight || wallLeft;
+        private WallSide EffectiveWalls => _wallSidesMigrated ? walls : walls | LegacyWalls;
+        private WallSide LegacyWalls =>
+            (_legacyWallFront ? WallSide.Front : WallSide.None) |
+            (_legacyWallBack ? WallSide.Back : WallSide.None) |
+            (_legacyWallRight ? WallSide.Right : WallSide.None) |
+            (_legacyWallLeft ? WallSide.Left : WallSide.None);
+        private bool HasAnyWall => EffectiveWalls != WallSide.None;
+
+        private bool HasWall(WallSide side) => (EffectiveWalls & side) != 0;
+
+        private void SetWall(WallSide side, bool enabled)
+        {
+            MigrateLegacyWalls();
+            if (enabled) walls |= side;
+            else walls &= ~side;
+        }
+
+        private void MigrateLegacyWalls()
+        {
+            if (_wallSidesMigrated) return;
+            walls |= LegacyWalls;
+            _wallSidesMigrated = true;
+        }
+
         #if UNITY_EDITOR
         public void OnValidate()
         {
+            MigrateLegacyWalls();
             _isCustom = size == GameLevelSize.Custom;
             if (floorMaterial == null) {
                 floorMaterial = AssetDatabase.LoadAssetAtPath<Material>("Assets/DreamPark/Materials/Occlusion.mat");
@@ -240,7 +292,7 @@ public class LevelTemplateEditor : Editor {
             if (runtimeCeiling != null) Destroy(runtimeCeiling);
             runtimeCeiling = null;
 
-            Vector2 dims = _isCustom ? GameLevelDimensions.GetDimensionsInMeters(new Vector2(customSize.x, customSize.y)) : GameLevelDimensions.GetDimensionsInMeters(size);
+            Vector2 dims = RuntimeFootprintMeters;
             float pad = Mathf.Max(0f, CeilingPadding);
             float width = dims.x + pad * 2f;
             float height = dims.y + pad * 2f;
@@ -250,9 +302,31 @@ public class LevelTemplateEditor : Editor {
 
         /// <summary>
         /// Public method to regenerate the floor mesh and notify listeners.
+        ///
+        /// RESPECTS generateFloor, matching RegenerateCeiling above, which has always
+        /// checked generateCeiling. This method did not check, and the asymmetry was
+        /// invisible for as long as every template generated a floor.
+        ///
+        /// The Dream Sequence format makes FLOORLESS templates normal: child levels
+        /// play on the DreamTemplate's single shared floor and set generateFloor =
+        /// false, so an unguarded rebuild would hand a level a second floor —
+        /// stacking a collider and a NavMeshSurface on the parent's, at the same
+        /// height, on every level change.
+        ///
+        /// The only thing preventing that before was a guard written in LUA, at
+        /// Assets/Content/Sample/Scripts/dreamsequence-controller.lua.txt:153, which
+        /// no C# caller inherits. Guarding here means the invariant holds for every
+        /// caller instead of for the one that remembered.
+        ///
+        /// No reachable behaviour changes: the two existing callers are that guarded
+        /// Lua path, and CalibrateLevel.Clear() (CalibrateLevel.cs:872) — and
+        /// CalibrateLevel only ever exists ON runtimePlane, which a template with
+        /// generateFloor = false never creates, so that path cannot reach a floorless
+        /// template at all.
         /// </summary>
         public void RegenerateFloor()
         {
+            if (!generateFloor) return;
             GenerateFloorWithHoles();
             SetFloorVisibilityForMode(isBuildMode);
             NotifyLevelTemplateChanged();
@@ -266,7 +340,17 @@ public class LevelTemplateEditor : Editor {
         {
             if (runtimePlane == null)
             {
-                Debug.LogWarning($"[LevelTemplate] SetFloorVisibilityForMode: runtimePlane is null on {gameObject.name}, skipping to preserve calibration data");
+                // Warn only when a floor was EXPECTED. This message is about a template
+                // that wants a floor and has not got one — the case where skipping
+                // preserves calibration data. A template with generateFloor = false has
+                // no runtimePlane by design, and Start() calls this unconditionally
+                // (:198), so without this test every deliberately floorless template
+                // logs a warning on spawn that reads exactly like a defect. Under the
+                // Dream Sequence format that is once per streamed level, on device.
+                if (generateFloor)
+                {
+                    Debug.LogWarning($"[LevelTemplate] SetFloorVisibilityForMode: runtimePlane is null on {gameObject.name}, skipping to preserve calibration data");
+                }
                 return;
             }
 
@@ -299,9 +383,7 @@ public class LevelTemplateEditor : Editor {
     if (runtimePlane != null) Destroy(runtimePlane);
 
     // Dimensions
-    Vector2 dims = _isCustom
-        ? GameLevelDimensions.GetDimensionsInMeters(new Vector2(customSize.x, customSize.y))
-        : GameLevelDimensions.GetDimensionsInMeters(size);
+    Vector2 dims = RuntimeFootprintMeters;
 
     float width  = dims.x;
     float height = dims.y;
@@ -662,7 +744,7 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
             // get dimensions (in meters) — must be custom-aware: the enum
             // overload returns Vector2.zero for GameLevelSize.Custom, which
             // drew a degenerate (invisible) selection outline on custom levels.
-            Vector2 dimensions = new Vector2(Size.x, Size.z);
+            Vector2 dimensions = RuntimeFootprintMeters;
 
             // rectangle points starting from bottom-left corner (counterclockwise)
             Vector3[] rectangle = new Vector3[5];
@@ -678,6 +760,18 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
             get {
                 Vector2 dims = (size == GameLevelSize.Custom) ? GameLevelDimensions.GetDimensionsInMeters(customSize) : GameLevelDimensions.GetDimensionsInMeters(size);
                 return new Vector3(dims.x, 0, dims.y);
+            }
+        }
+
+        /// <summary>
+        /// Footprint used by live floor, nav, calibration and activation systems.
+        /// Ordinary levels use their authored Size; AttractionTemplate overrides
+        /// this after a baked packing variant is selected.
+        /// </summary>
+        public virtual Vector2 RuntimeFootprintMeters {
+            get {
+                Vector3 authored = Size;
+                return new Vector2(authored.x, authored.z);
             }
         }
 
@@ -721,7 +815,7 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
             lr.useWorldSpace = false;
 
             // get dimensions (in meters) — custom-aware, same fix as ShowSelect
-            Vector2 dimensions = new Vector2(Size.x, Size.z);
+            Vector2 dimensions = RuntimeFootprintMeters;
 
             // rectangle points starting from bottom-left corner (counterclockwise)
             Vector3[] rectangle = new Vector3[5];
@@ -856,8 +950,8 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
                     }
                 }
             }
-            Vector2 dimensionsInFeet = _isCustom ? customSize : GameLevelDimensions.GetDimensions(size);
-            Vector2 dimensions = _isCustom ? GameLevelDimensions.GetDimensionsInMeters(new Vector2(customSize.x, customSize.y)) : GameLevelDimensions.GetDimensionsInMeters(size);
+            Vector2 dimensions = RuntimeFootprintMeters;
+            Vector2 dimensionsInFeet = dimensions / 0.3048f;
             Matrix4x4 oldMatrix = Gizmos.matrix;
             Gizmos.matrix = transform.localToWorldMatrix;
             Color levelPurple      = new Color(0.5f, 0, 1f);
@@ -960,10 +1054,11 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
         {
             float height = GetWallHeightMeters();
 
-            DrawWallIfSet(wallFront, new Vector3(0f, height * 0.5f, dimensions.y * 0.5f), new Vector3(dimensions.x, height, 0.05f));
-            DrawWallIfSet(wallBack, new Vector3(0f, height * 0.5f, -dimensions.y * 0.5f), new Vector3(dimensions.x, height, 0.05f));
-            DrawWallIfSet(wallRight, new Vector3(dimensions.x * 0.5f, height * 0.5f, 0f), new Vector3(0.05f, height, dimensions.y));
-            DrawWallIfSet(wallLeft, new Vector3(-dimensions.x * 0.5f, height * 0.5f, 0f), new Vector3(0.05f, height, dimensions.y));
+            WallSide selected = EffectiveWalls;
+            DrawWallIfSet((selected & WallSide.Front) != 0, new Vector3(0f, height * 0.5f, dimensions.y * 0.5f), new Vector3(dimensions.x, height, 0.05f));
+            DrawWallIfSet((selected & WallSide.Back) != 0, new Vector3(0f, height * 0.5f, -dimensions.y * 0.5f), new Vector3(dimensions.x, height, 0.05f));
+            DrawWallIfSet((selected & WallSide.Right) != 0, new Vector3(dimensions.x * 0.5f, height * 0.5f, 0f), new Vector3(0.05f, height, dimensions.y));
+            DrawWallIfSet((selected & WallSide.Left) != 0, new Vector3(-dimensions.x * 0.5f, height * 0.5f, 0f), new Vector3(0.05f, height, dimensions.y));
         }
 
         private static void DrawWallIfSet(bool set, Vector3 center, Vector3 size)

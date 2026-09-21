@@ -49,6 +49,12 @@ namespace DreamPark
         public static bool ManifestFetchSucceeded { get; private set; }
         public static bool ManifestFetchAttempted { get; private set; }
 
+        // Optional exact file paths supplied by the release manifest. This lets a
+        // future release retire assets without requiring Unitypackage itself to
+        // support deletions. SDKUpgradeCleanup rejects paths outside
+        // Assets/DreamPark and rejects directories/wildcards before touching disk.
+        public static List<string> LatestRetiredAssets { get; } = new List<string>();
+
         // Newest-first release-notes history from the manifest's `history`
         // field. Lets the update popup show notes for EVERY version the dev
         // skipped, not just the latest — devs often go several releases
@@ -140,10 +146,16 @@ namespace DreamPark
 
             if (SDKVersion.Compare(current, pending) >= 0)
             {
+                SDKUpgradeCleanup.CommitPendingUpgrade();
                 Debug.Log($"[DreamPark] SDK updated to v{current}.");
                 ManifestUpdated?.Invoke();
                 return;
             }
+
+            // Some package files may have landed even though the version marker
+            // did not. Keep retired files retired rather than reintroducing stale
+            // generated code into a partially updated SDK.
+            SDKUpgradeCleanup.CommitPendingUpgrade();
 
             // The import ran but the version file did not land. The usual cause is
             // Unity's interactive import dialog: we pass interactive: true on purpose
@@ -170,6 +182,7 @@ namespace DreamPark
             ManifestFetchSucceeded = success && response?.json != null && response.json.HasField("latest");
 
             ReleaseHistory.Clear();
+            LatestRetiredAssets.Clear();
             if (ManifestFetchSucceeded)
             {
                 LatestVersion = response.json.GetField("latest").stringValue;
@@ -194,6 +207,21 @@ namespace DreamPark
                             version = entry.GetField("version").stringValue,
                             notes = entry.HasField("releaseNotes") ? entry.GetField("releaseNotes").stringValue : ""
                         });
+                    }
+                }
+
+                // Optional release-level deletion manifest. Unitypackage has no
+                // delete semantics, so the updater consumes these paths before it
+                // imports the package. Older backends simply omit the field.
+                var retiredAssets = response.json.HasField("retiredAssets")
+                    ? response.json.GetField("retiredAssets")
+                    : null;
+                if (retiredAssets != null && retiredAssets.type == JSONObject.Type.Array && retiredAssets.list != null)
+                {
+                    for (int i = 0; i < retiredAssets.list.Count; i++)
+                    {
+                        string path = retiredAssets.list[i]?.stringValue;
+                        if (!string.IsNullOrEmpty(path)) LatestRetiredAssets.Add(path);
                     }
                 }
             }

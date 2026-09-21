@@ -277,7 +277,8 @@ namespace DreamPark
                 Repaint();
 
                 // 3. Upload. Server validates admin access and that version > prior latest.
-                SDKAPI.PublishVersion(newVersion, releaseNotes, bytes, fileName, (success, response) =>
+                string retiredAssets = string.Join("\n", SDKUpgradeCleanup.GetPublishedRetiredAssetPaths());
+                SDKAPI.PublishVersion(newVersion, releaseNotes, bytes, fileName, retiredAssets, (success, response) =>
                 {
                     isPublishing = false;
                     if (success)

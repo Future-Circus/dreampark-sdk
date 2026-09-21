@@ -27,6 +27,7 @@ namespace DreamPark.PreUploadChecks
             {
                 return new IPreUploadCheck[]
                 {
+                    new Checks.DreamSequenceRequiredCheck(),
                     new Checks.DuplicateNamesCheck(),
                     new Checks.SunLightCheck(),
                     new Checks.MetaOcclusionCheck(),
@@ -196,6 +197,21 @@ namespace DreamPark.PreUploadChecks
             bool publishToCache)
         {
             var report = new PreUploadReport { contentId = contentId };
+
+            // The blocking/manual scan must judge Dream Sequences against the
+            // latest authored prefab state, not a packing bake from an earlier
+            // save. Advisory scans stay read-only and cheap.
+            if (!advisoryOnly)
+            {
+                try
+                {
+                    global::AttractionPackingBaker.BakeAllInContent(contentId);
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning($"[DreamPark] Could not refresh attraction packing before checks: {e.Message}");
+                }
+            }
 
             List<ContentRootInfo> roots;
             try
