@@ -1822,8 +1822,16 @@ namespace DreamPark {
                 // server's own 10ft default stays in control — see the field's
                 // own comment on DimensionUploadRoot.
                 if (r.wallHeightFt > 0f) row.AddField("wallHeightFt", r.wallHeightFt);
-                if (r.packingBake != null && r.packingBake.IsValid)
-                    row.AddField("packing", BuildPackingUpload(r.packingBake, r.safeArea));
+                if (!r.isProp)
+                {
+                    // Presence is authoritative. An explicit null clears a
+                    // catalog bake if flexible packing was removed from the
+                    // prefab; omitting the field would leave stale database
+                    // capability data behind forever.
+                    row.AddField("packing", r.packingBake != null && r.packingBake.IsValid
+                        ? BuildPackingUpload(r.packingBake, r.safeArea)
+                        : new JSONObject(JSONObject.Type.Null));
+                }
                 if (!r.isProp)
                 {
                     row.AddField("requiredForGame", r.requiredForGame);
@@ -6163,7 +6171,7 @@ namespace DreamPark {
                             : ((buildAndroid ? 1 : 0) + (buildIos ? 1 : 0)
                              + (buildOsx ? 1 : 0) + (buildWindows ? 1 : 0));
                         int currentStep = 0;
-                        int totalSteps = (build ? 7 + numPlatforms : 0) + 1; // +1 for manifest computation
+                        int totalSteps = (build ? 8 + numPlatforms : 0) + 1; // +1 for manifest computation
                         Action<string> reportStep = (message) =>
                         {
                             currentStep++;
@@ -6257,6 +6265,15 @@ namespace DreamPark {
                                 // though a tracked material references it).
                                 AssetDatabase.SaveAssets();
                                 AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
+
+                                // Bake before Addressables are gathered so the
+                                // prefab shipped in this release and the static
+                                // packing profile uploaded to Firestore describe
+                                // the exact same child poses and ranges.
+                                reportStep("Baking flexible attraction layouts...");
+                                int packingBakes = AttractionPackingBaker.BakeAllInContent(contentId);
+                                Debug.Log($"[ContentUploader] Refreshed packing data for {packingBakes} attraction prefab(s) before build.");
+                                AssetDatabase.SaveAssets();
 
                                 reportStep("Updating addressable groups...");
                                 ContentProcessor.ForceUpdateContent(contentId);
