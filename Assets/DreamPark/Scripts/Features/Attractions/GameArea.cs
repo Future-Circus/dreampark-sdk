@@ -149,11 +149,7 @@ namespace DreamPark {
         public void ComputeBounds()
         {
             if (TryGetComponent(out LevelTemplate levelTemplate)) {
-                Vector2 bounds2D;
-                if (levelTemplate.size == GameLevelSize.Custom)
-                    bounds2D = GameLevelDimensions.GetDimensionsInMeters(levelTemplate.customSize);
-                else
-                    bounds2D = GameLevelDimensions.GetDimensionsInMeters(levelTemplate.size);
+                Vector2 bounds2D = levelTemplate.RuntimeFootprintMeters;
                 unpaddedHalfExtents = new Vector3(bounds2D.x / 2f, 50f, bounds2D.y / 2f);
             } else if (TryGetComponent(out PropTemplate propTemplate)) {
                 // PropTemplates use custom footprint dimensions

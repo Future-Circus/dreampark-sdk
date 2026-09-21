@@ -64,6 +64,34 @@ MonoBehaviour:
   gridX: 0
   gridY: 0
   floorMaterial: {fileID: 2100000, guid: 92daadbc9f8904f32a8d780277254506, type: 2}
+  walls: 0
+  showWallGizmos: 1
+  _legacyWallFront: 0
+  _legacyWallBack: 0
+  _legacyWallRight: 0
+  _legacyWallLeft: 0
+  _wallSidesMigrated: 1
+  gameRequiresAttraction: 0
+  safeAreaInset: 0
+  essentialProps: []
+  maxGrowthScale: {x: 1.25, y: 1.25}
+  shrinkClearanceMeters: 0.08
+  growGroupGapMeters: 0.35
+  growAlignmentToleranceMeters: 0.12
+  packingBake:
+    version: 0
+    authoredFootprintMeters: {x: 0, y: 0}
+    safeFootprintMeters: {x: 0, y: 0}
+    shrinkFootprintMeters: {x: 0, y: 0}
+    growFootprintMeters: {x: 0, y: 0}
+    essentialShrinkFootprintMeters: {x: 0, y: 0}
+    shrinkScale: {x: 0, y: 0}
+    growScale: {x: 0, y: 0}
+    essentialShrinkScale: {x: 0, y: 0}
+    props: []
+  packingPreviewScale: {x: 1, y: 1}
+  packingPreviewEssentialOnly: 0
+  showPackingGizmos: 1
 --- !u!114 &3187582560410740841
 MonoBehaviour:
   m_ObjectHideFlags: 0

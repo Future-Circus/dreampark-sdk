@@ -72,11 +72,154 @@ MonoBehaviour:
   gridX: 0
   gridY: 0
   floorMaterial: {fileID: 2100000, guid: 92daadbc9f8904f32a8d780277254506, type: 2}
-  wallFront: 0
-  wallBack: 0
-  wallRight: 0
-  wallLeft: 0
+  walls: 0
   showWallGizmos: 1
+  _legacyWallFront: 0
+  _legacyWallBack: 0
+  _legacyWallRight: 0
+  _legacyWallLeft: 0
+  _wallSidesMigrated: 1
+  gameRequiresAttraction: 0
+  safeAreaInset: 0
+  essentialProps: []
+  maxGrowthScale: {x: 1.25, y: 1.25}
+  shrinkClearanceMeters: 0.08
+  growGroupGapMeters: 0.35
+  growAlignmentToleranceMeters: 0.12
+  packingBake:
+    version: 4
+    authoredFootprintMeters: {x: 4.2672, y: 4.8768}
+    safeFootprintMeters: {x: 4.2672, y: 4.8768}
+    shrinkFootprintMeters: {x: 2.3727403, y: 2.863847}
+    growFootprintMeters: {x: 5.334, y: 6.096}
+    essentialShrinkFootprintMeters: {x: 4.2672, y: 4.8768}
+    shrinkScale: {x: 0.5560415, y: 0.58723897}
+    growScale: {x: 1.25, y: 1.25}
+    essentialShrinkScale: {x: 1, y: 1}
+    props:
+    - prop: {fileID: 2481521527750901063}
+      hierarchyPath: SharedAnchor/P_TestProp
+      displayName: P_TestProp
+      resourceName: Sample/Props/Generic/P_TestProp
+      essential: 0
+      authoredActive: 1
+      growGroup: 0
+      footprintMeters: {x: 0.50001526, y: 0.50001526}
+      authoredLocalPosition: {x: 0.249, y: 0, z: 0.357}
+      shrunkLocalPosition: {x: 0.19365075, y: 0, z: -0.07554901}
+      grownLocalPosition: {x: 0.3057, y: 0, z: 0.63409996}
+      essentialShrunkLocalPosition: {x: 0.249, y: 0, z: 0.357}
+    - prop: {fileID: 3113800391071651851}
+      hierarchyPath: SharedAnchor/P_TestProp (1)
+      displayName: P_TestProp (1)
+      resourceName: Sample/Props/Generic/P_TestProp
+      essential: 0
+      authoredActive: 1
+      growGroup: 0
+      footprintMeters: {x: 0.50001526, y: 0.50001526}
+      authoredLocalPosition: {x: 0.323, y: 0, z: -0.3110001}
+      shrunkLocalPosition: {x: 0.2401619, y: 0, z: -0.5381882}
+      grownLocalPosition: {x: 0.3797, y: 0, z: -0.03390014}
+      essentialShrunkLocalPosition: {x: 0.323, y: 0, z: -0.3110001}
+    - prop: {fileID: 1730987097368672479}
+      hierarchyPath: SharedAnchor/P_TestProp (2)
+      displayName: P_TestProp (2)
+      resourceName: Sample/Props/Generic/P_TestProp
+      essential: 0
+      authoredActive: 1
+      growGroup: 0
+      footprintMeters: {x: 0.50001526, y: 0.50001526}
+      authoredLocalPosition: {x: -0.27599996, y: 0, z: -0.050000086}
+      shrunkLocalPosition: {x: -0.13632673, y: 0, z: -0.35742646}
+      grownLocalPosition: {x: -0.21929997, y: 0, z: 0.2270999}
+      essentialShrunkLocalPosition: {x: -0.27599996, y: 0, z: -0.050000086}
+    - prop: {fileID: 3435203009809813540}
+      hierarchyPath: SharedAnchor/P_TestProp (3)
+      displayName: P_TestProp (3)
+      resourceName: Sample/Props/Generic/P_TestProp
+      essential: 0
+      authoredActive: 1
+      growGroup: 0
+      footprintMeters: {x: 0.5000153, y: 0.50001526}
+      authoredLocalPosition: {x: 0.028000012, y: 0.506, z: 0.005999908}
+      shrunkLocalPosition: {x: 0.05474595, y: 0.506, z: -0.31864238}
+      grownLocalPosition: {x: 0.08470002, y: 0.506, z: 0.2830999}
+      essentialShrunkLocalPosition: {x: 0.028000012, y: 0.506, z: 0.005999908}
+    - prop: {fileID: 2422385811074043750}
+      hierarchyPath: P_TestPoint
+      displayName: P_TestPoint
+      resourceName: Sample/Props/Generic/P_TestPoint
+      essential: 0
+      authoredActive: 1
+      growGroup: 1
+      footprintMeters: {x: 0.17666152, y: 0.17666152}
+      authoredLocalPosition: {x: 1.517, y: 0, z: -1.94}
+      shrunkLocalPosition: {x: 0.95347786, y: 0, z: -1.3435928}
+      grownLocalPosition: {x: 1.89625, y: 0, z: -2.4250002}
+      essentialShrunkLocalPosition: {x: 1.517, y: 0, z: -1.94}
+    - prop: {fileID: 600630766329157796}
+      hierarchyPath: P_TestPoint (1)
+      displayName: P_TestPoint (1)
+      resourceName: Sample/Props/Generic/P_TestPoint
+      essential: 0
+      authoredActive: 1
+      growGroup: 2
+      footprintMeters: {x: 0.17666152, y: 0.17666152}
+      authoredLocalPosition: {x: -1.747, y: 0, z: -1.018}
+      shrunkLocalPosition: {x: -1.0980394, y: 0, z: -0.70503986}
+      grownLocalPosition: {x: -2.18375, y: 0, z: -1.2725}
+      essentialShrunkLocalPosition: {x: -1.747, y: 0, z: -1.018}
+    - prop: {fileID: 3339716324058334880}
+      hierarchyPath: P_TestPoint (2)
+      displayName: P_TestPoint (2)
+      resourceName: Sample/Props/Generic/P_TestPoint
+      essential: 0
+      authoredActive: 1
+      growGroup: 3
+      footprintMeters: {x: 0.17666152, y: 0.17666152}
+      authoredLocalPosition: {x: 0.97, y: 0, z: 0.172}
+      shrunkLocalPosition: {x: 0.6096728, y: 0, z: 0.119122654}
+      grownLocalPosition: {x: 1.217875, y: 0, z: 0.071625}
+      essentialShrunkLocalPosition: {x: 0.97, y: 0, z: 0.172}
+    - prop: {fileID: 865343481829535579}
+      hierarchyPath: P_Enemy
+      displayName: P_Enemy
+      resourceName: Sample/Props/Generic/P_Enemy
+      essential: 0
+      authoredActive: 1
+      growGroup: 4
+      footprintMeters: {x: 0.47, y: 0.47}
+      authoredLocalPosition: {x: -1.1, y: 0, z: -1.47}
+      shrunkLocalPosition: {x: -0.69138145, y: 0, z: -1.0180831}
+      grownLocalPosition: {x: -1.375, y: 0, z: -1.8375001}
+      essentialShrunkLocalPosition: {x: -1.1, y: 0, z: -1.47}
+    - prop: {fileID: 4119374411150388225}
+      hierarchyPath: P_TestProp (4)
+      displayName: P_TestProp (4)
+      resourceName: Sample/Props/Generic/P_TestProp
+      essential: 0
+      authoredActive: 1
+      growGroup: 0
+      footprintMeters: {x: 0.50001526, y: 0.50001526}
+      authoredLocalPosition: {x: 1.21, y: 0, z: 1.34}
+      shrunkLocalPosition: {x: 0.7605196, y: 0, z: 0.92804855}
+      grownLocalPosition: {x: 1.2667, y: 0, z: 1.6171}
+      essentialShrunkLocalPosition: {x: 1.21, y: 0, z: 1.34}
+    - prop: {fileID: 8196876533043882246}
+      hierarchyPath: P_Pit
+      displayName: P_Pit
+      resourceName: Sample/Props/Generic/P_Pit
+      essential: 0
+      authoredActive: 1
+      growGroup: 3
+      footprintMeters: {x: 1, y: 1}
+      authoredLocalPosition: {x: 1.013, y: 0, z: -0.975}
+      shrunkLocalPosition: {x: 0.6366995, y: 0, z: -0.67525923}
+      grownLocalPosition: {x: 1.260875, y: 0, z: -1.0753751}
+      essentialShrunkLocalPosition: {x: 1.013, y: 0, z: -0.975}
+  packingPreviewScale: {x: 1, y: 1}
+  packingPreviewEssentialOnly: 0
+  showPackingGizmos: 1
 --- !u!114 &742819564840612202
 MonoBehaviour:
   m_ObjectHideFlags: 0

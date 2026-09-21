@@ -22,29 +22,17 @@ namespace DreamPark
     }
 
     /// <summary>
-    /// Which side of a prop's footprint mounts flush against a real wall — a
-    /// torch, a sign, a portal window. A prop only ever needs ONE side (unlike
-    /// LevelTemplate's 4 combinable wall bools), along the prop's local X axis
-    /// (Right/Left), matching the right/forward convention
-    /// TryGetManualFootprint and TryGetColliderFootprint already use. A plain
-    /// (non-[Flags]) enum keeps "no wall" and "one wall" the only
-    /// representable states.
-    ///
-    /// AXIS SETTLED ON X (2026-08-31, Scan Layout group): Mesh's
-    /// GENERATE_LAYOUT solver initially assumed a fixed "-z" (wall BEHIND the
-    /// prop, prop facing +Z into the room) to match PlaceOnWalls' facing
-    /// convention. Web independently re-read Aidan's original ask while
-    /// building the backend contract and confirmed it specifies X, same as
-    /// this file always has — Mesh is updating the solver to accept the X
-    /// token rather than this enum changing to Z. Server does not restrict
-    /// props to one side either (only validates tokens), so a future
-    /// multi-side prop needs no backend change if this enum ever grows.
+    /// The single footprint edge that must sit against a real wall. Values for
+    /// Right and Left retain their original serialized integers so existing
+    /// prop prefabs migrate without changing sides.
     /// </summary>
     public enum PropWallSide
     {
-        None,
-        Right,
-        Left
+        None = 0,
+        Front = 3,
+        Back = 4,
+        Right = 1,
+        Left = 2
     }
 
     [DisallowMultipleComponent][RequireComponent(typeof(GameArea))]
@@ -106,9 +94,9 @@ namespace DreamPark
         [ShowIf("_isManualFootprint")] public Vector2 customFootprintMeters = new Vector2(1f, 1f);
         public Vector2 footprintOffsetMeters = Vector2.zero;
         public bool showFootprintGizmos = true;
-        [Tooltip("If this prop mounts flush against a wall (e.g. a torch or a portal window), which side of its footprint the wall sits on. Published with the prop's dimensions so layout/AI tools can place it against a real wall.")]
+        [Tooltip("The one footprint edge that needs a real wall behind it. Front/Back are local +/-Z and Right/Left are local +/-X.")]
         public PropWallSide wallSide = PropWallSide.None;
-        [Tooltip("Draw the required wall as a gizmo plane when this prop is selected.")]
+        [Tooltip("Draw the required wall with the same filled blue gizmo used by AttractionTemplate.")]
         public bool showWallGizmo = true;
         [HideInInspector] public JSONObject pointData;
         [HideInInspector] public GameObject runtimePlane;
@@ -135,15 +123,30 @@ namespace DreamPark
         public float GetWallHeightMeters() => WallHeightMeasurement.GetWallHeightMeters(transform, SurfaceHeight);
 
         /// <summary>
-        /// This prop's wall side as a wire axis token ("+x"/"-x"), or "" if
-        /// wallSide is None. Always emitted on every dimensions row (never
+        /// This prop's single wall side as an axis token, or "" if none is
+        /// selected. Always emitted on every dimensions row (never
         /// omitted) per the backend contract: undefined means "don't touch
         /// the stored value", "" is the explicit clear a re-authored prop
         /// needs to actually turn a wall off.
         /// </summary>
-        public string PublishedWallSideToken =>
-            wallSide == PropWallSide.Right ? "+x" :
-            wallSide == PropWallSide.Left ? "-x" : "";
+        public string WallsWireValue
+        {
+            get
+            {
+                switch (wallSide)
+                {
+                    case PropWallSide.Front: return "+z";
+                    case PropWallSide.Back: return "-z";
+                    case PropWallSide.Right: return "+x";
+                    case PropWallSide.Left: return "-x";
+                    default: return "";
+                }
+            }
+        }
+
+        // Compatibility alias retained for callers introduced while both
+        // templates briefly shared the plural wire-value name.
+        public string PublishedWallSideToken => WallsWireValue;
 
         public static void NotifyPropTemplateChanged()
         {
@@ -677,63 +680,78 @@ namespace DreamPark
         }
 
 #if UNITY_EDITOR
-        // Was OnDrawGizmos (ran for EVERY prop every editor frame). TryGetWorldFootprint
-        // calls GetComponentsInChildren<Collider> — a hierarchy walk + array allocation —
-        // so per-prop-per-frame it was a major editor-only cost and GC source. Drawing
-        // only for the selected prop keeps the footprint visualization while removing the
-        // per-frame tax across all unselected props.
-        private void OnDrawGizmosSelected()
+        // Wall previews match LevelTemplate: once a wall is declared it stays
+        // visible, even when the prop is not selected. The expensive footprint
+        // walk remains gated to the uncommon wall-authored prop.
+        private void OnDrawGizmos()
         {
+            if (!showWallGizmo || wallSide == PropWallSide.None)
+                return;
             if (!TryGetWorldFootprint(out var footprint, out var surfaceHeight))
                 return;
+            DrawWallGizmos(footprint, surfaceHeight);
+        }
 
-            if (showFootprintGizmos)
-            {
-                Gizmos.color = new Color(1f, 0.6f, 0f, 1f);
-                for (int i = 0; i < footprint.Length; i++)
-                {
-                    Vector2 a = footprint[i];
-                    Vector2 b = footprint[(i + 1) % footprint.Length];
-                    Gizmos.DrawLine(new Vector3(a.x, surfaceHeight, a.y), new Vector3(b.x, surfaceHeight, b.y));
-                }
-            }
+        // The orange footprint is selection-only: unlike the wall preview it
+        // is useful only while sizing a prop, and drawing it for every prop
+        // would walk every collider hierarchy on every editor frame.
+        private void OnDrawGizmosSelected()
+        {
+            if (!showFootprintGizmos || !TryGetWorldFootprint(out var footprint, out var surfaceHeight))
+                return;
 
-            if (showWallGizmo && wallSide != PropWallSide.None)
+            Gizmos.color = new Color(1f, 0.6f, 0f, 1f);
+            for (int i = 0; i < footprint.Length; i++)
             {
-                DrawWallGizmo(footprint, surfaceHeight);
+                Vector2 a = footprint[i];
+                Vector2 b = footprint[(i + 1) % footprint.Length];
+                Gizmos.DrawLine(new Vector3(a.x, surfaceHeight, a.y), new Vector3(b.x, surfaceHeight, b.y));
             }
         }
 
         /// <summary>
         /// footprint[] is ordered (-x,-z),(+x,-z),(+x,+z),(-x,+z) in the prop's
         /// own oriented frame — see TryGetManualFootprint/TryGetColliderFootprint,
-        /// which both build it in that winding. Right is the +x edge (indices
-        /// 1,2), Left is the -x edge (indices 0,3). Drawn from those world-space
-        /// corners directly, the same frame the footprint outline above already
-        /// uses, rather than re-deriving a local frame via Gizmos.matrix — see
-        /// the FootprintMeters docblock on why this component avoids a second
-        /// position/rotation/scale convention living alongside the first.
+        /// which both build it in that winding. Each selected edge is drawn from
+        /// those world-space corners, so collider-derived offsets and root scale
+        /// stay identical to the orange footprint gizmo.
         /// </summary>
-        private void DrawWallGizmo(Vector2[] footprint, float surfaceHeight)
+        private void DrawWallGizmos(Vector2[] footprint, float surfaceHeight)
         {
-            int a = wallSide == PropWallSide.Right ? 1 : 0;
-            int b = wallSide == PropWallSide.Right ? 2 : 3;
-
             float wallHeight = GetWallHeightMeters();
+            switch (wallSide)
+            {
+                case PropWallSide.Back:
+                    DrawWallEdge(footprint, 0, 1, surfaceHeight, wallHeight);
+                    break;
+                case PropWallSide.Right:
+                    DrawWallEdge(footprint, 1, 2, surfaceHeight, wallHeight);
+                    break;
+                case PropWallSide.Front:
+                    DrawWallEdge(footprint, 2, 3, surfaceHeight, wallHeight);
+                    break;
+                case PropWallSide.Left:
+                    DrawWallEdge(footprint, 3, 0, surfaceHeight, wallHeight);
+                    break;
+            }
+        }
+
+        private static void DrawWallEdge(Vector2[] footprint, int a, int b, float surfaceHeight, float wallHeight)
+        {
             Vector3 baseA = new Vector3(footprint[a].x, surfaceHeight, footprint[a].y);
             Vector3 baseB = new Vector3(footprint[b].x, surfaceHeight, footprint[b].y);
-            Vector3 topA = baseA + Vector3.up * wallHeight;
-            Vector3 topB = baseB + Vector3.up * wallHeight;
+            Vector3 edge = baseB - baseA;
+            if (edge.sqrMagnitude <= Mathf.Epsilon) return;
 
+            Matrix4x4 oldMatrix = Gizmos.matrix;
+            Quaternion rotation = Quaternion.LookRotation(Vector3.Cross(edge.normalized, Vector3.up), Vector3.up);
+            Gizmos.matrix = Matrix4x4.TRS((baseA + baseB) * 0.5f + Vector3.up * (wallHeight * 0.5f), rotation, Vector3.one);
+            Vector3 size = new Vector3(edge.magnitude, wallHeight, 0.05f);
+            Gizmos.color = new Color(0.1f, 0.6f, 1f, 0.15f);
+            Gizmos.DrawCube(Vector3.zero, size);
             Gizmos.color = new Color(0.1f, 0.6f, 1f, 1f);
-            Gizmos.DrawLine(baseA, baseB);
-            Gizmos.DrawLine(baseB, topB);
-            Gizmos.DrawLine(topB, topA);
-            Gizmos.DrawLine(topA, baseA);
-            // Diagonal cross so the rectangle reads as a plane rather than a
-            // frame, matching what "a gizmo plane wall" is meant to show.
-            Gizmos.DrawLine(baseA, topB);
-            Gizmos.DrawLine(baseB, topA);
+            Gizmos.DrawWireCube(Vector3.zero, size);
+            Gizmos.matrix = oldMatrix;
         }
 #endif
     }

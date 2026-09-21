@@ -1,0 +1,13 @@
+{
+    "schemaVersion": 2,
+    "items": [
+        {
+            "kind": "attraction",
+            "id": "",
+            "name": "",
+            "attractionGuid": "9fef9800a47514811adbf916c8d1442f",
+            "attractionGuids": [],
+            "hidden": false
+        }
+    ]
+}

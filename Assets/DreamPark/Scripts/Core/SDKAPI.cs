@@ -52,9 +52,10 @@ namespace DreamPark.API
             });
         }
 
-        // Multipart POST: { package: <file>, version: <text>, releaseNotes: <text> }.
+        // Multipart POST: { package, version, releaseNotes, retiredAssets }.
         // Backend gates with `requireAdminJson`; SDK shows the 403 message verbatim.
-        public static void PublishVersion(string version, string releaseNotes, byte[] packageBytes, string fileName, Action<bool, APIResponse> callback)
+        public static void PublishVersion(string version, string releaseNotes, byte[] packageBytes, string fileName,
+            string retiredAssets, Action<bool, APIResponse> callback)
         {
             if (packageBytes == null || packageBytes.Length == 0)
             {
@@ -63,15 +64,20 @@ namespace DreamPark.API
             }
 
             EditorCoroutineUtility.StartCoroutineOwnerless(
-                PublishCoroutine(version, releaseNotes, packageBytes, fileName, callback)
+                PublishCoroutine(version, releaseNotes, packageBytes, fileName, retiredAssets, callback)
             );
         }
 
-        private static IEnumerator PublishCoroutine(string version, string releaseNotes, byte[] packageBytes, string fileName, Action<bool, APIResponse> callback)
+        private static IEnumerator PublishCoroutine(string version, string releaseNotes, byte[] packageBytes, string fileName,
+            string retiredAssets, Action<bool, APIResponse> callback)
         {
             var form = new WWWForm();
             form.AddField("version", version ?? "");
             form.AddField("releaseNotes", releaseNotes ?? "");
+            // Newline-delimited exact paths are easy for multipart form transport
+            // and safe because SDKUpgradeCleanup rejects newline-bearing paths.
+            // This list is cumulative: users may skip several SDK versions.
+            form.AddField("retiredAssets", retiredAssets ?? "");
             string sha256;
             using (var sha = SHA256.Create())
                 sha256 = BitConverter.ToString(sha.ComputeHash(packageBytes)).Replace("-", "").ToLowerInvariant();

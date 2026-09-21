@@ -380,8 +380,9 @@ namespace DreamPark
 
                     byte[] bytes = File.ReadAllBytes(tempPath);
                     string sha256 = SHA256Hex(bytes);
+                    string retiredAssets = string.Join("\n", SDKUpgradeCleanup.GetPublishedRetiredAssetPaths());
                     var published = await AwaitAPI(callback => SDKAPI.PublishVersion(
-                        version, releaseNotes.Trim(), bytes, Path.GetFileName(tempPath), callback));
+                        version, releaseNotes.Trim(), bytes, Path.GetFileName(tempPath), retiredAssets, callback));
                     if (!published.success)
                         throw new InvalidOperationException(ErrorOf(published.response, "SDK publish failed."));
 
