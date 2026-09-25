@@ -4,6 +4,7 @@ using UnityEngine;
 using System.IO;
 using DreamPark.API;
 using DreamPark.Editor;
+using DreamPark.ParkSim;
 using DreamPark.Badges;
 using System;
 using UnityEditor.AddressableAssets;
@@ -32,6 +33,15 @@ namespace DreamPark {
         private bool isLoadingMetadata = false;
         private int? latestPublishedVersionNumber = null;
         private int? lastSchemaVersion = null;
+        // The source project always remains `contentId` (the real folder under
+        // Assets/Content). A beta upload switches only the target identity.
+        // Keeping these separate prevents a beta id from ever being treated as
+        // a local folder while still letting every built/uploaded artifact use
+        // the target id end-to-end.
+        private ContentUploadTarget activeUploadTarget = ContentUploadTarget.Release;
+        private int? betaLatestPublishedVersionNumber = null;
+        private JSONObject betaContentDirectorySnapshot = null;
+        private bool isLoadingBetaTarget = false;
         private string uploadStatusTitle = "";
         private string uploadStatusMessage = "";
         private float uploadStatusProgress = -1f;
@@ -128,11 +138,14 @@ namespace DreamPark {
         // Foldout state for the "Park Assets" preview block. EditorPrefs-
         // backed so collapse choices survive Unity restarts and domain
         // reloads — otherwise the user has to re-collapse every recompile.
+        private const string PackagesFoldPrefKey         = "DreamPark.ContentUploader.Fold.Packages";
         private const string ParkAssetsFoldPrefKey       = "DreamPark.ContentUploader.Fold.ParkAssets";
         private const string ParkAssetsAttractionsPrefKey = "DreamPark.ContentUploader.Fold.ParkAssets.Attractions";
         private const string ParkAssetsPropsPrefKey       = "DreamPark.ContentUploader.Fold.ParkAssets.Props";
         private const string ParkAssetsPlayerPrefKey      = "DreamPark.ContentUploader.Fold.ParkAssets.Player";
         private const string ParkAssetsBadgesPrefKey      = "DreamPark.ContentUploader.Fold.ParkAssets.Badges";
+        private const string OrganizerModePrefKey         = "DreamPark.ContentUploader.OrganizerModeV2";
+        private bool packagesFold = true;
         private bool parkAssetsFold = true;
         private bool foldAttractions = true;
         private bool foldProps = true;
@@ -241,12 +254,27 @@ namespace DreamPark {
         private string contentRootsContentId;
         private bool contentRootsDirty;
         [SerializeField] private ContentSequenceStore.Data sequenceLayout;
+        [SerializeField] private ContentSequenceStore.Data libraryLayout;
+        [SerializeField] private ArenaPackageStore.Data arenaLayout;
         [SerializeField] private string sequenceUndoContentId;
+        private enum OrganizerMode { Arena, Sequence, Adventure }
+        [SerializeField] private OrganizerMode organizerMode = OrganizerMode.Arena;
         private string editingSequencePosition;
         private string sequencePositionText = "";
         private string pendingSequenceDrag;
         private Vector2 pendingSequenceDragStart;
         private bool sequenceDragWasStarted;
+        private string lastSequenceDropSource;
+        private string lastSequenceDropTarget;
+        private Rect lastSequenceDropRect;
+        private double lastSequenceDropTime;
+        private bool sequenceScaffoldQueued;
+        private bool containerScaffoldQueued;
+        private readonly HashSet<string> sequencePreviewAttemptedIds =
+            new HashSet<string>(StringComparer.Ordinal);
+        private Texture2D sequenceTabIcon;
+        private Texture2D adventureTabIcon;
+        private Texture2D arenaTabIcon;
         private string firstSequenceAttractionGuid;
         private string lastSequenceAttractionGuid;
 
@@ -265,6 +293,11 @@ namespace DreamPark {
         // is a light enough pass to run there rather than only inside the
         // pre-upload check.
         private BadgeAttributionScanner.Result badgeAttribution;
+        // Asset path -> badges awarded by that root's Lua. Shared scripts can
+        // resolve to different ids on different prefab instances, so this is
+        // built from BadgeAttributionScanner rather than the package-wide scan.
+        private Dictionary<string, List<BadgeStore.Entry>> badgesByAssetPath =
+            new Dictionary<string, List<BadgeStore.Entry>>(StringComparer.Ordinal);
         // Set when a field is edited; flushed to .badges.json on the next
         // Layout pass rather than on every keystroke.
         private bool badgesDirty;
@@ -398,11 +431,15 @@ namespace DreamPark {
 
         private void LoadFoldoutPrefs()
         {
+            packagesFold    = EditorPrefs.GetBool(PackagesFoldPrefKey,          true);
             parkAssetsFold  = EditorPrefs.GetBool(ParkAssetsFoldPrefKey,        true);
             foldAttractions = EditorPrefs.GetBool(ParkAssetsAttractionsPrefKey, true);
             foldProps       = EditorPrefs.GetBool(ParkAssetsPropsPrefKey,       true);
             foldPlayer      = EditorPrefs.GetBool(ParkAssetsPlayerPrefKey,      true);
             foldBadges      = EditorPrefs.GetBool(ParkAssetsBadgesPrefKey,      true);
+            organizerMode = (OrganizerMode)Mathf.Clamp(
+                EditorPrefs.GetInt(OrganizerModePrefKey, (int)OrganizerMode.Arena),
+                (int)OrganizerMode.Arena, (int)OrganizerMode.Adventure);
         }
 
         private void LoadSectionFoldoutPrefs()
@@ -511,20 +548,26 @@ namespace DreamPark {
             }
         }
 
-        // The Preview Editor just re-baked a preview PNG. If it belongs to the
-        // content package we're showing, drop the cached thumbnails and re-walk
-        // the tree so the freshly-saved PNG appears in the grid immediately.
-        private void OnPreviewSaved(string savedContentId)
+        // The Preview Editor just re-baked one preview PNG. Refresh only that
+        // card: clearing every cached thumbnail here made the whole grid appear
+        // to lose its previews after saving a single asset.
+        private void OnPreviewSaved(string savedContentId, string savedAssetPath)
         {
             if (savedContentId != contentId) return;
-            for (int i = 0; i < contentRoots.Count; i++)
-            {
-                contentRoots[i].customPreview = null;
-                contentRoots[i].autoPreview = null;
-                contentRoots[i].autoPreviewResolved = false;
-                contentRoots[i].firstPollTime = 0;
-            }
-            contentRootsDirty = true;
+            ContentRootEntry entry = contentRoots.FirstOrDefault(root =>
+                string.Equals(root.assetPath, savedAssetPath, StringComparison.Ordinal));
+            if (entry == null) return;
+
+            string previewsFolder = $"Assets/Content/{contentId}/Previews";
+            entry.customPreview = TryLoadPreviewFromFolder(
+                previewsFolder, AssetDatabase.IsValidFolder(previewsFolder), entry.name);
+            entry.autoPreview = null;
+            entry.autoPreviewResolved = entry.customPreview != null;
+            entry.firstPollTime = 0;
+            // AssetDatabase.Refresh inside the renderer raises projectChanged.
+            // That change is fully handled above; avoid replacing the whole card
+            // list on the next OnGUI pass and invalidating unrelated textures.
+            contentRootsDirty = false;
             Repaint();
         }
 
@@ -583,6 +626,7 @@ namespace DreamPark {
 
         private void RefreshContentIdOptions()
         {
+            string previouslySelectedId = contentId;
             contentIdOptions.Clear();
             string contentPath = Path.Combine(Application.dataPath, "Content");
             if (Directory.Exists(contentPath))
@@ -604,6 +648,12 @@ namespace DreamPark {
             {
                 contentId = "";
                 contentIdIndex = 0;
+            }
+            else if (!string.IsNullOrEmpty(previouslySelectedId))
+            {
+                int existingIndex = contentIdOptions.IndexOf(previouslySelectedId);
+                if (existingIndex >= 0) contentIdIndex = existingIndex;
+                else RestoreContentIdSelection();
             }
         }
 
@@ -682,6 +732,7 @@ namespace DreamPark {
             GUILayout.BeginHorizontal();
             EditorGUILayout.LabelField("Content ID", GUILayout.Width(EditorGUIUtility.labelWidth));
             int prevIndex = contentIdIndex;
+            string previousContentId = contentId;
 
             // Disable while uploading — the change handler below wipes
             // releaseNotes and fires metadata refetches, which would silently
@@ -701,7 +752,7 @@ namespace DreamPark {
             }
             EditorGUI.EndDisabledGroup();
             GUILayout.EndHorizontal();
-            if (prevIndex != contentIdIndex)
+            if (prevIndex != contentIdIndex || previousContentId != contentId)
             {
                 // Clear per-content fields on switch so the new selection can't
                 // inherit the previous content's name/description. FetchContentMetadata
@@ -723,7 +774,9 @@ namespace DreamPark {
             // OnGUI tick so a big import doesn't thrash the preview list.
             // Also re-syncs if the cached content id drifts from the
             // selected one (e.g. dropdown restored from prefs).
-            if ((contentRootsDirty || contentRootsContentId != contentId) && !isUploading)
+            bool sequenceDragActive = pendingSequenceDrag != null
+                || DragAndDrop.GetGenericData(SequenceDragKey) is string;
+            if ((contentRootsDirty || contentRootsContentId != contentId) && !isUploading && !sequenceDragActive)
             {
                 RefreshContentRoots();
 
@@ -932,6 +985,7 @@ namespace DreamPark {
                 EndSectionBox();
             }
 
+            CommitCachedSequenceDropOnRelease();
             EditorGUILayout.EndScrollView();
         }
 
@@ -988,6 +1042,93 @@ namespace DreamPark {
             }
         }
 
+        internal void SetActiveUploadTarget(ContentUploadTarget target)
+        {
+            if (activeUploadTarget == target) return;
+            activeUploadTarget = target;
+            ClearPendingProductionEstimateState();
+            patchBaseline = null;
+            patchCurrentSnapshot = null;
+            patchDiff = null;
+            dirtyGroupsEstimate = null;
+            InvalidatePatchBaselineCache();
+            Repaint();
+        }
+
+        private void ShowReleaseUploadFlow(bool build, bool failedOnly = false)
+        {
+            SetActiveUploadTarget(ContentUploadTarget.Release);
+            ContentUploadFlowPopup.Show(this, build, failedOnly, ContentUploadTarget.Release);
+        }
+
+        private void ShowBetaUploadFlow()
+        {
+            if (isLoadingBetaTarget || isUploading) return;
+
+            string expectedBetaId = BetaContentId.DeriveFrom(contentId);
+            if (string.IsNullOrEmpty(expectedBetaId) || !BetaContentId.IsPathSafe(expectedBetaId))
+            {
+                EditorUtility.DisplayDialog(
+                    "Beta target unavailable",
+                    $"'{contentId}' cannot be used to derive a safe beta target. Rename the content folder and try again.",
+                    "OK");
+                return;
+            }
+
+            isLoadingBetaTarget = true;
+            SetUploadStatus(
+                "Preparing beta target",
+                $"Allocating the separate content target '{expectedBetaId}' and loading its version history.",
+                0.02f);
+            Repaint();
+
+            ContentAPI.EnsureBetaContentTarget(contentId, (allocated, allocateResponse) =>
+            {
+                if (!allocated)
+                {
+                    isLoadingBetaTarget = false;
+                    string error = allocateResponse?.json?.GetField("message")?.stringValue
+                        ?? allocateResponse?.error
+                        ?? "The beta target could not be allocated.";
+                    CompleteUploadStatus(false, error);
+                    EditorUtility.DisplayDialog("Beta target unavailable", error, "OK");
+                    return;
+                }
+
+                string allocatedId = allocateResponse?.json?.GetField("contentId")?.stringValue;
+                if (!string.Equals(allocatedId, expectedBetaId, StringComparison.Ordinal))
+                {
+                    isLoadingBetaTarget = false;
+                    string error = $"The backend returned beta target '{allocatedId ?? "(missing)"}', but the SDK expected '{expectedBetaId}'. Upload was stopped before building anything.";
+                    CompleteUploadStatus(false, error);
+                    EditorUtility.DisplayDialog("Beta target mismatch", error, "OK");
+                    return;
+                }
+
+                ContentAPI.GetContent(allocatedId, (loaded, loadResponse) =>
+                {
+                    isLoadingBetaTarget = false;
+                    if (!loaded || loadResponse?.json == null || !loadResponse.json.HasField("content"))
+                    {
+                        string error = loadResponse?.error ?? "The allocated beta target could not be loaded.";
+                        CompleteUploadStatus(false, error);
+                        EditorUtility.DisplayDialog("Beta target unavailable", error, "OK");
+                        return;
+                    }
+
+                    betaContentDirectorySnapshot = loadResponse.json;
+                    JSONObject betaContent = loadResponse.json.GetField("content");
+                    betaLatestPublishedVersionNumber = betaContent.HasField("versions")
+                        && betaContent.GetField("versions").list != null
+                        ? betaContent.GetField("versions").list.Count
+                        : 0;
+                    SetActiveUploadTarget(ContentUploadTarget.Beta);
+                    ResetCompletionStateForNextRun();
+                    ContentUploadFlowPopup.Show(this, true, false, ContentUploadTarget.Beta);
+                });
+            });
+        }
+
         private void DrawLaunchActions(bool sdkOutOfDate)
         {
             bool shippable = HasShippableContent();
@@ -1006,7 +1147,7 @@ namespace DreamPark {
                     MessageType.Info);
                 if (GUILayout.Button("Open Upload Window", GUILayout.Height(24)))
                 {
-                    ContentUploadFlowPopup.Show(this, uploadBuildMode);
+                    ContentUploadFlowPopup.Show(this, uploadBuildMode, false, activeUploadTarget);
                 }
                 GUILayout.Space(6);
             }
@@ -1029,9 +1170,31 @@ namespace DreamPark {
                 // goes stale if the editor stays open across an SDK release.
                 // Out of date → routes to UpdateAvailablePopup instead of the
                 // upload popup.
-                SDKUpdateChecker.EnsureUpToDateThen(() => ContentUploadFlowPopup.Show(this, true));
+                SDKUpdateChecker.EnsureUpToDateThen(() => ShowReleaseUploadFlow(true));
             }
             GUI.enabled = true;
+
+            string betaTargetId = BetaContentId.DeriveFrom(contentId);
+            GUI.enabled = canLaunch && !isLoadingBetaTarget && !string.IsNullOrEmpty(betaTargetId);
+            string betaLabel = isLoadingBetaTarget
+                ? "Preparing Beta Target…"
+                : $"Upload Beta ({betaTargetId})";
+            if (GUILayout.Button(new GUIContent(
+                betaLabel,
+                "Build and upload to a fully separate content target. Its catalog, bundles, versions, schema attribution, metadata, and attraction rows do not touch the release target."),
+                GUILayout.Height(34)))
+            {
+                SaveLogoSelection();
+                SDKUpdateChecker.EnsureUpToDateThen(ShowBetaUploadFlow);
+            }
+            GUI.enabled = true;
+
+            if (!string.IsNullOrEmpty(betaTargetId))
+            {
+                EditorGUILayout.LabelField(
+                    $"Beta is isolated from release as content ID '{betaTargetId}'.",
+                    EditorStyles.wordWrappedMiniLabel);
+            }
 
             GUI.enabled = canLaunch && hasBuildArtifacts;
             string reuploadLabel = hasBuildArtifacts
@@ -1078,7 +1241,7 @@ namespace DreamPark {
                 // Same click-time version gate as Upload Release — a reupload
                 // still publishes bundles built against the stale SDK.
                 bool failedOnlyFinal = useFailedOnly;
-                SDKUpdateChecker.EnsureUpToDateThen(() => ContentUploadFlowPopup.Show(this, false, failedOnlyFinal));
+                SDKUpdateChecker.EnsureUpToDateThen(() => ShowReleaseUploadFlow(false, failedOnlyFinal));
             }
             GUI.enabled = true;
 
@@ -1283,15 +1446,14 @@ namespace DreamPark {
             GUI.enabled = !isUploading && !UploadsBlocked && !string.IsNullOrEmpty(contentId);
             if (GUILayout.Button(new GUIContent(
                 "Update Attraction Dimensions",
-                "Uploads every attraction's authored dimensions (feet) to the attractions " +
-                "catalog, refreshing size info even if the asset didn't change. Operators use " +
-                "these to plan around their real-world space — run this to backfill content " +
-                "published before dimensions existed."),
+                "Rebakes flexible packing, then uploads every attraction's authored dimensions, " +
+                "shrink/grow ranges, safe area, and essential-prop profile to the catalog. Use " +
+                "this to backfill content published before flexible packing metadata existed."),
                 GUILayout.Height(22)))
             {
                 if (EditorUtility.DisplayDialog(
                     "Update Attraction Dimensions",
-                    "Upload authored dimensions for every attraction in \"" + contentId + "\"?",
+                    "Rebake and upload dimensions plus flexible packing for every attraction in \"" + contentId + "\"?",
                     "Upload Dimensions", "Cancel"))
                 {
                     EditorCoroutineUtility.StartCoroutineOwnerless(UploadAttractionDimensionsRoutine(contentId));
@@ -1476,8 +1638,12 @@ namespace DreamPark {
         // preview endpoint is attach-only against rows the server's commit-
         // time catalog sync just created. Silent mode only fills in missing
         // preview PNGs (the compile pipeline already generated them).
-        private IEnumerator ForceUploadAllPreviewsRoutine(string idForUpload, bool interactive = true)
+        private IEnumerator ForceUploadAllPreviewsRoutine(
+            string idForUpload,
+            bool interactive = true,
+            string sourceContentId = null)
         {
+            string localContentId = string.IsNullOrEmpty(sourceContentId) ? idForUpload : sourceContentId;
             string auth = AuthAPI.GetUserAuth();
             if (string.IsNullOrEmpty(auth))
             {
@@ -1488,18 +1654,18 @@ namespace DreamPark {
 
             // 1) Regenerate the preview PNGs (same generator the compile pipeline runs).
             if (interactive) EditorUtility.DisplayProgressBar("Force Upload All Previews", "Regenerating preview images…", 0f);
-            try { ContentProcessor.GenerateAllLevelPreviews(idForUpload, forceRegenerate: interactive); }
+            try { ContentProcessor.GenerateAllLevelPreviews(localContentId, forceRegenerate: interactive); }
             catch (Exception e) { Debug.LogWarning("[Previews] regenerate failed: " + e.Message); }
             AssetDatabase.Refresh();
 
             // 2) Collect attraction/prop roots + their preview bytes.
-            List<PreviewUploadRoot> roots = CollectPreviewUploadRoots(idForUpload);
+            List<PreviewUploadRoot> roots = CollectPreviewUploadRoots(localContentId);
             if (roots.Count == 0)
             {
                 if (interactive)
                 {
                     EditorUtility.ClearProgressBar();
-                    EditorUtility.DisplayDialog("No attractions", "No attractions or props were found under Assets/Content/" + idForUpload + ".", "OK");
+                    EditorUtility.DisplayDialog("No attractions", "No attractions or props were found under Assets/Content/" + localContentId + ".", "OK");
                 }
                 yield break;
             }
@@ -1575,6 +1741,7 @@ namespace DreamPark {
                 string path = AssetDatabase.GUIDToAssetPath(guid);
                 if (string.IsNullOrEmpty(path)) continue;
                 if (path.IndexOf("/ThirdPartyLocal/", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                if (DreamSequenceGenerator.IsSpecialLevelPath(idForUpload, path)) continue;
 
                 GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
                 if (prefab == null) continue;
@@ -1701,6 +1868,7 @@ namespace DreamPark {
                 string path = AssetDatabase.GUIDToAssetPath(guid);
                 if (string.IsNullOrEmpty(path)) continue;
                 if (path.IndexOf("/ThirdPartyLocal/", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                if (DreamSequenceGenerator.IsSpecialLevelPath(idForUpload, path)) continue;
 
                 GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
                 if (prefab == null) continue;
@@ -1755,6 +1923,7 @@ namespace DreamPark {
                     widthFt = meters.x * FeetPerMeter;
                     lengthFt = meters.y * FeetPerMeter;
                     isProp = true;
+                    participatesInSequence = true;
                     walls = prop.WallsWireValue;
                     if (!string.IsNullOrEmpty(walls)) wallHeightFt = prop.GetWallHeightMeters() * FeetPerMeter;
                 }
@@ -1777,16 +1946,24 @@ namespace DreamPark {
                 });
             }
 
+            var orderedPackageGuids = list.Where(root => root.participatesInSequence)
+                    .OrderBy(root => root.isProp ? 1 : 0)
+                    .ThenBy(root => root.name, StringComparer.OrdinalIgnoreCase)
+                    .Select(root => root.guid).ToList();
             var layout = ContentSequenceStore.LoadAndReconcile(idForUpload,
-                list.Where(root => root.participatesInSequence).Select(root => root.guid));
+                orderedPackageGuids, list.Where(root => !root.isProp).Select(root => root.guid), false);
             ContentSequenceStore.Save(idForUpload, layout);
-            string[] active = ContentSequenceStore.Flatten(layout).ToArray();
-            string first = active.FirstOrDefault();
-            string last = active.LastOrDefault();
+            ContentSequenceStore.Data library = ContentSequenceStore.LoadLibraryAndReconcile(
+                idForUpload, orderedPackageGuids, layout);
+            ContentSequenceStore.SaveLibrary(idForUpload, library);
             foreach (DimensionUploadRoot root in list.Where(root => root.participatesInSequence))
             {
-                root.hidden = ContentSequenceStore.IsHidden(layout, root.guid);
-                root.requiredForGame = root.requiredForGame || root.guid == first || root.guid == last;
+                root.hidden = ContentSequenceStore.IsHidden(library, root.guid)
+                    || library.items.Any(item => item != null && item.IsWorld && item.hidden
+                        && (item.attractionGuids ?? new List<string>()).Contains(root.guid));
+                if (!root.isProp)
+                    root.requiredForGame = root.requiredForGame
+                        || root.guid == layout.startGuid || root.guid == layout.endGuid;
             }
             return list;
         }
@@ -1795,8 +1972,13 @@ namespace DreamPark {
         // false = silent post-upload push, mirroring the previews auto-push —
         // must run AFTER the commit because the endpoint is attach-only
         // against rows the server's commit-time catalog sync creates.
-        private static IEnumerator UploadAttractionDimensionsRoutine(string idForUpload, bool interactive = true)
+        private static IEnumerator UploadAttractionDimensionsRoutine(
+            string idForUpload,
+            bool interactive = true,
+            bool rebakeBeforeUpload = true,
+            string sourceContentId = null)
         {
+            string localContentId = string.IsNullOrEmpty(sourceContentId) ? idForUpload : sourceContentId;
             string auth = AuthAPI.GetUserAuth();
             if (string.IsNullOrEmpty(auth))
             {
@@ -1805,13 +1987,29 @@ namespace DreamPark {
                 yield break;
             }
 
-            List<DimensionUploadRoot> roots = CollectDimensionRoots(idForUpload);
+            if (rebakeBeforeUpload)
+            {
+                try
+                {
+                    int baked = AttractionPackingBaker.BakeAllInContent(localContentId);
+                    AssetDatabase.SaveAssets();
+                    Debug.Log("[Dimensions] refreshed packing data for " + baked + " attraction prefab(s) before catalog upload.");
+                }
+                catch (Exception e)
+                {
+                    Debug.LogError("[Dimensions] packing bake failed for " + localContentId + ": " + e.Message);
+                    if (interactive) EditorUtility.DisplayDialog("Packing bake failed", e.Message, "OK");
+                    yield break;
+                }
+            }
+
+            List<DimensionUploadRoot> roots = CollectDimensionRoots(localContentId);
             if (roots.Count == 0)
             {
                 if (interactive)
-                    EditorUtility.DisplayDialog("Nothing to measure", "No attractions or props with a footprint were found under Assets/Content/" + idForUpload + ".", "OK");
+                    EditorUtility.DisplayDialog("Nothing to measure", "No attractions or props with a footprint were found under Assets/Content/" + localContentId + ".", "OK");
                 else
-                    Debug.Log("[Dimensions] auto-push: nothing to send for " + idForUpload + ".");
+                    Debug.Log("[Dimensions] auto-push: nothing to send for " + localContentId + ".");
                 yield break;
             }
 
@@ -1843,8 +2041,8 @@ namespace DreamPark {
                 {
                     row.AddField("requiredForGame", r.requiredForGame);
                     row.AddField("sequenceCompatible", r.sequenceCompatible);
-                    row.AddField("hidden", r.hidden);
                 }
+                row.AddField("hidden", r.hidden);
                 arr.Add(row);
                 // The size-reference ladder bottoms out at a 4 x 4 ft phone booth,
                 // so EVERY prop would tag "fits a Phone Booth" — a line that reads
@@ -1881,6 +2079,7 @@ namespace DreamPark {
             {
                 int updated = result != null && result.GetField("updated") != null ? result.GetField("updated").intValue : roots.Count;
                 int skipped = result != null && result.GetField("skipped") != null ? result.GetField("skipped").intValue : 0;
+                int invalidPacking = result != null && result.GetField("invalidPacking") != null ? result.GetField("invalidPacking").intValue : 0;
                 // Non-zero only if the SDK and server disagree about the wall
                 // token vocabulary — the one failure mode of a two-vocabulary
                 // field, and otherwise silent everywhere (the row still
@@ -1890,11 +2089,14 @@ namespace DreamPark {
                 int droppedWallSides = result != null && result.GetField("droppedWallSides") != null ? result.GetField("droppedWallSides").intValue : 0;
                 string summary = updated + " footprint" + (updated == 1 ? "" : "s") + " updated" +
                     (skipped > 0 ? ", " + skipped + " not in the catalog yet (upload a build first)" : "") +
+                    (invalidPacking > 0 ? ", " + invalidPacking + " packing profile" + (invalidPacking == 1 ? "" : "s") + " rejected (last good database bake preserved)" : "") +
                     (droppedWallSides > 0 ? ", " + droppedWallSides + " wall side" + (droppedWallSides == 1 ? "" : "s") + " rejected by the server (vocabulary mismatch — check for an SDK/backend version skew)" : "") + ".";
                 if (interactive) EditorUtility.DisplayDialog("Dimensions uploaded", summary, "OK");
                 else Debug.Log("[Dimensions] auto-push: " + summary);
                 if (droppedWallSides > 0)
                     Debug.LogWarning("[Dimensions] " + droppedWallSides + " wall side(s) were rejected by the server — the SDK and backend disagree on the wall token vocabulary.");
+                if (invalidPacking > 0)
+                    Debug.LogWarning("[Dimensions] " + invalidPacking + " packing profile(s) were rejected by the server; the last good database bake was preserved. Check for an SDK/backend version skew.");
             }
             else
             {
@@ -1906,7 +2108,7 @@ namespace DreamPark {
         private static JSONObject BuildPackingUpload(AttractionPackingBake bake, float safeArea)
         {
             var packing = new JSONObject(JSONObject.Type.Object);
-            packing.AddField("schemaVersion", AttractionPackingBake.CurrentVersion);
+            packing.AddField("schemaVersion", AttractionPackingBake.CatalogSchemaVersion);
             packing.AddField("safeAreaInset", Mathf.Clamp(safeArea, 0f, 0.49f));
             packing.AddField("authored", PackingDimensions(bake.AuthoredFootprintMeters));
             packing.AddField("safe", PackingDimensions(bake.SafeFootprintMeters));
@@ -1990,7 +2192,7 @@ namespace DreamPark {
         {
             foreach (string id in contentIds)
             {
-                yield return UploadAttractionDimensionsRoutine(id, interactive: contentIds.Count == 1);
+                yield return UploadAttractionDimensionsRoutine(id, interactive: contentIds.Count == 1, rebakeBeforeUpload: true);
                 if (contentIds.Count > 1) Debug.Log("[Dimensions] finished " + id);
             }
             if (contentIds.Count > 1)
@@ -2736,6 +2938,8 @@ namespace DreamPark {
         }
 
         internal string ContentId => contentId;
+        internal ContentUploadTarget ActiveUploadTarget => activeUploadTarget;
+        internal string ActiveUploadContentId => ContentIdForTarget(activeUploadTarget);
         internal string ContentName => contentName;
         internal string ContentDescription => contentDescription;
         internal bool IsUploading => isUploading;
@@ -2747,6 +2951,9 @@ namespace DreamPark {
         internal float UploadStatusProgress => uploadStatusProgress;
         internal bool UploadStatusIsError => uploadStatusIsError;
         internal int? LatestPublishedVersionNumber => latestPublishedVersionNumber;
+        internal int? ActiveLatestPublishedVersionNumber => activeUploadTarget == ContentUploadTarget.Beta
+            ? betaLatestPublishedVersionNumber
+            : latestPublishedVersionNumber;
         internal Texture2D LogoTexture => logoTexture;
 
         internal string ReleaseNotes
@@ -2777,9 +2984,21 @@ namespace DreamPark {
 
         internal string GetVersionSummary()
         {
-            int current = latestPublishedVersionNumber ?? 0;
+            int current = ActiveLatestPublishedVersionNumber ?? 0;
             int next = current + 1;
             return current <= 0 ? $"First release → v{next}" : $"v{current} → v{next}";
+        }
+
+        internal string GetUploadTargetSummary()
+        {
+            return activeUploadTarget == ContentUploadTarget.Beta
+                ? $"Beta · {ActiveUploadContentId}"
+                : $"Release · {contentId}";
+        }
+
+        private string ContentIdForTarget(ContentUploadTarget target)
+        {
+            return target == ContentUploadTarget.Beta ? BetaContentId.DeriveFrom(contentId) : contentId;
         }
 
         private static string GetVersionSummaryAfterUpload(int uploadedVersion)
@@ -2947,13 +3166,13 @@ namespace DreamPark {
             // metadata fetch or a just-completed upload, while the backend
             // snapshot/local fallback already has everything we need to run a
             // real estimate.
-            return GetPreferredPatchBaseline(latestContentDirectorySnapshot) != null;
+            return GetPreferredPatchBaseline(ActiveContentDirectorySnapshot) != null;
         }
 
         internal bool PendingProductionEstimateMatches(UploadMode mode, bool doBuildOsx, bool doBuildWindows)
         {
             if (!HasPendingProductionEstimate) return false;
-            return string.Equals(pendingProductionContentId ?? "", contentId ?? "", StringComparison.OrdinalIgnoreCase)
+            return string.Equals(pendingProductionContentId ?? "", ActiveUploadContentId ?? "", StringComparison.OrdinalIgnoreCase)
                 && pendingProductionMode == mode
                 && pendingProductionBuildOsx == doBuildOsx
                 && pendingProductionBuildWindows == doBuildWindows;
@@ -2963,7 +3182,7 @@ namespace DreamPark {
 
         internal bool BeginUploadFromPopup(bool build, UploadMode mode)
         {
-            return BeginUploadFromPopup(build, mode, failedOnly: false);
+            return BeginUploadFromPopup(build, mode, failedOnly: false, ContentUploadTarget.Release);
         }
 
         // failedOnly = true comes from the "Upload Failed Bundles" choice on
@@ -2973,8 +3192,26 @@ namespace DreamPark {
         // Only is its own filter and stacks with neither Patch nor All.
         internal bool BeginUploadFromPopup(bool build, UploadMode mode, bool failedOnly)
         {
+            return BeginUploadFromPopup(build, mode, failedOnly, ContentUploadTarget.Release);
+        }
+
+        internal bool BeginUploadFromPopup(
+            bool build,
+            UploadMode mode,
+            bool failedOnly,
+            ContentUploadTarget uploadTarget)
+        {
             if (isUploading)
             {
+                return false;
+            }
+
+            SetActiveUploadTarget(uploadTarget);
+            string uploadContentId = ActiveUploadContentId;
+            if (string.IsNullOrEmpty(uploadContentId)
+                || (uploadTarget == ContentUploadTarget.Beta && !BetaContentId.IsPathSafe(uploadContentId)))
+            {
+                EditorUtility.DisplayDialog("Invalid upload target", "The selected upload target does not have a safe content ID.", "OK");
                 return false;
             }
 
@@ -3030,9 +3267,16 @@ namespace DreamPark {
                 return false;
             }
 
-            // Pre-upload checks: duplicate prefab names, directional lights, Meta
-            // occlusion, unapplied scene overrides, dependencies outside the content
-            // folder.
+            if (build)
+            {
+                // Compile the package recipe only at the upload boundary.
+                // Organizer edits never rebuild a prefab during IMGUI redraw.
+                CompileDreamSequencePackage(contentId);
+            }
+
+            // Creator-facing pre-upload suite. Registration and display order live in
+            // PreUploadCheckRunner so this call site cannot drift every time a check is
+            // added or moved to release-only validation.
             //
             // This is INVISIBLE when nothing is wrong — no window, no dialog, no extra
             // click. Only an actual finding interrupts. A gate that fires on every
@@ -3047,7 +3291,7 @@ namespace DreamPark {
             {
                 bool passed = PreUploadChecks.PreUploadChecksGate.Passes(
                     this, contentId,
-                    onCleared: () => ResumeUploadAfterPreUploadChecks(build, mode, failedOnly),
+                    onCleared: () => ResumeUploadAfterPreUploadChecks(build, mode, failedOnly, uploadTarget),
                     scenesAreSaved: build);
                 if (!passed) return false;
             }
@@ -3072,7 +3316,11 @@ namespace DreamPark {
         // the gate is passed, so it can never leave the gate permanently open.
         private bool preUploadChecksCleared;
 
-        private void ResumeUploadAfterPreUploadChecks(bool build, UploadMode mode, bool failedOnly)
+        private void ResumeUploadAfterPreUploadChecks(
+            bool build,
+            UploadMode mode,
+            bool failedOnly,
+            ContentUploadTarget uploadTarget)
         {
             preUploadChecksCleared = true;
 
@@ -3085,7 +3333,7 @@ namespace DreamPark {
                 // start an upload with no UI attached to report it.
                 if (this == null) return;
 
-                try { BeginUploadFromPopup(build, mode, failedOnly); }
+                try { BeginUploadFromPopup(build, mode, failedOnly, uploadTarget); }
                 finally { preUploadChecksCleared = false; }
             };
         }
@@ -3208,6 +3456,10 @@ namespace DreamPark {
             return latest;
         }
 
+        private JSONObject ActiveContentDirectorySnapshot => activeUploadTarget == ContentUploadTarget.Beta
+            ? betaContentDirectorySnapshot
+            : latestContentDirectorySnapshot;
+
         // Cache for the patch baseline. CanCheckProductionPatchSize() calls this
         // from OnGUI (every repaint frame), and the fetch is now a blocking
         // network round-trip — so without caching the Editor freezes. Keyed by
@@ -3221,7 +3473,8 @@ namespace DreamPark {
 
         private BuildManifest GetPreferredPatchBaseline(JSONObject contentDirectory = null)
         {
-            string key = $"{contentId ?? ""}@{(latestPublishedVersionNumber?.ToString() ?? "?")}";
+            string activeContentId = ActiveUploadContentId;
+            string key = $"{activeContentId ?? ""}@{(ActiveLatestPublishedVersionNumber?.ToString() ?? "?")}";
             bool keyMatches = string.Equals(key, cachedPatchBaselineKey, StringComparison.Ordinal);
 
             // Hit for this content+version → return cached, no network.
@@ -3328,16 +3581,17 @@ namespace DreamPark {
 
         private BuildManifest FetchBackendBaselineForUpload(JSONObject contentDirectory = null)
         {
-            if (string.IsNullOrEmpty(contentId))
-                return BuildManifestStore.LoadBaseline(contentId);
+            string targetContentId = ActiveUploadContentId;
+            if (string.IsNullOrEmpty(targetContentId))
+                return BuildManifestStore.LoadBaseline(targetContentId);
 
-            var latestVersion = GetLatestBackendVersionRecord(contentDirectory ?? latestContentDirectorySnapshot);
+            var latestVersion = GetLatestBackendVersionRecord(contentDirectory ?? ActiveContentDirectorySnapshot);
             if (latestVersion == null)
-                return BuildManifestStore.LoadBaseline(contentId);
+                return BuildManifestStore.LoadBaseline(targetContentId);
 
             int versionNumber = latestVersion.HasField("versionNumber") ? latestVersion.GetField("versionNumber").intValue : 0;
             if (versionNumber <= 0)
-                return BuildManifestStore.LoadBaseline(contentId);
+                return BuildManifestStore.LoadBaseline(targetContentId);
 
             var platformTargets = latestVersion.GetField("platformTargets")?.list?
                 .Select(node => node?.stringValue)
@@ -3346,7 +3600,7 @@ namespace DreamPark {
                 .ToList() ?? new List<string>();
 
             if (platformTargets.Count == 0)
-                return BuildManifestStore.LoadBaseline(contentId);
+                return BuildManifestStore.LoadBaseline(targetContentId);
 
             // Use the session bearer, NOT GetAPIKey(): GetAPIKey() is core-only
             // (#if DREAMPARKCORE) and returns "" in SDK/creator projects, which
@@ -3359,12 +3613,12 @@ namespace DreamPark {
             if (string.IsNullOrWhiteSpace(authHeader))
             {
                 Debug.LogWarning("[ContentUploader] No session available for backend baseline fetch (log in via the uploader panel); falling back to local baseline.");
-                return BuildManifestStore.LoadBaseline(contentId);
+                return BuildManifestStore.LoadBaseline(targetContentId);
             }
 
             var manifest = new BuildManifest
             {
-                contentId = contentId,
+                contentId = targetContentId,
                 versionNumber = versionNumber,
                 buildTimestampUtc =
                     latestVersion.GetField("createdAt")?.stringValue
@@ -3382,21 +3636,21 @@ namespace DreamPark {
                     long unityBytes = ExtractManifestPlatformBytes(latestVersion, "Unity");
                     unityPlatform.files.Add(new BuildManifestFile
                     {
-                        fileName = $"{contentId}.unitypackage",
+                        fileName = $"{targetContentId}.unitypackage",
                         sizeBytes = unityBytes,
                     });
                     manifest.platforms.Add(unityPlatform);
                     continue;
                 }
 
-                string url = BuildBundleManifestUrl(contentId, versionNumber, platform);
+                string url = BuildBundleManifestUrl(targetContentId, versionNumber, platform);
                 JSONObject responseJson = GetJsonSync(url, authHeader, out string error);
                 if (responseJson == null || responseJson.GetField("success")?.boolValue != true)
                 {
                     string responseError = responseJson?.GetField("error")?.stringValue ?? "Unknown error";
                     string baselineError = error ?? responseError;
                     Debug.LogWarning($"[ContentUploader] Could not fetch backend baseline for {platform}: {baselineError}. Falling back to local baseline.");
-                    return BuildManifestStore.LoadBaseline(contentId);
+                    return BuildManifestStore.LoadBaseline(targetContentId);
                 }
 
                 var platformManifest = new BuildManifestPlatform { platform = platform };
@@ -3428,7 +3682,7 @@ namespace DreamPark {
                 manifest.platforms.Add(platformManifest);
             }
 
-            return manifest.platforms.Count > 0 ? manifest : BuildManifestStore.LoadBaseline(contentId);
+            return manifest.platforms.Count > 0 ? manifest : BuildManifestStore.LoadBaseline(targetContentId);
         }
 
         private void CompleteUploadStatus(bool success, string message)
@@ -3437,7 +3691,8 @@ namespace DreamPark {
             uploadSucceeded = success;
             uploadStatusIsError = !success;
             uploadStatusProgress = success ? 1f : uploadStatusProgress;
-            uploadStatusTitle = success ? "Release complete" : "Release interrupted";
+            string targetLabel = activeUploadTarget == ContentUploadTarget.Beta ? "Beta upload" : "Release";
+            uploadStatusTitle = success ? $"{targetLabel} complete" : $"{targetLabel} interrupted";
             uploadStatusMessage = message ?? (success ? "Upload complete." : "Upload failed.");
             // A successful upload publishes a new version → the cached baseline is
             // now stale. Drop it so the next estimate re-fetches against the new
@@ -3457,8 +3712,8 @@ namespace DreamPark {
             List<DreamPark.API.UploadedFileRecord> preUploadedFiles)
         {
             SetUploadStatus(
-                "Uploading release",
-                "Sending changed files to DreamPark. Live file progress will appear below.",
+                activeUploadTarget == ContentUploadTarget.Beta ? "Uploading beta" : "Uploading release",
+                $"Sending changed files to the isolated '{uploadContentId}' target. Live file progress will appear below.",
                 1f);
 
             ContentAPI.UploadContent(uploadContentId, uploadReleaseNotes, lastSchemaVersion, skipSet, manifestSummary, preUploadedFiles, (success, apiResponse) =>
@@ -3492,7 +3747,10 @@ namespace DreamPark {
                         Debug.LogWarning($"[ContentUploader] Failed to clear dirty groups: {dgEx.Message}");
                     }
 
-                    latestPublishedVersionNumber = versionNumber;
+                    if (activeUploadTarget == ContentUploadTarget.Beta)
+                        betaLatestPublishedVersionNumber = versionNumber;
+                    else
+                        latestPublishedVersionNumber = versionNumber;
 
                     // Push attraction preview PNGs to the backend catalog —
                     // identical to Troubleshooting → "Force Upload All
@@ -3504,7 +3762,7 @@ namespace DreamPark {
                     try
                     {
                         EditorCoroutineUtility.StartCoroutineOwnerless(
-                            ForceUploadAllPreviewsRoutine(uploadContentId, interactive: false));
+                            ForceUploadAllPreviewsRoutine(uploadContentId, interactive: false, sourceContentId: contentId));
                     }
                     catch (Exception pvEx)
                     {
@@ -3519,14 +3777,16 @@ namespace DreamPark {
                     try
                     {
                         EditorCoroutineUtility.StartCoroutineOwnerless(
-                            UploadAttractionDimensionsRoutine(uploadContentId, interactive: false));
+                            UploadAttractionDimensionsRoutine(uploadContentId, interactive: false, rebakeBeforeUpload: false, sourceContentId: contentId));
                     }
                     catch (Exception dimEx)
                     {
                         Debug.LogWarning("[Dimensions] auto-push failed to start: " + dimEx.Message);
                     }
 
-                    CompleteUploadStatus(true, $"'{contentName}' uploaded successfully as {GetVersionSummaryAfterUpload(versionNumber)}.");
+                    string targetName = activeUploadTarget == ContentUploadTarget.Beta ? "beta" : "release";
+                    CompleteUploadStatus(true,
+                        $"'{contentName}' uploaded successfully to {targetName} target '{uploadContentId}' as {GetVersionSummaryAfterUpload(versionNumber)}.");
 
                     // Bridge into the second half of the content creation
                     // flow: the freshly-committed version just (re)synced this
@@ -3587,10 +3847,11 @@ namespace DreamPark {
         // loaded, so we can call it freely on lifecycle events.
         private void RefreshPatchEstimate()
         {
-            patchEstimateContentId = contentId;
+            string targetContentId = ActiveUploadContentId;
+            patchEstimateContentId = targetContentId;
             patchEstimateComputedAt = System.DateTime.UtcNow;
 
-            if (string.IsNullOrEmpty(contentId))
+            if (string.IsNullOrEmpty(targetContentId))
             {
                 patchBaseline = null;
                 patchCurrentSnapshot = null;
@@ -3601,10 +3862,10 @@ namespace DreamPark {
             try
             {
                 var platforms = GetEnabledPlatformsForManifest();
-                patchCurrentSnapshot = BuildManifestStore.BuildFromServerData(contentId, /*versionNumber*/ 0, platforms);
+                patchCurrentSnapshot = BuildManifestStore.BuildFromServerData(targetContentId, /*versionNumber*/ 0, platforms);
                 if (IsPatchUploadEnabled())
                 {
-                    patchBaseline = GetPreferredPatchBaseline(latestContentDirectorySnapshot);
+                    patchBaseline = GetPreferredPatchBaseline(ActiveContentDirectorySnapshot);
                     patchDiff = BuildManifestStore.Diff(patchBaseline, patchCurrentSnapshot);
 
                     // Source-aware estimate: read dirty-groups (maintained
@@ -3612,7 +3873,7 @@ namespace DreamPark {
                     // baseline's bundle filenames for a quick "patch size" guess
                     // that reflects current source state, not the (possibly
                     // stale) ServerData/.
-                    var dirtyGroups = DirtyGroupsStore.Load(contentId);
+                    var dirtyGroups = DirtyGroupsStore.Load(targetContentId);
                     dirtyGroupsEstimate = DirtyGroupsEstimator.Estimate(patchBaseline, dirtyGroups);
                 }
                 else
@@ -3672,47 +3933,295 @@ namespace DreamPark {
             // a specific SDK release, and the backend can flag releases built
             // against EOL SDK versions for forced re-upload before they break.
             uploaderMetadata.AddField("sdkVersion", SDKVersion.Current ?? "");
+            uploaderMetadata.AddField(
+                "releaseTarget",
+                activeUploadTarget == ContentUploadTarget.Beta ? "beta" : "main");
+            uploaderMetadata.AddField("sourceContentId", contentId ?? "");
+            uploaderMetadata.AddField("uploadContentId", ActiveUploadContentId ?? "");
             uploaderMetadata.AddField("sequenceLayout", BuildSequenceLayoutJson());
+            // Web's packages field is a versioned release contract. The richer
+            // GUID-backed organizer snapshot remains available separately.
+            uploaderMetadata.AddField("packageLayout", BuildPackageLayoutJson());
+            JSONObject publishedPackages = BuildPublishedPackagesJson();
+            if (publishedPackages != null) uploaderMetadata.AddField("packages", publishedPackages);
+            uploaderMetadata.AddField("parkAssets", BuildParkAssetsMetadataJson());
             return uploaderMetadata;
+        }
+
+        private void AttachUploaderAndPackages(JSONObject manifestSummary, UploadMode effectiveMode)
+        {
+            JSONObject uploader = BuildUploaderMetadata(effectiveMode);
+            manifestSummary.AddField("uploader", uploader);
+            // ContentAPI forwards manifestSummary.packages to Web's
+            // commitUpload; nesting this only under `uploader` is insufficient.
+            JSONObject packages = uploader.GetField("packages");
+            if (packages != null) manifestSummary.AddField("packages", packages);
         }
 
         private JSONObject BuildSequenceLayoutJson()
         {
+            ContentSequenceStore.Data layout = LoadPackageLayoutForMetadata(false);
+            return BuildLayoutMetadataJson(layout, "unsorted");
+        }
+
+        private JSONObject BuildPackageLayoutJson()
+        {
             var result = new JSONObject(JSONObject.Type.Object);
-            result.AddField("schemaVersion", ContentSequenceStore.CurrentVersion);
-            var items = new JSONObject(JSONObject.Type.Array);
-            foreach (var item in sequenceLayout?.items ?? new List<ContentSequenceStore.Entry>())
-            {
-                if (item == null) continue;
-                var node = new JSONObject(JSONObject.Type.Object);
-                node.AddField("kind", item.IsWorld ? "world" : "attraction");
-                if (item.IsWorld)
-                {
-                    node.AddField("id", item.id ?? "");
-                    node.AddField("name", item.name ?? "");
-                    var children = new JSONObject(JSONObject.Type.Array);
-                    foreach (string guid in item.attractionGuids ?? new List<string>())
-                        children.Add(SequenceAttractionJson(guid, false));
-                    node.AddField("attractions", children);
-                }
-                else node.AddField("attraction", SequenceAttractionJson(item.attractionGuid, item.hidden));
-                items.Add(node);
-            }
-            result.AddField("items", items);
+            result.AddField("arena", BuildArenaLayoutMetadataJson());
+            JSONObject adventure = BuildLayoutMetadataJson(LoadPackageLayoutForMetadata(false), "unused");
+            adventure.AddField("containerPath", DreamSequenceGenerator.ContainerPrefabPath(contentId));
+            adventure.AddField("gameManagerPath", DreamSequenceGenerator.ContainerPrefabPath(contentId));
+            result.AddField("adventure", adventure);
+            JSONObject sequence = BuildLayoutMetadataJson(LoadPackageLayoutForMetadata(true), "unused");
+            sequence.AddField("definitionAddress", DreamSequencePackageDefinition.AddressFor(contentId));
+            sequence.AddField("containerPath", DreamSequenceGenerator.ContainerPrefabPath(contentId));
+            sequence.AddField("gameManagerPath", DreamSequenceGenerator.ContainerPrefabPath(contentId));
+            sequence.AddField("startLevelPath", DreamSequenceGenerator.StartLevelPath(contentId));
+            sequence.AddField("overlayLevelPath", DreamSequenceGenerator.OverlayLevelPath(contentId));
+            sequence.AddField("gameOverLevelPath", DreamSequenceGenerator.GameOverLevelPath(contentId));
+            sequence.AddField("widthFeet", DreamSequenceTemplate.StandardWidthFeet);
+            sequence.AddField("lengthFeet", DreamSequenceTemplate.StandardLengthFeet);
+            result.AddField("sequence", sequence);
             return result;
         }
 
-        private JSONObject SequenceAttractionJson(string guid, bool hidden)
+        private JSONObject BuildArenaLayoutMetadataJson()
+        {
+            ArenaPackageStore.Data layout = arenaLayout
+                ?? ArenaPackageStore.LoadAndReconcile(contentId, ArenaCandidates());
+            var result = new JSONObject(JSONObject.Type.Object);
+            result.AddField("schemaVersion", ArenaPackageStore.CurrentVersion);
+            var buckets = new JSONObject(JSONObject.Type.Array);
+            foreach (ArenaPackageStore.Bucket source in layout.buckets
+                ?? new List<ArenaPackageStore.Bucket>())
+            {
+                if (source == null || source.guids == null || source.guids.Count == 0) continue;
+                var bucket = new JSONObject(JSONObject.Type.Object);
+                bucket.AddField("widthFeet", source.widthFeet);
+                bucket.AddField("lengthFeet", source.lengthFeet);
+                var items = new JSONObject(JSONObject.Type.Array);
+                foreach (string guid in source.guids) items.Add(SequenceAttractionJson(guid, false, null));
+                bucket.AddField("items", items);
+                buckets.Add(bucket);
+            }
+            result.AddField("buckets", buckets);
+            var excluded = new JSONObject(JSONObject.Type.Array);
+            foreach (string guid in layout.excludedGuids ?? new List<string>())
+                excluded.Add(SequenceAttractionJson(guid, false, null));
+            result.AddField("excluded", excluded);
+            return result;
+        }
+
+        private JSONObject BuildPublishedPackagesJson()
+        {
+            DreamParkPackageManifest manifest = AssetDatabase.LoadAssetAtPath<DreamParkPackageManifest>(
+                DreamParkPackageCompiler.ManifestPath(contentId));
+            if (manifest == null || (manifest.arena == null
+                && manifest.adventure == null && manifest.sequence == null))
+                return null;
+            var packages = new JSONObject(JSONObject.Type.Object);
+            packages.AddField("schemaVersion", DreamParkPackageManifest.CurrentSchemaVersion);
+            if (manifest.arena != null)
+                packages.AddField("arena", BuildPublishedPackageJson(manifest.arena, contentId));
+            if (manifest.adventure != null)
+                packages.AddField("adventure", BuildPublishedPackageJson(manifest.adventure, contentId));
+            if (manifest.sequence != null)
+                packages.AddField("sequence", BuildPublishedPackageJson(manifest.sequence, contentId));
+            return packages;
+        }
+
+        internal static JSONObject BuildPublishedPackageJson(PackageRecipe recipe, string sourceContentId)
+        {
+            // Web catalogs use the prefab's asset-path stem as resourceName
+            // when that path exists in the catalog. An Addressable loading
+            // address is a different key and fails Web's release validation.
+            // Keep the runtime address in the manifest, and resolve the Web
+            // key against the exact authored prefab here.
+            var catalogNames = new Dictionary<string, string>(StringComparer.Ordinal);
+            string root = $"Assets/Content/{sourceContentId}";
+            string targetId = recipe.occurrences.FirstOrDefault(o => o != null)?.resourceAddress?.Split('/')[0];
+            foreach (string guid in AssetDatabase.FindAssets("t:Prefab", new[] { root }))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                if (string.IsNullOrEmpty(path) || path.IndexOf("/ThirdPartyLocal/", StringComparison.OrdinalIgnoreCase) >= 0)
+                    continue;
+                GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                if (prefab == null) continue;
+                string leaf = Path.GetFileNameWithoutExtension(path);
+                LevelTemplate level = prefab.GetComponent<LevelTemplate>();
+                PropTemplate prop = prefab.GetComponent<PropTemplate>();
+                string address = level != null
+                    ? $"{targetId}/Levels/{level.size}/{leaf}"
+                    : prop != null ? $"{targetId}/Props/{prop.category}/{leaf}" : null;
+                if (address == null) continue;
+                string catalogName = ResourceNameForAssetPath(path);
+                if (catalogNames.TryGetValue(address, out string existing)
+                    && !string.Equals(existing, catalogName, StringComparison.Ordinal))
+                    throw new InvalidOperationException($"Package assets '{existing}' and '{catalogName}' share Addressable address '{address}'.");
+                catalogNames[address] = catalogName;
+            }
+            if (string.Equals(recipe.kind, "arena", StringComparison.OrdinalIgnoreCase))
+            {
+                var arenaResult = new JSONObject(JSONObject.Type.Object);
+                var buckets = new JSONObject(JSONObject.Type.Array);
+                var byId = (recipe.occurrences ?? new List<PackageOccurrence>())
+                    .Where(occurrence => occurrence != null && !string.IsNullOrEmpty(occurrence.occurrenceId))
+                    .ToDictionary(occurrence => occurrence.occurrenceId,
+                        occurrence => occurrence, StringComparer.Ordinal);
+                foreach (ArenaSizeBucket source in recipe.arenaBuckets ?? new List<ArenaSizeBucket>())
+                {
+                    if (source == null || source.occurrenceIds == null
+                        || source.occurrenceIds.Count == 0) continue;
+                    var bucket = new JSONObject(JSONObject.Type.Object);
+                    bucket.AddField("widthFeet", source.widthFeet);
+                    bucket.AddField("lengthFeet", source.lengthFeet);
+                    var candidates = new JSONObject(JSONObject.Type.Array);
+                    foreach (string id in source.occurrenceIds)
+                    {
+                        if (!byId.TryGetValue(id, out PackageOccurrence occurrence))
+                            throw new InvalidOperationException("Arena bucket references a missing occurrence: " + id);
+                        if (!catalogNames.TryGetValue(occurrence.resourceAddress, out string catalogName))
+                            throw new InvalidOperationException("Arena occurrence has no catalog prefab for '"
+                                + occurrence.resourceAddress + "'.");
+                        var item = new JSONObject(JSONObject.Type.Object);
+                        item.AddField("resourceName", catalogName);
+                        item.AddField("role", occurrence.role);
+                        item.AddField("required", occurrence.required);
+                        item.AddField("widthFeet", occurrence.widthFeet);
+                        item.AddField("lengthFeet", occurrence.lengthFeet);
+                        candidates.Add(item);
+                    }
+                    bucket.AddField("attractions", candidates);
+                    buckets.Add(bucket);
+                }
+                arenaResult.AddField("buckets", buckets);
+                return arenaResult;
+            }
+            var result = new JSONObject(JSONObject.Type.Object);
+            var groups = new JSONObject(JSONObject.Type.Array);
+            var groupIndices = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (PackageGroupOccurrence occurrence in recipe.groups ?? new List<PackageGroupOccurrence>())
+            {
+                if (occurrence == null) continue;
+                groupIndices[occurrence.occurrenceId] = groupIndices.Count;
+                var group = new JSONObject(JSONObject.Type.Object);
+                group.AddField("name", occurrence.name);
+                groups.Add(group);
+            }
+            var attractions = new JSONObject(JSONObject.Type.Array);
+            foreach (PackageOccurrence occurrence in recipe.occurrences ?? new List<PackageOccurrence>())
+            {
+                if (occurrence == null) continue;
+                var item = new JSONObject(JSONObject.Type.Object);
+                if (!catalogNames.TryGetValue(occurrence.resourceAddress, out string catalogName))
+                    throw new InvalidOperationException("Package occurrence has no catalog prefab for '"
+                        + occurrence.resourceAddress + "'.");
+                item.AddField("resourceName", catalogName);
+                if (!string.IsNullOrEmpty(occurrence.groupOccurrenceId))
+                {
+                    if (!groupIndices.TryGetValue(occurrence.groupOccurrenceId, out int index))
+                        throw new InvalidOperationException("Package occurrence references a missing Group.");
+                    item.AddField("groupIndex", index);
+                }
+                item.AddField("role", occurrence.role);
+                item.AddField("required", occurrence.required);
+                if (occurrence.widthFeet > 0) item.AddField("widthFt", occurrence.widthFeet);
+                if (occurrence.lengthFeet > 0) item.AddField("lengthFt", occurrence.lengthFeet);
+                attractions.Add(item);
+            }
+            result.AddField("groups", groups);
+            result.AddField("attractions", attractions);
+            return result;
+        }
+
+        private JSONObject BuildParkAssetsMetadataJson()
+        {
+            ContentSequenceStore.Data layout = libraryLayout ?? ContentSequenceStore.LoadLibraryAndReconcile(
+                contentId, ParkAssetEntries().Select(e => e.guid));
+            return BuildLayoutMetadataJson(layout, "hidden");
+        }
+
+        private ContentSequenceStore.Data LoadPackageLayoutForMetadata(bool sequenceMode)
+        {
+            if (sequenceMode == (organizerMode == OrganizerMode.Sequence) && sequenceLayout != null)
+                return sequenceLayout;
+            // Reconciliation must retain every asset already carried by a Group.
+            // Sequence compatibility restricts new individual drops and upload,
+            // but must not silently erase Group membership from saved metadata.
+            List<ContentRootEntry> entries = ParkAssetEntries();
+            return ContentSequenceStore.LoadAndReconcile(contentId, entries.Select(e => e.guid),
+                entries.Where(e => e.kind == ContentRootKind.Attraction).Select(e => e.guid), sequenceMode);
+        }
+
+        private JSONObject BuildLayoutMetadataJson(ContentSequenceStore.Data layout, string remainderField)
+        {
+            var result = new JSONObject(JSONObject.Type.Object);
+            result.AddField("schemaVersion", ContentSequenceStore.CurrentVersion);
+            result.AddField("startPoint", SequenceAttractionJson(layout?.startGuid, false, layout));
+            result.AddField("endPoint", SequenceAttractionJson(layout?.endGuid, false, layout));
+            var items = new JSONObject(JSONObject.Type.Array);
+            foreach (var item in layout?.items ?? new List<ContentSequenceStore.Entry>())
+            {
+                if (item == null) continue;
+                var node = new JSONObject(JSONObject.Type.Object);
+                node.AddField("kind", item.IsWorld ? "group" : SequenceContentKind(item.attractionGuid));
+                if (item.IsWorld)
+                {
+                    node.AddField("id", item.id ?? "");
+                    node.AddField("sourceGroupId", item.sourceGroupId ?? "");
+                    node.AddField("name", item.name ?? "");
+                    node.AddField("hidden", item.hidden);
+                    var children = new JSONObject(JSONObject.Type.Array);
+                    var legacyAttractions = new JSONObject(JSONObject.Type.Array);
+                    for (int childIndex = 0; childIndex < (item.attractionGuids ?? new List<string>()).Count; childIndex++)
+                    {
+                        string guid = item.attractionGuids[childIndex];
+                        string placementId = item.attractionIds != null && childIndex < item.attractionIds.Count
+                            ? item.attractionIds[childIndex] : "";
+                        children.Add(SequenceAttractionJson(guid, false, layout, placementId));
+                        legacyAttractions.Add(SequenceAttractionJson(guid, false, layout));
+                    }
+                    node.AddField("items", children);
+                    node.AddField("attractions", legacyAttractions);
+                }
+                else
+                {
+                    node.AddField("id", item.id ?? "");
+                    node.AddField("attraction", SequenceAttractionJson(
+                        item.attractionGuid, item.hidden, layout, item.id));
+                }
+                items.Add(node);
+            }
+            result.AddField("items", items);
+            var unsorted = new JSONObject(JSONObject.Type.Array);
+            foreach (string guid in layout?.unsortedGuids ?? new List<string>())
+                unsorted.Add(SequenceAttractionJson(guid,
+                    (layout.hiddenGuids ?? new List<string>()).Contains(guid), layout));
+            result.AddField(remainderField, unsorted);
+            return result;
+        }
+
+        private JSONObject SequenceAttractionJson(string guid, bool hidden,
+            ContentSequenceStore.Data layout, string placementId = null)
         {
             var node = new JSONObject(JSONObject.Type.Object);
             ContentRootEntry entry = contentRoots.FirstOrDefault(e => e.guid == guid);
+            node.AddField("kind", SequenceContentKind(guid));
             node.AddField("guid", guid ?? "");
+            if (!string.IsNullOrEmpty(placementId)) node.AddField("placementId", placementId);
             node.AddField("name", entry?.name ?? "");
             node.AddField("assetPath", entry?.assetPath ?? AssetDatabase.GUIDToAssetPath(guid));
             node.AddField("hidden", hidden);
-            node.AddField("required", entry != null && IsEffectivelyRequired(entry));
+            node.AddField("required", entry != null && (entry.requiredForGame
+                || guid == layout?.startGuid || guid == layout?.endGuid));
             node.AddField("sequenceCompatible", entry != null && entry.sequenceCompatible);
             return node;
+        }
+
+        private string SequenceContentKind(string guid)
+        {
+            ContentRootEntry entry = contentRoots.FirstOrDefault(e => e.guid == guid);
+            return entry != null && entry.kind == ContentRootKind.Prop ? "prop" : "attraction";
         }
 
         // ── "What you're uploading" preview ──────────────────────────────
@@ -3749,6 +4258,9 @@ namespace DreamPark {
                 string path = AssetDatabase.GUIDToAssetPath(guid);
                 if (string.IsNullOrEmpty(path)) continue;
                 if (path.IndexOf("/ThirdPartyLocal/", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                if (DreamSequenceGenerator.IsSpecialLevelPath(contentId, path)) continue;
+                if (string.Equals(path, DreamSequenceGenerator.SequencePrefabPath(contentId),
+                    StringComparison.OrdinalIgnoreCase)) continue; // retired generated artifact
 
                 GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
                 if (prefab == null) continue;
@@ -3783,8 +4295,7 @@ namespace DreamPark {
                     subLabel = subLabel,
                     requiredForGame = prefab.GetComponent<AttractionTemplate>()?.gameRequiresAttraction ?? false,
                     sequenceCompatible = DreamSequenceCompatibility.IsCompatible(prefab.GetComponent<AttractionTemplate>()),
-                    isDreamSequence = prefab.GetComponent<DreamSequenceTemplate>() != null
-                        || name.IndexOf("DreamSequence", StringComparison.OrdinalIgnoreCase) >= 0,
+                    isDreamSequence = prefab.GetComponent<DreamSequenceTemplate>() != null,
                 });
             }
 
@@ -3794,10 +4305,41 @@ namespace DreamPark {
                 .ThenBy(e => e.name, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            sequenceLayout = ContentSequenceStore.LoadAndReconcile(contentId,
-                contentRoots.Where(e => e.kind == ContentRootKind.Attraction && !e.isDreamSequence).Select(e => e.guid));
+            List<ContentRootEntry> organizerEntries = OrganizerEntries().ToList();
+            List<ContentRootEntry> packageAssets = ParkAssetEntries();
+            IEnumerable<string> attractionGuids = packageAssets
+                .OrderBy(e => e.kind == ContentRootKind.Prop ? 1 : 0)
+                .ThenBy(e => e.name, StringComparer.OrdinalIgnoreCase)
+                .Select(e => e.guid);
+            IEnumerable<string> endpointCandidates = organizerEntries
+                .Where(e => e.kind == ContentRootKind.Attraction && !e.isDreamSequence).Select(e => e.guid);
+            arenaLayout = ArenaPackageStore.LoadAndReconcile(contentId, ArenaCandidates());
+            ArenaPackageStore.Save(contentId, arenaLayout);
+            sequenceLayout = sequenceLayout != null && string.Equals(sequenceUndoContentId, contentId, StringComparison.Ordinal)
+                ? ContentSequenceStore.Reconcile(sequenceLayout, attractionGuids)
+                : ContentSequenceStore.LoadAndReconcile(contentId, attractionGuids, endpointCandidates,
+                    organizerMode == OrganizerMode.Sequence);
+            if (!sequenceLayout.hasExplicitEndpoints)
+                ContentSequenceStore.MigrateToExplicitEndpoints(sequenceLayout, endpointCandidates,
+                    organizerMode == OrganizerMode.Sequence);
             sequenceUndoContentId = contentId;
-            ContentSequenceStore.Save(contentId, sequenceLayout);
+            ContentSequenceStore.Save(contentId, sequenceLayout, organizerMode == OrganizerMode.Sequence);
+
+            var allLibraryGuids = contentRoots.Where(e => (e.kind == ContentRootKind.Attraction && !e.isDreamSequence)
+                || e.kind == ContentRootKind.Prop)
+                .OrderBy(e => e.kind == ContentRootKind.Prop ? 1 : 0)
+                .ThenBy(e => e.name, StringComparer.OrdinalIgnoreCase)
+                .Select(e => e.guid).ToList();
+            ContentSequenceStore.Data adventureFallback = organizerMode == OrganizerMode.Adventure
+                ? sequenceLayout
+                : ContentSequenceStore.LoadAndReconcile(contentId, allLibraryGuids,
+                    contentRoots.Where(e => e.kind == ContentRootKind.Attraction && !e.isDreamSequence)
+                        .Select(e => e.guid), false);
+            libraryLayout = ContentSequenceStore.LoadLibraryAndReconcile(
+                contentId, allLibraryGuids, adventureFallback);
+            ContentSequenceStore.SaveLibrary(contentId, libraryLayout);
+            if (SyncPackageGroupSources())
+                ContentSequenceStore.Save(contentId, sequenceLayout, organizerMode == OrganizerMode.Sequence);
 
             // Make sure Unity's preview cache has room for everything we're
             // about to ask for. Default cache size (≈100) is fine for a
@@ -3944,29 +4486,28 @@ namespace DreamPark {
 
         private void DrawContentPreviewSection()
         {
-            // Outer foldout for the whole "Park Assets" block. Header includes
-            // a compact summary so collapsed users still know what they have.
-            int attractionCount = 0, propCount = 0, playerCount = 0;
+            DrawPackagesSection();
+            GUILayout.Space(10f);
+
+            // Outer foldout for the reusable Park Assets library.
+            int attractionCount = 0, propCount = 0;
             for (int i = 0; i < contentRoots.Count; i++)
             {
                 switch (contentRoots[i].kind)
                 {
-                    case ContentRootKind.Attraction: attractionCount++; break;
-                    case ContentRootKind.Prop:       propCount++; break;
-                    case ContentRootKind.Player:     playerCount++; break;
+                    case ContentRootKind.Attraction:
+                        if (!contentRoots[i].isDreamSequence) attractionCount++;
+                        break;
+                    case ContentRootKind.Prop: propCount++; break;
                 }
             }
 
+            int groupCount = libraryLayout?.items?.Count(item => item != null && item.IsWorld) ?? 0;
             string badgeSummary = badges.Count > 0 ? $"  ·  {badges.Count} badge(s)" : "";
-            string summary = (contentRoots.Count == 0 && badges.Count == 0)
+            string summary = (attractionCount == 0 && propCount == 0 && groupCount == 0 && badges.Count == 0)
                 ? "Park Assets (none)"
-                : $"Park Assets  ·  {attractionCount} attraction(s)  ·  {propCount} prop(s)  ·  {playerCount} player{badgeSummary}";
+                : $"Park Assets  ·  {attractionCount} attraction(s)  ·  {propCount} prop(s)  ·  {groupCount} group(s){badgeSummary}";
 
-            // Manual rect layout so we can pin a small refresh-glyph button
-            // to the top-right of the foldout header. EditorStyles.foldoutHeader
-            // stretches to fill its row, which makes the standard
-            // BeginHorizontal/Foldout/Button pattern push the button onto a
-            // new line — Rect math is the cleanest way to reserve space.
             Rect headerRect = GUILayoutUtility.GetRect(0f, EditorGUIUtility.singleLineHeight + 4f, GUILayout.ExpandWidth(true));
             const float refreshBtnSize = 22f;
             const float refreshBtnPad = 2f;
@@ -3979,80 +4520,478 @@ namespace DreamPark {
                 headerRect.width - refreshBtnSize - (refreshBtnPad * 2f),
                 headerRect.height);
 
-            bool newParkAssetsFold = EditorGUI.Foldout(foldoutRect, parkAssetsFold, summary, true, EditorStyles.foldoutHeader);
+            bool newParkAssetsFold = DrawOrganizerSectionHeader(headerRect,
+                foldoutRect, parkAssetsFold, summary);
             if (newParkAssetsFold != parkAssetsFold)
             {
                 parkAssetsFold = newParkAssetsFold;
                 EditorPrefs.SetBool(ParkAssetsFoldPrefKey, parkAssetsFold);
             }
 
-            // Refresh button — Unity's stock "Refresh" glyph + tooltip. Builds
-            // a fresh GUIContent (rather than mutating the cached IconContent's
-            // tooltip) so we don't pollute Unity's icon cache.
-            var refreshContent = new GUIContent(
-                EditorGUIUtility.IconContent("Refresh").image,
-                "Rebuild Previews");
+            var refreshContent = new GUIContent(EditorGUIUtility.IconContent("Refresh").image, "Rebuild Previews");
             using (new EditorGUI.DisabledScope(contentRoots.Count == 0))
-            {
-                if (GUI.Button(refreshBtnRect, refreshContent, EditorStyles.iconButton))
-                {
-                    RebuildPreviews();
-                }
-            }
+                if (GUI.Button(refreshBtnRect, refreshContent, EditorStyles.iconButton)) RebuildPreviews();
 
             if (!parkAssetsFold) return;
 
-            if (contentRoots.Count == 0)
-            {
+            if (!HasShippableContent())
                 EditorGUILayout.HelpBox(
-                    $"You haven't created any Attractions or Props yet. Add a prefab to Assets/Content/{contentId}/ " +
-                    "with a LevelTemplate, AttractionTemplate, or PropTemplate component before uploading.",
+                    $"Add Attractions or Props under Assets/Content/{contentId}/. New Park Assets enter Arena automatically and remain reusable in Sequence and Adventure.",
                     MessageType.Warning);
-            }
-            else
-            {
-                if (!HasShippableContent())
-                {
-                    EditorGUILayout.HelpBox(
-                        "This content folder has no Attractions or Props. Uploading is disabled until you add at least one.",
-                        MessageType.Warning);
-                }
+            else DrawParkAssetLibrary();
 
-                DrawDreamsGroup();
-                DrawAttractionSequenceGroup();
-                DrawContentGroup("Props",       ContentRootKind.Prop,       ref foldProps,       ParkAssetsPropsPrefKey);
-                DrawContentGroup("Player",      ContentRootKind.Player,     ref foldPlayer,      ParkAssetsPlayerPrefKey);
-            }
-
-            // Badges are data records, not prefabs, so they are not in
-            // contentRoots — and they must draw even when the package has no
-            // prefabs at all. Defining the badges before the attraction that
-            // awards them is a legitimate order to work in, and returning early
-            // above (which is what this section used to do) would have hidden
-            // the section from exactly the developer starting from scratch.
             DrawBadgesGroup();
 
             if (contentRoots.Count == 0) return;
+            bool anyUnresolved = contentRoots.Any(e => e.customPreview == null && !e.autoPreviewResolved);
+            if (anyUnresolved || AssetPreview.IsLoadingAssetPreviews()) Repaint();
+        }
 
-            // Keep repainting until every root has its full AssetPreview
-            // resolved. Relying on AssetPreview.IsLoadingAssetPreviews()
-            // alone wasn't enough — the global flag flips false between
-            // frames while individual previews are still being scheduled,
-            // and when an OnGUI tick happens to land in that gap we'd
-            // stop polling and the cards would stay blank until the user
-            // moved the mouse. Per-entry tracking guarantees we keep
-            // ticking until everyone's resolved.
-            bool anyUnresolved = false;
-            for (int i = 0; i < contentRoots.Count; i++)
+        private void DrawPackagesSection()
+        {
+            EnsureContainerDeferred();
+            Rect headerRect = GUILayoutUtility.GetRect(0f,
+                EditorGUIUtility.singleLineHeight + 4f, GUILayout.ExpandWidth(true));
+            bool expanded = DrawOrganizerSectionHeader(headerRect, headerRect,
+                packagesFold, "Packages");
+            if (expanded != packagesFold)
             {
-                var e = contentRoots[i];
-                if (e.customPreview != null) continue;       // hand-curated wins, skip
-                if (!e.autoPreviewResolved) { anyUnresolved = true; break; }
+                packagesFold = expanded;
+                EditorPrefs.SetBool(PackagesFoldPrefKey, packagesFold);
             }
-            if (anyUnresolved || AssetPreview.IsLoadingAssetPreviews())
+            if (!packagesFold) return;
+
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            LoadPackageIcons();
+            Rect packageTabsRect = GUILayoutUtility.GetRect(0f, 38f, GUILayout.ExpandWidth(true));
+            var packageTabs = new[] { GUIContent.none, GUIContent.none, GUIContent.none };
+            int selectedMode = GUI.Toolbar(packageTabsRect, (int)organizerMode, packageTabs);
+            float packageTabWidth = packageTabsRect.width / 3f;
+            DrawPackageTabContent(new Rect(packageTabsRect.x, packageTabsRect.y,
+                    packageTabWidth, packageTabsRect.height), arenaTabIcon, "Arena",
+                "An instant package that selects the highest-priority content fitting the available space.");
+            DrawPackageTabContent(new Rect(packageTabsRect.x + packageTabWidth, packageTabsRect.y,
+                    packageTabWidth, packageTabsRect.height), sequenceTabIcon, "Sequence",
+                "A single-room 12 × 18 ft playable package.");
+            DrawPackageTabContent(new Rect(packageTabsRect.x + packageTabWidth * 2f, packageTabsRect.y,
+                    packageTabsRect.width - packageTabWidth * 2f, packageTabsRect.height), adventureTabIcon, "Adventure",
+                "A spatial package that can expand across a venue.");
+            if (selectedMode != (int)organizerMode)
             {
+                if (organizerMode == OrganizerMode.Arena)
+                    ArenaPackageStore.Save(contentId, arenaLayout);
+                else
+                    ContentSequenceStore.Save(contentId, sequenceLayout, organizerMode == OrganizerMode.Sequence);
+                organizerMode = (OrganizerMode)selectedMode;
+                EditorPrefs.SetInt(OrganizerModePrefKey, selectedMode);
+                sequenceLayout = null;
+                arenaLayout = null;
+                RefreshContentRoots();
+                if (organizerMode == OrganizerMode.Sequence)
+                {
+                    EnsureSequenceScaffoldDeferred();
+                }
+            }
+            var descriptionStyle = new GUIStyle(EditorStyles.wordWrappedLabel)
+            {
+                fontSize = 12,
+                padding = new RectOffset(8, 8, 8, 8),
+            };
+            string description = organizerMode == OrganizerMode.Arena
+                ? "ARENA packages make every title useful as soon as space is found. Every Attraction and Prop is included automatically in its smallest whole-foot size; drag cards within a size to set priority or into another size to override the measured fit. Exclude anything unsuitable. The app chooses the largest occupied size that fits, then shows its first entry."
+                : organizerMode == OrganizerMode.Sequence
+                    ? "SEQUENCE packages make the game playable in one flexible room, authored at 12 × 18 ft. Start, Overlay, and Game Over are editable spatial levels. The persistent Game Manager controls your routing, rules, score, hubs, or randomizers; the listed order is only the working default."
+                    : "ADVENTURE packages arrange a clear Start Point, Groups and Attractions through the venue, and a required End Point. The persistent Game Manager holds game rules and state; it is not a spatial container.";
+            GUILayout.Label(description, descriptionStyle);
+            string testLabel = organizerMode == OrganizerMode.Arena
+                ? "Test Arena in Park Simulator"
+                : organizerMode == OrganizerMode.Sequence
+                    ? "Test Sequence in Park Simulator" : "Test Adventure in Park Simulator";
+            if (GUILayout.Button(new GUIContent("▶ " + testLabel,
+                organizerMode == OrganizerMode.Arena
+                    ? "Preview the first-priority entry from the largest occupied Arena size."
+                    : organizerMode == OrganizerMode.Sequence
+                        ? "Build the Sequence from its editable parts on the basketball court blacktop."
+                        : "Play this Adventure as an ordered walking route through the scanned park."),
+                GUILayout.Height(30f))) QueuePackageTest();
+            if (organizerMode == OrganizerMode.Sequence)
+            {
+                EnsureSequenceScaffoldDeferred();
+            }
+            DrawPackageManagerAndPlayerRow();
+            if (organizerMode == OrganizerMode.Arena) DrawArenaOrganizer();
+            else DrawAttractionSequenceGroup();
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawArenaOrganizer()
+        {
+            List<ArenaPackageStore.Candidate> candidates = ArenaCandidates();
+            arenaLayout = ArenaPackageStore.Reconcile(arenaLayout
+                ?? ArenaPackageStore.Load(contentId), candidates);
+            var entries = ParkAssetEntries().ToDictionary(entry => entry.guid,
+                entry => entry, StringComparer.Ordinal);
+            List<ArenaPackageStore.Bucket> buckets = arenaLayout.buckets
+                ?? new List<ArenaPackageStore.Bucket>();
+
+            int maxRecommendedEdge = buckets.Count == 0 ? 1 : buckets.Max(bucket => bucket.lengthFeet);
+            var occupiedSquares = new HashSet<int>(buckets
+                .Where(bucket => bucket.widthFeet == bucket.lengthFeet)
+                .Select(bucket => bucket.widthFeet));
+            List<int> missingSquares = Enumerable.Range(1, maxRecommendedEdge)
+                .Where(size => !occupiedSquares.Contains(size)).ToList();
+            if (missingSquares.Count > 0)
+            {
+                string shown = string.Join(", ", missingSquares.Take(12).Select(size => $"{size}×{size}"));
+                if (missingSquares.Count > 12) shown += $", +{missingSquares.Count - 12} more";
+                EditorGUILayout.HelpBox("Recommended square-size gaps: " + shown
+                    + ". Add a small Prop or Attraction to cover a missing size.", MessageType.Info);
+            }
+
+            if (buckets.Count == 0)
+                EditorGUILayout.HelpBox("Arena has no included Attractions or Props.", MessageType.Warning);
+
+            foreach (ArenaPackageStore.Bucket bucket in buckets)
+                DrawArenaBucketSection(bucket, candidates, entries);
+
+            List<string> excluded = arenaLayout.excludedGuids ?? new List<string>();
+            if (excluded.Count == 0) return;
+            EditorGUILayout.Space(8f);
+            EditorGUILayout.LabelField("Excluded from Arena", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                "Excluded assets remain in Park Assets. Right-click a dimmed card to include it in Arena again.",
+                MessageType.None);
+            int perRow = SequenceCardsPerRow();
+            for (int start = 0; start < excluded.Count; start += perRow)
+            {
+                EditorGUILayout.BeginHorizontal();
+                int rowEnd = Mathf.Min(start + perRow, excluded.Count);
+                for (int index = start; index < rowEnd; index++)
+                {
+                    string guid = excluded[index];
+                    entries.TryGetValue(guid, out ContentRootEntry entry);
+                    if (entry != null)
+                    {
+                        Color previous = GUI.color;
+                        GUI.color = new Color(previous.r, previous.g, previous.b,
+                            previous.a * 0.5f);
+                        Rect card = DrawPackageAssetCard(entry);
+                        GUI.color = previous;
+                        DrawArenaContextMenu(card, entry, guid, candidates, excluded: true);
+                    }
+                    if (index + 1 < rowEnd) GUILayout.Space(CardSpacing);
+                }
+                GUILayout.FlexibleSpace();
+                EditorGUILayout.EndHorizontal();
+                GUILayout.Space(CardSpacing);
+            }
+        }
+
+        /// <summary>
+        /// Arena uses the same foldout headers, preview cards, position badges,
+        /// grid rhythm and context-menu interactions as Sequence and Adventure.
+        /// The size bucket replaces their progression Group; only the data model
+        /// is Arena-specific.
+        /// </summary>
+        private void DrawArenaBucketSection(ArenaPackageStore.Bucket bucket,
+            List<ArenaPackageStore.Candidate> candidates,
+            Dictionary<string, ContentRootEntry> entries)
+        {
+            if (bucket == null || bucket.guids == null || bucket.guids.Count == 0) return;
+            string foldKey = $"DreamPark.ContentUploader.Arena.{contentId}."
+                + bucket.widthFeet + "x" + bucket.lengthFeet;
+            bool expanded = EditorPrefs.GetBool(foldKey, true);
+
+            GUILayout.Space(4f);
+            Rect header = GUILayoutUtility.GetRect(0f, 30f, GUILayout.ExpandWidth(true));
+            GUI.Box(header, GUIContent.none, EditorStyles.helpBox);
+            Rect foldRect = new Rect(header.x + 8f, header.y + 5f, 92f, 20f);
+            bool nextExpanded = EditorGUI.Foldout(foldRect, expanded, "SIZE", true,
+                EditorStyles.foldout);
+            if (nextExpanded != expanded) EditorPrefs.SetBool(foldKey, nextExpanded);
+            Rect labelRect = new Rect(foldRect.xMax + 4f, header.y + 4f,
+                Mathf.Max(80f, header.width - foldRect.width - 100f), 21f);
+            GUI.Label(labelRect, bucket.Label, EditorStyles.boldLabel);
+            Rect countRect = new Rect(header.xMax - 90f, header.y + 5f, 82f, 20f);
+            GUI.Label(countRect,
+                new GUIContent(bucket.guids.Count + (bucket.guids.Count == 1 ? " option" : " options"),
+                    "The first card is this size's highest-priority Arena choice. Drag a card onto another size header to override its Arena size."),
+                EditorStyles.centeredGreyMiniLabel);
+            HandleArenaBucketHeaderDrop(header, bucket);
+            if (!nextExpanded) return;
+
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            int perRow = SequenceCardsPerRow();
+            for (int start = 0; start < bucket.guids.Count; start += perRow)
+            {
+                DrawArenaInsertionZone(bucket, bucket.guids[start], after: false);
+                EditorGUILayout.BeginHorizontal();
+                GUILayout.Space(12f);
+                int rowEnd = Mathf.Min(start + perRow, bucket.guids.Count);
+                for (int index = start; index < rowEnd; index++)
+                {
+                    string guid = bucket.guids[index];
+                    entries.TryGetValue(guid, out ContentRootEntry entry);
+                    if (entry != null)
+                    {
+                        Rect card = DrawPackageAssetCard(entry);
+                        Rect badge = new Rect(card.x + 4f, card.y + 4f, 24f, 24f);
+                        DrawPositionEditor(badge, ArenaPositionToken(bucket, guid), index + 1);
+                        DrawSequenceDrag(card, ArenaPositionToken(bucket, guid));
+                        HandleArenaCardDrop(card, bucket, guid);
+                        DrawArenaContextMenu(card, entry, guid, candidates, excluded: false);
+                    }
+                    if (index + 1 < rowEnd) GUILayout.Space(CardSpacing);
+                }
+                GUILayout.FlexibleSpace();
+                EditorGUILayout.EndHorizontal();
+                DrawArenaInsertionZone(bucket, bucket.guids[rowEnd - 1], after: true);
+            }
+            EditorGUILayout.EndVertical();
+        }
+
+        private static string ArenaPositionToken(ArenaPackageStore.Bucket bucket, string guid)
+            => $"arena:{bucket.widthFeet}:{bucket.lengthFeet}:{guid}";
+
+        private static bool TryParseArenaPositionToken(string token, out int widthFeet,
+            out int lengthFeet, out string guid)
+        {
+            widthFeet = 0;
+            lengthFeet = 0;
+            guid = null;
+            if (string.IsNullOrEmpty(token) || !token.StartsWith("arena:", StringComparison.Ordinal))
+                return false;
+            string[] parts = token.Split(':');
+            if (parts.Length != 4 || !int.TryParse(parts[1], out widthFeet)
+                || !int.TryParse(parts[2], out lengthFeet) || string.IsNullOrEmpty(parts[3]))
+                return false;
+            guid = parts[3];
+            return true;
+        }
+
+        private void HandleArenaCardDrop(Rect card, ArenaPackageStore.Bucket bucket,
+            string targetGuid)
+        {
+            string source = DragAndDrop.GetGenericData(SequenceDragKey) as string;
+            if (!TryParseArenaPositionToken(source, out _, out _, out _)) return;
+            bool after = Event.current.mousePosition.x >= card.center.x;
+            HandleSequenceDrop(card, ArenaDropTarget(bucket, targetGuid, after));
+            DrawSequenceInsertionCue(card, after, false);
+        }
+
+        private void DrawArenaInsertionZone(ArenaPackageStore.Bucket bucket,
+            string targetGuid, bool after)
+        {
+            Rect zone = GUILayoutUtility.GetRect(0f, 2f, GUILayout.ExpandWidth(true));
+            Rect hitZone = new Rect(zone.x, zone.center.y - 6f, zone.width, 12f);
+            string source = DragAndDrop.GetGenericData(SequenceDragKey) as string;
+            if (!TryParseArenaPositionToken(source, out _, out _, out _)) return;
+            if (hitZone.Contains(Event.current.mousePosition)
+                && Event.current.type == EventType.Repaint)
+                EditorGUI.DrawRect(new Rect(zone.x, zone.center.y - 1.5f, zone.width, 3f),
+                    new Color(0.2f, 0.7f, 1f, 0.95f));
+            HandleSequenceDrop(hitZone, ArenaDropTarget(bucket, targetGuid, after));
+        }
+
+        private void HandleArenaBucketHeaderDrop(Rect header, ArenaPackageStore.Bucket bucket)
+        {
+            string source = DragAndDrop.GetGenericData(SequenceDragKey) as string;
+            if (!TryParseArenaPositionToken(source, out int sourceWidth,
+                    out int sourceLength, out _)) return;
+            bool differentBucket = sourceWidth != bucket.widthFeet
+                || sourceLength != bucket.lengthFeet;
+            if (differentBucket && header.Contains(Event.current.mousePosition)
+                && Event.current.type == EventType.Repaint)
+                EditorGUI.DrawRect(new Rect(header.x, header.yMax - 3f, header.width, 3f),
+                    new Color(0.2f, 0.7f, 1f, 0.95f));
+            HandleSequenceDrop(header,
+                $"arena-append:{bucket.widthFeet}:{bucket.lengthFeet}");
+        }
+
+        private static string ArenaDropTarget(ArenaPackageStore.Bucket bucket,
+            string targetGuid, bool after)
+            => $"arena-{(after ? "after" : "before")}:{bucket.widthFeet}:"
+                + $"{bucket.lengthFeet}:{targetGuid}";
+
+        private void DrawArenaContextMenu(Rect card, ContentRootEntry entry, string guid,
+            List<ArenaPackageStore.Candidate> candidates, bool excluded)
+        {
+            Event evt = Event.current;
+            if (evt.type != EventType.ContextClick || !card.Contains(evt.mousePosition)) return;
+            var menu = new GenericMenu();
+            AddRegeneratePreviewMenuItem(menu, entry);
+            menu.AddSeparator("");
+            menu.AddItem(new GUIContent(excluded ? "Include in Arena" : "Exclude from Arena"),
+                false, () =>
+                {
+                    BeginSequenceChange(excluded ? "Include in Arena" : "Exclude from Arena");
+                    ArenaPackageStore.SetExcluded(arenaLayout, candidates, guid, !excluded);
+                    SaveArenaLayout();
+                });
+            if (!excluded && ArenaPackageStore.HasSizeOverride(arenaLayout, guid))
+            {
+                menu.AddItem(new GUIContent("Use Measured Size"), false, () =>
+                {
+                    BeginSequenceChange("Reset Arena Size");
+                    ArenaPackageStore.ClearSizeOverride(arenaLayout, candidates, guid);
+                    SaveArenaLayout();
+                });
+            }
+            menu.ShowAsContext();
+            evt.Use();
+        }
+
+        private void SaveArenaLayout()
+        {
+            ArenaPackageStore.Save(contentId, arenaLayout);
+            EditorUtility.SetDirty(this);
+            Repaint();
+        }
+
+        private static bool DrawOrganizerSectionHeader(Rect backgroundRect, Rect clickRect,
+            bool expanded, string label)
+        {
+            bool hovered = clickRect.Contains(Event.current.mousePosition);
+            Color background = EditorGUIUtility.isProSkin
+                ? (hovered ? new Color32(49, 49, 49, 255) : new Color32(56, 56, 56, 255))
+                : (hovered ? new Color32(205, 205, 205, 255) : new Color32(220, 220, 220, 255));
+            EditorGUI.DrawRect(backgroundRect, background);
+
+            Rect arrow = new Rect(clickRect.x + 5f, clickRect.y + 1f,
+                17f, clickRect.height - 2f);
+            GUI.Label(arrow, expanded ? "▼" : "▶", EditorStyles.miniLabel);
+            Rect textRect = new Rect(clickRect.x + 25f, clickRect.y,
+                Mathf.Max(0f, clickRect.width - 25f), clickRect.height);
+            GUI.Label(textRect, label, EditorStyles.boldLabel);
+
+            return GUI.Button(clickRect, GUIContent.none, GUIStyle.none) ? !expanded : expanded;
+        }
+
+        private void QueuePackageTest()
+        {
+            string targetContentId = contentId;
+            OrganizerMode mode = organizerMode;
+            ArenaPackageStore.Data arena = arenaLayout != null
+                ? ArenaPackageStore.Clone(arenaLayout) : ArenaPackageStore.Load(targetContentId);
+            ContentSequenceStore.Data layout = sequenceLayout != null
+                ? ContentSequenceStore.Clone(sequenceLayout)
+                : ContentSequenceStore.Load(targetContentId, mode == OrganizerMode.Sequence);
+            EditorApplication.delayCall += () =>
+            {
+                if (string.IsNullOrEmpty(targetContentId)) return;
+                try
+                {
+                    if (mode == OrganizerMode.Arena)
+                    {
+                        ArenaPackageStore.Save(targetContentId, arena);
+                        DreamSequenceGenerator.EnsureContainer(targetContentId);
+                    }
+                    else ContentSequenceStore.Save(targetContentId, layout, mode == OrganizerMode.Sequence);
+                    if (mode == OrganizerMode.Sequence)
+                    {
+                        AttractionPackingBaker.BakeAllInContent(targetContentId);
+                        CompileDreamSequencePackage(targetContentId);
+                        if (AssetDatabase.LoadAssetAtPath<DreamSequencePackageDefinition>(
+                            DreamSequencePackageCompiler.DefinitionPath(targetContentId)) == null)
+                            throw new InvalidOperationException("The Sequence package definition was not created.");
+                    }
+                    else if (mode == OrganizerMode.Adventure)
+                    {
+                        if (layout == null || string.IsNullOrEmpty(layout.startGuid)
+                            || string.IsNullOrEmpty(layout.endGuid))
+                        {
+                            EditorUtility.DisplayDialog("Adventure needs endpoints",
+                                "Set both Start Point and End Point before testing the Adventure.", "OK");
+                            return;
+                        }
+                        DreamSequenceGenerator.EnsureContainer(targetContentId);
+                    }
+                    ParkSimPackageTest.Launch(targetContentId,
+                        mode == OrganizerMode.Arena ? ParkSimPackageKind.Arena
+                        : mode == OrganizerMode.Sequence ? ParkSimPackageKind.Sequence
+                        : ParkSimPackageKind.Adventure);
+                }
+                catch (Exception e)
+                {
+                    Debug.LogException(e);
+                    EditorUtility.DisplayDialog("Package test could not start", e.Message, "OK");
+                }
+            };
+        }
+
+        private void LoadPackageIcons()
+        {
+            // Unity hot reload preserves private EditorWindow fields, so the old
+            // built-in Grid.BoxTool texture can survive after adding this asset.
+            // Replace any cached fallback instead of only checking for null.
+            if (arenaTabIcon == null || arenaTabIcon.name != "icon_arena")
+                arenaTabIcon = AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/DreamPark/Editor/Icons/icon_arena.png");
+            if (sequenceTabIcon == null)
+                sequenceTabIcon = AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/DreamPark/Editor/Icons/icon_sequence.png");
+            if (adventureTabIcon == null)
+                adventureTabIcon = AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/DreamPark/Editor/Icons/icon_adventure.png");
+        }
+
+        private static void DrawPackageTabContent(Rect rect, Texture icon, string label, string tooltip)
+        {
+            var labelStyle = new GUIStyle(EditorStyles.label)
+            {
+                alignment = TextAnchor.MiddleLeft,
+                fontStyle = FontStyle.Normal,
+            };
+            Vector2 textSize = labelStyle.CalcSize(new GUIContent(label));
+            const float iconWidth = 28f;
+            const float iconHeight = 20f;
+            const float gap = 5f;
+            float totalWidth = (icon != null ? iconWidth + gap : 0f) + textSize.x;
+            float x = rect.center.x - totalWidth * 0.5f;
+            if (icon != null)
+            {
+                Rect iconRect = new Rect(x, rect.center.y - iconHeight * 0.5f, iconWidth, iconHeight);
+                Color prior = GUI.color;
+                GUI.color = EditorGUIUtility.isProSkin ? Color.white : Color.black;
+                GUI.DrawTexture(iconRect, icon, ScaleMode.ScaleToFit, true);
+                GUI.color = prior;
+                x += iconWidth + gap;
+            }
+            GUI.Label(new Rect(x, rect.y, textSize.x, rect.height), new GUIContent(label, tooltip), labelStyle);
+        }
+
+        private void EnsureSequenceScaffoldDeferred()
+        {
+            if (sequenceScaffoldQueued || string.IsNullOrEmpty(contentId)) return;
+            bool scaffoldNeeded = DreamSequenceGenerator.NeedsScaffoldRefresh(contentId);
+            bool previewsMissing = !ContentProcessor.HasSequenceLevelPreviews(contentId);
+            if (!scaffoldNeeded && (!previewsMissing || sequencePreviewAttemptedIds.Contains(contentId))) return;
+            if (previewsMissing) sequencePreviewAttemptedIds.Add(contentId);
+            sequenceScaffoldQueued = true;
+            string scheduledContentId = contentId;
+            EditorApplication.delayCall += () =>
+            {
+                sequenceScaffoldQueued = false;
+                if (this == null || !string.Equals(contentId, scheduledContentId, StringComparison.Ordinal)) return;
+                bool refreshed = DreamSequenceGenerator.NeedsScaffoldRefresh(scheduledContentId);
+                if (refreshed) DreamSequenceGenerator.EnsureScaffold(scheduledContentId);
+                if (refreshed || !ContentProcessor.HasSequenceLevelPreviews(scheduledContentId))
+                    ContentProcessor.GenerateSequenceLevelPreviews(scheduledContentId, refreshed);
                 Repaint();
-            }
+            };
+        }
+
+        private void EnsureContainerDeferred()
+        {
+            if (containerScaffoldQueued || string.IsNullOrEmpty(contentId)
+                || AssetDatabase.LoadAssetAtPath<GameObject>(
+                    DreamSequenceGenerator.ContainerPrefabPath(contentId)) != null) return;
+            containerScaffoldQueued = true;
+            string scheduledContentId = contentId;
+            EditorApplication.delayCall += () =>
+            {
+                containerScaffoldQueued = false;
+                if (this == null || !string.Equals(contentId, scheduledContentId, StringComparison.Ordinal)) return;
+                DreamSequenceGenerator.EnsureContainer(scheduledContentId);
+                Repaint();
+            };
         }
 
         private void DrawContentGroup(string header, ContentRootKind kind, ref bool foldState, string prefKey)
@@ -4089,7 +5028,10 @@ namespace DreamPark {
                 GUILayout.Space(EditorGUI.indentLevel * 12f);
                 for (int j = 0; j < perRow && i + j < entries.Count; j++)
                 {
-                    DrawCard(entries[i + j]);
+                    ContentRootEntry entry = entries[i + j];
+                    Rect card = DrawCard(entry);
+                    if (kind == ContentRootKind.Prop)
+                        DrawPreviewContextMenu(card, entry);
                     if (j < perRow - 1) GUILayout.Space(CardSpacing);
                 }
                 GUILayout.FlexibleSpace();
@@ -4101,31 +5043,384 @@ namespace DreamPark {
 
         private const string SequenceDragKey = "DreamPark.SequenceDrag";
 
-        private void DrawAttractionSequenceGroup()
+        private IEnumerable<ContentRootEntry> OrganizerEntries()
         {
-            var attractions = contentRoots.Where(e => e.kind == ContentRootKind.Attraction && !e.isDreamSequence).ToList();
-            if (attractions.Count == 0) return;
-            if (sequenceLayout == null)
-            {
-                sequenceLayout = ContentSequenceStore.LoadAndReconcile(contentId, attractions.Select(e => e.guid));
-                sequenceUndoContentId = contentId;
-            }
-            string[] flattenedAttractions = ContentSequenceStore.Flatten(sequenceLayout).ToArray();
-            firstSequenceAttractionGuid = flattenedAttractions.FirstOrDefault();
-            lastSequenceAttractionGuid = flattenedAttractions.LastOrDefault();
+            IEnumerable<ContentRootEntry> entries = contentRoots.Where(e =>
+                (e.kind == ContentRootKind.Attraction && !e.isDreamSequence) || e.kind == ContentRootKind.Prop);
+            if (organizerMode == OrganizerMode.Sequence)
+                entries = entries.Where(e => e.kind == ContentRootKind.Attraction && e.sequenceCompatible);
+            return entries;
+        }
 
-            GUILayout.Space(4);
-            bool next = EditorGUILayout.Foldout(foldAttractions, $"Attractions & Worlds ({attractions.Count})", true);
-            if (next != foldAttractions)
+        private List<ContentRootEntry> ParkAssetEntries()
+            => contentRoots.Where(e => (e.kind == ContentRootKind.Attraction && !e.isDreamSequence)
+                || e.kind == ContentRootKind.Prop).ToList();
+
+        private List<ArenaPackageStore.Candidate> ArenaCandidates()
+            => ParkAssetEntries()
+                .Select(entry => ArenaPackageStore.CandidateForPrefab(
+                    entry.guid, entry.cachedAsset as GameObject))
+                .ToList();
+
+        private void DrawParkAssetLibrary()
+        {
+            var entries = ParkAssetEntries();
+            if (libraryLayout == null)
             {
-                foldAttractions = next;
-                EditorPrefs.SetBool(ParkAssetsAttractionsPrefKey, next);
+                libraryLayout = ContentSequenceStore.LoadLibraryAndReconcile(
+                    contentId, entries.Select(e => e.guid));
+                ContentSequenceStore.SaveLibrary(contentId, libraryLayout);
             }
-            if (!foldAttractions) return;
 
             EditorGUILayout.HelpBox(
-                "This order is published as progression metadata. Drag cards and World headers to reorder them. Drop an attraction anywhere inside an expanded World to place and sort it there.",
+                "Park Assets are your reusable library. Arena includes Attractions and Props automatically unless you exclude them; drag assets into Sequence or Adventure to author those packages. Create Groups to organize reusable sets.",
                 MessageType.None);
+
+            var run = new List<int>();
+            for (int i = 0; i < libraryLayout.items.Count; i++)
+            {
+                ContentSequenceStore.Entry item = libraryLayout.items[i];
+                if (item == null || item.hidden) continue;
+                if (item.IsWorld)
+                {
+                    DrawLibraryGridRun(run, entries);
+                    run.Clear();
+                    DrawLibraryGroup(item, i, entries, false);
+                }
+                else run.Add(i);
+            }
+            DrawLibraryGridRun(run, entries);
+            DrawLibraryAddTiles();
+
+            List<ContentSequenceStore.Entry> hidden = libraryLayout.items
+                .Where(item => item != null && item.hidden).ToList();
+            if (hidden.Count > 0)
+            {
+                GUILayout.Space(8f);
+                EditorGUILayout.LabelField($"Hidden ({hidden.Count})", EditorStyles.boldLabel);
+                var hiddenLeaves = new List<ContentSequenceStore.Entry>();
+                foreach (ContentSequenceStore.Entry item in hidden)
+                {
+                    if (item.IsWorld)
+                    {
+                        DrawLibraryHiddenLeaves(hiddenLeaves, entries);
+                        hiddenLeaves.Clear();
+                        DrawLibraryGroup(item, libraryLayout.items.IndexOf(item), entries, true);
+                    }
+                    else hiddenLeaves.Add(item);
+                }
+                DrawLibraryHiddenLeaves(hiddenLeaves, entries);
+            }
+        }
+
+        private void DrawLibraryGridRun(List<int> indices, List<ContentRootEntry> entries)
+        {
+            if (indices == null || indices.Count == 0) return;
+            int perRow = SequenceCardsPerRow();
+            EditorGUI.indentLevel++;
+            for (int start = 0; start < indices.Count; start += perRow)
+            {
+                ContentSequenceStore.Entry first = libraryLayout.items[indices[start]];
+                DrawLibraryInsertionZone("top-before|" + ContentSequenceStore.EntryToken(first));
+                GUILayout.BeginHorizontal();
+                GUILayout.Space(EditorGUI.indentLevel * 12f);
+                int end = Mathf.Min(start + perRow, indices.Count);
+                for (int slot = start; slot < end; slot++)
+                {
+                    ContentSequenceStore.Entry item = libraryLayout.items[indices[slot]];
+                    ContentRootEntry entry = entries.FirstOrDefault(e => e.guid == item.attractionGuid);
+                    if (entry != null)
+                    {
+                        Rect card = DrawCard(entry, true);
+                        DrawSequenceDrag(card, "a:" + entry.guid);
+                        string anchor = ContentSequenceStore.EntryToken(item);
+                        bool after = LibrarySourceComesBeforeTarget(
+                            DragAndDrop.GetGenericData(SequenceDragKey) as string, anchor);
+                        HandleLibraryDrop(card, (after ? "top-after|" : "top-before|") + anchor);
+                        DrawSequenceInsertionCue(card, after, false);
+                        DrawLibraryAssetContextMenu(card, entry, false);
+                    }
+                    if (slot + 1 < end) GUILayout.Space(CardSpacing);
+                }
+                GUILayout.FlexibleSpace();
+                GUILayout.EndHorizontal();
+                ContentSequenceStore.Entry last = libraryLayout.items[indices[end - 1]];
+                DrawLibraryInsertionZone("top-after|" + ContentSequenceStore.EntryToken(last));
+            }
+            EditorGUI.indentLevel--;
+        }
+
+        private void DrawLibraryGroup(ContentSequenceStore.Entry group, int topIndex,
+            List<ContentRootEntry> entries, bool hidden)
+        {
+            string foldKey = "DreamPark.ContentUploader.Group.Library." + contentId + "." + group.id;
+            bool expanded = EditorPrefs.GetBool(foldKey, true);
+            if (!hidden) DrawLibraryInsertionZone("top-before|w:" + group.id);
+
+            Color prior = GUI.color;
+            if (hidden) GUI.color = new Color(prior.r, prior.g, prior.b, prior.a * 0.5f);
+            Rect header = GUILayoutUtility.GetRect(0f, 30f, GUILayout.ExpandWidth(true));
+            GUI.Box(header, GUIContent.none, EditorStyles.helpBox);
+            DrawSequenceDrag(header, "lw:" + group.id);
+            Rect foldRect = new Rect(header.x + 8f, header.y + 5f, 82f, 20f);
+            bool nextExpanded = EditorGUI.Foldout(foldRect, expanded, "GROUP", true, EditorStyles.foldout);
+            if (nextExpanded != expanded) EditorPrefs.SetBool(foldKey, nextExpanded);
+            Rect menuRect = new Rect(header.xMax - 28f, header.y + 5f, 24f, 20f);
+            Rect nameRect = new Rect(foldRect.xMax + 4f, header.y + 4f,
+                Mathf.Max(60f, menuRect.x - foldRect.xMax - 8f), 21f);
+            string nextName = EditorGUI.TextField(nameRect, group.name ?? "New Group");
+            if (nextName != group.name)
+            {
+                BeginSequenceChange("Rename Group");
+                group.name = nextName;
+                SaveLibraryLayout();
+            }
+            GUI.Label(menuRect, new GUIContent("≡", "Drag this Group into either Package or reorder it in Park Assets."),
+                EditorStyles.centeredGreyMiniLabel);
+            GUI.color = prior;
+            DrawLibraryGroupContextMenu(header, group, hidden);
+
+            if (nextExpanded)
+            {
+                Rect body = EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                List<string> children = group.attractionGuids ?? (group.attractionGuids = new List<string>());
+                int perRow = SequenceCardsPerRow();
+                for (int start = 0; start < children.Count; start += perRow)
+                {
+                    GUILayout.BeginHorizontal();
+                    GUILayout.Space(12f);
+                    int end = Mathf.Min(start + perRow, children.Count);
+                    for (int child = start; child < end; child++)
+                    {
+                        ContentRootEntry entry = entries.FirstOrDefault(e => e.guid == children[child]);
+                        if (entry != null)
+                        {
+                            Color childPrior = GUI.color;
+                            if (hidden) GUI.color = new Color(childPrior.r, childPrior.g, childPrior.b, childPrior.a * 0.5f);
+                            Rect card = DrawCard(entry, true);
+                            GUI.color = childPrior;
+                            DrawSequenceDrag(card, "a:" + entry.guid);
+                            if (!hidden)
+                            {
+                                bool after = LibrarySourceComesBeforeTarget(
+                                    DragAndDrop.GetGenericData(SequenceDragKey) as string, "a:" + entry.guid);
+                                HandleLibraryDrop(card, $"world|{group.id}|{child + (after ? 1 : 0)}");
+                                DrawSequenceInsertionCue(card, after, false);
+                            }
+                            DrawLibraryAssetContextMenu(card, entry, false);
+                        }
+                        if (child + 1 < end) GUILayout.Space(CardSpacing);
+                    }
+                    GUILayout.FlexibleSpace();
+                    GUILayout.EndHorizontal();
+                    GUILayout.Space(CardSpacing);
+                }
+                if (!hidden)
+                {
+                    Rect endDrop = GUILayoutUtility.GetRect(0f, 24f, GUILayout.ExpandWidth(true));
+                    GUI.Label(endDrop, "Drop here to add at the end of this Group", EditorStyles.centeredGreyMiniLabel);
+                    HandleLibraryDrop(endDrop, $"world|{group.id}|{children.Count}");
+                }
+                EditorGUILayout.EndVertical();
+            }
+            if (!hidden)
+            {
+                DrawLibraryInsertionZone("top-after|w:" + group.id);
+                GUILayout.Space(CardSpacing);
+            }
+        }
+
+        private void DrawLibraryHiddenLeaves(List<ContentSequenceStore.Entry> hidden,
+            List<ContentRootEntry> entries)
+        {
+            if (hidden == null || hidden.Count == 0) return;
+            int perRow = SequenceCardsPerRow();
+            for (int start = 0; start < hidden.Count; start += perRow)
+            {
+                GUILayout.BeginHorizontal();
+                int end = Mathf.Min(start + perRow, hidden.Count);
+                for (int i = start; i < end; i++)
+                {
+                    ContentRootEntry entry = entries.FirstOrDefault(e => e.guid == hidden[i].attractionGuid);
+                    if (entry != null)
+                    {
+                        Color prior = GUI.color;
+                        GUI.color = new Color(prior.r, prior.g, prior.b, prior.a * 0.5f);
+                        Rect card = DrawCard(entry, true);
+                        GUI.color = prior;
+                        DrawSequenceDrag(card, "a:" + entry.guid);
+                        DrawLibraryAssetContextMenu(card, entry, true);
+                    }
+                    if (i + 1 < end) GUILayout.Space(CardSpacing);
+                }
+                GUILayout.FlexibleSpace();
+                GUILayout.EndHorizontal();
+                GUILayout.Space(CardSpacing);
+            }
+        }
+
+        private void DrawLibraryAddTiles()
+        {
+            int perRow = SequenceCardsPerRow();
+            GUILayout.BeginHorizontal();
+            Rect attraction = DrawAddGridTile("Add Attraction", "Create a new Attraction prefab.");
+            if (GUI.Button(attraction, GUIContent.none, GUIStyle.none)) CreateAttractionPrefab();
+            if (perRow > 1) GUILayout.Space(CardSpacing);
+            Rect group = DrawAddGridTile("Add Group", "Create a reusable Group in Park Assets.");
+            if (GUI.Button(group, GUIContent.none, GUIStyle.none)) AddLibraryGroup();
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
+        }
+
+        private void AddLibraryGroup()
+        {
+            BeginSequenceChange("Add Group");
+            int firstHidden = libraryLayout.items.FindIndex(item => item != null && item.hidden);
+            var group = new ContentSequenceStore.Entry
+            {
+                kind = "world", id = Guid.NewGuid().ToString("N"), name = "New Group"
+            };
+            if (firstHidden >= 0) libraryLayout.items.Insert(firstHidden, group);
+            else libraryLayout.items.Add(group);
+            SaveLibraryLayout();
+        }
+
+        private void DrawLibraryGroupContextMenu(Rect rect, ContentSequenceStore.Entry group, bool hidden)
+        {
+            Event evt = Event.current;
+            if (evt.type != EventType.ContextClick || !rect.Contains(evt.mousePosition)) return;
+            var menu = new GenericMenu();
+            menu.AddItem(new GUIContent(hidden ? "Unhide" : "Hidden"), false, () =>
+            {
+                BeginSequenceChange(hidden ? "Unhide Group" : "Hide Group");
+                if (ContentSequenceStore.SetGroupHidden(libraryLayout, group.id, !hidden)) SaveLibraryLayout();
+            });
+            menu.AddItem(new GUIContent("Remove Group"), false, () =>
+            {
+                BeginSequenceChange("Remove Group");
+                int at = libraryLayout.items.IndexOf(group);
+                libraryLayout.items.Remove(group);
+                foreach (string guid in group.attractionGuids ?? new List<string>())
+                    libraryLayout.items.Insert(Mathf.Clamp(at++, 0, libraryLayout.items.Count),
+                        new ContentSequenceStore.Entry { attractionGuid = guid, hidden = hidden });
+                SaveLibraryLayout();
+            });
+            menu.ShowAsContext();
+            evt.Use();
+        }
+
+        private bool LibrarySourceComesBeforeTarget(string source, string target)
+        {
+            string normalized = source != null && source.StartsWith("lw:", StringComparison.Ordinal)
+                ? "w:" + source.Substring(3) : source;
+            if (string.IsNullOrEmpty(normalized) || normalized == target) return false;
+            int from = libraryLayout.items.FindIndex(x => ContentSequenceStore.EntryToken(x) == normalized);
+            int to = libraryLayout.items.FindIndex(x => ContentSequenceStore.EntryToken(x) == target);
+            return from >= 0 && to >= 0 && from < to;
+        }
+
+        private void DrawLibraryInsertionZone(string target)
+        {
+            Rect zone = GUILayoutUtility.GetRect(0f, 6f, GUILayout.ExpandWidth(true));
+            string source = DragAndDrop.GetGenericData(SequenceDragKey) as string;
+            if (string.IsNullOrEmpty(source)) return;
+            if (zone.Contains(Event.current.mousePosition) && Event.current.type == EventType.Repaint)
+                EditorGUI.DrawRect(new Rect(zone.x, zone.center.y - 1.5f, zone.width, 3f),
+                    new Color(0.2f, 0.7f, 1f, 0.95f));
+            HandleLibraryDrop(zone, target);
+        }
+
+        private void HandleLibraryDrop(Rect rect, string target)
+            => HandleSequenceDrop(rect, "library:" + target);
+
+        private void SaveLibraryLayout()
+        {
+            ContentSequenceStore.SaveLibrary(contentId, libraryLayout);
+            if (SyncPackageGroupSources())
+                ContentSequenceStore.Save(contentId, sequenceLayout, organizerMode == OrganizerMode.Sequence);
+            EditorUtility.SetDirty(this);
+            Repaint();
+        }
+
+        private bool SyncPackageGroupSources()
+        {
+            if (sequenceLayout?.items == null || libraryLayout?.items == null) return false;
+
+            List<ContentSequenceStore.Entry> sources = libraryLayout.items
+                .Where(item => item != null && item.IsWorld).ToList();
+            var available = new HashSet<string>(ParkAssetEntries().Select(entry => entry.guid), StringComparer.Ordinal);
+            bool changed = false;
+            foreach (ContentSequenceStore.Entry packageGroup in sequenceLayout.items
+                .Where(item => item != null && item.IsWorld))
+            {
+                ContentSequenceStore.Entry source = !string.IsNullOrEmpty(packageGroup.sourceGroupId)
+                    ? sources.FirstOrDefault(item => item.id == packageGroup.sourceGroupId)
+                    : sources.FirstOrDefault(item => string.Equals(item.name, packageGroup.name,
+                        StringComparison.Ordinal));
+                if (source == null) continue;
+
+                if (!string.Equals(packageGroup.sourceGroupId, source.id, StringComparison.Ordinal))
+                {
+                    packageGroup.sourceGroupId = source.id;
+                    changed = true;
+                }
+                if (!string.Equals(packageGroup.name, source.name, StringComparison.Ordinal))
+                {
+                    packageGroup.name = source.name;
+                    changed = true;
+                }
+
+                // Repair package Groups created by older builds that copied the
+                // header but filtered every child out. Non-empty package Groups
+                // retain their independently authored order and membership.
+                packageGroup.attractionGuids = packageGroup.attractionGuids ?? new List<string>();
+                packageGroup.attractionIds = packageGroup.attractionIds ?? new List<string>();
+                if (packageGroup.attractionGuids.Count == 0)
+                {
+                    List<string> children = (source.attractionGuids ?? new List<string>())
+                        .Where(available.Contains).ToList();
+                    if (children.Count > 0)
+                    {
+                        packageGroup.attractionGuids.AddRange(children);
+                        packageGroup.attractionIds.Clear();
+                        packageGroup.attractionIds.AddRange(children.Select(_ => Guid.NewGuid().ToString("N")));
+                        changed = true;
+                    }
+                }
+            }
+            return changed;
+        }
+
+        private void DrawAttractionSequenceGroup()
+        {
+            // Package Groups may contain the complete reusable Group, including
+            // Props. Individual Sequence drops are still restricted separately.
+            var attractions = ParkAssetEntries();
+            if (sequenceLayout == null)
+            {
+                sequenceLayout = ContentSequenceStore.LoadAndReconcile(contentId, attractions
+                    .OrderBy(e => e.kind == ContentRootKind.Prop ? 1 : 0)
+                    .ThenBy(e => e.name, StringComparer.OrdinalIgnoreCase)
+                    .Select(e => e.guid), attractions.Where(e => e.kind == ContentRootKind.Attraction)
+                    .Select(e => e.guid), organizerMode == OrganizerMode.Sequence);
+                sequenceUndoContentId = contentId;
+            }
+            firstSequenceAttractionGuid = organizerMode == OrganizerMode.Adventure ? sequenceLayout.startGuid : null;
+            lastSequenceAttractionGuid = organizerMode == OrganizerMode.Adventure ? sequenceLayout.endGuid : null;
+
+            if (organizerMode == OrganizerMode.Sequence)
+            {
+                DrawGeneratedPrefabSlotsRow(
+                    "START LEVEL", DreamSequenceGenerator.StartLevelPath(contentId),
+                    "Your editable spatial introduction. The default start button asks the Game Manager to begin.",
+                    "OVERLAY LEVEL", DreamSequenceGenerator.OverlayLevelPath(contentId),
+                    "Your persistent level UI. Visible over ordinary levels by default, not Start or Game Over.",
+                    null, null, null);
+            }
+            else
+            {
+                DrawEndpointSlot("START POINT", sequenceLayout.startGuid, "start-slot", attractions);
+            }
 
             var gridRun = new List<int>();
             for (int i = 0; i < sequenceLayout.items.Count; i++)
@@ -4140,7 +5435,16 @@ namespace DreamPark {
                 }
                 else gridRun.Add(i);
             }
-            DrawAttractionGridTail(gridRun, attractions);
+            DrawTopLevelGridRun(gridRun, attractions);
+            if (sequenceLayout.items.Count == 0) DrawTopLevelInsertionZone("top-end");
+
+            if (organizerMode == OrganizerMode.Sequence)
+            {
+                DrawGeneratedPrefabSlot("GAME OVER LEVEL", DreamSequenceGenerator.GameOverLevelPath(contentId),
+                    "The specialized 12 × 18 ft final level reached after the last compiled attraction.");
+            }
+            else
+                DrawEndpointSlot("END POINT", sequenceLayout.endGuid, "end-slot", attractions);
         }
 
         private int SequenceCardsPerRow()
@@ -4149,28 +5453,194 @@ namespace DreamPark {
             return Mathf.Max(1, Mathf.FloorToInt((panelWidth + CardSpacing) / (CardWidth + CardSpacing)));
         }
 
-        private void DrawTopLevelGridRun(List<int> itemIndices, List<ContentRootEntry> attractions)
+        private void DrawGeneratedPrefabSlot(string label, string assetPath, string tooltip)
         {
-            if (itemIndices == null || itemIndices.Count == 0) return;
+            GUILayout.Space(2f);
+            EditorGUILayout.LabelField(label, EditorStyles.boldLabel);
+            EditorGUILayout.BeginHorizontal();
+            DrawGeneratedPrefabCard(assetPath, tooltip);
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private void DrawGeneratedPrefabSlotsRow(string firstLabel, string firstAssetPath,
+            string firstTooltip, string secondLabel, string secondAssetPath, string secondTooltip,
+            string thirdLabel, string thirdAssetPath, string thirdTooltip)
+        {
+            GUILayout.Space(2f);
+            EditorGUILayout.BeginHorizontal();
+            DrawGeneratedPrefabColumn(firstLabel, firstAssetPath, firstTooltip);
+            GUILayout.Space(CardSpacing);
+            DrawGeneratedPrefabColumn(secondLabel, secondAssetPath, secondTooltip);
+            if (!string.IsNullOrEmpty(thirdAssetPath))
+            {
+                GUILayout.Space(CardSpacing);
+                DrawGeneratedPrefabColumn(thirdLabel, thirdAssetPath, thirdTooltip);
+            }
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private void DrawGeneratedPrefabColumn(string label, string assetPath, string tooltip)
+        {
+            EditorGUILayout.BeginVertical(GUILayout.Width(CardWidth));
+            EditorGUILayout.LabelField(label, EditorStyles.boldLabel, GUILayout.Width(CardWidth));
+            DrawGeneratedPrefabCard(assetPath, tooltip);
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawGeneratedPrefabCard(string assetPath, string tooltip)
+        {
+            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+            float totalHeight = CardImageSize + CardLabelHeight + 2f;
+            Rect card = GUILayoutUtility.GetRect(CardWidth, totalHeight,
+                GUILayout.Width(CardWidth), GUILayout.Height(totalHeight));
+            Rect imageRect = new Rect(card.x, card.y, CardWidth, CardImageSize);
+            Rect labelRect = new Rect(card.x, card.y + CardImageSize + 2f, CardWidth, CardLabelHeight);
+            EditorGUI.DrawRect(imageRect, new Color(0f, 0f, 0f, 0.18f));
+            string previewPath = prefab != null
+                ? $"Assets/Content/{contentId}/Previews/{prefab.name}.png" : null;
+            Texture preview = previewPath != null
+                ? AssetDatabase.LoadAssetAtPath<Texture2D>(previewPath) : null;
+            if (preview == null && prefab != null) preview = AssetPreview.GetAssetPreview(prefab);
+            if (preview == null && prefab != null) preview = AssetPreview.GetMiniThumbnail(prefab);
+            if (preview == null) preview = EditorGUIUtility.IconContent("Prefab Icon").image;
+            GUI.DrawTexture(imageRect, preview, ScaleMode.ScaleToFit);
+            var style = new GUIStyle(EditorStyles.miniLabel)
+            {
+                alignment = TextAnchor.UpperCenter,
+                fontStyle = FontStyle.Bold,
+                wordWrap = true,
+            };
+            string cardName = string.Equals(assetPath,
+                DreamSequenceGenerator.ContainerPrefabPath(contentId), StringComparison.OrdinalIgnoreCase)
+                ? "Game Manager" : prefab != null ? prefab.name : "Generating…";
+            GUI.Label(labelRect, new GUIContent(cardName, tooltip), style);
+            if (GUI.Button(card, new GUIContent("", tooltip), GUIStyle.none) && prefab != null)
+            {
+                Selection.activeObject = prefab;
+                EditorGUIUtility.PingObject(prefab);
+            }
+            if (prefab != null && Event.current.type == EventType.ContextClick
+                && card.Contains(Event.current.mousePosition))
+            {
+                string previewContentId = contentId;
+                string previewAssetPath = assetPath;
+                var menu = new GenericMenu();
+                menu.AddItem(new GUIContent("Regenerate Preview"), false, () =>
+                {
+                    ContentProcessor.RegeneratePreviewForPrefab(previewContentId, previewAssetPath);
+                    Repaint();
+                });
+                menu.ShowAsContext();
+                Event.current.Use();
+            }
+        }
+
+        private void DrawPackageManagerAndPlayerRow()
+        {
+            ContentRootEntry player = contentRoots.FirstOrDefault(e => e.kind == ContentRootKind.Player);
+            GUILayout.Space(4f);
+            EditorGUILayout.BeginHorizontal();
+            DrawGeneratedPrefabColumn("GAME MANAGER", DreamSequenceGenerator.ContainerPrefabPath(contentId),
+                "Persistent game rules, progression and state for both Sequence and Adventure. Edit this prefab to customize the experience.");
+            GUILayout.Space(CardSpacing);
+            EditorGUILayout.BeginVertical(GUILayout.Width(CardWidth));
+            EditorGUILayout.LabelField("PLAYER", EditorStyles.boldLabel, GUILayout.Width(CardWidth));
+            if (player != null) DrawCard(player, showAssetWarning: false);
+            else DrawAddGridTile("Player Required", "Add a Player prefab to this content package.");
+            EditorGUILayout.EndVertical();
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private void DrawEndpointSlot(string label, string guid, string target,
+            List<ContentRootEntry> entries)
+        {
+            GUILayout.Space(2f);
+            EditorGUILayout.LabelField(label, EditorStyles.boldLabel);
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.Space(EditorGUI.indentLevel * 12f);
+            ContentRootEntry entry = entries.FirstOrDefault(e => e.guid == guid);
+            Rect rect;
+            if (entry != null)
+            {
+                rect = DrawCard(entry, true, false);
+                int position = target == "start-slot" ? 1 : Mathf.Max(2, ContentSequenceStore.Flatten(sequenceLayout).Count());
+                var badge = new Rect(rect.x + 4f, rect.y + 4f, 24f, 24f);
+                DrawPositionEditor(badge, "endpoint:" + target, position,
+                    target == "start-slot", target == "end-slot", true, false);
+                DrawAttractionContextMenu(rect, entry, false);
+            }
+            else
+            {
+                rect = DrawAddGridTile(target == "start-slot" ? "Assign Start Point" : "Assign End Point",
+                    "Drag an attraction here. This slot is required.");
+            }
+            HandleEndpointDrop(rect, target);
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndHorizontal();
+            GUILayout.Space(2f);
+        }
+
+        private void HandleEndpointDrop(Rect rect, string target)
+        {
+            string source = DragAndDrop.GetGenericData(SequenceDragKey) as string;
+            if (string.IsNullOrEmpty(source) || source.StartsWith("w:", StringComparison.Ordinal)
+                || source.StartsWith("lw:", StringComparison.Ordinal)) return;
+            string guid = source.StartsWith("a:", StringComparison.Ordinal) ? source.Substring(2)
+                : source.StartsWith("p:", StringComparison.Ordinal)
+                    ? ContentSequenceStore.PlacementGuid(sequenceLayout, source.Substring(2)) : null;
+            ContentRootEntry entry = contentRoots.FirstOrDefault(e => e.guid == guid);
+            if (entry == null || entry.kind != ContentRootKind.Attraction) return;
+            HandleSequenceDrop(rect, target);
+            if (Event.current.type == EventType.Repaint && rect.Contains(Event.current.mousePosition))
+                EditorGUI.DrawRect(new Rect(rect.x, rect.y, rect.width, 3f), new Color(0.95f, 0.7f, 0.08f, 0.95f));
+        }
+
+        private void DrawUnsortedGrid(List<ContentRootEntry> entries, string label)
+        {
+            GUILayout.Space(8f);
+            EditorGUILayout.LabelField(label, EditorStyles.boldLabel);
+            var hiddenSet = new HashSet<string>(sequenceLayout.hiddenGuids ?? new List<string>(), StringComparer.Ordinal);
+            var ordered = (sequenceLayout.unsortedGuids ?? new List<string>())
+                .Where(g => !hiddenSet.Contains(g)).Concat((sequenceLayout.unsortedGuids ?? new List<string>())
+                    .Where(hiddenSet.Contains)).ToList();
+            int total = ordered.Count + 2;
             int perRow = SequenceCardsPerRow();
             EditorGUI.indentLevel++;
-            for (int start = 0; start < itemIndices.Count; start += perRow)
+            for (int start = 0; start < total; start += perRow)
             {
                 GUILayout.BeginHorizontal();
                 GUILayout.Space(EditorGUI.indentLevel * 12f);
-                int rowEnd = Mathf.Min(start + perRow, itemIndices.Count);
+                int rowEnd = Mathf.Min(start + perRow, total);
                 for (int slot = start; slot < rowEnd; slot++)
                 {
-                    int itemIndex = itemIndices[slot];
-                    var item = sequenceLayout.items[itemIndex];
-                    ContentRootEntry entry = attractions.FirstOrDefault(e => e.guid == item.attractionGuid);
-                    if (entry != null)
+                    if (slot < ordered.Count)
                     {
-                        Rect card = DrawCard(entry, true);
-                        DrawSequenceCardDecorations(card, itemIndex + 1, entry, "a:" + entry.guid);
-                        DrawSequenceDrag(card, "a:" + entry.guid);
-                        HandleTopLevelCardDrop(card, ContentSequenceStore.EntryToken(item));
-                        DrawAttractionContextMenu(card, entry, false);
+                        string guid = ordered[slot];
+                        ContentRootEntry entry = entries.FirstOrDefault(e => e.guid == guid);
+                        if (entry != null)
+                        {
+                            bool hidden = hiddenSet.Contains(guid);
+                            Color prior = GUI.color;
+                            if (hidden) GUI.color = new Color(prior.r, prior.g, prior.b, prior.a * 0.5f);
+                            Rect card = DrawPackageAssetCard(entry);
+                            GUI.color = prior;
+                            if (!hidden) DrawSequenceDrag(card, "a:" + guid);
+                            DrawAttractionContextMenu(card, entry, hidden);
+                            HandleSequenceItemDrop(card, "unsorted-end");
+                        }
+                    }
+                    else if (slot == ordered.Count)
+                    {
+                        Rect tile = DrawAddGridTile("Add Attraction", "Create a new Attraction prefab.");
+                        if (GUI.Button(tile, GUIContent.none, GUIStyle.none)) CreateAttractionPrefab();
+                    }
+                    else
+                    {
+                        Rect tile = DrawAddGridTile("Add Group", "Create a Group between Start and End.");
+                        if (GUI.Button(tile, GUIContent.none, GUIStyle.none)) AddWorldAtEnd();
                     }
                     if (slot + 1 < rowEnd) GUILayout.Space(CardSpacing);
                 }
@@ -4181,10 +5651,49 @@ namespace DreamPark {
             EditorGUI.indentLevel--;
         }
 
+        private void DrawTopLevelGridRun(List<int> itemIndices, List<ContentRootEntry> attractions)
+        {
+            if (itemIndices == null || itemIndices.Count == 0) return;
+            int perRow = SequenceCardsPerRow();
+            EditorGUI.indentLevel++;
+            for (int start = 0; start < itemIndices.Count; start += perRow)
+            {
+                ContentSequenceStore.Entry firstInRow = sequenceLayout.items[itemIndices[start]];
+                DrawTopLevelInsertionZone("top-before|" + ContentSequenceStore.PlacementToken(firstInRow));
+                GUILayout.BeginHorizontal();
+                GUILayout.Space(EditorGUI.indentLevel * 12f);
+                int rowEnd = Mathf.Min(start + perRow, itemIndices.Count);
+                for (int slot = start; slot < rowEnd; slot++)
+                {
+                    int itemIndex = itemIndices[slot];
+                    var item = sequenceLayout.items[itemIndex];
+                    ContentRootEntry entry = attractions.FirstOrDefault(e => e.guid == item.attractionGuid);
+                    if (entry != null)
+                    {
+                        Rect card = DrawPackageAssetCard(entry);
+                        string placementToken = ContentSequenceStore.PlacementToken(item);
+                        DrawSequenceCardDecorations(card,
+                            itemIndex + (organizerMode == OrganizerMode.Adventure ? 2 : 1), entry, placementToken);
+                        DrawSequenceDrag(card, placementToken);
+                        HandleTopLevelCardDrop(card, placementToken);
+                        DrawPackageContextMenu(card, entry, item.id);
+                    }
+                    if (slot + 1 < rowEnd) GUILayout.Space(CardSpacing);
+                }
+                GUILayout.FlexibleSpace();
+                GUILayout.EndHorizontal();
+                ContentSequenceStore.Entry lastInRow = sequenceLayout.items[itemIndices[rowEnd - 1]];
+                DrawTopLevelInsertionZone("top-after|" + ContentSequenceStore.PlacementToken(lastInRow));
+            }
+            EditorGUI.indentLevel--;
+        }
+
         private void DrawWorldSection(ContentSequenceStore.Entry world, int topIndex, List<ContentRootEntry> attractions)
         {
             string foldKey = "DreamPark.ContentUploader.World." + contentId + "." + world.id;
             bool expanded = EditorPrefs.GetBool(foldKey, true);
+
+            DrawTopLevelInsertionZone("top-before|w:" + world.id);
 
             Rect header = GUILayoutUtility.GetRect(0f, 30f, GUILayout.ExpandWidth(true));
             GUI.Box(header, GUIContent.none, EditorStyles.helpBox);
@@ -4193,32 +5702,25 @@ namespace DreamPark {
             // the same gesture into a World drag from anywhere on the bar.
             DrawSequenceDrag(header, "w:" + world.id);
             Rect numberRect = new Rect(header.x + 5f, header.y + 3f, 24f, 24f);
-            DrawPositionEditor(numberRect, "w:" + world.id, topIndex + 1);
+            DrawPositionEditor(numberRect, "w:" + world.id,
+                topIndex + (organizerMode == OrganizerMode.Adventure ? 2 : 1));
 
             Rect foldRect = new Rect(header.x + 34f, header.y + 5f, 80f, 20f);
-            bool nextExpanded = EditorGUI.Foldout(foldRect, expanded, "WORLD", true, EditorStyles.foldout);
+            bool nextExpanded = EditorGUI.Foldout(foldRect, expanded, "GROUP", true, EditorStyles.foldout);
             if (nextExpanded != expanded) EditorPrefs.SetBool(foldKey, nextExpanded);
 
             Rect removeRect = new Rect(header.xMax - 58f, header.y + 5f, 52f, 20f);
             Rect dragRect = new Rect(removeRect.x - 28f, header.y + 5f, 24f, 20f);
-            GUI.Label(dragRect, new GUIContent("≡", "Drag to reorder this World"), EditorStyles.centeredGreyMiniLabel);
+            GUI.Label(dragRect, new GUIContent("≡", "Drag to reorder this Group"), EditorStyles.centeredGreyMiniLabel);
             Rect nameRect = new Rect(foldRect.xMax + 4f, header.y + 4f,
                 Mathf.Max(60f, dragRect.x - foldRect.xMax - 8f), 21f);
-            string nextName = EditorGUI.TextField(nameRect, world.name ?? "New World");
-            if (nextName != world.name)
-            {
-                BeginSequenceChange("Rename World");
-                world.name = nextName;
-                SaveSequenceLayout();
-            }
+            GUI.Label(nameRect, new GUIContent(world.name ?? "Group",
+                "Rename this Group in Park Assets."), EditorStyles.boldLabel);
 
-            if (GUI.Button(removeRect, new GUIContent("Remove", "Remove the World but keep its attractions at this position."), EditorStyles.miniButton))
+            if (GUI.Button(removeRect, new GUIContent("Remove", "Remove the Group from this Package."), EditorStyles.miniButton))
             {
-                BeginSequenceChange("Remove World");
-                int insert = topIndex;
-                sequenceLayout.items.RemoveAt(topIndex);
-                foreach (string guid in world.attractionGuids ?? new List<string>())
-                    sequenceLayout.items.Insert(insert++, new ContentSequenceStore.Entry { attractionGuid = guid });
+                BeginSequenceChange("Remove Group");
+                ContentSequenceStore.RemoveGroupFromPackage(sequenceLayout, world.id);
                 SaveSequenceLayout();
                 return;
             }
@@ -4229,55 +5731,80 @@ namespace DreamPark {
 
             if (!nextExpanded)
             {
-                GUILayout.Space(CardSpacing * 2f);
+                DrawTopLevelInsertionZone("top-after|w:" + world.id);
                 return;
             }
 
             var children = world.attractionGuids ?? (world.attractionGuids = new List<string>());
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            Rect worldBody = EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            bool pointerOverCard = false;
             if (children.Count == 0)
             {
                 Rect empty = GUILayoutUtility.GetRect(0f, 52f, GUILayout.ExpandWidth(true));
-                GUI.Label(empty, "Drop attractions anywhere in this World", EditorStyles.centeredGreyMiniLabel);
-                HandleSequenceDrop(empty, "world|" + world.id + "|0");
+                GUI.Label(empty, "Drop Park Assets anywhere in this Group", EditorStyles.centeredGreyMiniLabel);
             }
             else
             {
-                DrawWorldGrid(world, topIndex, attractions);
+                pointerOverCard = DrawWorldGrid(world, topIndex, attractions);
                 Rect dropRect = GUILayoutUtility.GetRect(0f, 18f, GUILayout.ExpandWidth(true));
-                GUI.Label(dropRect, new GUIContent("Drop anywhere here to add at the end", "Drop directly on a card to insert at that exact position."), EditorStyles.centeredGreyMiniLabel);
-                HandleSequenceDrop(dropRect, $"world|{world.id}|{children.Count}");
+                GUI.Label(dropRect, new GUIContent("Drop anywhere here to add at the end", "Drop an attraction or prop directly on a card to insert it at that exact position."), EditorStyles.centeredGreyMiniLabel);
             }
             EditorGUILayout.EndVertical();
-            GUILayout.Space(CardSpacing * 2f);
+            if (!pointerOverCard)
+            {
+                HandleSequenceItemDrop(worldBody, $"world|{world.id}|{children.Count}");
+                DrawWorldEndInsertionCue(worldBody);
+            }
+            DrawTopLevelInsertionZone("top-after|w:" + world.id);
         }
 
-        private void DrawWorldGrid(ContentSequenceStore.Entry world, int topIndex, List<ContentRootEntry> attractions)
+        private bool DrawWorldGrid(ContentSequenceStore.Entry world, int topIndex, List<ContentRootEntry> attractions)
         {
             List<string> children = world.attractionGuids;
+            // Sequence-incompatible entries remain visible for feedback, but they
+            // are not compiled as levels. Keep the visible order honest by showing
+            // the compiled entries first (in their authored relative order), then
+            // the excluded entries as an unnumbered tail.
+            var displayedChildren = children
+                .Select((guid, sourceIndex) => new
+                {
+                    sourceIndex,
+                    entry = attractions.FirstOrDefault(candidate => candidate.guid == guid),
+                })
+                .Where(child => child.entry != null)
+                .OrderBy(child => IsPackageEntryCompatible(child.entry) ? 0 : 1)
+                .ToList();
             int perRow = SequenceCardsPerRow();
-            for (int start = 0; start < children.Count; start += perRow)
+            bool pointerOverCard = false;
+            int compatiblePosition = 0;
+            for (int start = 0; start < displayedChildren.Count; start += perRow)
             {
                 GUILayout.BeginHorizontal();
                 GUILayout.Space(12f);
-                int rowEnd = Mathf.Min(start + perRow, children.Count);
-                for (int childIndex = start; childIndex < rowEnd; childIndex++)
+                int rowEnd = Mathf.Min(start + perRow, displayedChildren.Count);
+                for (int displayIndex = start; displayIndex < rowEnd; displayIndex++)
                 {
-                    ContentRootEntry entry = attractions.FirstOrDefault(e => e.guid == children[childIndex]);
+                    var child = displayedChildren[displayIndex];
+                    int childIndex = child.sourceIndex;
+                    ContentRootEntry entry = child.entry;
                     if (entry != null)
                     {
-                        Rect card = DrawCard(entry, true);
-                        DrawSequenceCardDecorations(card, childIndex + 1, entry, "a:" + entry.guid);
-                        DrawSequenceDrag(card, "a:" + entry.guid);
-                        HandleWorldCardDrop(card, world.id, childIndex, entry.guid);
-                        DrawAttractionContextMenu(card, entry, false);
+                        Rect card = DrawPackageAssetCard(entry);
+                        pointerOverCard |= card.Contains(Event.current.mousePosition);
+                        string placementToken = ContentSequenceStore.ChildPlacementToken(world, childIndex);
+                        if (IsPackageEntryCompatible(entry))
+                            DrawSequenceCardDecorations(card, ++compatiblePosition, entry, placementToken);
+                        DrawSequenceDrag(card, placementToken);
+                        HandleWorldCardDrop(card, world.id, childIndex, placementToken);
+                        DrawPackageContextMenu(card, entry, placementToken.Substring(2));
                     }
-                    if (childIndex + 1 < rowEnd) GUILayout.Space(CardSpacing);
+                    if (displayIndex + 1 < rowEnd) GUILayout.Space(CardSpacing);
                 }
                 GUILayout.FlexibleSpace();
                 GUILayout.EndHorizontal();
-                GUILayout.Space(CardSpacing);
+                GUILayout.Space(2f);
             }
+            return pointerOverCard;
         }
 
         private void DrawAttractionGridTail(List<int> activeItemIndices, List<ContentRootEntry> attractions)
@@ -4292,6 +5819,11 @@ namespace DreamPark {
             EditorGUI.indentLevel++;
             for (int start = 0; start < total; start += perRow)
             {
+                if (start < activeCount)
+                {
+                    ContentSequenceStore.Entry firstInRow = sequenceLayout.items[activeItemIndices[start]];
+                    DrawTopLevelInsertionZone("top-before|" + ContentSequenceStore.PlacementToken(firstInRow));
+                }
                 GUILayout.BeginHorizontal();
                 GUILayout.Space(EditorGUI.indentLevel * 12f);
                 int rowEnd = Mathf.Min(start + perRow, total);
@@ -4304,10 +5836,11 @@ namespace DreamPark {
                         ContentRootEntry entry = attractions.FirstOrDefault(e => e.guid == item.attractionGuid);
                         if (entry != null)
                         {
-                            Rect card = DrawCard(entry, true);
-                            DrawSequenceCardDecorations(card, itemIndex + 1, entry, "a:" + entry.guid);
-                            DrawSequenceDrag(card, "a:" + entry.guid);
-                            HandleTopLevelCardDrop(card, ContentSequenceStore.EntryToken(item));
+                            Rect card = DrawPackageAssetCard(entry);
+                            string placementToken = ContentSequenceStore.PlacementToken(item);
+                            DrawSequenceCardDecorations(card, itemIndex + 1, entry, placementToken);
+                            DrawSequenceDrag(card, placementToken);
+                            HandleTopLevelCardDrop(card, placementToken);
                             DrawAttractionContextMenu(card, entry, false);
                         }
                     }
@@ -4316,7 +5849,7 @@ namespace DreamPark {
                         ContentRootEntry entry = hidden[slot - activeCount];
                         Color previous = GUI.color;
                         GUI.color = new Color(previous.r, previous.g, previous.b, previous.a * 0.5f);
-                        Rect card = DrawCard(entry, true);
+                        Rect card = DrawCard(entry, true, false);
                         GUI.color = previous;
                         DrawAttractionContextMenu(card, entry, true);
                     }
@@ -4329,7 +5862,7 @@ namespace DreamPark {
                     }
                     else
                     {
-                        Rect tile = DrawAddGridTile("Add World", "Create a new World at the end of the progression.");
+                        Rect tile = DrawAddGridTile("Add Group", "Create a new Group at the end of the progression.");
                         if (GUI.Button(tile, GUIContent.none, GUIStyle.none))
                             AddWorldAtEnd();
                         HandleSequenceDrop(tile, "top-end");
@@ -4338,7 +5871,13 @@ namespace DreamPark {
                 }
                 GUILayout.FlexibleSpace();
                 GUILayout.EndHorizontal();
-                GUILayout.Space(CardSpacing);
+                int lastActiveSlot = Mathf.Min(rowEnd, activeCount) - 1;
+                if (lastActiveSlot >= start)
+                {
+                    ContentSequenceStore.Entry lastInRow = sequenceLayout.items[activeItemIndices[lastActiveSlot]];
+                    DrawTopLevelInsertionZone("top-after|" + ContentSequenceStore.PlacementToken(lastInRow));
+                }
+                else GUILayout.Space(CardSpacing);
             }
             EditorGUI.indentLevel--;
         }
@@ -4369,11 +5908,11 @@ namespace DreamPark {
 
         private void AddWorldAtEnd()
         {
-            BeginSequenceChange("Add World");
+            BeginSequenceChange("Add Group");
             int firstHidden = sequenceLayout.items.FindIndex(item => item.hidden);
             var world = new ContentSequenceStore.Entry
             {
-                kind = "world", id = Guid.NewGuid().ToString("N"), name = "New World"
+                kind = "world", id = Guid.NewGuid().ToString("N"), name = "New Group"
             };
             if (firstHidden >= 0) sequenceLayout.items.Insert(firstHidden, world);
             else sequenceLayout.items.Add(world);
@@ -4413,21 +5952,125 @@ namespace DreamPark {
             if (evt.type != EventType.ContextClick || !card.Contains(evt.mousePosition)) return;
 
             var menu = new GenericMenu();
-            menu.AddItem(new GUIContent(hidden ? "Unhide" : "Hidden"), false, () =>
-            {
-                BeginSequenceChange(hidden ? "Unhide Attraction" : "Hide Attraction");
-                if (ContentSequenceStore.SetHidden(sequenceLayout, entry.guid, !hidden)) SaveSequenceLayout();
-            });
-            bool positionRequiresAttraction = !hidden
-                && (entry.guid == firstSequenceAttractionGuid || entry.guid == lastSequenceAttractionGuid);
-            if (positionRequiresAttraction)
-                menu.AddDisabledItem(new GUIContent("Is Required"), true);
-            else if (entry.requiredForGame)
-                menu.AddItem(new GUIContent("Make Optional"), false, () => SetManualRequired(entry, false));
+            AddRegeneratePreviewMenuItem(menu, entry);
+            menu.AddSeparator("");
+            bool isEndpoint = organizerMode == OrganizerMode.Adventure
+                && (entry.guid == sequenceLayout?.startGuid || entry.guid == sequenceLayout?.endGuid);
+            if (isEndpoint) menu.AddDisabledItem(new GUIContent("Hidden"));
             else
-                menu.AddItem(new GUIContent("Make Required"), false, () => SetManualRequired(entry, true));
+                menu.AddItem(new GUIContent(hidden ? "Unhide" : "Hidden"), false, () =>
+                {
+                    BeginSequenceChange(hidden ? "Unhide Sequence Item" : "Hide Sequence Item");
+                    if (ContentSequenceStore.SetHidden(sequenceLayout, entry.guid, !hidden)) SaveSequenceLayout();
+                });
+            if (entry.kind == ContentRootKind.Attraction)
+            {
+                bool positionRequiresAttraction = !hidden
+                    && (entry.guid == firstSequenceAttractionGuid || entry.guid == lastSequenceAttractionGuid);
+                if (positionRequiresAttraction)
+                    menu.AddDisabledItem(new GUIContent("Is Required"), true);
+                else if (entry.requiredForGame)
+                    menu.AddItem(new GUIContent("Make Optional"), false, () => SetManualRequired(entry, false));
+                else
+                    menu.AddItem(new GUIContent("Make Required"), false, () => SetManualRequired(entry, true));
+            }
             menu.ShowAsContext();
             evt.Use();
+        }
+
+        private void DrawLibraryAssetContextMenu(Rect card, ContentRootEntry entry, bool hidden)
+        {
+            Event evt = Event.current;
+            if (evt.type != EventType.ContextClick || !card.Contains(evt.mousePosition)) return;
+            var menu = new GenericMenu();
+            AddRegeneratePreviewMenuItem(menu, entry);
+            menu.AddSeparator("");
+            menu.AddItem(new GUIContent(hidden ? "Unhide" : "Hidden"), false, () =>
+            {
+                BeginSequenceChange(hidden ? "Unhide Park Asset" : "Hide Park Asset");
+                if (ContentSequenceStore.SetHidden(libraryLayout, entry.guid, !hidden)) SaveLibraryLayout();
+            });
+            if (entry.kind == ContentRootKind.Attraction)
+            {
+                if (entry.requiredForGame)
+                    menu.AddItem(new GUIContent("Make Optional"), false, () => SetManualRequired(entry, false));
+                else menu.AddItem(new GUIContent("Make Required"), false, () => SetManualRequired(entry, true));
+            }
+            menu.ShowAsContext();
+            evt.Use();
+        }
+
+        private void DrawPackageContextMenu(Rect card, ContentRootEntry entry, string placementId)
+        {
+            Event evt = Event.current;
+            if (evt.type != EventType.ContextClick || !card.Contains(evt.mousePosition)) return;
+            var menu = new GenericMenu();
+            AddRegeneratePreviewMenuItem(menu, entry);
+            bool endpoint = organizerMode == OrganizerMode.Adventure
+                && (entry.guid == sequenceLayout?.startGuid || entry.guid == sequenceLayout?.endGuid);
+            if (endpoint) menu.AddDisabledItem(new GUIContent("Remove from Package"));
+            else
+                menu.AddItem(new GUIContent("Remove from Package"), false, () =>
+                {
+                    BeginSequenceChange("Remove from Package");
+                    if (ContentSequenceStore.RemovePlacementFromPackage(sequenceLayout, placementId)) SaveSequenceLayout();
+                });
+            if (entry.kind == ContentRootKind.Attraction)
+            {
+                if (endpoint) menu.AddDisabledItem(new GUIContent("Is Required"), true);
+                else if (entry.requiredForGame)
+                    menu.AddItem(new GUIContent("Make Optional"), false, () => SetManualRequired(entry, false));
+                else menu.AddItem(new GUIContent("Make Required"), false, () => SetManualRequired(entry, true));
+            }
+            menu.ShowAsContext();
+            evt.Use();
+        }
+
+        private void DrawPreviewContextMenu(Rect card, ContentRootEntry entry)
+        {
+            Event evt = Event.current;
+            if (evt.type != EventType.ContextClick || !card.Contains(evt.mousePosition)) return;
+
+            var menu = new GenericMenu();
+            AddRegeneratePreviewMenuItem(menu, entry);
+            menu.ShowAsContext();
+            evt.Use();
+        }
+
+        private void AddRegeneratePreviewMenuItem(GenericMenu menu, ContentRootEntry entry)
+        {
+            menu.AddItem(new GUIContent("Regenerate Preview"), false,
+                () => QueueRegeneratePreview(entry));
+        }
+
+        private void QueueRegeneratePreview(ContentRootEntry entry)
+        {
+            if (entry == null || string.IsNullOrEmpty(entry.assetPath) || string.IsNullOrEmpty(contentId)) return;
+            string scheduledContentId = contentId;
+            string scheduledAssetPath = entry.assetPath;
+            string displayName = entry.name;
+            EditorApplication.delayCall += () =>
+            {
+                if (this == null || !string.Equals(contentId, scheduledContentId, StringComparison.Ordinal)) return;
+                try
+                {
+                    EditorUtility.DisplayProgressBar(
+                        "Regenerating Preview", $"Rendering {displayName}...", 0.5f);
+                    if (!ContentProcessor.RegeneratePreviewForPrefab(scheduledContentId, scheduledAssetPath))
+                    {
+                        EditorUtility.DisplayDialog(
+                            "Preview Generation Failed",
+                            $"DreamPark could not generate a preview for {displayName}. Check the Console for details.",
+                            "OK");
+                        return;
+                    }
+                    OnPreviewSaved(scheduledContentId, scheduledAssetPath);
+                }
+                finally
+                {
+                    EditorUtility.ClearProgressBar();
+                }
+            };
         }
 
         private void SetManualRequired(ContentRootEntry entry, bool required)
@@ -4445,10 +6088,10 @@ namespace DreamPark {
 
         private bool IsEffectivelyRequired(ContentRootEntry entry)
         {
-            if (entry == null) return false;
+            if (entry == null || entry.kind != ContentRootKind.Attraction) return false;
             if (entry.requiredForGame) return true;
-            string[] active = ContentSequenceStore.Flatten(sequenceLayout).ToArray();
-            return active.Length > 0 && (entry.guid == active[0] || entry.guid == active[active.Length - 1]);
+            return organizerMode == OrganizerMode.Adventure
+                && (entry.guid == sequenceLayout?.startGuid || entry.guid == sequenceLayout?.endGuid);
         }
 
         private static void MoveListItem<T>(List<T> list, int from, int to)
@@ -4459,6 +6102,7 @@ namespace DreamPark {
 
         private void DrawSequenceCardDecorations(Rect card, int position, ContentRootEntry entry, string token)
         {
+            if (!IsPackageEntryCompatible(entry)) return;
             var numberRect = new Rect(card.x + 4f, card.y + 4f, 24f, 24f);
             DrawPositionEditor(numberRect, token, position,
                 entry.guid == firstSequenceAttractionGuid,
@@ -4466,8 +6110,47 @@ namespace DreamPark {
                 IsEffectivelyRequired(entry));
         }
 
+        private Rect DrawPackageAssetCard(ContentRootEntry entry)
+        {
+            string incompatibility = SequenceIncompatibilityMessage(entry);
+            Color previous = GUI.color;
+            if (!string.IsNullOrEmpty(incompatibility))
+                GUI.color = new Color(previous.r, previous.g, previous.b, previous.a * 0.5f);
+            Rect card = DrawCard(entry, true, false);
+            GUI.color = previous;
+
+            if (!string.IsNullOrEmpty(incompatibility))
+            {
+                Rect image = new Rect(card.x, card.y, CardWidth, CardImageSize);
+                EditorGUI.DrawRect(image, new Color(0.08f, 0.08f, 0.08f, 0.18f));
+                GUIContent icon = EditorGUIUtility.IconContent("console.warnicon.sml");
+                Rect warning = new Rect(image.xMax - 22f, image.yMax - 22f, 20f, 20f);
+                GUI.Label(warning, new GUIContent(icon != null ? icon.image : null, incompatibility));
+                GUI.Label(card, new GUIContent(string.Empty, incompatibility), GUIStyle.none);
+            }
+            return card;
+        }
+
+        private string SequenceIncompatibilityMessage(ContentRootEntry entry)
+        {
+            if (organizerMode != OrganizerMode.Sequence || entry == null) return null;
+            if (entry.kind == ContentRootKind.Prop)
+                return "Not Sequence compatible: Props cannot run as Sequence levels and will not be included in the generated Dream Sequence.";
+            if (entry.kind == ContentRootKind.Attraction && !entry.sequenceCompatible)
+                return "Not Sequence compatible: this Attraction does not fit inside 12 × 18 ft at its smallest shrink size and will not be included in the generated Dream Sequence.";
+            return null;
+        }
+
+        private bool IsPackageEntryCompatible(ContentRootEntry entry)
+        {
+            if (organizerMode != OrganizerMode.Sequence) return true;
+            return entry != null
+                && entry.kind == ContentRootKind.Attraction
+                && entry.sequenceCompatible;
+        }
+
         private void DrawPositionEditor(Rect rect, string token, int currentPosition,
-            bool isStarter = false, bool isFinal = false, bool isRequired = false)
+            bool isStarter = false, bool isFinal = false, bool isRequired = false, bool allowEdit = true)
         {
             if (editingSequencePosition == token)
             {
@@ -4513,7 +6196,7 @@ namespace DreamPark {
                         ? "This attraction is required for the game to function"
                     : "Click to enter a new position";
             GUI.Label(rect, new GUIContent(label, tooltip), numberStyle);
-            if (GUI.Button(rect, new GUIContent("", tooltip), GUIStyle.none))
+            if (allowEdit && GUI.Button(rect, new GUIContent("", tooltip), GUIStyle.none))
             {
                 editingSequencePosition = token;
                 sequencePositionText = currentPosition.ToString();
@@ -4550,28 +6233,57 @@ namespace DreamPark {
             if (int.TryParse(sequencePositionText, out int requested))
             {
                 requested = Mathf.Max(1, requested);
-                BeginSequenceChange("Change Sequence Position");
-                if (token.StartsWith("w:", StringComparison.Ordinal))
+                if (token.StartsWith("arena:", StringComparison.Ordinal))
                 {
-                    int from = sequenceLayout.items.FindIndex(x => x.IsWorld && x.id == token.Substring(2));
-                    if (from >= 0) MoveListItem(sequenceLayout.items, from, Mathf.Clamp(requested - 1, 0, sequenceLayout.items.Count - 1));
-                }
-                else if (token.StartsWith("a:", StringComparison.Ordinal))
-                {
-                    string guid = token.Substring(2);
-                    int top = sequenceLayout.items.FindIndex(x => !x.IsWorld && x.attractionGuid == guid);
-                    if (top >= 0) MoveListItem(sequenceLayout.items, top, Mathf.Clamp(requested - 1, 0, sequenceLayout.items.Count - 1));
-                    else
+                    string[] parts = token.Split(':');
+                    if (parts.Length == 4
+                        && int.TryParse(parts[1], out int widthFeet)
+                        && int.TryParse(parts[2], out int lengthFeet))
                     {
-                        var world = sequenceLayout.items.FirstOrDefault(x => x.IsWorld && x.attractionGuids.Contains(guid));
-                        if (world != null)
+                        ArenaPackageStore.Bucket bucket = arenaLayout?.buckets?.FirstOrDefault(item =>
+                            item != null && item.widthFeet == widthFeet
+                            && item.lengthFeet == lengthFeet);
+                        int from = bucket?.guids?.IndexOf(parts[3]) ?? -1;
+                        if (from >= 0)
                         {
-                            int from = world.attractionGuids.IndexOf(guid);
-                            MoveListItem(world.attractionGuids, from, Mathf.Clamp(requested - 1, 0, world.attractionGuids.Count - 1));
+                            BeginSequenceChange("Change Arena Priority");
+                            MoveListItem(bucket.guids, from,
+                                Mathf.Clamp(requested - 1, 0, bucket.guids.Count - 1));
+                            SaveArenaLayout();
                         }
                     }
                 }
-                SaveSequenceLayout();
+                else
+                {
+                    BeginSequenceChange("Change Sequence Position");
+                    if (token.StartsWith("w:", StringComparison.Ordinal))
+                    {
+                        int from = sequenceLayout.items.FindIndex(x => x.IsWorld && x.id == token.Substring(2));
+                        int offset = organizerMode == OrganizerMode.Adventure ? 2 : 1;
+                        if (from >= 0) MoveListItem(sequenceLayout.items, from,
+                            Mathf.Clamp(requested - offset, 0, sequenceLayout.items.Count - 1));
+                    }
+                    else if (token.StartsWith("p:", StringComparison.Ordinal))
+                    {
+                        string placementId = token.Substring(2);
+                        int top = sequenceLayout.items.FindIndex(x => !x.IsWorld && x.id == placementId);
+                        int offset = organizerMode == OrganizerMode.Adventure ? 2 : 1;
+                        if (top >= 0) MoveListItem(sequenceLayout.items, top,
+                            Mathf.Clamp(requested - offset, 0, sequenceLayout.items.Count - 1));
+                        else
+                        {
+                            var world = sequenceLayout.items.FirstOrDefault(x => x.IsWorld
+                                && (x.attractionIds ?? new List<string>()).Contains(placementId));
+                            if (world != null)
+                            {
+                                int from = world.attractionIds.IndexOf(placementId);
+                                MoveListItem(world.attractionGuids, from, Mathf.Clamp(requested - 1, 0, world.attractionGuids.Count - 1));
+                                MoveListItem(world.attractionIds, from, Mathf.Clamp(requested - 1, 0, world.attractionIds.Count - 1));
+                            }
+                        }
+                    }
+                    SaveSequenceLayout();
+                }
             }
             editingSequencePosition = null;
             sequencePositionText = "";
@@ -4593,8 +6305,12 @@ namespace DreamPark {
             {
                 DragAndDrop.PrepareStartDrag();
                 DragAndDrop.SetGenericData(SequenceDragKey, source);
+                lastSequenceDropSource = null;
+                lastSequenceDropTarget = null;
+                lastSequenceDropRect = default;
                 DragAndDrop.StartDrag(source.StartsWith("w:", StringComparison.Ordinal)
-                    ? "Reorder World" : "Reorder attraction");
+                    || source.StartsWith("lw:", StringComparison.Ordinal)
+                    ? "Move Group" : "Move Park Asset");
                 pendingSequenceDrag = null;
                 sequenceDragWasStarted = true;
                 evt.Use();
@@ -4612,17 +6328,49 @@ namespace DreamPark {
         private void HandleTopLevelCardDrop(Rect rect, string anchor)
         {
             string source = DragAndDrop.GetGenericData(SequenceDragKey) as string;
-            bool after = SourceComesBeforeTarget(source, anchor);
+            if (string.IsNullOrEmpty(source)) return;
+            bool after = Event.current.mousePosition.x >= rect.center.x;
             HandleSequenceDrop(rect, (after ? "top-after|" : "top-before|") + anchor);
             DrawSequenceInsertionCue(rect, after, true);
         }
 
-        private void HandleWorldCardDrop(Rect rect, string worldId, int childIndex, string targetGuid)
+        private void DrawTopLevelInsertionZone(string target)
+        {
+            Rect zone = GUILayoutUtility.GetRect(0f, 2f, GUILayout.ExpandWidth(true));
+            Rect hitZone = new Rect(zone.x, zone.center.y - 6f, zone.width, 12f);
+            string source = DragAndDrop.GetGenericData(SequenceDragKey) as string;
+            if (string.IsNullOrEmpty(source)) return;
+
+            if (hitZone.Contains(Event.current.mousePosition) && Event.current.type == EventType.Repaint)
+                EditorGUI.DrawRect(new Rect(zone.x, zone.center.y - 1.5f, zone.width, 3f),
+                    new Color(0.2f, 0.7f, 1f, 0.95f));
+            HandleSequenceDrop(hitZone, target);
+        }
+
+        private void HandleWorldCardDrop(Rect rect, string worldId, int childIndex, string targetToken)
         {
             string source = DragAndDrop.GetGenericData(SequenceDragKey) as string;
-            bool after = SourceComesBeforeTarget(source, "a:" + targetGuid);
-            HandleSequenceDrop(rect, $"world|{worldId}|{childIndex + (after ? 1 : 0)}");
+            if (source != null && source.StartsWith("w:", StringComparison.Ordinal)) return;
+            bool after = Event.current.mousePosition.x >= rect.center.x;
+            HandleSequenceItemDrop(rect, $"world|{worldId}|{childIndex + (after ? 1 : 0)}");
             DrawSequenceInsertionCue(rect, after, false);
+        }
+
+        private void HandleSequenceItemDrop(Rect rect, string target)
+        {
+            string source = DragAndDrop.GetGenericData(SequenceDragKey) as string;
+            if (string.IsNullOrEmpty(source) || source.StartsWith("w:", StringComparison.Ordinal)
+                || source.StartsWith("lw:", StringComparison.Ordinal)) return;
+            HandleSequenceDrop(rect, target);
+        }
+
+        private void DrawWorldEndInsertionCue(Rect rect)
+        {
+            if (Event.current.type != EventType.Repaint || !rect.Contains(Event.current.mousePosition)) return;
+            string source = DragAndDrop.GetGenericData(SequenceDragKey) as string;
+            if (string.IsNullOrEmpty(source) || source.StartsWith("w:", StringComparison.Ordinal)) return;
+            EditorGUI.DrawRect(new Rect(rect.x + 2f, rect.yMax - 4f, rect.width - 4f, 3f),
+                new Color(0.2f, 0.7f, 1f, 0.95f));
         }
 
         private bool SourceComesBeforeTarget(string source, string target)
@@ -4633,17 +6381,17 @@ namespace DreamPark {
             {
                 string worldId = source.Substring(2);
                 int sourceTop = sequenceLayout.items.FindIndex(item => item.IsWorld && item.id == worldId);
-                int targetTop = sequenceLayout.items.FindIndex(item => ContentSequenceStore.EntryToken(item) == target);
+                int targetTop = sequenceLayout.items.FindIndex(item => ContentSequenceStore.PlacementToken(item) == target);
                 return sourceTop >= 0 && targetTop >= 0 && sourceTop < targetTop;
             }
 
-            if (source.StartsWith("a:", StringComparison.Ordinal) && target.StartsWith("a:", StringComparison.Ordinal))
+            if (source.StartsWith("p:", StringComparison.Ordinal) && target.StartsWith("p:", StringComparison.Ordinal))
             {
-                string sourceGuid = source.Substring(2);
-                string targetGuid = target.Substring(2);
-                List<string> flattened = ContentSequenceStore.Flatten(sequenceLayout).ToList();
-                int sourceIndex = flattened.IndexOf(sourceGuid);
-                int targetIndex = flattened.IndexOf(targetGuid);
+                List<string> flattened = sequenceLayout.items.SelectMany(item => item.IsWorld
+                    ? (IEnumerable<string>)(item.attractionIds ?? new List<string>())
+                    : new[] { item.id }).ToList();
+                int sourceIndex = flattened.IndexOf(source.Substring(2));
+                int targetIndex = flattened.IndexOf(target.Substring(2));
                 return sourceIndex >= 0 && targetIndex >= 0 && sourceIndex < targetIndex;
             }
             return false;
@@ -4663,24 +6411,97 @@ namespace DreamPark {
             Event evt = Event.current;
             if ((evt.type != EventType.DragUpdated && evt.type != EventType.DragPerform) || !rect.Contains(evt.mousePosition)) return;
             if (!(DragAndDrop.GetGenericData(SequenceDragKey) is string source)) return;
-            DragAndDrop.visualMode = DragAndDropVisualMode.Move;
+            DragAndDrop.visualMode = source.StartsWith("a:", StringComparison.Ordinal)
+                || source.StartsWith("lw:", StringComparison.Ordinal)
+                ? DragAndDropVisualMode.Copy : DragAndDropVisualMode.Move;
+            lastSequenceDropSource = source;
+            lastSequenceDropTarget = target;
+            lastSequenceDropRect = rect;
+            lastSequenceDropTime = EditorApplication.timeSinceStartup;
             if (evt.type == EventType.DragPerform)
             {
                 DragAndDrop.AcceptDrag();
-                QueueSequenceMove(source, target);
-                DragAndDrop.SetGenericData(SequenceDragKey, null);
+                CommitSequenceDrop(source, target);
             }
             evt.Use();
+        }
+
+        private void CommitCachedSequenceDropOnRelease()
+        {
+            Event evt = Event.current;
+            if (evt.rawType != EventType.DragPerform && evt.rawType != EventType.MouseUp) return;
+            if (!(DragAndDrop.GetGenericData(SequenceDragKey) is string source)) return;
+            if (!string.Equals(source, lastSequenceDropSource, StringComparison.Ordinal)
+                || string.IsNullOrEmpty(lastSequenceDropTarget)
+                || !lastSequenceDropRect.Contains(evt.mousePosition)
+                || EditorApplication.timeSinceStartup - lastSequenceDropTime > 2d) return;
+
+            if (evt.rawType == EventType.DragPerform) DragAndDrop.AcceptDrag();
+            CommitSequenceDrop(source, lastSequenceDropTarget);
+            if (evt.type != EventType.Used) evt.Use();
+        }
+
+        private void CommitSequenceDrop(string source, string target)
+        {
+            if (source.StartsWith("arena:", StringComparison.Ordinal))
+                QueueArenaMove(source, target);
+            else if (target.StartsWith("library:", StringComparison.Ordinal))
+                QueueLibraryMove(source, target.Substring("library:".Length));
+            else QueueSequenceMove(source, target);
+            DragAndDrop.SetGenericData(SequenceDragKey, null);
+            lastSequenceDropSource = null;
+            lastSequenceDropTarget = null;
+            lastSequenceDropRect = default;
+        }
+
+        private void QueueArenaMove(string source, string target)
+        {
+            if (!TryParseArenaPositionToken(source, out int sourceWidth,
+                    out int sourceLength, out string sourceGuid)) return;
+            bool after = target.StartsWith("arena-after:", StringComparison.Ordinal);
+            bool before = target.StartsWith("arena-before:", StringComparison.Ordinal);
+            bool append = target.StartsWith("arena-append:", StringComparison.Ordinal);
+            if (!after && !before && !append) return;
+            string[] parts = target.Split(':');
+            int expectedParts = append ? 3 : 4;
+            if (parts.Length != expectedParts || !int.TryParse(parts[1], out int targetWidth)
+                || !int.TryParse(parts[2], out int targetLength)) return;
+            string targetGuid = append ? null : parts[3];
+            string scheduledContentId = contentId;
+            EditorApplication.delayCall += () =>
+            {
+                if (this == null || arenaLayout == null
+                    || !string.Equals(contentId, scheduledContentId, StringComparison.Ordinal)) return;
+                ArenaPackageStore.Data next = ArenaPackageStore.Clone(arenaLayout);
+                bool moved = append
+                    ? ArenaPackageStore.MoveToBucketEnd(next, sourceWidth, sourceLength,
+                        targetWidth, targetLength, sourceGuid)
+                    : ArenaPackageStore.MoveRelative(next, sourceWidth, sourceLength,
+                        targetWidth, targetLength, sourceGuid, targetGuid, after);
+                if (!moved) return;
+                BeginSequenceChange(sourceWidth == targetWidth && sourceLength == targetLength
+                    ? "Change Arena Priority" : "Override Arena Size");
+                arenaLayout = next;
+                SaveArenaLayout();
+            };
         }
 
         private void HandleWorldHeaderDrop(Rect rect, string worldId, int topIndex)
         {
             string source = DragAndDrop.GetGenericData(SequenceDragKey) as string;
+            if (source != null && source.StartsWith("lw:", StringComparison.Ordinal)) return;
             string target;
             if (source != null && source.StartsWith("w:", StringComparison.Ordinal))
             {
                 string anchor = "w:" + worldId;
-                target = (SourceComesBeforeTarget(source, anchor) ? "top-after|" : "top-before|") + anchor;
+                bool after = SourceComesBeforeTarget(source, anchor);
+                target = (after ? "top-after|" : "top-before|") + anchor;
+                if (rect.Contains(Event.current.mousePosition) && Event.current.type == EventType.Repaint)
+                {
+                    float y = after ? rect.yMax - 2f : rect.y;
+                    EditorGUI.DrawRect(new Rect(rect.x, y, rect.width, 3f),
+                        new Color(0.2f, 0.7f, 1f, 0.95f));
+                }
             }
             else target = "world|" + worldId + "|0";
             HandleSequenceDrop(rect, target);
@@ -4697,11 +6518,60 @@ namespace DreamPark {
                 if (this == null || sequenceLayout == null
                     || !string.Equals(contentId, scheduledContentId, StringComparison.Ordinal)) return;
                 ContentSequenceStore.Data nextLayout = ContentSequenceStore.Clone(sequenceLayout);
+                if (source.StartsWith("lw:", StringComparison.Ordinal))
+                {
+                    if (target.StartsWith("world|", StringComparison.Ordinal)) return;
+                    string groupId = source.Substring(3);
+                    ContentSequenceStore.Entry libraryGroup = libraryLayout?.items
+                        .FirstOrDefault(x => x.IsWorld && x.id == groupId);
+                    if (libraryGroup == null) return;
+                    var allowed = new HashSet<string>(ParkAssetEntries().Select(e => e.guid), StringComparer.Ordinal);
+                    var copiedGuids = (libraryGroup.attractionGuids ?? new List<string>())
+                        .Where(allowed.Contains).ToList();
+                    string packageGroupId = Guid.NewGuid().ToString("N");
+                    var copy = new ContentSequenceStore.Entry
+                    {
+                        kind = "world",
+                        id = packageGroupId,
+                        sourceGroupId = libraryGroup.id,
+                        name = libraryGroup.name,
+                        attractionGuids = copiedGuids,
+                        attractionIds = copiedGuids.Select(_ => Guid.NewGuid().ToString("N")).ToList(),
+                    };
+                    nextLayout.items.Add(copy);
+                    source = "w:" + packageGroupId;
+                }
+                else if (source.StartsWith("a:", StringComparison.Ordinal))
+                {
+                    string guid = source.Substring(2);
+                    // Keep incompatible assets visible in Sequence packages so the
+                    // organizer can explain why they are excluded at compile time.
+                    if (!ParkAssetEntries().Any(entry => entry.guid == guid)) return;
+                }
                 if (!ContentSequenceStore.TryMove(nextLayout, source, target)) return;
                 BeginSequenceChange(source.StartsWith("w:", StringComparison.Ordinal)
-                    ? "Reorder World" : "Reorder Attraction");
+                    ? "Place Group" : source.StartsWith("a:", StringComparison.Ordinal)
+                        ? "Place Park Asset" : "Move Park Asset");
                 sequenceLayout = nextLayout;
                 SaveSequenceLayout();
+            };
+        }
+
+        private void QueueLibraryMove(string source, string target)
+        {
+            string scheduledContentId = contentId;
+            EditorApplication.delayCall += () =>
+            {
+                if (this == null || libraryLayout == null
+                    || !string.Equals(contentId, scheduledContentId, StringComparison.Ordinal)) return;
+                string normalized = source.StartsWith("lw:", StringComparison.Ordinal)
+                    ? "w:" + source.Substring(3) : source;
+                ContentSequenceStore.Data next = ContentSequenceStore.Clone(libraryLayout);
+                if (!ContentSequenceStore.TryMove(next, normalized, target)) return;
+                BeginSequenceChange(normalized.StartsWith("w:", StringComparison.Ordinal)
+                    ? "Reorder Group" : "Reorder Park Asset");
+                libraryLayout = next;
+                SaveLibraryLayout();
             };
         }
 
@@ -4712,42 +6582,36 @@ namespace DreamPark {
 
         private void OnSequenceUndoRedo()
         {
+            if (organizerMode == OrganizerMode.Arena)
+            {
+                if (arenaLayout != null && !string.IsNullOrEmpty(contentId))
+                    ArenaPackageStore.Save(contentId, arenaLayout);
+                Repaint();
+                return;
+            }
             if (sequenceLayout == null || string.IsNullOrEmpty(contentId)) return;
             if (!string.Equals(sequenceUndoContentId, contentId, StringComparison.Ordinal))
             {
                 RefreshContentRoots();
                 return;
             }
-            ContentSequenceStore.Save(contentId, sequenceLayout);
+            ContentSequenceStore.Save(contentId, sequenceLayout, organizerMode == OrganizerMode.Sequence);
             Repaint();
         }
 
         private void SaveSequenceLayout()
         {
-            ContentSequenceStore.Save(contentId, sequenceLayout);
+            ContentSequenceStore.Save(contentId, sequenceLayout, organizerMode == OrganizerMode.Sequence);
             EditorUtility.SetDirty(this);
             Repaint();
         }
 
-        private void DrawDreamsGroup()
+        private static void CompileDreamSequencePackage(string targetContentId)
         {
-            var dreams = contentRoots.Where(e => e.kind == ContentRootKind.Attraction && e.isDreamSequence).ToList();
-            GUILayout.Space(4);
-            EditorGUILayout.LabelField($"Dreams ({dreams.Count})", EditorStyles.boldLabel);
-            EditorGUILayout.BeginHorizontal();
-            foreach (var dream in dreams) { DrawCard(dream); GUILayout.Space(CardSpacing); }
-            Rect addDreamTile = DrawAddGridTile(
-                "Add Dream Sequence", "Generate the required single-room fallback sequence.");
-            if (GUI.Button(addDreamTile, GUIContent.none, GUIStyle.none))
-            {
-                var byGuid = contentRoots.Where(e => e.kind == ContentRootKind.Attraction && !e.isDreamSequence)
-                    .ToDictionary(e => e.guid, e => e.assetPath, StringComparer.Ordinal);
-                string[] orderedPaths = ContentSequenceStore.Flatten(sequenceLayout, includeHidden: true)
-                    .Where(byGuid.ContainsKey).Select(guid => byGuid[guid]).ToArray();
-                DreamSequenceWizard.Show(contentId, orderedPaths, RefreshContentRoots);
-            }
-            GUILayout.FlexibleSpace();
-            EditorGUILayout.EndHorizontal();
+            // This saves only an addressable recipe. The package root is built
+            // from its editable parts when the Sequence is actually loaded.
+            DreamSequencePackageCompiler.Compile(targetContentId);
+            DreamParkPackageCompiler.Compile(targetContentId);
         }
 
         // ── Badges ──────────────────────────────────────────────────────
@@ -4778,6 +6642,7 @@ namespace DreamPark {
             badgesDirty = false;
             badgeScan = null;
             badgeAttribution = null;
+            badgesByAssetPath = new Dictionary<string, List<BadgeStore.Entry>>(StringComparer.Ordinal);
 
             if (string.IsNullOrEmpty(contentId))
             {
@@ -4804,12 +6669,54 @@ namespace DreamPark {
                 // "Awarded by" tooltip should be current the moment a rescan
                 // runs, not wait on the (debounced) advisory check pass.
                 badgeAttribution = BadgeAttributionScanner.Scan(contentId, PreUploadChecks.ContentRootScanner.Scan(contentId));
+                RebuildBadgePreviewIndex();
             }
             catch (Exception e)
             {
                 Debug.LogWarning("[Badges] Attribution scan failed: " + e.Message);
                 badgeAttribution = null;
             }
+        }
+
+        private void RebuildBadgePreviewIndex()
+        {
+            badgesByAssetPath = BuildBadgePreviewIndex(badges, badgeAttribution);
+        }
+
+        internal static Dictionary<string, List<BadgeStore.Entry>> BuildBadgePreviewIndex(
+            IReadOnlyList<BadgeStore.Entry> badgeEntries, BadgeAttributionScanner.Result attribution)
+        {
+            var result = new Dictionary<string, List<BadgeStore.Entry>>(StringComparer.Ordinal);
+            if (attribution == null) return result;
+
+            var byId = new Dictionary<string, BadgeStore.Entry>(StringComparer.Ordinal);
+            if (badgeEntries != null)
+                foreach (BadgeStore.Entry badge in badgeEntries)
+                    if (badge != null && !string.IsNullOrEmpty(badge.badgeId)
+                        && !byId.ContainsKey(badge.badgeId))
+                        byId.Add(badge.badgeId, badge);
+
+            foreach (var award in attribution.awardedByRoot.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+            {
+                if (string.IsNullOrEmpty(award.Key) || award.Value == null) continue;
+                // An attribution can exist before the badge has a completed
+                // card. Still show a named placeholder for the Lua id.
+                if (!byId.TryGetValue(award.Key, out BadgeStore.Entry badge))
+                    badge = new BadgeStore.Entry { badgeId = award.Key };
+                foreach (var root in award.Value)
+                {
+                    if (root == null || string.IsNullOrEmpty(root.assetPath)
+                        || root.kind == PreUploadChecks.ContentRootKindPublic.Player) continue;
+                    if (!result.TryGetValue(root.assetPath, out List<BadgeStore.Entry> assetBadges))
+                    {
+                        assetBadges = new List<BadgeStore.Entry>();
+                        result.Add(root.assetPath, assetBadges);
+                    }
+                    if (!assetBadges.Any(existing => existing.badgeId == award.Key))
+                        assetBadges.Add(badge);
+                }
+            }
+            return result;
         }
 
         // "Awarded by Fountain Quest (Attraction), the Player rig" — or "" when
@@ -4836,6 +6743,7 @@ namespace DreamPark {
                 badgeAddRequested = false;
                 badges.Add(new BadgeStore.Entry());
                 badgesDirty = true;
+                RebuildBadgePreviewIndex();
                 Repaint();
             }
 
@@ -4844,6 +6752,7 @@ namespace DreamPark {
                 if (badgeRemoveIndex < badges.Count) badges.RemoveAt(badgeRemoveIndex);
                 badgeRemoveIndex = -1;
                 badgesDirty = true;
+                RebuildBadgePreviewIndex();
                 Repaint();
             }
         }
@@ -5033,6 +6942,7 @@ namespace DreamPark {
                 if (!entry.IdLocked) entry.badgeId = newId;
                 entry.iconAssetPath = icon != null ? AssetDatabase.GetAssetPath(icon) : "";
                 badgesDirty = true;
+                RebuildBadgePreviewIndex();
             }
 
             var sourceRect = new Rect(fx, card.y + 70f, fw - 56f, 14f);
@@ -5132,12 +7042,13 @@ namespace DreamPark {
         // UploadLogoImage: it must never fail or delay a content upload, because
         // the bundles are the release and the badge text is metadata that can be
         // re-pushed from the panel in one click.
-        private void PushBadgesSilently(string idForUpload)
+        private void PushBadgesSilently(string idForUpload, string sourceContentId = null)
         {
             try
             {
                 if (string.IsNullOrEmpty(idForUpload)) return;
-                var toPush = BadgeStore.Load(idForUpload);
+                string localContentId = string.IsNullOrEmpty(sourceContentId) ? idForUpload : sourceContentId;
+                var toPush = BadgeStore.Load(localContentId);
                 if (toPush == null || toPush.Count == 0) return;
                 BadgeUploader.UploadAll(idForUpload, toPush, interactive: false);
             }
@@ -5154,7 +7065,8 @@ namespace DreamPark {
         // repaint forever waiting for something that's never coming.
         private const double PreviewPollTimeoutSeconds = 5.0;
 
-        private Rect DrawCard(ContentRootEntry entry, bool sequenceInteraction = false)
+        private Rect DrawCard(ContentRootEntry entry, bool sequenceInteraction = false,
+            bool showAssetWarning = true)
         {
             // Resolve which texture to draw on this paint. Priority:
             //   1. Hand-curated Previews/{name}.png (if user provided one)
@@ -5262,7 +7174,8 @@ namespace DreamPark {
             // `= default` is load-bearing: the `&&` below short-circuits, so the
             // compiler cannot prove TryGetValue ran and reports CS0165 on badge.Key.
             KeyValuePair<PreUploadChecks.CheckSeverity, string> badge = default;
-            bool hasBadge = preUploadBadges != null
+            bool hasBadge = showAssetWarning
+                         && preUploadBadges != null
                          && preUploadBadges.TryGetValue(entry.assetPath, out badge);
             if (hasBadge)
             {
@@ -5276,6 +7189,13 @@ namespace DreamPark {
                     PreUploadChecks.PreUploadChecksPopup.ShowForAsset(this, contentId, entry.assetPath);
                 }
             }
+
+            // Awarded badge artwork sits in the opposite corner from the
+            // pre-upload warning. Labels (not buttons) keep the card's control
+            // ids stable and leave the whole tile clickable for Preview.
+            if (entry.kind != ContentRootKind.Player
+                && badgesByAssetPath.TryGetValue(entry.assetPath, out List<BadgeStore.Entry> awarded))
+                DrawAwardedBadgeIcons(imgRect, awarded);
 
             // Two-line label: name on top (bold-ish), kind on bottom.
             var nameStyle = new GUIStyle(EditorStyles.miniLabel)
@@ -5311,6 +7231,49 @@ namespace DreamPark {
                 Event.current.Use();
             }
             return cardRect;
+        }
+
+        private static void DrawAwardedBadgeIcons(Rect imageRect, IReadOnlyList<BadgeStore.Entry> awarded)
+        {
+            if (awarded == null || awarded.Count == 0) return;
+            const float iconSize = 25f;
+            const float gap = 2f;
+            int visible = Mathf.Min(awarded.Count, 3);
+            int actualIcons = awarded.Count > 3 ? 2 : visible;
+            float x = imageRect.xMax - 3f - visible * iconSize - (visible - 1) * gap;
+            float y = imageRect.yMax - iconSize - 3f;
+            var iconStyle = new GUIStyle(EditorStyles.boldLabel)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = 16,
+            };
+            iconStyle.normal.textColor = new Color(1f, 0.82f, 0.25f);
+
+            for (int i = 0; i < actualIcons; i++)
+            {
+                BadgeStore.Entry badge = awarded[i];
+                Rect slot = new Rect(x + i * (iconSize + gap), y, iconSize, iconSize);
+                EditorGUI.DrawRect(slot, new Color(0.95f, 0.7f, 0.2f, 0.95f));
+                Rect inside = new Rect(slot.x + 1f, slot.y + 1f, slot.width - 2f, slot.height - 2f);
+                EditorGUI.DrawRect(inside, new Color(0.15f, 0.14f, 0.13f, 0.96f));
+                Texture2D icon = string.IsNullOrEmpty(badge.iconAssetPath)
+                    ? null : AssetDatabase.LoadAssetAtPath<Texture2D>(badge.iconAssetPath);
+                if (icon != null) GUI.DrawTexture(inside, icon, ScaleMode.ScaleToFit);
+                else GUI.Label(inside, "★", iconStyle);
+                GUI.Label(slot, new GUIContent("", BadgePreviewTooltip(badge)), GUIStyle.none);
+            }
+
+            if (awarded.Count <= 3) return;
+            Rect more = new Rect(x + 2f * (iconSize + gap), y, iconSize, iconSize);
+            EditorGUI.DrawRect(more, new Color(0.15f, 0.14f, 0.13f, 0.96f));
+            string tooltip = string.Join("\n", awarded.Skip(2).Select(BadgePreviewTooltip));
+            GUI.Label(more, new GUIContent("+" + (awarded.Count - 2), tooltip), iconStyle);
+        }
+
+        private static string BadgePreviewTooltip(BadgeStore.Entry badge)
+        {
+            string title = string.IsNullOrWhiteSpace(badge.name) ? badge.badgeId : badge.name;
+            return "Awards badge: " + title + " (" + badge.badgeId + ")";
         }
 
         // The set of platforms to include in the manifest. Mirrors the build-
@@ -5416,7 +7379,12 @@ namespace DreamPark {
                 return;
             }
 
-            string savedContentId = EditorPrefs.GetString(ContentIdPrefKey, "");
+            string savedContentId = EditorPrefs.GetString(ProjectContentIdPrefKey, "");
+            // Migrate the original machine-global preference only when it
+            // names content in this project. Other Unity projects must not
+            // overwrite one another's uploader selection.
+            if (string.IsNullOrEmpty(savedContentId))
+                savedContentId = EditorPrefs.GetString(ContentIdPrefKey, "");
             if (!string.IsNullOrEmpty(savedContentId))
             {
                 int savedIndex = contentIdOptions.IndexOf(savedContentId);
@@ -5424,6 +7392,7 @@ namespace DreamPark {
                 {
                     contentIdIndex = savedIndex;
                     contentId = contentIdOptions[contentIdIndex];
+                    SaveContentIdSelection();
                     return;
                 }
             }
@@ -5454,8 +7423,13 @@ namespace DreamPark {
                 return;
             }
 
-            EditorPrefs.SetString(ContentIdPrefKey, contentId);
+            EditorPrefs.SetString(ProjectContentIdPrefKey, contentId);
         }
+
+        internal static string ContentIdPrefKeyForProject(string assetsPath) =>
+            ContentIdPrefKey + "." + Hash128.Compute(Path.GetFullPath(assetsPath)).ToString();
+
+        private static string ProjectContentIdPrefKey => ContentIdPrefKeyForProject(Application.dataPath);
 
         private void LoadBuildTargetSelection()
         {
@@ -5651,6 +7625,9 @@ namespace DreamPark {
             // Reset access state for the new contentId so the gate UI doesn't
             // briefly show stale "no access" between selections.
             isContentAccessibleByMe = null;
+            betaLatestPublishedVersionNumber = null;
+            betaContentDirectorySnapshot = null;
+            if (!isUploading) activeUploadTarget = ContentUploadTarget.Release;
 
             if (string.IsNullOrEmpty(contentId) || !AuthAPI.isLoggedIn)
             {
@@ -6129,6 +8106,16 @@ namespace DreamPark {
                     return;
                 }
 
+                string sourceContentId = contentId;
+                string uploadContentId = ActiveUploadContentId;
+                ContentUploadTarget uploadTarget = activeUploadTarget;
+                if (string.IsNullOrEmpty(uploadContentId))
+                {
+                    Debug.LogError("❌ Upload target ID could not be derived.");
+                    CompleteUploadStatus(false, "Upload target ID could not be derived.");
+                    return;
+                }
+
                 isUploading = true;
                 uploadCompleted = false;
                 uploadSucceeded = false;
@@ -6139,14 +8126,17 @@ namespace DreamPark {
                         : "Fetching metadata and getting the existing build artifacts ready.",
                     0.05f);
 
-                Debug.Log($"🚀 Uploading content for {contentId}...");
+                Debug.Log($"🚀 Uploading source {sourceContentId} to target {uploadContentId}...");
 
-                ContentAPI.GetContent(contentId, (exists, response) =>
+                ContentAPI.GetContent(uploadContentId, (exists, response) =>
                 {
                     Action uploadBuiltContent = () =>
                     {
                         var contentDirectory = response != null ? response.json : null;
-                        latestContentDirectorySnapshot = contentDirectory;
+                        if (uploadTarget == ContentUploadTarget.Beta)
+                            betaContentDirectorySnapshot = contentDirectory;
+                        else
+                            latestContentDirectorySnapshot = contentDirectory;
                         // Note the `.list != null` guard: a freshly-registered
                         // content can come back with `versions: null`, where
                         // HasField() is true but the JSON node has no list.
@@ -6155,7 +8145,7 @@ namespace DreamPark {
                                             && contentDirectory.GetField("content").GetField("versions").list != null
                             ? contentDirectory.GetField("content").GetField("versions").list.Count + 1
                             : 1;
-                        var targetUrl = $"{DreamParkAPI.baseUrl}/app/content/addressables-v2/{contentId}/{versionNumber}";
+                        var targetUrl = $"{DreamParkAPI.baseUrl}/app/content/addressables-v2/{uploadContentId}/{versionNumber}";
                         bool singlePlatformEstimate = pendingProductionEstimateOnly;
                         EstimateBuildTargetInfo estimateTargetInfo = default;
                         if (singlePlatformEstimate && !TryGetSinglePlatformEstimateTarget(out estimateTargetInfo))
@@ -6177,8 +8167,12 @@ namespace DreamPark {
                             ? 1
                             : ((buildAndroid ? 1 : 0) + (buildIos ? 1 : 0)
                              + (buildOsx ? 1 : 0) + (buildWindows ? 1 : 0));
+                        int targetRestoreSteps = build
+                            && !string.Equals(sourceContentId, uploadContentId, StringComparison.Ordinal)
+                            ? 1
+                            : 0;
                         int currentStep = 0;
-                        int totalSteps = (build ? 8 + numPlatforms : 0) + 1; // +1 for manifest computation
+                        int totalSteps = (build ? 9 + numPlatforms + targetRestoreSteps : 0) + 1; // +1 for manifest computation
                         Action<string> reportStep = (message) =>
                         {
                             currentStep++;
@@ -6188,12 +8182,13 @@ namespace DreamPark {
                                 message,
                                 stageProgress);
                             EditorUtility.DisplayProgressBar(
-                                "Upload Release",
+                                uploadTarget == ContentUploadTarget.Beta ? "Upload Beta" : "Upload Release",
                                 $"({currentStep}/{totalSteps}) {message}",
                                 stageProgress);
                         };
 
                         bool buildSuccess = true;
+                        bool targetIdentityApplied = false;
                         try
                         {
                             if (build)
@@ -6221,11 +8216,11 @@ namespace DreamPark {
                                 reportStep("Configuring addressable settings...");
                                 var settings = AddressableAssetSettingsDefaultObject.Settings;
                                 settings.MonoScriptBundleNaming = MonoScriptBundleNaming.Custom;
-                                settings.MonoScriptBundleCustomNaming = contentId + "_";
+                                settings.MonoScriptBundleCustomNaming = uploadContentId + "_";
                                 // Pin catalog filename to the contentId so every build produces
                                 // "catalog_{contentId}.json" instead of using the app bundleVersion.
                                 Debug.Log($"📛 [BEFORE] OverridePlayerVersion = '{settings.OverridePlayerVersion}', PlayerBuildVersion = '{settings.PlayerBuildVersion}'");
-                                settings.OverridePlayerVersion = contentId;
+                                settings.OverridePlayerVersion = uploadContentId;
                                 Debug.Log($"📛 [AFTER]  OverridePlayerVersion = '{settings.OverridePlayerVersion}', PlayerBuildVersion = '{settings.PlayerBuildVersion}'");
                                 // Pinned to Unity's default (true) — see the
                                 // longer comment in BeginUploadFromPopup's
@@ -6248,7 +8243,7 @@ namespace DreamPark {
                                 reportStep("Syncing third-party assets...");
                                 try
                                 {
-                                    ThirdPartySyncTool.RunSyncForContent(contentId);
+                                    ThirdPartySyncTool.RunSyncForContent(sourceContentId);
                                 }
                                 catch (Exception syncEx)
                                 {
@@ -6278,12 +8273,17 @@ namespace DreamPark {
                                 // packing profile uploaded to Firestore describe
                                 // the exact same child poses and ranges.
                                 reportStep("Baking flexible attraction layouts...");
-                                int packingBakes = AttractionPackingBaker.BakeAllInContent(contentId);
+                                int packingBakes = AttractionPackingBaker.BakeAllInContent(sourceContentId);
                                 Debug.Log($"[ContentUploader] Refreshed packing data for {packingBakes} attraction prefab(s) before build.");
                                 AssetDatabase.SaveAssets();
 
+                                reportStep("Compiling Sequence package definition...");
+                                CompileDreamSequencePackage(sourceContentId);
+
                                 reportStep("Updating addressable groups...");
-                                ContentProcessor.ForceUpdateContent(contentId);
+                                targetIdentityApplied = !string.Equals(
+                                    sourceContentId, uploadContentId, StringComparison.Ordinal);
+                                ContentProcessor.ForceUpdateContent(sourceContentId, uploadContentId);
 
                                 // Janitor pass — drop missing-reference entries and
                                 // empty stale-prefix groups (e.g. YOUR_GAME_HERE-*
@@ -6295,7 +8295,7 @@ namespace DreamPark {
                                 SyncLogoAddressableEntry();
 
                                 reportStep("Enforcing content namespaces...");
-                                ContentProcessor.EnforceContentNamespaces(contentId);
+                                ContentProcessor.EnforceContentNamespaces(sourceContentId);
 
                                 if (singlePlatformEstimate)
                                 {
@@ -6310,40 +8310,47 @@ namespace DreamPark {
                                         estimateTargetInfo.target,
                                         estimateTargetInfo.group,
                                         $"{targetUrl}/{estimateTargetInfo.platformName}",
-                                        contentId);
+                                        uploadContentId);
                                     if (!buildSuccess) throw new Exception($"{estimateTargetInfo.label} build failed");
                                 }
                                 else
                                 {
                                     reportStep("Building scripts package...");
-                                    buildSuccess &= ContentProcessor.BuildUnityPackage(contentId);
+                                    buildSuccess &= ContentProcessor.BuildUnityPackage(sourceContentId, uploadContentId);
 
                                     if (!buildSuccess) throw new Exception("Unity package build failed");
                                     if (buildAndroid)
                                     {
                                         reportStep("Building Android...");
-                                        buildSuccess &= BuildForTarget(BuildTarget.Android, BuildTargetGroup.Android, $"{targetUrl}/Android", contentId);
+                                        buildSuccess &= BuildForTarget(BuildTarget.Android, BuildTargetGroup.Android, $"{targetUrl}/Android", uploadContentId);
                                         if (!buildSuccess) throw new Exception("Android build failed");
                                     }
                                     if (buildIos)
                                     {
                                         reportStep("Building iOS...");
-                                        buildSuccess &= BuildForTarget(BuildTarget.iOS, BuildTargetGroup.iOS, $"{targetUrl}/iOS", contentId);
+                                        buildSuccess &= BuildForTarget(BuildTarget.iOS, BuildTargetGroup.iOS, $"{targetUrl}/iOS", uploadContentId);
                                         if (!buildSuccess) throw new Exception("iOS build failed");
                                     }
                                     if (buildOsx)
                                     {
                                         reportStep("Building StandaloneOSX...");
-                                        buildSuccess &= BuildForTarget(BuildTarget.StandaloneOSX, BuildTargetGroup.Standalone, $"{targetUrl}/StandaloneOSX", contentId);
+                                        buildSuccess &= BuildForTarget(BuildTarget.StandaloneOSX, BuildTargetGroup.Standalone, $"{targetUrl}/StandaloneOSX", uploadContentId);
                                         if (!buildSuccess) throw new Exception("OSX build failed");
                                     }
                                     if (buildWindows)
                                     {
                                         reportStep("Building StandaloneWindows...");
-                                        buildSuccess &= BuildForTarget(BuildTarget.StandaloneWindows, BuildTargetGroup.Standalone, $"{targetUrl}/StandaloneWindows", contentId);
+                                        buildSuccess &= BuildForTarget(BuildTarget.StandaloneWindows, BuildTargetGroup.Standalone, $"{targetUrl}/StandaloneWindows", uploadContentId);
                                         if (!buildSuccess) throw new Exception("Windows build failed");
                                     }
                                 }
+                            }
+
+                            if (targetIdentityApplied)
+                            {
+                                reportStep("Restoring release authoring state...");
+                                ContentProcessor.RestoreContentAfterTargetBuild(sourceContentId, uploadContentId);
+                                targetIdentityApplied = false;
                             }
 
                             reportStep("Computing patch estimate...");
@@ -6390,9 +8397,9 @@ namespace DreamPark {
                                 try
                                 {
                                     var manifestPlatformsFO = GetEnabledPlatformsForManifest();
-                                    currentManifest = BuildManifestStore.BuildFromServerData(contentId, versionNumber, manifestPlatformsFO);
+                                    currentManifest = BuildManifestStore.BuildFromServerData(uploadContentId, versionNumber, manifestPlatformsFO);
 
-                                    var failedRecord = FailedBundleStore.Load(contentId);
+                                    var failedRecord = FailedBundleStore.Load(uploadContentId);
                                     if (failedRecord == null || !failedRecord.HasRetryableFailures)
                                     {
                                         // The dialog gated on Load() returning a
@@ -6490,11 +8497,11 @@ namespace DreamPark {
                                 var manifestPlatforms = singlePlatformEstimate
                                     ? new List<string> { estimateTargetInfo.platformName }
                                     : GetEnabledPlatformsForManifest();
-                                currentManifest = BuildManifestStore.BuildFromServerData(contentId, versionNumber, manifestPlatforms);
+                                currentManifest = BuildManifestStore.BuildFromServerData(uploadContentId, versionNumber, manifestPlatforms);
                                 BuildManifest baseline = backendBaselineForUpload;
                                 var diff = BuildManifestStore.Diff(baseline, currentManifest);
 
-                                modeResult = UploadModeFilter.Build(effectiveMode, contentId, currentManifest, patchingEnabled ? diff : null);
+                                modeResult = UploadModeFilter.Build(effectiveMode, uploadContentId, currentManifest, patchingEnabled ? diff : null);
 
                                 // Sanity check for Code-only: an empty Code group (no Lua
                                 // scripts) leaves no bundle to ship. SmartBundleGrouper's
@@ -6512,7 +8519,7 @@ namespace DreamPark {
                                     {
                                         foreach (var f in p.files)
                                         {
-                                            if (UploadModeFilter.Categorize(contentId, f.fileName) == targetCat)
+                                            if (UploadModeFilter.Categorize(uploadContentId, f.fileName) == targetCat)
                                             {
                                                 hasTargetBundle = true;
                                                 break;
@@ -6522,7 +8529,7 @@ namespace DreamPark {
                                     }
                                     if (!hasTargetBundle)
                                     {
-                                        string what = "Lua scripts (*.lua.txt under Assets/Content/" + contentId + "/)";
+                                        string what = "Lua scripts (*.lua.txt under Assets/Content/" + sourceContentId + "/)";
                                         modeResult.blockingError =
                                             $"{UploadModePrefs.ShortLabel(effectiveMode)} upload aborted: " +
                                             $"no {UploadModePrefs.ShortLabel(effectiveMode)} bundle was produced by this build. " +
@@ -6631,7 +8638,7 @@ namespace DreamPark {
                                     manifestSummary = new JSONObject(JSONObject.Type.Object);
                                 }
 
-                                manifestSummary.AddField("uploader", BuildUploaderMetadata(effectiveMode));
+                                AttachUploaderAndPackages(manifestSummary, effectiveMode);
                             }
                             catch (Exception uploaderMetadataEx)
                             {
@@ -6640,7 +8647,7 @@ namespace DreamPark {
 
                             if (pendingProductionEstimateOnly)
                             {
-                                pendingProductionContentId = contentId;
+                                pendingProductionContentId = uploadContentId;
                                 pendingProductionMode = effectiveMode;
                                 pendingProductionBuildOsx = buildOsx;
                                 pendingProductionBuildWindows = buildWindows;
@@ -6733,7 +8740,7 @@ namespace DreamPark {
                                         manifestSummary = BuildManifestStore.BuildCommitSummary(currentManifest, diff: null);
                                         if (manifestSummary == null || manifestSummary.type != JSONObject.Type.Object)
                                             manifestSummary = new JSONObject(JSONObject.Type.Object);
-                                        manifestSummary.AddField("uploader", BuildUploaderMetadata(effectiveMode));
+                                        AttachUploaderAndPackages(manifestSummary, effectiveMode);
                                     }
                                     catch (Exception forceSummaryEx)
                                     {
@@ -6751,7 +8758,7 @@ namespace DreamPark {
                             }
 
                             StartPreparedProductionUpload(
-                                contentId,
+                                uploadContentId,
                                 releaseNotes,
                                 versionNumber,
                                 patchingEnabled,
@@ -6762,11 +8769,23 @@ namespace DreamPark {
                         }
                         catch (Exception e)
                         {
+                            if (targetIdentityApplied)
+                            {
+                                try
+                                {
+                                    ContentProcessor.RestoreContentAfterTargetBuild(sourceContentId, uploadContentId);
+                                }
+                                catch (Exception restoreEx)
+                                {
+                                    Debug.LogError($"[ContentUploader] Failed to restore release authoring state after target build: {restoreEx}");
+                                }
+                            }
                             // Clear the compile-progress bar so the error dialog
                             // isn't competing with a stale progress overlay.
                             EditorUtility.ClearProgressBar();
                             Debug.LogError("❌ Addressable build failed: " + e);
-                            CompleteUploadStatus(false, $"Release failed: {e.Message}");
+                            CompleteUploadStatus(false,
+                                $"{(uploadTarget == ContentUploadTarget.Beta ? "Beta upload" : "Release")} failed: {e.Message}");
                             EditorUtility.DisplayDialog("Error", $"Error: {e.Message}", "OK");
                             pendingFailedOnly = false;
                             isUploading = false;
@@ -6779,7 +8798,7 @@ namespace DreamPark {
                             "Syncing schema",
                             "Checking tags and layers so the release lands cleanly on the backend.",
                             0.12f);
-                        SyncTagLayerSchema((syncSuccess, syncError) =>
+                        SyncTagLayerSchema(sourceContentId, uploadContentId, (syncSuccess, syncError) =>
                         {
                             if (!syncSuccess)
                             {
@@ -6795,9 +8814,11 @@ namespace DreamPark {
 
                     if (exists)
                     {
-                        Debug.Log($"Content found for {contentId}.");
+                        Debug.Log($"Content found for {uploadContentId}.");
                         JSONObject metadataUpdate = new JSONObject();
-                        metadataUpdate.AddField("contentName", contentName);
+                        metadataUpdate.AddField(
+                            "contentName",
+                            uploadTarget == ContentUploadTarget.Beta ? $"{contentName} (Beta)" : contentName);
                         metadataUpdate.AddField("contentDescription", contentDescription);
                         metadataUpdate.AddField("sequenceLayout", BuildSequenceLayoutJson());
                         // logoAddress (the Addressables key) is deliberately NOT
@@ -6808,7 +8829,7 @@ namespace DreamPark {
                         // it. Sending a key that no longer resolves would just
                         // hand clients a dead address.
 
-                        ContentAPI.UpdateContent(contentId, metadataUpdate, (updateSuccess, updateResponse) =>
+                        ContentAPI.UpdateContent(uploadContentId, metadataUpdate, (updateSuccess, updateResponse) =>
                         {
                             if (!updateSuccess)
                             {
@@ -6821,48 +8842,58 @@ namespace DreamPark {
                             // Fire-and-forget: push the raw logo image to the
                             // backend alongside the metadata (never blocks or
                             // fails the upload — repair via Troubleshooting).
-                            try { UploadLogoImage(contentId, interactive: false); }
+                            try { UploadLogoImage(uploadContentId, interactive: false); }
                             catch (Exception e) { Debug.LogWarning("[Logo] upload skipped: " + e.Message); }
                             // Badges ride alongside the logo, and for the same
                             // reason: they are backend metadata on the content
                             // doc, not bundle payload, so this is the moment the
                             // doc is known to exist and to be ours.
-                            PushBadgesSilently(contentId);
+                            PushBadgesSilently(uploadContentId, sourceContentId);
                             continueAfterSchemaSync();
                         });
                         return;
                     }
                     else if (response.statusCode == 403)
                     {
-                        Debug.LogError($"❌ Content '{contentId}' is owned by another user.");
+                        Debug.LogError($"❌ Content '{uploadContentId}' is owned by another user.");
                         CompleteUploadStatus(false, "Access denied. This content ID belongs to another owner.");
                         EditorUtility.DisplayDialog("Access Denied",
-                            $"Content '{contentId}' is owned by another user. Choose a different folder name in Assets/Content/ or ask the content owner to add you as a collaborator.",
+                            $"Content '{uploadContentId}' is owned by another user. Choose a different folder name in Assets/Content/ or ask the content owner to add you as a collaborator.",
                             "OK");
                         isUploading = false;
                         return;
                     }
                     else if (response.statusCode == 404)
                     {
+                        if (uploadTarget == ContentUploadTarget.Beta)
+                        {
+                            const string betaMissing = "The beta target no longer exists. Close this window and click Upload Beta again to re-allocate it safely.";
+                            Debug.LogError("❌ " + betaMissing);
+                            CompleteUploadStatus(false, betaMissing);
+                            EditorUtility.DisplayDialog("Beta target missing", betaMissing, "OK");
+                            isUploading = false;
+                            return;
+                        }
+
                         // Content doesn't exist yet — create it
                         // logoAddress: null — the logo isn't in a bundle any
                         // more (July 2026), so a key would be a dead pointer.
                         // UploadLogoImage pushes the image itself and the
                         // backend serves it as content.logoImageUrl.
-                        ContentAPI.AddContent(contentId, contentName, contentDescription, null, (success, response) =>
+                        ContentAPI.AddContent(sourceContentId, contentName, contentDescription, null, (success, response) =>
                         {
                             if (success)
                             {
                                 Debug.Log($"✅ Content '{contentName}' uploaded successfully!");
                                 // First upload is exactly when the logo should
                                 // land on the backend too (fire-and-forget).
-                                try { UploadLogoImage(contentId, interactive: false); }
+                                try { UploadLogoImage(sourceContentId, interactive: false); }
                                 catch (Exception e) { Debug.LogWarning("[Logo] upload skipped: " + e.Message); }
                                 // First upload: the content doc has just been
                                 // created, so this is the earliest point at which
                                 // /admin/content/:id/badges/save can authorize us
                                 // as its owner. Pushing any earlier 403s.
-                                PushBadgesSilently(contentId);
+                                PushBadgesSilently(sourceContentId, sourceContentId);
                                 SetUploadStatus(
                                     "Creating release record",
                                     "Project created. Moving straight into the first release build.",
@@ -6893,18 +8924,22 @@ namespace DreamPark {
             catch (Exception e)
             {
                 Debug.LogError("❌ Upload failed: " + e);
-                CompleteUploadStatus(false, $"Release failed: {e.Message}");
+                CompleteUploadStatus(false,
+                    $"{(activeUploadTarget == ContentUploadTarget.Beta ? "Beta upload" : "Release")} failed: {e.Message}");
                 EditorUtility.DisplayDialog("Error", $"Error: {e.Message}", "OK");
                 isUploading = false;
             }
         }
 
-        private void SyncTagLayerSchema(Action<bool, string> callback)
+        private void SyncTagLayerSchema(
+            string sourceContentId,
+            string uploadContentId,
+            Action<bool, string> callback)
         {
             try
             {
                 var local = TagLayerSchemaSyncUtility.ReadLocalTagManager();
-                ContentAPI.SyncTagLayerSchema(contentId, 0, local.tags, local.layers, (syncSuccess, syncResponse) =>
+                ContentAPI.SyncTagLayerSchema(uploadContentId, 0, local.tags, local.layers, (syncSuccess, syncResponse) =>
                 {
                     // If endpoint is unavailable, allow legacy backend and continue.
                     if (!syncSuccess && syncResponse != null && (syncResponse.statusCode == 404 || syncResponse.statusCode == 405))
@@ -6938,10 +8973,10 @@ namespace DreamPark {
                     // remap prefab tags by index changes, then apply canonical schema exactly.
                     var targetTags = TagLayerSchemaSyncUtility.BuildTargetTagOrder(syncResult.schema.tags, local.tags, preserveLocalExtras: true);
                     var remap = TagLayerSchemaSyncUtility.BuildTagRemapByIndex(local.tags, targetTags);
-                    var remapResult = TagLayerSchemaSyncUtility.RemapContentPrefabsByTagName(contentId, remap);
+                    var remapResult = TagLayerSchemaSyncUtility.RemapContentPrefabsByTagName(sourceContentId, remap);
                     if (remapResult.replacements > 0)
                     {
-                        Debug.Log($"[TagLayerSchema] Remapped prefab tags for {contentId}: {remapResult.replacements} replacements across {remapResult.filesChanged} prefabs.");
+                        Debug.Log($"[TagLayerSchema] Remapped prefab tags for {sourceContentId}: {remapResult.replacements} replacements across {remapResult.filesChanged} prefabs.");
                     }
 
                     var applyResult = TagLayerSchemaSyncUtility.ApplyCanonicalSchema(syncResult.schema.tags, syncResult.schema.layers, preserveLocalExtras: true);
@@ -6954,7 +8989,7 @@ namespace DreamPark {
                     bool schemaChangedLocally = remapResult.replacements > 0 || applyResult.changed;
                     if (schemaChangedLocally)
                     {
-                        var refreshResult = TagLayerSchemaSyncUtility.ForceRefreshContentPrefabs(contentId);
+                        var refreshResult = TagLayerSchemaSyncUtility.ForceRefreshContentPrefabs(sourceContentId);
                         if (refreshResult.prefabsProcessed > 0)
                         {
                             Debug.Log($"[TagLayerSchema] Force refreshed prefab imports for {contentId}: {refreshResult.prefabsReserialized}/{refreshResult.prefabsProcessed}");
@@ -6972,7 +9007,7 @@ namespace DreamPark {
                     }
                     if (syncResult.proposalPending)
                     {
-                        Debug.LogWarning($"[TagLayerSchema] Content '{syncResult.proposalContentId ?? contentId}' has pending schema additions awaiting acceptance by core.");
+                        Debug.LogWarning($"[TagLayerSchema] Content '{syncResult.proposalContentId ?? uploadContentId}' has pending schema additions awaiting acceptance by core.");
                     }
                     callback?.Invoke(true, null);
                 });
@@ -7155,14 +9190,30 @@ namespace DreamPark {
                     CleanAddressablesPlayerContentCache();
                 }
 
-                // 🔹 Kick off the Addressables build
+                // DeliveryIndexGenerator consumes Addressables' actual SBP bundle
+                // graph, so force the machine-independent JSON build layout for this
+                // build even when the developer has the optional report UI disabled.
+                bool priorGenerateBuildLayout = ProjectConfigData.GenerateBuildLayout;
+                ProjectConfigData.ReportFileFormat priorBuildLayoutFormat = ProjectConfigData.BuildLayoutReportFileFormat;
                 AddressablesPlayerBuildResult result;
-                AddressableAssetSettings.BuildPlayerContent(out result);
+                try
+                {
+                    ProjectConfigData.GenerateBuildLayout = true;
+                    ProjectConfigData.BuildLayoutReportFileFormat = ProjectConfigData.ReportFileFormat.JSON;
+                    AddressableAssetSettings.BuildPlayerContent(out result);
+                }
+                finally
+                {
+                    ProjectConfigData.GenerateBuildLayout = priorGenerateBuildLayout;
+                    ProjectConfigData.BuildLayoutReportFileFormat = priorBuildLayoutFormat;
+                }
 
                 if (!string.IsNullOrEmpty(result.Error))
                 {
                     throw new System.Exception($"❌ Addressables build failed for {target}: {result.Error}");
                 }
+                if (!string.IsNullOrEmpty(contentId))
+                    DeliveryIndexGenerator.Generate(contentId, DeliveryPlatformName(target));
                 Debug.Log($"✅ Addressables build complete for {target}");
                 return true;
             }
@@ -7170,6 +9221,19 @@ namespace DreamPark {
             {
                 Debug.LogError($"❌ Addressables build failed for {target}: {e}");
                 return false;
+            }
+        }
+
+        private static string DeliveryPlatformName(BuildTarget target)
+        {
+            switch (target)
+            {
+                case BuildTarget.Android: return "Android";
+                case BuildTarget.iOS: return "iOS";
+                case BuildTarget.StandaloneOSX: return "StandaloneOSX";
+                case BuildTarget.StandaloneWindows:
+                case BuildTarget.StandaloneWindows64: return "StandaloneWindows";
+                default: return target.ToString();
             }
         }
 

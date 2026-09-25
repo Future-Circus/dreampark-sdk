@@ -56,6 +56,10 @@ namespace DreamPark.ParkSim
         /// The prefab asset to instantiate. Null when this entry is sourced
         /// from a scene instance that carries unapplied overrides.
         public GameObject prefabAsset;
+        // A Sequence Test builds this recipe into a transient root at spawn
+        // time; there is deliberately no generated per-title prefab asset.
+        public DreamSequencePackageDefinition sequenceDefinition;
+        public string sequenceContentId;
 
         /// A disabled scene instance to duplicate instead of the asset,
         /// preserving the developer's un-applied edits. Null otherwise.
@@ -95,7 +99,8 @@ namespace DreamPark.ParkSim
         /// one per content package, not one per park.
         public string contentFolder;
 
-        public GameObject Source { get { return sceneTemplate != null ? sceneTemplate : prefabAsset; } }
+        public UnityEngine.Object Source { get { return sceneTemplate != null ? sceneTemplate
+            : prefabAsset != null ? (UnityEngine.Object)prefabAsset : sequenceDefinition; } }
     }
 
     public class ScanResult

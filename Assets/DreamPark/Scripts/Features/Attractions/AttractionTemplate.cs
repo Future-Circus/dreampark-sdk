@@ -67,6 +67,50 @@ namespace DreamPark
         }
     }
 
+    /// <summary>A non-blocking object's baked attraction-space pose and local scale.</summary>
+    [Serializable]
+    public sealed class AttractionPackingFollowerPose
+    {
+        [SerializeField] private Transform follower;
+        [SerializeField] private Vector3 authoredPosition;
+        [SerializeField] private Vector3 shrunkPosition;
+        [SerializeField] private Vector3 grownPosition;
+        [SerializeField] private Vector3 essentialShrunkPosition;
+        [SerializeField] private Vector3 authoredLocalScale;
+        [SerializeField] private Vector3 shrunkLocalScale;
+        [SerializeField] private Vector3 grownLocalScale;
+        [SerializeField] private Vector3 essentialShrunkLocalScale;
+        [SerializeField] private AttractionPackingScaleMode scaleMode;
+
+        public Transform Follower => follower;
+        public Vector3 AuthoredPosition => authoredPosition;
+        public Vector3 ShrunkPosition => shrunkPosition;
+        public Vector3 GrownPosition => grownPosition;
+        public Vector3 EssentialShrunkPosition => essentialShrunkPosition;
+        public Vector3 AuthoredLocalScale => authoredLocalScale;
+        public Vector3 ShrunkLocalScale => shrunkLocalScale;
+        public Vector3 GrownLocalScale => grownLocalScale;
+        public Vector3 EssentialShrunkLocalScale => essentialShrunkLocalScale;
+        public AttractionPackingScaleMode ScaleMode => scaleMode;
+
+        public AttractionPackingFollowerPose(Transform follower, Vector3 authoredPosition,
+            Vector3 shrunkPosition, Vector3 grownPosition, Vector3 essentialShrunkPosition,
+            Vector3 authoredLocalScale, Vector3 shrunkLocalScale, Vector3 grownLocalScale,
+            Vector3 essentialShrunkLocalScale, AttractionPackingScaleMode scaleMode)
+        {
+            this.follower = follower;
+            this.authoredPosition = authoredPosition;
+            this.shrunkPosition = shrunkPosition;
+            this.grownPosition = grownPosition;
+            this.essentialShrunkPosition = essentialShrunkPosition;
+            this.authoredLocalScale = authoredLocalScale;
+            this.shrunkLocalScale = shrunkLocalScale;
+            this.grownLocalScale = grownLocalScale;
+            this.essentialShrunkLocalScale = essentialShrunkLocalScale;
+            this.scaleMode = scaleMode;
+        }
+    }
+
     /// <summary>
     /// Baked footprint ladder for one attraction. All dimensions are local-X/local-Z
     /// metres and remain rectangles so the existing room packer can consume them.
@@ -74,7 +118,10 @@ namespace DreamPark
     [Serializable]
     public sealed class AttractionPackingBake
     {
-        public const int CurrentVersion = 5;
+        public const int CurrentVersion = 9;
+        // The catalog receives only footprint/essential-prop data; follower poses
+        // are local prefab data, so its wire schema remains unchanged.
+        public const int CatalogSchemaVersion = 8;
 
         [SerializeField] private int version;
         [SerializeField] private Vector2 authoredFootprintMeters;
@@ -86,9 +133,11 @@ namespace DreamPark
         [SerializeField] private Vector2 growScale = Vector2.one;
         [SerializeField] private Vector2 essentialShrinkScale = Vector2.one;
         [SerializeField] private List<AttractionPropPackingPose> props = new List<AttractionPropPackingPose>();
+        [SerializeField] private List<AttractionPackingFollowerPose> followers = new List<AttractionPackingFollowerPose>();
 
         public int Version => version;
-        public bool IsValid => version == CurrentVersion && authoredFootprintMeters.x > 0f && authoredFootprintMeters.y > 0f;
+        public bool IsValid => version >= 8 && version <= CurrentVersion
+            && authoredFootprintMeters.x > 0f && authoredFootprintMeters.y > 0f;
         public Vector2 AuthoredFootprintMeters => authoredFootprintMeters;
         public Vector2 SafeFootprintMeters => safeFootprintMeters;
         public Vector2 ShrinkFootprintMeters => shrinkFootprintMeters;
@@ -98,6 +147,8 @@ namespace DreamPark
         public Vector2 GrowScale => growScale;
         public Vector2 EssentialShrinkScale => essentialShrinkScale;
         public IReadOnlyList<AttractionPropPackingPose> Props => props;
+        public IReadOnlyList<AttractionPackingFollowerPose> Followers =>
+            followers ?? (IReadOnlyList<AttractionPackingFollowerPose>)Array.Empty<AttractionPackingFollowerPose>();
         public bool HasEssentialProps
         {
             get
@@ -115,7 +166,8 @@ namespace DreamPark
             Vector2 shrink,
             Vector2 grow,
             Vector2 essentialShrink,
-            List<AttractionPropPackingPose> props)
+            List<AttractionPropPackingPose> props,
+            List<AttractionPackingFollowerPose> followers = null)
         {
             version = CurrentVersion;
             authoredFootprintMeters = authored;
@@ -127,6 +179,7 @@ namespace DreamPark
             growScale = DivideFootprints(grow, authored);
             essentialShrinkScale = DivideFootprints(essentialShrink, authored);
             this.props = props ?? new List<AttractionPropPackingPose>();
+            this.followers = followers ?? new List<AttractionPackingFollowerPose>();
         }
 
         private static Vector2 DivideFootprints(Vector2 value, Vector2 authored)
@@ -174,11 +227,11 @@ namespace DreamPark
         public float shrinkClearanceMeters = 0.08f;
 
         [SerializeField, HideInInspector, Min(0f)]
-        [Tooltip("Props this close together are treated as one group during growth.")]
+        [Tooltip("Props this close together are grouped during growth. Compact mixed groups stay rigid; repeated aligned runs may spread along their run axis.")]
         public float growGroupGapMeters = 0.35f;
 
         [SerializeField, HideInInspector, Min(0f)]
-        [Tooltip("Nearby props whose centres align within this distance are kept in the same growth group.")]
+        [Tooltip("Internal alignment tolerance used to recognize nearby growth groups and repeated aligned prop runs.")]
         public float growAlignmentToleranceMeters = 0.12f;
 
         [SerializeField, HideInInspector]
@@ -197,13 +250,39 @@ namespace DreamPark
         [NonSerialized] private Vector2 runtimePackingFootprintMeters;
 
         public AttractionPackingBake PackingBake => packingBake;
-        public bool HasPackingBake => packingBake != null && packingBake.IsValid;
+        /// <summary>
+        /// A bake is only usable while it still describes this attraction's authored
+        /// footprint and growth settings. Treating an old bake as valid after Custom
+        /// Size changes makes 1.0 refer to the previous rectangle and leaves the debug
+        /// controls apparently stuck on their old limits.
+        /// </summary>
+        public bool HasPackingBake => packingBake != null
+            && packingBake.IsValid
+            && Approximately(packingBake.AuthoredFootprintMeters, AuthoredFootprintMeters)
+            && Approximately(packingBake.GrowScale, RequestedGrowScale);
+        public bool HasStalePackingBake => packingBake != null && packingBake.IsValid && !HasPackingBake;
         public Vector2 PackingPreviewScale => packingPreviewScale;
         public bool PackingPreviewEssentialOnly => packingPreviewEssentialOnly;
         public bool ShowPackingGizmos => showPackingGizmos;
-        public override Vector2 RuntimeFootprintMeters => hasRuntimePackingFootprint
+        public override Vector2 RuntimeFootprintMeters => HasPackingBake && hasRuntimePackingFootprint
             ? runtimePackingFootprintMeters
             : base.RuntimeFootprintMeters;
+
+        private Vector2 AuthoredFootprintMeters
+        {
+            get
+            {
+                Vector3 authored = Size;
+                return new Vector2(authored.x, authored.z);
+            }
+        }
+
+        private Vector2 RequestedGrowScale => new Vector2(
+            Mathf.Max(1f, maxGrowthScale.x),
+            Mathf.Max(1f, maxGrowthScale.y));
+
+        private static bool Approximately(Vector2 a, Vector2 b) =>
+            (a - b).sqrMagnitude <= 0.000001f;
 
         /// <summary>
         /// Dream Sequences use a standard 12 ft x 18 ft room. An attraction is
@@ -283,6 +362,12 @@ namespace DreamPark
         /// authored active state when that mode is left.
         /// </summary>
         public bool ApplyPackingVariant(Vector2 packingScale, bool essentialOnly)
+            => ApplyPackingVariantInternal(packingScale, essentialOnly, false);
+
+        private bool ApplyPackingVariantInternal(
+            Vector2 packingScale,
+            bool essentialOnly,
+            bool replaceGeneratedSurfacesImmediately)
         {
             if (!HasPackingBake) return false;
 
@@ -304,11 +389,36 @@ namespace DreamPark
                 prop.gameObject.SetActive(active && pose.AuthoredActive);
                 prop.localPosition = GetPackingPoseLocalPosition(pose, packingScale, useEssential);
             }
-            RefreshPackingDependentSystems(footprintChanged);
+            IReadOnlyList<AttractionPackingFollowerPose> followers = packingBake.Followers;
+            List<FloorAnchor> anchorsToRecache = null;
+            for (int i = 0; i < followers.Count; i++)
+            {
+                AttractionPackingFollowerPose pose = followers[i];
+                Transform follower = pose?.Follower;
+                if (follower == null) continue;
+                Vector3 position = GetFollowerPosition(pose, packingScale, useEssential);
+                Vector3 worldPosition = transform.TransformPoint(position);
+                Vector3 localScale = GetFollowerLocalScale(pose, packingScale, useEssential);
+                bool changed = (follower.position - worldPosition).sqrMagnitude > 0.0000001f
+                    || (follower.localScale - localScale).sqrMagnitude > 0.0000001f;
+                if (!changed) continue;
+                follower.position = worldPosition;
+                follower.localScale = localScale;
+                FloorAnchor anchor = follower.GetComponent<FloorAnchor>();
+                if (anchor == null) continue;
+                if (anchorsToRecache == null) anchorsToRecache = new List<FloorAnchor>();
+                anchorsToRecache.Add(anchor);
+            }
+            RefreshPackingDependentSystems(footprintChanged, replaceGeneratedSurfacesImmediately);
+            if (anchorsToRecache != null)
+                for (int i = 0; i < anchorsToRecache.Count; i++)
+                    anchorsToRecache[i].RecacheCorners();
             return true;
         }
 
-        private void RefreshPackingDependentSystems(bool footprintChanged)
+        private void RefreshPackingDependentSystems(
+            bool footprintChanged,
+            bool replaceGeneratedSurfacesImmediately)
         {
             GetComponent<GameArea>()?.ComputeBounds();
             GetComponent<MusicArea>()?.ComputeBounds();
@@ -317,7 +427,29 @@ namespace DreamPark
             // is already the right size. This branch covers editor slider changes
             // and fallback/legacy callers that select a variant after startup.
             if (!footprintChanged || !Application.isPlaying) return;
-            if (runtimePlane != null) RegenerateFloor();
+#if UNITY_EDITOR
+            if (replaceGeneratedSurfacesImmediately)
+            {
+                if (runtimePlane != null) RegenerateFloorForEditorPreview();
+                if (runtimeCeiling != null) RegenerateCeilingForEditorPreview();
+                return;
+            }
+#endif
+            if (runtimePlane != null)
+            {
+                CalibrateLevel previous = runtimePlane.GetComponent<CalibrateLevel>();
+                Vector3[] grade = previous != null ? previous.CaptureGradeWorldSamples() : null;
+                RegenerateFloor();
+                CalibrateLevel current = runtimePlane != null
+                    ? runtimePlane.GetComponent<CalibrateLevel>() : null;
+                if (current != null && current != previous && current.TransferGradeFrom(grade))
+                {
+                    floorData = current.CompileCalibrationData();
+                    // The transferred mesh is already live. Do not let the new
+                    // CalibrateLevel's Start queue the old topology for replay.
+                    current.floorData = null;
+                }
+            }
             if (runtimeCeiling != null) RegenerateCeiling();
         }
 
@@ -344,6 +476,49 @@ namespace DreamPark
                 scale,
                 minimumScale,
                 packingBake.GrowScale);
+        }
+
+        private Vector3 GetFollowerPosition(AttractionPackingFollowerPose pose,
+            Vector2 packingScale, bool essentialOnly)
+        {
+            Vector2 minimum = essentialOnly ? packingBake.EssentialShrinkScale : packingBake.ShrinkScale;
+            Vector2 scale = new Vector2(
+                Mathf.Clamp(packingScale.x, minimum.x, packingBake.GrowScale.x),
+                Mathf.Clamp(packingScale.y, minimum.y, packingBake.GrowScale.y));
+            return ResolvePose(pose.AuthoredPosition,
+                essentialOnly ? pose.EssentialShrunkPosition : pose.ShrunkPosition,
+                pose.GrownPosition, scale, minimum, packingBake.GrowScale);
+        }
+
+        private Vector3 GetFollowerLocalScale(AttractionPackingFollowerPose pose,
+            Vector2 packingScale, bool essentialOnly)
+        {
+            Vector2 minimum = essentialOnly ? packingBake.EssentialShrinkScale : packingBake.ShrinkScale;
+            Vector3 low = essentialOnly ? pose.EssentialShrunkLocalScale : pose.ShrunkLocalScale;
+            Vector3 authored = pose.AuthoredLocalScale;
+            Vector3 high = pose.GrownLocalScale;
+            float tx = AxisProgress(packingScale.x, minimum.x, packingBake.GrowScale.x);
+            float tz = AxisProgress(packingScale.y, minimum.y, packingBake.GrowScale.y);
+            if (pose.ScaleMode == AttractionPackingScaleMode.XZIndependent)
+                return new Vector3(
+                    tx < 0f ? Mathf.Lerp(authored.x, low.x, -tx) : Mathf.Lerp(authored.x, high.x, tx),
+                    authored.y,
+                    tz < 0f ? Mathf.Lerp(authored.z, low.z, -tz) : Mathf.Lerp(authored.z, high.z, tz));
+
+            float progress = Mathf.Min(tx, tz);
+            return progress < 0f
+                ? Vector3.Lerp(authored, low, -progress)
+                : Vector3.Lerp(authored, high, progress);
+        }
+
+        private static float AxisProgress(float scale, float minimum, float maximum)
+        {
+            scale = Mathf.Clamp(scale, minimum, maximum);
+            if (scale < 1f && minimum < 1f)
+                return -Mathf.InverseLerp(1f, minimum, scale);
+            if (scale > 1f && maximum > 1f)
+                return Mathf.InverseLerp(1f, maximum, scale);
+            return 0f;
         }
 
         [Obsolete("Use ApplyPackingVariant(Vector2, bool). Packing scale is now a direct X/Z multiplier.")]
@@ -405,7 +580,7 @@ namespace DreamPark
             // In Play Mode the debug controls intentionally drive the real baked
             // transforms so creators can exercise the adjusted attraction.
             if (Application.isPlaying)
-                ApplyPackingVariant(packingPreviewScale, packingPreviewEssentialOnly);
+                ApplyPackingVariantInternal(packingPreviewScale, packingPreviewEssentialOnly, true);
 #endif
         }
 
@@ -414,7 +589,7 @@ namespace DreamPark
         {
             if (!Application.isPlaying || !HasPackingBake) return;
             if (packingPreviewScale == Vector2.one && !packingPreviewEssentialOnly) return;
-            ApplyPackingVariant(packingPreviewScale, packingPreviewEssentialOnly);
+            ApplyPackingVariantInternal(packingPreviewScale, packingPreviewEssentialOnly, true);
         }
 
         private void LateUpdate()
@@ -425,7 +600,7 @@ namespace DreamPark
             // Run after the park loader's Update. A non-default editor preview is
             // an explicit local override; the default (1,1) leaves real park
             // packingScale/essentialOnly decisions completely untouched.
-            ApplyPackingVariant(packingPreviewScale, packingPreviewEssentialOnly);
+            ApplyPackingVariantInternal(packingPreviewScale, packingPreviewEssentialOnly, true);
         }
 #endif
 

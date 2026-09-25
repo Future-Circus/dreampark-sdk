@@ -1,0 +1,14 @@
+{
+    "schemaVersion": 2,
+    "buckets": [
+        {
+            "widthFeet": 14,
+            "lengthFeet": 16,
+            "guids": [
+                "9fef9800a47514811adbf916c8d1442f"
+            ]
+        }
+    ],
+    "excludedGuids": [],
+    "sizeOverrides": []
+}

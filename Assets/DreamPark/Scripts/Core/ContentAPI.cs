@@ -372,6 +372,19 @@ namespace DreamPark.API
             });
         }
 
+        // Allocates (or returns) the permanent beta content target linked to a
+        // release title. The backend owns the naming and authorization rule;
+        // callers must use the returned contentId rather than assuming that a
+        // locally-derived suffix is authoritative. The endpoint is idempotent,
+        // so the uploader intentionally calls it before every beta upload.
+        public static void EnsureBetaContentTarget(string releaseContentId, Action<bool, APIResponse> callback) {
+            string encodedContentId = UnityWebRequest.EscapeURL(releaseContentId ?? "");
+            var body = new JSONObject(JSONObject.Type.Object);
+            DreamParkAPI.POST($"/api/content/{encodedContentId}/beta", AuthAPI.GetUserAuth(), body, (success, response) => {
+                callback?.Invoke(success, response);
+            });
+        }
+
         // List collaborators (owners) on a content record. Server returns:
         //   { success, contentOwner, contentOwners: [uid...], owners: [{userId, email}...] }
         public static void ListContentUsers(string contentId, Action<bool, APIResponse> callback) {
@@ -1663,6 +1676,10 @@ namespace DreamPark.API
             }
             if (manifestSummary != null) {
                 commitBody.AddField("manifest", manifestSummary);
+                // Web's commitUpload reads packages from the request root,
+                // not from manifest.uploader or manifest.packages.
+                JSONObject packages = manifestSummary.GetField("packages");
+                if (packages != null) commitBody.AddField("packages", packages);
             }
 
             // 🔹 Commit upload version metadata to server

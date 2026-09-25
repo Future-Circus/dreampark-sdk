@@ -172,6 +172,141 @@ namespace DreamPark
             return level != null ? level.gameId : null;
         }
 
+        // Package context is resolved from the CALLING LuaBehaviour's hierarchy.
+        // It is intentionally not a global current sequence: parks can contain
+        // several packages (or players) at once.
+        public static DreamParkPackageHost Package(GameObject go)
+        {
+            if (go == null) return null;
+            // Sequence spatial roots have the host as an ancestor. Adventure
+            // and Arena occurrences may live in separate calibrated anchors,
+            // each linked explicitly to the non-spatial owner.
+            var direct = go.GetComponentInParent<DreamParkPackageHost>(true);
+            if (direct != null) return direct;
+            return go.GetComponentInParent<DreamParkPackageMembership>(true)?.host;
+        }
+
+        public static GameObject PackageObject(GameObject go) => Package(go)?.gameObject;
+
+        public static GameObject ContainerObject(GameObject go) => Package(go)?.container;
+
+        public static LuaTable ContainerScope(GameObject go) => Scope(ContainerObject(go));
+
+        /// <summary>Press a default Sequence control, including its feedback and cooldown.</summary>
+        public static bool PressButton(GameObject go)
+        {
+            if (go == null) return false;
+            DreamSequenceButtonFeedback feedback = go.GetComponent<DreamSequenceButtonFeedback>();
+            return feedback == null || feedback.TryPress();
+        }
+
+        public static bool IsSequence(GameObject go)
+        {
+            var package = Package(go);
+            return package != null && package.kind == DreamParkPackageKind.Sequence;
+        }
+
+        public static bool IsAdventure(GameObject go)
+        {
+            var package = Package(go);
+            return package != null && package.kind == DreamParkPackageKind.Adventure;
+        }
+
+        public static bool IsArena(GameObject go)
+        {
+            var package = Package(go);
+            return package != null && package.kind == DreamParkPackageKind.Arena;
+        }
+
+        public static int CurrentLevelIndex(GameObject go) => Package(go)?.CurrentLevelIndex ?? 0;
+
+        public static int LevelCount(GameObject go) => Package(go)?.LevelCount ?? 0;
+
+        /// <summary>1-based display names in package order; no Addressable IDs.</summary>
+        public static LuaTable Levels(GameObject go)
+        {
+            DreamParkPackageHost package = Package(go);
+            if (package == null) return null;
+            LuaTable result = LuaBehaviour.GetLuaEnv().NewTable();
+            if (package.kind == DreamParkPackageKind.Sequence)
+            {
+                result.Set(1, package.startLevel != null ? package.startLevel.name : "Start Level");
+                var sequence = package.GetComponent<DreamSequenceTemplate>();
+                if (sequence != null && sequence.levels != null)
+                    for (int i = 0; i < sequence.levels.Count; i++)
+                        result.Set(i + 2, sequence.levels[i]?.displayName ?? "Level");
+                result.Set(package.LevelCount, package.gameOverLevel != null
+                    ? package.gameOverLevel.name : "Game Over Level");
+            }
+            else if ((package.kind == DreamParkPackageKind.Adventure
+                || package.kind == DreamParkPackageKind.Arena)
+                && package.adventureLevelNames != null)
+                for (int i = 0; i < package.adventureLevelNames.Count; i++)
+                    result.Set(i + 1, package.adventureLevelNames[i]);
+            else if (package.levelParent != null)
+                for (int i = 0; i < package.levelParent.childCount; i++)
+                {
+                    Transform stop = package.levelParent.GetChild(i);
+                    LevelTemplate attraction = stop.GetComponentInChildren<LevelTemplate>(true);
+                    PropTemplate prop = attraction == null ? stop.GetComponentInChildren<PropTemplate>(true) : null;
+                    result.Set(i + 1, attraction != null ? attraction.name
+                        : prop != null ? prop.name : stop.name);
+                }
+            return result;
+        }
+
+        public static bool LoadLevel(GameObject go, int slot)
+        {
+            var package = Package(go);
+            return package != null && package.LoadLevel(slot);
+        }
+
+        public static void ShowOverlay(GameObject go, bool visible)
+            => Package(go)?.ShowOverlay(visible);
+
+        public static void SetOverlayAutoVisibility(GameObject go, bool enabled)
+            => Package(go)?.SetOverlayAutoVisibility(enabled);
+
+        /// <summary>
+        /// Install a scope-local dp facade after self is injected but before the
+        /// creator script executes. Lua functions can then omit game IDs and caller
+        /// arguments, while the global dp table remains useful from console code.
+        /// </summary>
+        public static void BindScope(LuaTable scriptScope)
+        {
+            if (scriptScope == null) return;
+            LuaBehaviour.GetLuaEnv().DoString(@"
+local base = dp or {}
+dp = setmetatable({
+    package = function() return dp_package(self.gameObject) end,
+    container = function() return dp_container(self.gameObject) end,
+    container_object = function() return dp_container_object(self.gameObject) end,
+    game_manager = function() return dp_container(self.gameObject) end,
+    game_manager_object = function() return dp_container_object(self.gameObject) end,
+    button_press = function() return dp_button_press(self.gameObject) end,
+    is_sequence = function() return dp_is_sequence(self.gameObject) end,
+    is_adventure = function() return dp_is_adventure(self.gameObject) end,
+    is_arena = function() return dp_is_arena(self.gameObject) end,
+    current_level_index = function() return dp_current_level_index(self.gameObject) end,
+    level_count = function() return dp_level_count(self.gameObject) end,
+    levels = function() return dp_levels(self.gameObject) end,
+    load_level = function(slot) return dp_load_level(self.gameObject, slot) end,
+    show_overlay = function(visible) dp_show_overlay(self.gameObject, visible) end,
+    overlay_auto_visibility = function(enabled) dp_overlay_auto_visibility(self.gameObject, enabled) end,
+    next_level = function()
+        local c = dp_container(self.gameObject)
+        if c == nil or c.next_level == nil then return false end
+        return c.next_level()
+    end,
+    previous_level = function()
+        local c = dp_container(self.gameObject)
+        if c == nil or c.previous_level == nil then return false end
+        return c.previous_level()
+    end
+}, {__index = base})
+", "dreampark.package_scope", scriptScope);
+        }
+
         // ── dp.scope(gameObject) ─────────────────────────────────────
         //
         // REPLACES, in shipped content (three separate copies in Zombiez alone):
@@ -472,6 +607,19 @@ namespace DreamPark
                 env.Global.Set("dp_attraction_scope", new Func<GameObject, LuaTable>(AttractionScope));
                 env.Global.Set("dp_attraction_root",  new Func<GameObject, GameObject>(AttractionRoot));
                 env.Global.Set("dp_game_id",          new Func<GameObject, string>(GameId));
+                env.Global.Set("dp_package",          new Func<GameObject, GameObject>(PackageObject));
+                env.Global.Set("dp_container",        new Func<GameObject, LuaTable>(ContainerScope));
+                env.Global.Set("dp_container_object", new Func<GameObject, GameObject>(ContainerObject));
+                env.Global.Set("dp_button_press",     new Func<GameObject, bool>(PressButton));
+                env.Global.Set("dp_is_sequence",      new Func<GameObject, bool>(IsSequence));
+                env.Global.Set("dp_is_adventure",     new Func<GameObject, bool>(IsAdventure));
+                env.Global.Set("dp_is_arena",         new Func<GameObject, bool>(IsArena));
+                env.Global.Set("dp_current_level_index", new Func<GameObject, int>(CurrentLevelIndex));
+                env.Global.Set("dp_level_count",      new Func<GameObject, int>(LevelCount));
+                env.Global.Set("dp_levels",           new Func<GameObject, LuaTable>(Levels));
+                env.Global.Set("dp_load_level",       new Func<GameObject, int, bool>(LoadLevel));
+                env.Global.Set("dp_show_overlay",     new Action<GameObject, bool>(ShowOverlay));
+                env.Global.Set("dp_overlay_auto_visibility", new Action<GameObject, bool>(SetOverlayAutoVisibility));
                 env.Global.Set("dp_ensure_pump",      new Action(EnsurePump));
                 env.Global.Set("dp_hand",             new Func<string, Transform>(Hand));
                 // Cheap enough to poll every frame — dp.relay() allocates a table,
@@ -505,6 +653,23 @@ dp.scope       = function(go) return dp_scope(go) end
 dp.attraction  = function(go) return dp_attraction_scope(go) end
 dp.attraction_root = function(go) return dp_attraction_root(go) end
 dp.game_id     = function(go) return dp_game_id(go) end
+-- Console/non-LuaBehaviour callers pass a GameObject explicitly. Each
+-- LuaBehaviour gets a bound facade where these arguments are automatic.
+dp.package     = function(go) return dp_package(go) end
+dp.container   = function(go) return dp_container(go) end
+dp.container_object = function(go) return dp_container_object(go) end
+dp.game_manager = function(go) return dp_container(go) end
+dp.game_manager_object = function(go) return dp_container_object(go) end
+dp.button_press = function(go) return dp_button_press(go) end
+dp.is_sequence = function(go) return dp_is_sequence(go) end
+dp.is_adventure = function(go) return dp_is_adventure(go) end
+dp.is_arena = function(go) return dp_is_arena(go) end
+dp.current_level_index = function(go) return dp_current_level_index(go) end
+dp.level_count = function(go) return dp_level_count(go) end
+dp.levels = function(go) return dp_levels(go) end
+dp.load_level  = function(go, slot) return dp_load_level(go, slot) end
+dp.show_overlay = function(go, visible) dp_show_overlay(go, visible) end
+dp.overlay_auto_visibility = function(go, enabled) dp_overlay_auto_visibility(go, enabled) end
 
 -- Where the player's hand is, right now. side is 'left' / 'right', or
 -- omitted for the rig's own hand anchor. May be nil before the rig exists.

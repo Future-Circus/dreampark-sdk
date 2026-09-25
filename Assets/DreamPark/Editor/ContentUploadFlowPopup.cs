@@ -11,6 +11,7 @@ namespace DreamPark
     {
         private ContentUploaderPanel owner;
         private bool buildBeforeUpload = true;
+        private ContentUploadTarget uploadTarget = ContentUploadTarget.Release;
         // Mirrored from UploadModePrefs on Show(). Carrying it on the popup
         // (rather than reading prefs every OnGUI tick) keeps the mode stable
         // during a long-running flow even if some other tool flips prefs
@@ -39,6 +40,16 @@ namespace DreamPark
 
         public static void Show(ContentUploaderPanel owner, bool buildBeforeUpload, bool failedOnly)
         {
+            Show(owner, buildBeforeUpload, failedOnly, ContentUploadTarget.Release);
+        }
+
+        public static void Show(
+            ContentUploaderPanel owner,
+            bool buildBeforeUpload,
+            bool failedOnly,
+            ContentUploadTarget uploadTarget)
+        {
+            if (owner != null) owner.SetActiveUploadTarget(uploadTarget);
             // Whether we're reusing an existing window or spawning a new one,
             // (re)opening the popup is the user's "I want to do an upload"
             // signal — so wipe any leftover completion state from the last
@@ -58,13 +69,16 @@ namespace DreamPark
             // the window header reflects the reduced scope of the run.
             string windowTitle = failedOnly
                 ? "Retry Failed Bundles"
-                : (buildBeforeUpload ? "Upload Release" : "Try Reupload");
+                : (uploadTarget == ContentUploadTarget.Beta
+                    ? "Upload Beta"
+                    : (buildBeforeUpload ? "Upload Release" : "Try Reupload"));
 
             var existing = Resources.FindObjectsOfTypeAll<ContentUploadFlowPopup>();
             if (existing != null && existing.Length > 0)
             {
                 existing[0].owner = owner;
                 existing[0].buildBeforeUpload = buildBeforeUpload;
+                existing[0].uploadTarget = uploadTarget;
                 existing[0].uploadMode = initialMode;
                 existing[0].failedOnly = failedOnly;
                 existing[0].titleContent = new GUIContent(windowTitle);
@@ -76,6 +90,7 @@ namespace DreamPark
             var win = CreateInstance<ContentUploadFlowPopup>();
             win.owner = owner;
             win.buildBeforeUpload = buildBeforeUpload;
+            win.uploadTarget = uploadTarget;
             win.uploadMode = initialMode;
             win.failedOnly = failedOnly;
             win.titleContent = new GUIContent(windowTitle);
@@ -205,7 +220,9 @@ namespace DreamPark
             // apply when the file set is "whichever bundles failed last run."
             string cta = failedOnly
                 ? "Start · Retry Failed Bundles"
-                : $"Start · {UploadModePrefs.ShortLabel(uploadMode)}";
+                : uploadTarget == ContentUploadTarget.Beta
+                    ? $"Start · Beta · {UploadModePrefs.ShortLabel(uploadMode)}"
+                    : $"Start · {UploadModePrefs.ShortLabel(uploadMode)}";
             bool modeRequiresSmart = UploadModePrefs.RequiresSmart(uploadMode);
             bool smartActive = BundlingStrategyPrefs.Current == BundlingStrategy.Smart;
             // Failed-Only ignores the upload-mode strategy gate entirely —
@@ -223,7 +240,7 @@ namespace DreamPark
                 }
                 else
                 {
-                    started = owner.BeginUploadFromPopup(buildBeforeUpload, uploadMode, failedOnly);
+                    started = owner.BeginUploadFromPopup(buildBeforeUpload, uploadMode, failedOnly, uploadTarget);
                 }
                 if (started)
                 {
@@ -242,7 +259,7 @@ namespace DreamPark
         private static bool IsFirstUpload(ContentUploaderPanel owner)
         {
             if (owner == null) return true;
-            int? v = owner.LatestPublishedVersionNumber;
+            int? v = owner.ActiveLatestPublishedVersionNumber;
             return !v.HasValue || v.Value <= 0;
         }
 
@@ -369,7 +386,11 @@ namespace DreamPark
             GUI.Label(
                 new Rect(rect.x + 18f, rect.y + 60f, rect.width - 36f, 36f),
                 string.IsNullOrEmpty(owner.UploadStatusMessage)
-                    ? (owner.UploadSucceeded ? "Your release is ready." : "Review the final status below.")
+                    ? (owner.UploadSucceeded
+                        ? (uploadTarget == ContentUploadTarget.Beta
+                            ? "Your isolated beta build is ready. The release target was not changed."
+                            : "Your release is ready.")
+                        : "Review the final status below.")
                     : owner.UploadStatusMessage,
                 subtitleStyle);
 
@@ -404,7 +425,7 @@ namespace DreamPark
                 wordWrap = true
             };
 
-            string title = string.IsNullOrEmpty(owner.ContentName) ? owner.ContentId : owner.ContentName;
+            string title = string.IsNullOrEmpty(owner.ContentName) ? owner.ActiveUploadContentId : owner.ContentName;
             EditorGUILayout.LabelField(title, centeredTitleStyle, GUILayout.MinHeight(28f));
 
             if (!string.IsNullOrEmpty(owner.ContentDescription))
@@ -417,7 +438,7 @@ namespace DreamPark
             }
 
             GUILayout.Space(10f);
-            EditorGUILayout.LabelField($"Content ID: {owner.ContentId}", metaStyle);
+            EditorGUILayout.LabelField($"Target: {owner.GetUploadTargetSummary()}", metaStyle);
             EditorGUILayout.LabelField($"Version: {owner.GetVersionSummary()}", metaStyle);
             EditorGUILayout.LabelField($"Targets: {owner.GetBuildTargetSummary()}", metaStyle);
             GUILayout.EndVertical();
@@ -453,14 +474,14 @@ namespace DreamPark
             // Successful uploads auto-open the Developer Portal's Attractions
             // page (see ContentUploaderPanel's commit handler); this button is
             // the way back for anyone who closed that tab — same deep link.
-            if (owner.UploadSucceeded && !string.IsNullOrEmpty(owner.ContentId))
+            if (owner.UploadSucceeded && !string.IsNullOrEmpty(owner.ActiveUploadContentId))
             {
                 if (GUILayout.Button(new GUIContent(
                     "View Attractions in Developer Portal",
                     "Opens dreampark.app/developer — edit names, descriptions, and previews for the attractions you just uploaded."),
                     GUILayout.Height(34f)))
                 {
-                    Application.OpenURL(DeveloperPortalMenuItem.AttractionsUrl(owner.ContentId));
+                    Application.OpenURL(DeveloperPortalMenuItem.AttractionsUrl(owner.ActiveUploadContentId));
                 }
                 GUILayout.Space(6f);
             }
@@ -495,12 +516,16 @@ namespace DreamPark
                 fontSize = 11
             };
 
-            GUI.Label(new Rect(rect.x + 18f, rect.y + 12f, rect.width - 36f, 16f), "FINAL LAUNCH CHECK", eyebrowStyle);
+            GUI.Label(new Rect(rect.x + 18f, rect.y + 12f, rect.width - 36f, 16f),
+                uploadTarget == ContentUploadTarget.Beta ? "ISOLATED BETA TARGET" : "FINAL LAUNCH CHECK",
+                eyebrowStyle);
             GUI.Label(new Rect(rect.x + 18f, rect.y + 30f, rect.width - 36f, 26f),
-                buildBeforeUpload ? "Compile, verify, and send your release" : "Send the existing release build",
+                uploadTarget == ContentUploadTarget.Beta
+                    ? "Compile, verify, and send a separate beta"
+                    : (buildBeforeUpload ? "Compile, verify, and send your release" : "Send the existing release build"),
                 titleStyle);
 
-            string summary = string.IsNullOrEmpty(owner.ContentName) ? owner.ContentId : owner.ContentName;
+            string summary = string.IsNullOrEmpty(owner.ContentName) ? owner.ActiveUploadContentId : owner.ContentName;
             string detail = $"{summary}  ·  {owner.GetVersionSummary()}  ·  {owner.GetBuildTargetSummary()}";
             GUI.Label(new Rect(rect.x + 18f, rect.y + 60f, rect.width - 36f, 34f),
                 detail,
@@ -509,7 +534,7 @@ namespace DreamPark
 
         private void DrawSummaryCard()
         {
-            string title = string.IsNullOrEmpty(owner.ContentName) ? owner.ContentId : owner.ContentName;
+            string title = string.IsNullOrEmpty(owner.ContentName) ? owner.ActiveUploadContentId : owner.ContentName;
             var titleStyle = new GUIStyle(EditorStyles.boldLabel)
             {
                 fontSize = 18,
@@ -549,7 +574,7 @@ namespace DreamPark
             GUI.Label(descriptionRect, description, descriptionStyle);
 
             GUILayout.Space(10f);
-            EditorGUILayout.LabelField($"Content ID: {owner.ContentId}", metaStyle);
+            EditorGUILayout.LabelField($"Target: {owner.GetUploadTargetSummary()}", metaStyle);
             EditorGUILayout.LabelField($"Version: {owner.GetVersionSummary()}", metaStyle);
         }
 
@@ -579,7 +604,7 @@ namespace DreamPark
                 }
             }
 
-            if (!owner.BuildOsx || !owner.BuildWindows)
+            if (uploadTarget == ContentUploadTarget.Release && (!owner.BuildOsx || !owner.BuildWindows))
             {
                 EditorGUILayout.HelpBox("Editor targets are required for official release", MessageType.Warning);
             }
@@ -592,7 +617,11 @@ namespace DreamPark
         {
             GUILayout.BeginVertical(EditorStyles.helpBox);
             GUILayout.Label("Release Notes", EditorStyles.boldLabel);
-            EditorGUILayout.LabelField("These notes ship into the DreamPark app and are read by end users, so write them like player-facing release notes.", EditorStyles.wordWrappedMiniLabel);
+            EditorGUILayout.LabelField(
+                uploadTarget == ContentUploadTarget.Beta
+                    ? "These notes belong only to this beta target and do not change the release title's history."
+                    : "These notes ship into the DreamPark app and are read by end users, so write them like player-facing release notes.",
+                EditorStyles.wordWrappedMiniLabel);
             using (new EditorGUI.DisabledScope(owner.IsUploading))
             {
                 notesScroll = EditorGUILayout.BeginScrollView(notesScroll, GUILayout.MinHeight(100f), GUILayout.MaxHeight(150f));

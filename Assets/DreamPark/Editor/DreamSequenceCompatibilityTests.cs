@@ -26,6 +26,7 @@ public sealed class DreamSequenceCompatibilityTests
     public void LargerAttraction_IsEligibleWhenShrinkBakeFitsTwelveByEighteen()
     {
         AttractionTemplate attraction = Create(30f, 40f);
+        attraction.maxGrowthScale = new Vector2(35f / 30f, 45f / 40f);
         attraction.SetPackingBake(new AttractionPackingBake(
             new Vector2(30f, 40f) * 0.3048f,
             new Vector2(30f, 40f) * 0.3048f,
@@ -43,13 +44,19 @@ public sealed class DreamSequenceCompatibilityTests
     }
 
     [Test]
-    public void SequenceScaleOverridesNormalGrowCeiling()
+    public void SequenceScaleStopsAtBakedGrowCeiling()
     {
         AttractionTemplate attraction = Create(6f, 9f);
-        attraction.maxGrowthScale = new Vector2(1.25f, 1.25f);
+        attraction.SetPackingBake(new AttractionPackingBake(
+            new Vector2(6f, 9f) * 0.3048f,
+            new Vector2(6f, 9f) * 0.3048f,
+            new Vector2(4f, 6f) * 0.3048f,
+            new Vector2(7.5f, 11.25f) * 0.3048f,
+            new Vector2(4f, 6f) * 0.3048f,
+            new List<AttractionPropPackingPose>()));
         Vector2 scale = DreamSequenceCompatibility.SequenceScale(attraction);
-        Assert.That(scale.x, Is.EqualTo(2f).Within(0.001f));
-        Assert.That(scale.y, Is.EqualTo(2f).Within(0.001f));
+        Assert.That(scale.x, Is.EqualTo(1.25f).Within(0.001f));
+        Assert.That(scale.y, Is.EqualTo(1.25f).Within(0.001f));
     }
 
     [Test]

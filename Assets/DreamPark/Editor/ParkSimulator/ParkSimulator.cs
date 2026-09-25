@@ -57,6 +57,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using Defective.JSON;
 using UnityEditor;
 using UnityEngine;
@@ -206,6 +207,9 @@ namespace DreamPark.ParkSim
                 // survive re-entering Play re-adds its own descriptors — it is
                 // the only thing that can resolve the prefab again.
                 ParkSimExternalContent.Clear();
+#if !DREAMPARKCORE
+                ParkSimPackageTest.Clear();
+#endif
             }
         }
 
@@ -425,15 +429,38 @@ namespace DreamPark.ParkSim
 
             EnsureOptimizedAF(report.notes);
 
+#if !DREAMPARKCORE
+            var packageTest = ParkSimPackageTest.Current();
+            bool arenaTest = packageTest != null
+                && packageTest.kind == ParkSimPackageKind.Arena;
+            if (arenaTest) ParkSimPackageTest.PrepareArena(packageTest, report.notes);
+            // A Package Test deliberately uses the SDK's scanned park.fbx.
+            // A registered real-park source is left untouched for normal runs.
+            var source = packageTest == null ? _source : null;
+#else
             var source = _source;
+#endif
             List<SpawnPoint> spawnPoints;
             bool sourceProvidesGround = true;
 
             if (source == null) {
                 // ── The synthetic park ───────────────────────────────────
-                _environment = ParkSimPark.SpawnEnvironment(report.notes);
+                _environment =
+#if !DREAMPARKCORE
+                    arenaTest
+                        ? ParkSimPark.SpawnArenaGround(
+                            ParkSimPackageTest.ArenaFloorFeet, report.notes)
+                        :
+#endif
+                    ParkSimPark.SpawnEnvironment(report.notes);
                 if (_environment != null) _environment.transform.SetParent(_root.transform, true);
-                spawnPoints = ParkSimPark.CollectSpawnPoints(_environment, seed, report.notes);
+                spawnPoints =
+#if !DREAMPARKCORE
+                    arenaTest
+                        ? ParkSimPackageTest.PlaceArenaAtOrigin()
+                        :
+#endif
+                    ParkSimPark.CollectSpawnPoints(_environment, seed, report.notes);
             } else {
                 // ── Somebody else's park ─────────────────────────────────
                 report.parkName = source.DisplayName;
@@ -497,7 +524,25 @@ namespace DreamPark.ParkSim
             }
 
             var scan = ParkSimContent.Scan(ParkSimSettings.IncludeProps);
+#if !DREAMPARKCORE
+            int scanNoteCount = scan.notes.Count;
+#endif
             report.notes.AddRange(scan.notes);
+#if !DREAMPARKCORE
+            if (packageTest != null)
+            {
+                ParkSimPackageTest.SelectPackagePlayer(packageTest, scan);
+                for (int i = scanNoteCount; i < scan.notes.Count; i++)
+                    report.notes.Add(scan.notes[i]);
+                report.parkName = packageTest.kind + " Test: " + packageTest.contentId;
+                report.parkDetail = packageTest.kind == ParkSimPackageKind.Arena
+                    ? ParkSimPackageTest.ArenaSizeLabel + " · "
+                        + ParkSimPackageTest.ArenaCandidateLabel
+                    : packageTest.kind == ParkSimPackageKind.Sequence
+                        ? "Single-room package on the basketball court blacktop"
+                        : "Package order laid out as a walking route through the park";
+            }
+#endif
             FlushSuspensions();
             DisableSceneTemplates(scan);
 
@@ -516,7 +561,34 @@ namespace DreamPark.ParkSim
             // toggleable parent for every level under a portal. Reproduced by
             // name so a hierarchy screenshot from the simulator is comparable
             // to one from a headset.
-            Transform subLevelRoot = NewChild(portalAnchor, "SubLevelRoot");
+            Transform subLevelRoot;
+#if !DREAMPARKCORE
+            if (packageTest != null && (packageTest.kind == ParkSimPackageKind.Adventure
+                || packageTest.kind == ParkSimPackageKind.Arena))
+            {
+                Transform packageRoot = NewChild(portalAnchor,
+                    "[ParkSim] " + packageTest.kind + " Package");
+                var packageHost = packageRoot.gameObject.AddComponent<DreamParkPackageHost>();
+                packageHost.kind = packageTest.kind == ParkSimPackageKind.Arena
+                    ? DreamParkPackageKind.Arena : DreamParkPackageKind.Adventure;
+                packageHost.transitionDelaySeconds = 0f;
+                string containerPath = DreamPark.Editor.DreamSequenceGenerator.ContainerPrefabPath(packageTest.contentId);
+                GameObject containerPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(containerPath);
+                if (containerPrefab != null)
+                {
+                    GameObject container = Object.Instantiate(containerPrefab, packageRoot);
+                    container.name = "Game Container";
+                    packageHost.container = container;
+                }
+                else report.notes.Add(packageTest.kind
+                    + " Container prefab is missing: " + containerPath);
+                subLevelRoot = NewChild(packageRoot, "SubLevelRoot");
+                packageHost.levelParent = subLevelRoot;
+            }
+            else subLevelRoot = NewChild(portalAnchor, "SubLevelRoot");
+#else
+            subLevelRoot = NewChild(portalAnchor, "SubLevelRoot");
+#endif
 
             // Capacity is the marker count — with the synthetic park, park.fbx
             // decides how many places exist, so adding markers raises the
@@ -528,10 +600,24 @@ namespace DreamPark.ParkSim
             // in your scene when you pressed Play, plus anything injected —
             // gets placed. Rotating strangers through a real venue would bury
             // the one thing you are trying to look at.
+#if !DREAMPARKCORE
+            var selected = packageTest != null
+                ? ParkSimPackageTest.BuildEntries(packageTest, scan, report.notes)
+                : ParkSimSelection.Choose(scan.placeables, spawnPoints.Count, seed, report.notes, source != null);
+
+            var placements = packageTest == null
+                ? AssignPlacements(selected, spawnPoints, report.notes)
+                : packageTest.kind == ParkSimPackageKind.Sequence
+                    || packageTest.kind == ParkSimPackageKind.Arena
+                    ? packageTest.kind == ParkSimPackageKind.Arena
+                        ? ParkSimPackageTest.PlaceArenaAtOrigin()
+                        : ParkSimPackageTest.PlaceSequenceOnCourt(selected, spawnPoints, report.notes)
+                    : ParkSimPackageTest.PlaceAdventurePath(selected, spawnPoints, report.notes);
+#else
             var selected = ParkSimSelection.Choose(
                 scan.placeables, spawnPoints.Count, seed, report.notes, source != null);
-
             var placements = AssignPlacements(selected, spawnPoints, report.notes);
+#endif
 
             // A source's park usually brings its own player rig. Spawning a
             // second one would bind every global on Player.prefab twice.
@@ -611,6 +697,15 @@ namespace DreamPark.ParkSim
             // already looking at, at the same offset — see ParkSimViewpoint.
             // Simulator copies the Scene view onto Camera.main every frame, so
             // moving the view is the whole of "move the guest".
+#if !DREAMPARKCORE
+            if (arenaTest)
+            {
+                FramedOn = ParkSimSettings.DriveCamera
+                    ? report.OwnedItems.FirstOrDefault() : null;
+                ParkSimPackageTest.BindArenaGround(_environment);
+            }
+            else
+#endif
             if (ParkSimSettings.DriveCamera) FramedOn = ParkSimViewpoint.TryApply(report);
 
             if (Object.FindFirstObjectByType<Simulator>() == null) {
@@ -793,6 +888,14 @@ namespace DreamPark.ParkSim
 
             instance.name = entry.displayName;
 
+            // A Package Test runs before any Addressables build. Resolve the
+            // compiled Sequence's source GUIDs from the local AssetDatabase,
+            // while exercising the same DreamLevelLoader/host presentation path.
+#if !DREAMPARKCORE
+            if (ParkSimPackageTest.Current()?.kind == ParkSimPackageKind.Sequence)
+                ParkSimPackageTest.ConfigureSequenceLoader(instance);
+#endif
+
             // Immediately after Instantiate and before ANY yield — a
             // NavMeshAgent binds to the nearest navmesh point the moment it
             // enables, which is now, while the object is still at the prefab's
@@ -801,6 +904,9 @@ namespace DreamPark.ParkSim
 
             instance.transform.SetParent(levelAnchor, true);
             instance.transform.localRotation = Quaternion.identity;
+#if !DREAMPARKCORE
+            ParkSimPackageTest.ConfigureArenaInstance(instance);
+#endif
 
             // A spawn marker represents where the PORTAL goes, not where the
             // attraction's pivot goes — the same thing PortalAnchor.NewLevel
@@ -809,7 +915,8 @@ namespace DreamPark.ParkSim
             // attraction's arbitrary authoring origin instead of at the point
             // the creator nominated as its entrance, and every attraction would
             // sit a little way off from where the operator placed it.
-            instance.transform.localPosition = EntranceOffset(instance);
+            instance.transform.localPosition = instance.transform.localRotation
+                * EntranceOffset(instance);
 
             var scope = instance.AddComponent<NetScope>();
             scope.scopeKey = levelId + "|" + objectIndex + "|" + entry.displayName;
@@ -826,6 +933,11 @@ namespace DreamPark.ParkSim
                 var pt = instance.GetComponent<PropTemplate>();
                 if (pt != null) { pt.pointData = cached; replayed = true; }
             }
+
+            // The transient Sequence root is assembled inactive so its floor
+            // builder and gameplay scripts cannot run until it has a park pose
+            // and any cached floor data, exactly like a placed Attraction.
+            if (entry.sequenceDefinition != null) instance.SetActive(true);
 
             NavAgentPlacementGuard.ReleaseIfPlayMode(instance);
             Register(instance, true);
@@ -868,7 +980,7 @@ namespace DreamPark.ParkSim
                 if (!item.simulatorOwned) continue;
                 if (item.instance == null || item.floorReplayed) continue;
 
-                var calibrateLevel = item.instance.GetComponentInChildren<CalibrateLevel>(true);
+                var calibrateLevel = CalibrationReference(item.instance);
                 if (calibrateLevel != null) {
                     bool applied = calibrateLevel.ConformOnce();
                     if (!applied && hasGroundMesh) {
@@ -935,7 +1047,7 @@ namespace DreamPark.ParkSim
                 if (!item.simulatorOwned) continue;
                 if (item.instance == null || item.floorReplayed) continue;
 
-                var calibrateLevel = item.instance.GetComponentInChildren<CalibrateLevel>(true);
+                var calibrateLevel = CalibrationReference(item.instance);
                 if (calibrateLevel != null && calibrateLevel.hasFloorData) {
                     _floorCache[item.name + "@" + item.marker] = calibrateLevel.CompileCalibrationData();
                     continue;
@@ -946,6 +1058,17 @@ namespace DreamPark.ParkSim
                     _floorCache[item.name + "@" + item.marker] = calibrateProp.CompileCalibrationData();
                 }
             }
+        }
+
+        private static CalibrateLevel CalibrationReference(Transform item)
+        {
+            // A Sequence also has a cutout floor on its active child. The park
+            // layout stores ONE canonical calibration payload on the package
+            // root; descendant enumeration may find the child floor first.
+            LevelTemplate owner = item != null ? item.GetComponent<LevelTemplate>() : null;
+            CalibrateLevel root = owner?.runtimePlane != null
+                ? owner.runtimePlane.GetComponent<CalibrateLevel>() : null;
+            return root != null ? root : item?.GetComponentInChildren<CalibrateLevel>(true);
         }
 
         private static string CacheKey(ContentEntry entry, SpawnPoint point)
@@ -1035,6 +1158,9 @@ namespace DreamPark.ParkSim
 
         private static GameObject InstantiateSource(ContentEntry entry)
         {
+            if (entry.sequenceDefinition != null)
+                return DreamSequencePackageRuntime.Create(entry.sequenceDefinition,
+                    entry.sequenceContentId, activate: false);
             if (entry.sceneTemplate != null) {
                 // Duplicating the DISABLED scene object, so the copy arrives
                 // inactive and its Awake/Start do not run until it is enabled
@@ -1096,6 +1222,9 @@ namespace DreamPark.ParkSim
         {
             // Stop any patrol before the park it is walking around disappears.
             ParkSimCamera.Reset();
+#if !DREAMPARKCORE
+            ParkSimPackageTest.BindArenaGround(null);
+#endif
 
             // Before the root goes: a source may own objects outside it, or
             // hold state that a bare DestroyImmediate would strand.
