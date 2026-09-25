@@ -37,6 +37,7 @@ namespace DreamPark.ParkSim
         /// How far back a Go lands from its target. Standing inside an
         /// attraction's bounds is the one place its culling cannot be observed.
         private const float ViewingDistance = 8f;
+        private const float FeetToMeters = 0.3048f;
         private const float PatrolSpeed = 5f;
         private const float EyeHeight = 1.7f;
         private const float ArrivalRadius = 1.5f;
@@ -59,6 +60,32 @@ namespace DreamPark.ParkSim
             if (view == null) return;
 
             view.LookAt(target, view.rotation, ViewingDistance);
+            view.Repaint();
+        }
+
+        /// <summary>
+        /// Gives Arena package previews a deterministic, size-aware establishing
+        /// shot. Arena content is authored around its local origin, so keeping
+        /// the pivot fixed there makes stepping sizes read as one continuous
+        /// comparison rather than a series of unrelated camera jumps.
+        /// </summary>
+        public static void FrameArena(Vector2 footprintFeet)
+        {
+            SetPatrol(false, null);
+
+            var view = SceneView.lastActiveSceneView;
+            if (view == null) return;
+
+            float width = Mathf.Max(1f, footprintFeet.x) * FeetToMeters;
+            float length = Mathf.Max(1f, footprintFeet.y) * FeetToMeters;
+            float diagonal = Mathf.Sqrt(width * width + length * length);
+            // SceneView's size is its vertical half-span, not a literal camera
+            // distance. This keeps a one-foot Prop legible while leaving room
+            // around a full-size Arena footprint.
+            float viewSize = Mathf.Max(2.5f, diagonal * 0.75f);
+            Quaternion angle = Quaternion.Euler(28f, -135f, 0f);
+            view.orthographic = false;
+            view.LookAt(Vector3.zero, angle, viewSize);
             view.Repaint();
         }
 

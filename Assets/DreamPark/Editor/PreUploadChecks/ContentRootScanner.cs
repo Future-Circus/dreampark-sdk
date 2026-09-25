@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using DreamPark.Editor;
 using UnityEditor;
 using UnityEngine;
 
@@ -86,6 +87,7 @@ namespace DreamPark.PreUploadChecks
                 // packages. Its prefabs never ship, and they frequently contain demo
                 // content with missing-script references that blows up prefab editing.
                 if (IsThirdPartyLocal(path)) continue;
+                if (DreamSequenceGenerator.IsSpecialLevelPath(contentId, path)) continue;
 
                 GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
                 if (prefab == null) continue;

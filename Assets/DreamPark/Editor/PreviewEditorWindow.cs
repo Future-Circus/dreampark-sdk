@@ -27,9 +27,9 @@ namespace DreamPark
     public class PreviewEditorWindow : EditorWindow
     {
         // Fired after a preview PNG has been regenerated on Save, with the
-        // affected contentId. The Content Uploader panel listens so its grid
-        // refreshes without the user hitting "Rebuild Previews".
-        public static event Action<string> PreviewSaved;
+        // affected contentId and prefab asset path. The Content Uploader panel
+        // uses both values to refresh only the card that actually changed.
+        public static event Action<string, string> PreviewSaved;
 
         private const int kRenderResolution = 512;
         private const float kControlsWidth = 320f;
@@ -798,7 +798,7 @@ namespace DreamPark
                     : "Save failed — see Console.";
                 if (ok)
                 {
-                    PreviewSaved?.Invoke(contentId);
+                    PreviewSaved?.Invoke(contentId, assetPath);
                     ShowNotification(new GUIContent("Preview saved"));
                 }
                 Repaint();
@@ -821,7 +821,7 @@ namespace DreamPark
             {
                 bool ok = ContentProcessor.RegeneratePreviewForPrefab(contentId, assetPath);
                 _statusMessage = ok ? "Reverted to default framing." : "Revert failed — see Console.";
-                if (ok) PreviewSaved?.Invoke(contentId);
+                if (ok) PreviewSaved?.Invoke(contentId, assetPath);
                 Repaint();
             };
 

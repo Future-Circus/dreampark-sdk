@@ -60,6 +60,7 @@ namespace DreamPark.PreUploadChecks.Checks
             public string scenePath;
             public string sceneGuid;
             public string hierarchyPath;
+            public string globalObjectId;
             public List<string> changes = new List<string>();
         }
 
@@ -68,14 +69,14 @@ namespace DreamPark.PreUploadChecks.Checks
             // UNCONDITIONAL. RestoreSceneManagerSetup closes every open scene and
             // reopens it from disk with no save prompt, so running this with unsaved
             // work in the editor destroys that work silently and un-undoably. The
-            // upload path calls SaveModifiedScenesBeforeCompile first and so passes
-            // this trivially; the "Review…" and "Re-run" buttons do not, and used to
-            // be gated only on ctx.scenesAreSaved — which the runner hardcoded to true.
+            // upload gate never runs this scene-opening check. Explicit Review and
+            // Re-run can, and must inspect the actual dirty state rather than trust
+            // ctx.scenesAreSaved alone.
             if (AnyOpenSceneDirty())
             {
                 return CheckResult.Skipped(CheckId,
-                    "Skipped — you have unsaved scene changes. Save your open scenes (or start an "
-                  + "upload, which saves them) so this reads what is actually on disk.");
+                    "Skipped — you have unsaved scene changes. Save your open scenes and "
+                  + "re-run this check so it reads what is actually on disk.");
             }
 
             var scenePaths = FindScenes(ctx);
@@ -226,7 +227,7 @@ namespace DreamPark.PreUploadChecks.Checks
                     if (!ContentRootScanner.IsUnderContentRoot(sourcePath, ctx.contentRoot)) continue;
                     if (ContentRootScanner.IsThirdPartyLocal(sourcePath)) continue;
 
-                    var changes = DescribeChanges(go, ignoreRootScale);
+                    var changes = DescribeChanges(go, sourcePath, ignoreRootScale);
                     if (changes.Count == 0) continue;
 
                     hits.Add(new InstanceHit
@@ -236,6 +237,7 @@ namespace DreamPark.PreUploadChecks.Checks
                         scenePath = scene.path,
                         sceneGuid = sceneGuid,
                         hierarchyPath = HierarchyPath(go.transform),
+                        globalObjectId = GlobalObjectId.GetGlobalObjectIdSlow(go).ToString(),
                         changes = changes,
                     });
                 }
@@ -251,7 +253,8 @@ namespace DreamPark.PreUploadChecks.Checks
         // localScale (not one) produces exactly ONE ObjectOverride either way, and you
         // cannot tell from it which properties changed. It is the right API for
         // driving Apply/Revert on a whole object and the wrong one for reporting.
-        private static List<string> DescribeChanges(GameObject instanceRoot, bool ignoreRootScale)
+        private static List<string> DescribeChanges(
+            GameObject instanceRoot, string sourcePrefabPath, bool ignoreRootScale)
         {
             var changes = new List<string>();
 
@@ -277,6 +280,12 @@ namespace DreamPark.PreUploadChecks.Checks
                     if (addedGo == null || addedGo.instanceGameObject == null) continue;
                     changes.Add($"added GameObject '{addedGo.instanceGameObject.name}'");
                 }
+
+                foreach (var removedGo in PrefabUtility.GetRemovedGameObjects(instanceRoot))
+                {
+                    if (removedGo == null || removedGo.assetGameObject == null) continue;
+                    changes.Add($"removed GameObject '{removedGo.assetGameObject.name}'");
+                }
             }
             catch (Exception e)
             {
@@ -298,7 +307,8 @@ namespace DreamPark.PreUploadChecks.Checks
 
             if (mods != null)
             {
-                var rootTransform = instanceRoot.transform;
+                var rootAssetTransform = PrefabUtility.GetCorrespondingObjectFromSourceAtPath(
+                    instanceRoot.transform, sourcePrefabPath);
 
                 foreach (var mod in mods)
                 {
@@ -313,7 +323,7 @@ namespace DreamPark.PreUploadChecks.Checks
                     catch { isDefault = false; }
                     if (isDefault) continue;
 
-                    bool onRootTransform = ReferenceEquals(mod.target, rootTransform);
+                    bool onRootTransform = mod.target == rootAssetTransform;
 
                     // localScale is NOT a default override, so IsDefaultOverride will
                     // not drop it — but scaling an instance to eyeball it in a test
@@ -361,10 +371,12 @@ namespace DreamPark.PreUploadChecks.Checks
         {
             var findings = new List<Finding>();
 
-            // One finding per (source prefab, scene) pair, so a dev can ignore
-            // "Player.prefab in Template.unity" without also ignoring the same prefab
-            // in a different scene.
-            foreach (var group in hits.GroupBy(h => h.sourcePrefabPath + "|" + h.scenePath))
+            // One finding per concrete scene instance. A scene can contain several
+            // instances of the same prefab with different overrides; aggregating
+            // them into one row made the resolver open only the first while the title
+            // claimed to cover all of them.
+            foreach (var group in hits.GroupBy(h => h.sourcePrefabPath + "|" + h.scenePath
+                                                  + "|" + h.globalObjectId))
             {
                 var list = group.ToList();
                 var first = list[0];
@@ -385,7 +397,7 @@ namespace DreamPark.PreUploadChecks.Checks
                     severity = CheckSeverity.Warning,
                     assetGuid = first.sourcePrefabGuid,
                     assetPath = first.sourcePrefabPath,
-                    subKey = first.sceneGuid,
+                    subKey = first.sceneGuid + "|" + first.globalObjectId,
                     title = $"{prefabName} has {allChanges.Count} unapplied override"
                           + (allChanges.Count == 1 ? "" : "s") + $" in {sceneName}",
                     detail = $"{changeText}\n\n"
@@ -396,16 +408,20 @@ namespace DreamPark.PreUploadChecks.Checks
 
                 string scenePath = first.scenePath;
                 string hierarchy = first.hierarchyPath;
+                string globalObjectId = first.globalObjectId;
 
-                // "Open Scene & Select" is offered as the primary action rather than an
-                // automatic apply. Applying selectively means re-resolving the instance
-                // after a scene reopen and calling Apply* per override — and getting
-                // that subtly wrong writes the test-scene pose into shipped content.
-                // Unity's own Overrides dropdown already does this correctly, with a
-                // diff view; this puts the dev in front of it.
+                string prefabPath = first.sourcePrefabPath;
+                finding.fixes.Add(FixAction.Interactive("Review Apply / Revert…", completed =>
+                {
+                    SceneOverrideResolverWindow.Show(
+                        scenePath, hierarchy, globalObjectId, prefabPath, completed);
+                }));
+
+                // Keep direct navigation as a secondary escape hatch for creators who
+                // prefer Unity's native Overrides inspector.
                 finding.fixes.Add(new FixAction("Open scene & select", () =>
                 {
-                    return OpenAndSelect(scenePath, hierarchy);
+                    return OpenAndSelect(scenePath, hierarchy, globalObjectId);
                 })
                 {
                     resolvesFinding = false,   // opening resolves nothing on its own
@@ -422,7 +438,8 @@ namespace DreamPark.PreUploadChecks.Checks
             return findings;
         }
 
-        private static bool OpenAndSelect(string scenePath, string hierarchyPath)
+        private static bool OpenAndSelect(
+            string scenePath, string hierarchyPath, string globalObjectId)
         {
             try
             {
@@ -431,7 +448,7 @@ namespace DreamPark.PreUploadChecks.Checks
                 var scene = EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Single);
                 if (!scene.IsValid()) return false;
 
-                var target = FindByHierarchyPath(scene, hierarchyPath);
+                var target = FindSceneObject(scene, hierarchyPath, globalObjectId);
                 if (target != null)
                 {
                     Selection.activeGameObject = target;
@@ -448,8 +465,20 @@ namespace DreamPark.PreUploadChecks.Checks
             }
         }
 
-        private static GameObject FindByHierarchyPath(Scene scene, string hierarchyPath)
+        private static GameObject FindSceneObject(
+            Scene scene, string hierarchyPath, string globalObjectId)
         {
+            GlobalObjectId parsed;
+            if (!string.IsNullOrEmpty(globalObjectId)
+                && GlobalObjectId.TryParse(globalObjectId, out parsed))
+            {
+                var exact = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(parsed) as GameObject;
+                if (exact != null && exact.scene == scene) return exact;
+                return null;
+            }
+
+            // Legacy/fallback path for findings produced before GlobalObjectId was
+            // captured. New findings never take this potentially stale route.
             if (string.IsNullOrEmpty(hierarchyPath)) return null;
 
             foreach (var rootGo in scene.GetRootGameObjects())
@@ -468,7 +497,9 @@ namespace DreamPark.PreUploadChecks.Checks
             var cur = t;
             while (cur != null)
             {
-                parts.Add(cur.name);
+                // Name alone is ambiguous when siblings share a name. The sibling
+                // index also works for scene roots and makes resolution deterministic.
+                parts.Add(cur.name + "[" + cur.GetSiblingIndex() + "]");
                 cur = cur.parent;
             }
             parts.Reverse();

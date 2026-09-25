@@ -148,6 +148,11 @@ public class LevelTemplateEditor : Editor {
                  "Helps visualize floor mesh subdivision without any runtime cost.")]
         public bool showGridGizmo = true;
         public int gridDensity = 10;
+        // Runtime-only floor geometry for a level presented inside a Sequence.
+        // The attraction's authored size, packing bake and gridDensity stay intact;
+        // only its generated playable floor takes the package room's footprint.
+        [System.NonSerialized] private Vector2 sequenceFloorFootprint;
+        [System.NonSerialized] private int sequenceFloorGridDensity;
         [HideInInspector] public float gridWidth;
         [HideInInspector] public float gridHeight;
         [HideInInspector] public int gridX;
@@ -284,12 +289,17 @@ public class LevelTemplateEditor : Editor {
         /// DepthMaskCeiling for why a patchwork of small ceilings is the wrong shape for
         /// the flicker this trick exists to kill. Runs only when that plane is absent.
         /// </summary>
-        private void GenerateDepthCeiling() {
+        private void GenerateDepthCeiling(bool destroyImmediately = false) {
             // Feeds a runtime manager, and Destroy() is illegal in edit mode — the public
             // RegenerateCeiling entry point makes that reachable from tooling.
             if (!Application.isPlaying) return;
 
-            if (runtimeCeiling != null) Destroy(runtimeCeiling);
+            if (runtimeCeiling != null)
+            {
+                GameObject previousCeiling = runtimeCeiling;
+                runtimeCeiling = null;
+                DestroyGeneratedObject(previousCeiling, destroyImmediately);
+            }
             runtimeCeiling = null;
 
             Vector2 dims = RuntimeFootprintMeters;
@@ -307,11 +317,9 @@ public class LevelTemplateEditor : Editor {
         /// checked generateCeiling. This method did not check, and the asymmetry was
         /// invisible for as long as every template generated a floor.
         ///
-        /// The Dream Sequence format makes FLOORLESS templates normal: child levels
-        /// play on the DreamTemplate's single shared floor and set generateFloor =
-        /// false, so an unguarded rebuild would hand a level a second floor —
-        /// stacking a collider and a NavMeshSurface on the parent's, at the same
-        /// height, on every level change.
+        /// Floorless templates still exist (for example the persistent Sequence
+        /// overlay). Its active attraction owns the cutout floor, while the
+        /// package root keeps a non-colliding calibration reference.
         ///
         /// The only thing preventing that before was a guard written in LUA, at
         /// Assets/Content/Sample/Scripts/dreamsequence-controller.lua.txt:153, which
@@ -331,6 +339,44 @@ public class LevelTemplateEditor : Editor {
             SetFloorVisibilityForMode(isBuildMode);
             NotifyLevelTemplateChanged();
         }
+
+        /// <summary>
+        /// Use a Sequence-wide floor footprint and grid while retaining this
+        /// level's own FloorCutouts. The package owns the calibrated grade; this
+        /// generated floor is the active, level-specific collision/NavMesh skin.
+        /// </summary>
+        public void ConfigureSequenceFloor(Vector2 footprint, int density)
+        {
+            if (footprint.x <= 0f || footprint.y <= 0f || density < 1) return;
+            bool changed = (sequenceFloorFootprint - footprint).sqrMagnitude > 0.000001f
+                || sequenceFloorGridDensity != density;
+            sequenceFloorFootprint = footprint;
+            sequenceFloorGridDensity = density;
+            if (changed && runtimePlane != null && generateFloor) RegenerateFloor();
+        }
+
+#if UNITY_EDITOR
+        /// <summary>
+        /// Editor packing sliders can emit several values before Unity reaches the end
+        /// of the frame. Destroy() is deferred until then, so the normal replacement
+        /// path temporarily retains every generated mesh, collider and NavMeshSurface.
+        /// The preview owns these generated objects outright and can replace them
+        /// synchronously instead.
+        /// </summary>
+        internal void RegenerateFloorForEditorPreview()
+        {
+            if (!generateFloor) return;
+            GenerateFloorWithHoles(true);
+            SetFloorVisibilityForMode(isBuildMode);
+            NotifyLevelTemplateChanged();
+        }
+
+        internal void RegenerateCeilingForEditorPreview()
+        {
+            if (generateCeiling && DepthMaskCeiling.AllowTemplateCeilings)
+                GenerateDepthCeiling(true);
+        }
+#endif
 
         /// <summary>
         /// Build mode can create floor occlusion artifacts on iOS.
@@ -378,12 +424,13 @@ public class LevelTemplateEditor : Editor {
             }
         }
 
-        private void GenerateFloorWithHoles()
+        private void GenerateFloorWithHoles(bool destroyImmediately = false)
 {
-    if (runtimePlane != null) Destroy(runtimePlane);
+    if (runtimePlane != null) DestroyRuntimeFloor(destroyImmediately);
 
     // Dimensions
-    Vector2 dims = RuntimeFootprintMeters;
+    Vector2 dims = sequenceFloorGridDensity > 0
+        ? sequenceFloorFootprint : RuntimeFootprintMeters;
 
     float width  = dims.x;
     float height = dims.y;
@@ -401,7 +448,9 @@ public class LevelTemplateEditor : Editor {
     MeshFilter   mf = runtimePlane.AddComponent<MeshFilter>();
     MeshCollider mc = runtimePlane.AddComponent<MeshCollider>();
     MeshRenderer mr = runtimePlane.AddComponent<MeshRenderer>();
-    mr.material = floorMaterial ? floorMaterial : Resources.Load<Material>("Materials/Occlusion");
+    // This material is never modified per generated floor, so do not instantiate a
+    // private copy on every preview tick.
+    mr.sharedMaterial = floorMaterial ? floorMaterial : Resources.Load<Material>("Materials/Occlusion");
     // && DREAMPARKCORE added porting this from dreampark-core (Grid,
     // feat/grid-portal-yaw @ 2e1e940e): PlaceHasScanForFloorHiding() below
     // calls DreamPark.EnvironmentDust.EnvironmentDustManager, which lives
@@ -420,8 +469,9 @@ public class LevelTemplateEditor : Editor {
     // Grid setup (same logic as before)
     gridWidth  = width;
     gridHeight = height;
-    gridX = Mathf.Max(1, Mathf.RoundToInt(gridDensity * (width  / Mathf.Min(width, height))));
-    gridY = Mathf.Max(1, Mathf.RoundToInt(gridDensity * (height / Mathf.Min(width, height))));
+    int floorDensity = sequenceFloorGridDensity > 0 ? sequenceFloorGridDensity : gridDensity;
+    gridX = Mathf.Max(1, Mathf.RoundToInt(floorDensity * (width  / Mathf.Min(width, height))));
+    gridY = Mathf.Max(1, Mathf.RoundToInt(floorDensity * (height / Mathf.Min(width, height))));
     int vertCountX = gridX + 1;
     int vertCountY = gridY + 1;
 
@@ -445,6 +495,10 @@ public class LevelTemplateEditor : Editor {
     List<List<Vector2>> holes = new List<List<Vector2>>();
     foreach (var pit in GetComponentsInChildren<FloorCutout>())
     {
+        // A Sequence keeps a plain calibration reference on its package root.
+        // Each nested attraction cuts its own floor; its pits must not punch
+        // holes in the reference surface or alter persisted floor topology.
+        if (pit.GetComponentInParent<LevelTemplate>() != this) continue;
         if (pit.points == null || pit.points.Count < 3) continue;
 
         List<Vector2> hole = new List<Vector2>();
@@ -617,6 +671,52 @@ public class LevelTemplateEditor : Editor {
     BuildNavSurfaceAndAnchors(vertices, uv, gridX, gridY, holes);
 }
 
+private void DestroyRuntimeFloor(bool destroyImmediately)
+{
+    GameObject previousFloor = runtimePlane;
+    runtimePlane = null;
+    if (previousFloor == null) return;
+
+    // NavMeshSurface.RemoveData deliberately does not destroy its NavMeshData.
+    // Both it and the procedural mesh are owned by this generated floor, so release
+    // them along with the GameObject instead of leaking one copy per slider value.
+    var surface = previousFloor.GetComponent<Unity.AI.Navigation.NavMeshSurface>();
+    NavMeshData navMeshData = surface != null ? surface.navMeshData : null;
+    if (surface != null)
+    {
+        surface.RemoveData();
+        surface.navMeshData = null;
+    }
+
+    var filter = previousFloor.GetComponent<MeshFilter>();
+    var collider = previousFloor.GetComponent<MeshCollider>();
+    var renderer = previousFloor.GetComponent<MeshRenderer>();
+    // Destroy is deferred in play mode. Never let the outgoing floor keep a
+    // collider under a newly opened cutout for the rest of this frame.
+    if (collider != null) collider.enabled = false;
+    if (renderer != null) renderer.enabled = false;
+    Mesh generatedMesh = filter != null ? filter.sharedMesh : null;
+    if (filter != null) filter.sharedMesh = null;
+    if (collider != null) collider.sharedMesh = null;
+
+    DestroyGeneratedObject(previousFloor, destroyImmediately);
+    DestroyGeneratedObject(generatedMesh, destroyImmediately);
+    DestroyGeneratedObject(navMeshData, destroyImmediately);
+}
+
+private static void DestroyGeneratedObject(Object generatedObject, bool destroyImmediately)
+{
+    if (generatedObject == null) return;
+#if UNITY_EDITOR
+    if (destroyImmediately || !Application.isPlaying)
+    {
+        DestroyImmediate(generatedObject);
+        return;
+    }
+#endif
+    Destroy(generatedObject);
+}
+
 private bool SegmentIntersectsPolygon(Vector2 a, Vector2 b, List<Vector2> poly)
 {
     for (int i = 0; i < poly.Count; i++)
@@ -669,10 +769,16 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
     if (floorData != null)
         calibrator.floorData = floorData;
 
-    foreach (Transform child in transform)
+    // A package's direct children are structural containers (Levels, overlay,
+    // manager, transition). Anchoring those would move entire levels instead of
+    // conforming their authored FloorAnchors to the shared floor.
+    if (GetComponent<DreamParkPackageHost>() == null)
     {
-        if (child.gameObject == runtimePlane || child.gameObject == gameObject) continue;
-        Componentizer.DoComponent<FloorAnchor>(child.gameObject, true).calibrator = calibrator;
+        foreach (Transform child in transform)
+        {
+            if (child.gameObject == runtimePlane || child.gameObject == gameObject) continue;
+            Componentizer.DoComponent<FloorAnchor>(child.gameObject, true).calibrator = calibrator;
+        }
     }
 }
 

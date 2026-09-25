@@ -5,7 +5,9 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace DreamPark.PreUploadChecks
 {
@@ -118,12 +120,25 @@ namespace DreamPark.PreUploadChecks
         private Vector2 scroll;
         private bool busy;
         private bool scanFailed;
+        private Action<bool> onComplete;
+        private bool completionReported;
+        private string applyBackupDir;
 
         // ------------------------------------------------------------------
         // Show
 
-        public static void Show(string rootAssetPath, string offenderPath, string contentId, string contentRoot)
+        public static void Show(string rootAssetPath, string offenderPath, string contentId,
+                                string contentRoot, Action<bool> onComplete = null)
         {
+            // The resolver rewrites serialized YAML on disk. Never let a later save
+            // of an already-open dirty scene overwrite those GUID replacements.
+            if (!EnsureScenesSaved())
+            {
+                if (onComplete != null) onComplete(false);
+                return;
+            }
+            AssetDatabase.SaveAssets();
+
             var win = CreateInstance<OutsideContentDependencyResolverPopup>();
             win.titleContent = new GUIContent("Resolve Dependencies");
             win.minSize = new Vector2(560f, 420f);
@@ -139,9 +154,24 @@ namespace DreamPark.PreUploadChecks
             win.offenderPath = offenderPath;
             win.contentId = contentId;
             win.contentRoot = contentRoot;
+            win.onComplete = onComplete;
             win.Scan();
 
             win.ShowUtility();
+        }
+
+        private void OnDestroy()
+        {
+            ReportCompletion(false);
+        }
+
+        private void ReportCompletion(bool changed)
+        {
+            if (completionReported) return;
+            completionReported = true;
+            var callback = onComplete;
+            onComplete = null;
+            if (callback != null) callback(changed);
         }
 
         private void Scan()
@@ -436,8 +466,16 @@ namespace DreamPark.PreUploadChecks
 
         private void Apply()
         {
+            // The window can remain open while the creator keeps working, so repeat
+            // the dirty-scene guard immediately before the raw YAML mutation.
+            if (!EnsureScenesSaved()) return;
+            AssetDatabase.SaveAssets();
+
             busy = true;
             int transferred = 0, copied = 0, failed = 0;
+            string projectRoot = Path.GetDirectoryName(Application.dataPath);
+            applyBackupDir = Path.Combine(projectRoot, "Library", "DreamPark",
+                "OutsideContentResolver", DateTime.Now.ToString("yyyyMMdd_HHmmss_fff"), "backup");
 
             try
             {
@@ -480,7 +518,27 @@ namespace DreamPark.PreUploadChecks
                 Debug.Log($"[DreamPark] Resolve dependencies for '{offenderPath}': {transferred} transferred, {copied} copied.");
 
             PreUploadCheckRunner.InvalidateCache(contentId);
+            ReportCompletion(transferred > 0 || copied > 0);
             Close();
+        }
+
+        private static bool EnsureScenesSaved()
+        {
+            if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return false;
+
+            // Unity returns true for both Save and Don't Save. Don't Save leaves the
+            // loaded scene dirty, which could later overwrite our on-disk GUID edits.
+            for (int i = 0; i < SceneManager.sceneCount; i++)
+            {
+                if (!SceneManager.GetSceneAt(i).isDirty) continue;
+                EditorUtility.DisplayDialog(
+                    "Save scenes before resolving",
+                    "The dependency resolver cannot safely rewrite scene references while a loaded "
+                  + "scene still has unsaved changes. Save or close the dirty scene, then try again.",
+                    "OK");
+                return false;
+            }
+            return true;
         }
 
         // Copy mints a new GUID (AssetDatabase.CopyAsset, unlike MoveAsset, does NOT
@@ -527,24 +585,74 @@ namespace DreamPark.PreUploadChecks
                 return false;
             }
 
-            RepointInPackageConsumers(item.guid, newGuid, item.insideConsumers);
+            // Re-scan after the copy instead of trusting the pre-apply consumer list.
+            // If a copied parent depends on another copied item, that newly-created
+            // parent did not exist during Scan(); this pass is what repoints the whole
+            // copied dependency chain rather than leaving its children external.
+            bool scanSucceeded;
+            var consumers = FindInPackageConsumers(item.guid, out scanSucceeded);
+            if (!scanSucceeded
+                || !RepointInPackageConsumers(item.guid, newGuid, consumers))
+            {
+                Debug.LogWarning($"[DreamPark] Copied '{item.sourcePath}' to '{target}', but one or more "
+                               + "in-package references could not be repointed. Restore from "
+                               + $"'{applyBackupDir}' or version control before retrying.");
+                return false;
+            }
 
             Debug.Log($"[DreamPark] Copied '{item.sourcePath}' -> '{target}' and repointed "
-                    + $"{item.insideConsumers.Count} in-package reference(s).");
+                    + $"{consumers.Count} in-package reference(s).");
             return true;
+        }
+
+        private List<string> FindInPackageConsumers(string guid, out bool succeeded)
+        {
+            var result = new List<string>();
+            succeeded = true;
+            if (string.IsNullOrEmpty(guid) || string.IsNullOrEmpty(contentRoot)) return result;
+
+            string projectRoot = Path.GetDirectoryName(Application.dataPath);
+            string fullRoot = Path.Combine(projectRoot,
+                contentRoot.Replace('/', Path.DirectorySeparatorChar));
+            if (!Directory.Exists(fullRoot)) return result;
+
+            foreach (string file in Directory.EnumerateFiles(fullRoot, "*", SearchOption.AllDirectories))
+            {
+                if (!ConsumerExtensions.Contains(Path.GetExtension(file))) continue;
+
+                string content;
+                try { content = File.ReadAllText(file); }
+                catch (Exception e)
+                {
+                    Debug.LogWarning($"[DreamPark] Could not inspect '{file}' while repointing: {e.Message}");
+                    succeeded = false;
+                    continue;
+                }
+
+                if (!GuidRegex.Matches(content).Cast<Match>()
+                    .Any(m => string.Equals(m.Groups[1].Value, guid,
+                                            StringComparison.OrdinalIgnoreCase)))
+                    continue;
+
+                string relative = "Assets" + file.Substring(Application.dataPath.Length)
+                    .Replace('\\', '/');
+                result.Add(relative);
+            }
+
+            return result.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
 
         // Rewrites `guid: <old>` occurrences to `guid: <new>` in every in-package
         // consumer file. Same atomic-write-plus-backup discipline as
         // ThirdPartyLocalDeduplicator.RunApply: a timestamped backup under Library/
         // before every rewrite, so a bad remap is recoverable outside of git too.
-        private void RepointInPackageConsumers(string oldGuid, string newGuid, List<string> consumerAssetPaths)
+        private bool RepointInPackageConsumers(
+            string oldGuid, string newGuid, List<string> consumerAssetPaths)
         {
-            if (consumerAssetPaths == null || consumerAssetPaths.Count == 0) return;
+            if (consumerAssetPaths == null || consumerAssetPaths.Count == 0) return true;
 
             string projectRoot = Path.GetDirectoryName(Application.dataPath);
-            string runStamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-            string backupDir = Path.Combine(projectRoot, "Library", "DreamPark", "OutsideContentResolver", runStamp, "backup");
+            bool succeeded = true;
 
             foreach (var assetPath in consumerAssetPaths)
             {
@@ -555,6 +663,7 @@ namespace DreamPark.PreUploadChecks
                 catch (Exception e)
                 {
                     Debug.LogWarning($"[DreamPark] Could not read '{assetPath}' to repoint: {e.Message}");
+                    succeeded = false;
                     continue;
                 }
 
@@ -570,9 +679,13 @@ namespace DreamPark.PreUploadChecks
 
                 try
                 {
-                    string backupPath = Path.Combine(backupDir, assetPath.Replace('/', Path.DirectorySeparatorChar));
+                    string backupPath = Path.Combine(applyBackupDir,
+                        assetPath.Replace('/', Path.DirectorySeparatorChar));
                     Directory.CreateDirectory(Path.GetDirectoryName(backupPath));
-                    File.Copy(fullPath, backupPath, overwrite: true);
+                    // A file may contain several copied dependency GUIDs. Preserve
+                    // its pre-apply state once; later replacements must not overwrite
+                    // that recovery point with an already-modified intermediate.
+                    if (!File.Exists(backupPath)) File.Copy(fullPath, backupPath);
 
                     string tmp = fullPath + ".dp_resolve_tmp";
                     File.WriteAllText(tmp, newContent);
@@ -581,10 +694,12 @@ namespace DreamPark.PreUploadChecks
                 catch (Exception e)
                 {
                     Debug.LogWarning($"[DreamPark] Could not repoint '{assetPath}': {e.Message}");
+                    succeeded = false;
                 }
             }
 
             AssetDatabase.Refresh();
+            return succeeded;
         }
     }
 }

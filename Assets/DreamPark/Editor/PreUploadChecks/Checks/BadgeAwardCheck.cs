@@ -37,8 +37,12 @@
 // ─────────────────────────────────────────────────────────────────────
 
 #if UNITY_EDITOR && !DREAMPARKCORE
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using DreamPark.Badges;
+using UnityEditor;
+using UnityEngine;
 
 namespace DreamPark.PreUploadChecks.Checks
 {
@@ -82,9 +86,10 @@ namespace DreamPark.PreUploadChecks.Checks
                 return CheckResult.Skipped(CheckId, "no content selected");
 
             List<BadgeStore.Entry> badges;
+            BadgeLuaScanner.Result scan;
             try
             {
-                var scan = BadgeLuaScanner.Scan(ctx.contentId);
+                scan = BadgeLuaScanner.Scan(ctx.contentId);
                 badges = BadgeStore.Merge(BadgeStore.Load(ctx.contentId), scan.discoveries);
             }
             catch (System.Exception e)
@@ -105,7 +110,7 @@ namespace DreamPark.PreUploadChecks.Checks
 
                 if (!badge.IdLocked)
                 {
-                    findings.Add(new Finding
+                    var finding = new Finding
                     {
                         checkId = CheckId,
                         severity = CheckSeverity.Warning,
@@ -117,13 +122,35 @@ namespace DreamPark.PreUploadChecks.Checks
                                + "\") (or matching @var) was found anywhere in this content package's Lua. "
                                + "Normal mid-development — just confirm it's still meant to be wired up "
                                + "before you ship.",
+                    };
+
+                    string badgeId = badge.badgeId;
+                    string contentId = ctx.contentId;
+                    finding.fixes.Add(FixAction.Navigate("Copy awardBadge call", () =>
+                    {
+                        EditorGUIUtility.systemCopyBuffer =
+                            "dp.profile.awardBadge(\"" + EscapeLuaString(badgeId) + "\")";
+                    }));
+                    finding.fixes.Add(new FixAction("Remove badge draft", () =>
+                    {
+                        return RemoveManualDraft(contentId, badgeId);
+                    })
+                    {
+                        canBulk = false,
+                        affectedPaths = new[] { assetPath },
+                        confirmTitle = "Remove badge draft?",
+                        confirmMessage = "Remove the local draft for badge '" + badgeId + "'?\n\n"
+                                       + "This does not delete a badge that was already uploaded to the "
+                                       + "developer portal.",
+                        tooltip = "Removes only this hand-authored local badge card. Uploaded badges are unchanged.",
                     });
+                    findings.Add(finding);
                     continue;
                 }
 
                 if (!attribution.IsAwardedAnywhere(badge.badgeId))
                 {
-                    findings.Add(new Finding
+                    var finding = new Finding
                     {
                         checkId = CheckId,
                         severity = CheckSeverity.Warning,
@@ -135,11 +162,71 @@ namespace DreamPark.PreUploadChecks.Checks
                                + "but that script isn't attached to any Attraction, Prop, or Player prefab in "
                                + "this package — only prefabs ship, so a LuaBehaviour left in a scene, or on a "
                                + "prefab that isn't one of those three roots, never reaches players.",
-                    });
+                    };
+
+                    // Keep the scanner's structured paths for actions. discoveredIn is
+                    // deliberately human-readable and should never be parsed back into
+                    // identity.
+                    var discovery = scan.discoveries.FirstOrDefault(d =>
+                        d != null && string.Equals(d.badgeId, badge.badgeId, StringComparison.Ordinal));
+                    string relevantPath = discovery != null && !string.IsNullOrEmpty(discovery.prefabPath)
+                        ? discovery.prefabPath
+                        : discovery != null ? discovery.scriptPath : null;
+
+                    if (!string.IsNullOrEmpty(relevantPath))
+                    {
+                        string path = relevantPath;
+                        finding.fixes.Add(FixAction.Navigate(
+                            path.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase)
+                                ? "Open referenced prefab"
+                                : "Open awarding script",
+                            () => OpenAsset(path)));
+                    }
+
+                    string badgeId = badge.badgeId;
+                    finding.fixes.Add(FixAction.Navigate("Copy awardBadge call", () =>
+                    {
+                        EditorGUIUtility.systemCopyBuffer =
+                            "dp.profile.awardBadge(\"" + EscapeLuaString(badgeId) + "\")";
+                    }));
+                    findings.Add(finding);
                 }
             }
 
             return CheckResult.From(CheckId, findings);
+        }
+
+        private static string EscapeLuaString(string value)
+        {
+            return (value ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"");
+        }
+
+        private static void OpenAsset(string path)
+        {
+            var asset = AssetDatabase.LoadMainAssetAtPath(path);
+            if (asset == null) return;
+            Selection.activeObject = asset;
+            EditorGUIUtility.PingObject(asset);
+            AssetDatabase.OpenAsset(asset);
+        }
+
+        private static bool RemoveManualDraft(string contentId, string badgeId)
+        {
+            // The saved entry can still carry an old locked source until Merge runs.
+            // Establish "manual" from the live Lua scan, not stale persisted metadata.
+            var scan = BadgeLuaScanner.Scan(contentId);
+            if (scan.discoveries.Any(d => d != null
+                && string.Equals(d.badgeId, badgeId, StringComparison.Ordinal)))
+                return false;
+
+            var entries = BadgeStore.Load(contentId);
+            int removed = entries.RemoveAll(e => e != null
+                && string.Equals(e.badgeId, badgeId, StringComparison.Ordinal));
+            if (removed == 0) return false;
+
+            BadgeStore.Save(contentId, entries);
+            PreUploadCheckRunner.InvalidateCache(contentId);
+            return true;
         }
     }
 }

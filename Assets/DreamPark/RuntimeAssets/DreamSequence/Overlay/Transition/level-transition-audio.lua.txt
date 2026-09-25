@@ -1,0 +1,47 @@
+-- Particle transition audio: one spatial cue per emission start.
+-- The clip contains its own short fade envelope, so particle tails cannot
+-- prolong or restart the sound. Audio lifetime is owned by SDK PlaySFX.
+-- @var particleSystemObject gameobject
+-- @var sfxTransition audioclip
+-- @var targetVolume float 1.0
+
+local UE = CS.UnityEngine
+local ParticleSystemType = typeof(UE.ParticleSystem)
+local particleSystem = nil
+local wasEmitting = false
+
+local function resolve_particle_system()
+    if particleSystem ~= nil then return end
+    pcall(function()
+        local target = particleSystemObject or self.gameObject
+        local candidate = target:GetComponent(ParticleSystemType)
+        local _ = candidate.isEmitting
+        particleSystem = candidate
+    end)
+end
+
+function awake()
+    resolve_particle_system()
+end
+
+function onenable()
+    wasEmitting = false
+    resolve_particle_system()
+end
+
+function update()
+    local emitting = false
+    pcall(function() emitting = particleSystem.isEmitting end)
+    if emitting and not wasEmitting and sfxTransition ~= nil then
+        local ok, err = pcall(function()
+            CS.CoreExtensions.PlaySFX(sfxTransition, self.transform.position,
+                targetVolume or 1.0, 1.0, nil)
+        end)
+        if not ok then UE.Debug.LogWarning('[TransitionAudio] ' .. tostring(err)) end
+    end
+    wasEmitting = emitting
+end
+
+function ondisable()
+    wasEmitting = false
+end

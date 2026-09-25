@@ -27,8 +27,20 @@ internal static class AttractionPackingBaker
         public Vector2 size;
         public Vector2 offset;
         public float yawRadians;
+        public List<Vector2> footprintPolygon;
         public bool essential;
         public int group;
+    }
+
+    private sealed class FollowerItem
+    {
+        public AttractionPackingFollower component;
+        public Transform transform;
+        public Vector3 authoredPosition;
+        public Vector3 authoredLocalScale;
+        public Vector2 size;
+        public Vector2 offset;
+        public float yawRadians;
     }
 
     private struct Rect
@@ -42,7 +54,12 @@ internal static class AttractionPackingBaker
         if (attraction == null) return false;
         if (recordUndo) Undo.RecordObject(attraction, "Bake attraction packing variants");
 
+        // Collider.bounds can lag behind freshly edited prefab transforms. The
+        // follower's visible footprint must be measured at its authored scale.
+        Physics.SyncTransforms();
+
         List<Item> items = CollectItems(attraction);
+        List<FollowerItem> followers = CollectFollowers(attraction);
         Vector2 authored = attraction.DimensionsInFeet * FeetToMeters;
         Vector2 safe = attraction.GetSafeFootprintMeters();
 
@@ -53,12 +70,18 @@ internal static class AttractionPackingBaker
                 Mathf.Max(1f, attraction.maxGrowthScale.y));
             attraction.SetPackingBake(new AttractionPackingBake(
                 authored, safe, authored, Vector2.Scale(authored, emptyGrowthScale), authored,
-                new List<AttractionPropPackingPose>()));
+                new List<AttractionPropPackingPose>(),
+                BuildFollowerPoses(followers, items, attraction.transform,
+                    authored, authored, authored, Vector2.Scale(authored, emptyGrowthScale),
+                    attraction.shrinkClearanceMeters)));
             EditorUtility.SetDirty(attraction);
             return true;
         }
 
-        HashSet<long> authoredOverlaps = FindOverlaps(items, 1f, false, attraction.shrinkClearanceMeters);
+        // Only genuine authored intersections are exempt from collision checks.
+        // Items that merely start closer than the requested clearance must still
+        // become blockers; otherwise a tight grid can collapse rows onto each other.
+        HashSet<long> authoredOverlaps = FindOverlaps(items, 1f, false, 0f);
         Vector3[] shrunkPositions = PackInwardPositions(
             items, authoredOverlaps, false, attraction.shrinkClearanceMeters);
         Vector3[] essentialShrunkPositions = PackInwardPositions(
@@ -75,18 +98,26 @@ internal static class AttractionPackingBaker
                 : item.authored;
         }
 
+        // Keep shrink based on the same coarse roots it has always used. Growth can
+        // then expand legacy grouping roots (for example A_CoinZone) into their
+        // repeated children without changing the proven shrink result.
+        Vector2 shrink = Min(authored, MeasureSymmetricFootprint(attraction.transform, items, Pose.Shrunk, false, authored));
+        Vector2 essentialShrink = Min(authored, MeasureSymmetricFootprint(attraction.transform, items, Pose.EssentialShrunk, true, authored));
+        items = ExpandLegacyRepeatedRunsForGrowth(attraction.transform, items);
+
         AssignGrowGroups(items, authored, attraction.growGroupGapMeters, attraction.growAlignmentToleranceMeters);
         Vector2 requestedGrowthScale = new Vector2(
             Mathf.Max(1f, attraction.maxGrowthScale.x),
             Mathf.Max(1f, attraction.maxGrowthScale.y));
-        ApplyGroupedGrowth(attraction.transform, items, requestedGrowthScale);
+        ApplyGroupedGrowth(
+            attraction.transform,
+            items,
+            requestedGrowthScale);
 
-        Vector2 shrink = Min(authored, MeasureSymmetricFootprint(attraction.transform, items, Pose.Shrunk, false, authored));
         // Growth is an authored reservation target, not merely the tight bounds of
         // the moved props. This makes the runtime contract exact: authored width *
         // X scale and authored length * Z scale are always the reserved dimensions.
         Vector2 grow = Vector2.Scale(authored, requestedGrowthScale);
-        Vector2 essentialShrink = Min(authored, MeasureSymmetricFootprint(attraction.transform, items, Pose.EssentialShrunk, true, authored));
 
         var poses = new List<AttractionPropPackingPose>(items.Count);
         for (int i = 0; i < items.Count; i++)
@@ -107,7 +138,9 @@ internal static class AttractionPackingBaker
                 item.essentialShrunk));
         }
 
-        attraction.SetPackingBake(new AttractionPackingBake(authored, safe, shrink, grow, essentialShrink, poses));
+        attraction.SetPackingBake(new AttractionPackingBake(authored, safe, shrink, grow,
+            essentialShrink, poses, BuildFollowerPoses(followers, items, attraction.transform,
+                authored, shrink, essentialShrink, grow, attraction.shrinkClearanceMeters)));
         EditorUtility.SetDirty(attraction);
         PrefabUtility.RecordPrefabInstancePropertyModifications(attraction);
         return true;
@@ -135,10 +168,10 @@ internal static class AttractionPackingBaker
             }
 
             // The inspector target can contain authoring edits that have not yet
-            // been written to the prefab asset (especially while in Prefab Mode).
-            // Carry those values into the isolated prefab copy before baking so
-            // the bake and its debug slider limits reflect what the user sees.
-            prefabAttraction.maxGrowthScale = attraction.maxGrowthScale;
+            // been written to the prefab asset (especially while in Prefab Mode or
+            // on a scene instance). Carry every packing input into the isolated
+            // prefab copy so the bake reflects what the user currently sees.
+            CopyPackingAuthoringSettings(attraction, prefabAttraction);
             if (!Bake(prefabAttraction, false)) return false;
             PrefabUtility.SaveAsPrefabAsset(root, prefabPath);
         }
@@ -151,6 +184,55 @@ internal static class AttractionPackingBaker
         RevertPackingOverrides(attraction);
         Debug.Log($"[AttractionPacking] Baked packing data into '{prefabPath}'.");
         return true;
+    }
+
+    private static void CopyPackingAuthoringSettings(
+        AttractionTemplate source,
+        AttractionTemplate destination)
+    {
+        destination.size = source.size;
+        destination.customSize = source.customSize;
+        destination.safeAreaInset = source.safeAreaInset;
+        destination.maxGrowthScale = source.maxGrowthScale;
+        destination.shrinkClearanceMeters = source.shrinkClearanceMeters;
+        destination.growGroupGapMeters = source.growGroupGapMeters;
+        destination.growAlignmentToleranceMeters = source.growAlignmentToleranceMeters;
+
+        if (destination.essentialProps == null)
+            destination.essentialProps = new List<Transform>();
+        destination.essentialProps.Clear();
+        if (source.essentialProps != null)
+        {
+            for (int i = 0; i < source.essentialProps.Count; i++)
+            {
+                Transform sourceProp = source.essentialProps[i];
+                if (sourceProp == null) continue;
+                string path = PathFrom(source.transform, sourceProp);
+                Transform destinationProp = string.IsNullOrEmpty(path)
+                    ? destination.transform
+                    : destination.transform.Find(path);
+                if (destinationProp != null)
+                    destination.essentialProps.Add(destinationProp);
+                else
+                    Debug.LogWarning($"[AttractionPacking] Could not map essential prop '{path}' into the prefab asset.");
+            }
+        }
+
+        foreach (AttractionPackingFollower sourceFollower in
+                 source.GetComponentsInChildren<AttractionPackingFollower>(true))
+        {
+            string path = PathFrom(source.transform, sourceFollower.transform);
+            Transform target = destination.transform.Find(path);
+            if (target == null) continue;
+            AttractionPackingFollower destinationFollower =
+                target.GetComponent<AttractionPackingFollower>();
+            if (destinationFollower == null)
+                destinationFollower = target.gameObject.AddComponent<AttractionPackingFollower>();
+            destinationFollower.enabled = sourceFollower.enabled;
+            destinationFollower.followPacking = sourceFollower.followPacking;
+            destinationFollower.scaleMode = sourceFollower.scaleMode;
+            destinationFollower.avoidNewPropOverlaps = sourceFollower.avoidNewPropOverlaps;
+        }
     }
 
     internal static int BakeAllInContent(string contentId, bool showProgress = false)
@@ -226,6 +308,7 @@ internal static class AttractionPackingBaker
         {
             PropTemplate prop = all[i];
             if (prop == null || prop.transform == attraction.transform) continue;
+            if (HasPackingFollowerOnPath(prop.transform, attraction.transform)) continue;
             if (IsEntirePackingRootHidden(prop.transform)) continue;
 
             // Move only top-level nested props. A PropTemplate inside another prop moves
@@ -241,18 +324,21 @@ internal static class AttractionPackingBaker
             Vector2 size = prop.FootprintMeters;
             Vector3 relativeForward = attraction.transform.InverseTransformDirection(prop.transform.forward);
 
+            Vector3 authoredInAttraction = attraction.transform.InverseTransformPoint(prop.transform.position);
             result.Add(new Item
             {
                 template = prop,
                 transform = prop.transform,
                 authored = prop.transform.localPosition,
-                authoredInAttraction = attraction.transform.InverseTransformPoint(prop.transform.position),
+                authoredInAttraction = authoredInAttraction,
                 shrunk = prop.transform.localPosition,
                 grown = prop.transform.localPosition,
                 essentialShrunk = prop.transform.localPosition,
                 size = size,
                 offset = prop.footprintOffsetMeters,
                 yawRadians = Mathf.Atan2(relativeForward.x, relativeForward.z),
+                footprintPolygon = GetFloorCutoutPolygon(
+                    attraction.transform, prop.transform, authoredInAttraction),
                 essential = essentialRoots.Contains(prop.transform),
                 group = -1,
             });
@@ -265,27 +351,208 @@ internal static class AttractionPackingBaker
         {
             Transform child = attraction.transform.GetChild(i);
             if (claimedDirectChildren.Contains(child)) continue;
+            if (HasPackingFollowerOnPath(child, attraction.transform)) continue;
             if (IsEntirePackingRootHidden(child)) continue;
             if (!TryMeasureLocalFootprint(child, out Vector2 size, out Vector2 offset)) continue;
 
             Vector3 relativeForward = attraction.transform.InverseTransformDirection(child.forward);
+            Vector3 authoredInAttraction = attraction.transform.InverseTransformPoint(child.position);
             result.Add(new Item
             {
                 template = null,
                 transform = child,
                 authored = child.localPosition,
-                authoredInAttraction = attraction.transform.InverseTransformPoint(child.position),
+                authoredInAttraction = authoredInAttraction,
                 shrunk = child.localPosition,
                 grown = child.localPosition,
                 essentialShrunk = child.localPosition,
                 size = size,
                 offset = offset,
                 yawRadians = Mathf.Atan2(relativeForward.x, relativeForward.z),
+                footprintPolygon = GetFloorCutoutPolygon(
+                    attraction.transform, child, authoredInAttraction),
                 essential = essentialRoots.Contains(child),
                 group = -1,
             });
         }
         return result;
+    }
+
+    private static List<FollowerItem> CollectFollowers(AttractionTemplate attraction)
+    {
+        var result = new List<FollowerItem>();
+        AttractionPackingFollower[] all = attraction.GetComponentsInChildren<AttractionPackingFollower>(true);
+        for (int i = 0; i < all.Length; i++)
+        {
+            AttractionPackingFollower follower = all[i];
+            if (follower == null || !follower.enabled || !follower.followPacking
+                || follower.transform == attraction.transform) continue;
+            if (HasPackingFollowerOnPath(follower.transform.parent, attraction.transform))
+            {
+                Debug.LogWarning($"[AttractionPacking] Nested packing follower '{follower.name}' is ignored.");
+                continue;
+            }
+            PropTemplate owner = follower.transform.parent != null
+                ? follower.transform.parent.GetComponentInParent<PropTemplate>(true) : null;
+            if (owner != null && owner.transform.IsChildOf(attraction.transform))
+            {
+                Debug.LogWarning($"[AttractionPacking] Put follower '{follower.name}' on its owning PropTemplate or a separate child root.");
+                continue;
+            }
+            if (!TryMeasureLocalFootprint(follower.transform, out Vector2 size,
+                    out Vector2 offset, true))
+            {
+                Debug.LogWarning($"[AttractionPacking] Follower '{follower.name}' has no measurable footprint.");
+                continue;
+            }
+            Vector3 relativeForward = attraction.transform.InverseTransformDirection(follower.transform.forward);
+            result.Add(new FollowerItem
+            {
+                component = follower,
+                transform = follower.transform,
+                authoredPosition = attraction.transform.InverseTransformPoint(follower.transform.position),
+                authoredLocalScale = follower.transform.localScale,
+                size = size,
+                offset = offset,
+                yawRadians = Mathf.Atan2(relativeForward.x, relativeForward.z),
+            });
+        }
+        return result;
+    }
+
+    private static bool HasPackingFollowerOnPath(Transform current, Transform attractionRoot)
+    {
+        for (; current != null && current != attractionRoot; current = current.parent)
+        {
+            AttractionPackingFollower follower = current.GetComponent<AttractionPackingFollower>();
+            if (follower != null && follower.enabled && follower.followPacking) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Legacy attractions often organize repeated gameplay objects below a plain
+    /// top-level transform instead of giving every object a PropTemplate. Shrink
+    /// deliberately treats that transform as one rigid item. Growth needs the
+    /// individual repeated children so trails can distribute through longer rooms.
+    /// Each child inherits the already-solved rigid shrink translation from its
+    /// owner, keeping shrink behavior byte-for-byte equivalent at runtime.
+    /// </summary>
+    private static List<Item> ExpandLegacyRepeatedRunsForGrowth(
+        Transform attractionRoot,
+        List<Item> coarseItems)
+    {
+        var result = new List<Item>(coarseItems.Count);
+        for (int i = 0; i < coarseItems.Count; i++)
+        {
+            Item owner = coarseItems[i];
+            if (owner.template != null
+                || !TryGetRepeatedLegacyChildren(owner.transform, out List<Transform> children))
+            {
+                result.Add(owner);
+                continue;
+            }
+
+            Vector3 shrinkDelta = ToAttractionLocal(
+                attractionRoot, owner.transform.parent, owner.shrunk) - owner.authoredInAttraction;
+            Vector3 essentialShrinkDelta = ToAttractionLocal(
+                attractionRoot, owner.transform.parent, owner.essentialShrunk) - owner.authoredInAttraction;
+
+            for (int childIndex = 0; childIndex < children.Count; childIndex++)
+            {
+                Transform child = children[childIndex];
+                if (!TryMeasureLocalFootprint(child, out Vector2 size, out Vector2 offset)) continue;
+
+                Vector3 authoredInAttraction = attractionRoot.InverseTransformPoint(child.position);
+                Vector3 relativeForward = attractionRoot.InverseTransformDirection(child.forward);
+                result.Add(new Item
+                {
+                    template = null,
+                    transform = child,
+                    authored = child.localPosition,
+                    authoredInAttraction = authoredInAttraction,
+                    shrunk = ToParentLocal(
+                        attractionRoot, child.parent, authoredInAttraction + shrinkDelta),
+                    grown = child.localPosition,
+                    essentialShrunk = ToParentLocal(
+                        attractionRoot, child.parent, authoredInAttraction + essentialShrinkDelta),
+                    size = size,
+                    offset = offset,
+                    yawRadians = Mathf.Atan2(relativeForward.x, relativeForward.z),
+                    essential = owner.essential,
+                    group = -1,
+                });
+            }
+        }
+        return result;
+    }
+
+    private static bool TryGetRepeatedLegacyChildren(
+        Transform owner,
+        out List<Transform> children)
+    {
+        children = new List<Transform>();
+        // Only plain grouping transforms may be expanded into independently growing
+        // children. If the owner has geometry of its own, replacing its pose with
+        // child poses leaves that geometry behind at runtime (for example, a
+        // procedural lava pit whose platform children happen to share a name).
+        if (HasOwnPackingGeometry(owner)) return false;
+
+        string family = null;
+        for (int i = 0; i < owner.childCount; i++)
+        {
+            Transform child = owner.GetChild(i);
+            if (IsEntirePackingRootHidden(child)) continue;
+            if (!TryMeasureLocalFootprint(child, out _, out _)) continue;
+
+            string childFamily = GrowthFamilyName(child.name);
+            if (string.IsNullOrEmpty(childFamily)) return false;
+            if (family == null) family = childFamily;
+            else if (!string.Equals(family, childFamily, StringComparison.OrdinalIgnoreCase))
+                return false;
+            children.Add(child);
+        }
+        return children.Count >= 3;
+    }
+
+    private static bool HasOwnPackingGeometry(Transform owner)
+    {
+        if (owner == null || IsHiddenPackingGeometry(owner, owner)) return false;
+
+        Collider collider = owner.GetComponent<Collider>();
+        if (collider != null && collider.bounds.size.sqrMagnitude > Mathf.Epsilon)
+            return true;
+
+        MeshFilter mesh = owner.GetComponent<MeshFilter>();
+        Renderer renderer = owner.GetComponent<Renderer>();
+        if (mesh != null && mesh.sharedMesh != null && renderer != null
+            && !RendererUsesOnlyHiddenMaterials(renderer))
+            return true;
+
+        SkinnedMeshRenderer skinned = owner.GetComponent<SkinnedMeshRenderer>();
+        return skinned != null && skinned.sharedMesh != null
+            && !RendererUsesOnlyHiddenMaterials(skinned);
+    }
+
+    private static List<Vector2> GetFloorCutoutPolygon(
+        Transform attractionRoot,
+        Transform packingRoot,
+        Vector3 authoredInAttraction)
+    {
+        FloorCutout cutout = packingRoot.GetComponent<FloorCutout>();
+        if (cutout == null || cutout.points == null || cutout.points.Count < 3)
+            return null;
+
+        var polygon = new List<Vector2>(cutout.points.Count);
+        for (int i = 0; i < cutout.points.Count; i++)
+        {
+            Vector3 point = attractionRoot.InverseTransformPoint(
+                cutout.transform.TransformPoint(cutout.points[i]));
+            polygon.Add(new Vector2(
+                point.x - authoredInAttraction.x,
+                point.z - authoredInAttraction.z));
+        }
+        return polygon;
     }
 
     private static Transform ResolvePackingRoot(Transform attractionRoot, Transform selected)
@@ -313,7 +580,8 @@ internal static class AttractionPackingBaker
         return cursor.parent == root ? cursor : null;
     }
 
-    private static bool TryMeasureLocalFootprint(Transform root, out Vector2 size, out Vector2 offset)
+    private static bool TryMeasureLocalFootprint(Transform root, out Vector2 size,
+        out Vector2 offset, bool includeFollowerGeometry = false)
     {
         bool any = false;
         Vector3 minimum = new Vector3(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
@@ -325,7 +593,8 @@ internal static class AttractionPackingBaker
         Collider[] colliders = root.GetComponentsInChildren<Collider>(true);
         for (int i = 0; i < colliders.Length; i++)
         {
-            if (IsHiddenPackingGeometry(colliders[i].transform, root)) continue;
+            if (IsHiddenPackingGeometry(colliders[i].transform, root)
+                || (!includeFollowerGeometry && HasPackingFollowerOnPath(colliders[i].transform, root.parent))) continue;
             Bounds bounds = colliders[i].bounds;
             if (bounds.size.sqrMagnitude <= Mathf.Epsilon) continue;
             EncapsulateWorldBounds(root, bounds, ref minimum, ref maximum);
@@ -340,7 +609,8 @@ internal static class AttractionPackingBaker
                 MeshFilter filter = meshes[i];
                 if (filter.sharedMesh == null) continue;
                 Renderer renderer = filter.GetComponent<Renderer>();
-                if (renderer == null || IsHiddenPackingGeometry(filter.transform, root)) continue;
+                if (renderer == null || IsHiddenPackingGeometry(filter.transform, root)
+                    || (!includeFollowerGeometry && HasPackingFollowerOnPath(filter.transform, root.parent))) continue;
                 EncapsulateBounds(root, filter.transform.localToWorldMatrix, filter.sharedMesh.bounds, ref minimum, ref maximum);
                 any = true;
             }
@@ -350,7 +620,8 @@ internal static class AttractionPackingBaker
             {
                 SkinnedMeshRenderer renderer = skinned[i];
                 if (renderer.sharedMesh == null) continue;
-                if (IsHiddenPackingGeometry(renderer.transform, root)) continue;
+                if (IsHiddenPackingGeometry(renderer.transform, root)
+                    || (!includeFollowerGeometry && HasPackingFollowerOnPath(renderer.transform, root.parent))) continue;
                 EncapsulateBounds(root, renderer.transform.localToWorldMatrix, renderer.localBounds, ref minimum, ref maximum);
                 any = true;
             }
@@ -420,6 +691,7 @@ internal static class AttractionPackingBaker
         if (string.IsNullOrEmpty(value)) return false;
         string lower = value.ToLowerInvariant();
         return lower.Contains("occlud")
+            || lower.Contains("occlus")
             || lower.Contains("invisible")
             || lower.Contains("depthmask")
             || lower.Contains("depth mask")
@@ -467,6 +739,183 @@ internal static class AttractionPackingBaker
 
     private static Vector3 ScaleFromOrigin(Vector3 position, Vector2 scale) =>
         new Vector3(position.x * scale.x, position.y, position.z * scale.y);
+
+    private struct FollowerEndpoint
+    {
+        public Vector3 position;
+        public Vector3 localScale;
+    }
+
+    private static List<AttractionPackingFollowerPose> BuildFollowerPoses(
+        List<FollowerItem> followers, List<Item> props, Transform attractionRoot,
+        Vector2 authoredFootprint, Vector2 shrinkFootprint, Vector2 essentialFootprint,
+        Vector2 growFootprint, float clearance)
+    {
+        var poses = new List<AttractionPackingFollowerPose>(followers.Count);
+        for (int i = 0; i < followers.Count; i++)
+        {
+            FollowerItem follower = followers[i];
+            FollowerEndpoint shrunk = FitFollower(follower, props, attractionRoot,
+                shrinkFootprint, Pose.Shrunk, false, clearance);
+            FollowerEndpoint essential = FitFollower(follower, props, attractionRoot,
+                essentialFootprint, Pose.EssentialShrunk, true, clearance);
+            FollowerEndpoint grown = GrowFollower(follower, authoredFootprint, growFootprint);
+            poses.Add(new AttractionPackingFollowerPose(follower.transform,
+                follower.authoredPosition, shrunk.position, grown.position, essential.position,
+                follower.authoredLocalScale, shrunk.localScale, grown.localScale,
+                essential.localScale, follower.component.scaleMode));
+        }
+        return poses;
+    }
+
+    private static FollowerEndpoint FitFollower(FollowerItem follower, List<Item> props,
+        Transform attractionRoot, Vector2 targetFootprint, Pose pose,
+        bool essentialOnly, float clearance)
+    {
+        Vector2 baseRatio = new Vector2(
+            Mathf.Min(1f, targetFootprint.x / Mathf.Max(0.001f, follower.size.x)),
+            Mathf.Min(1f, targetFootprint.y / Mathf.Max(0.001f, follower.size.y)));
+        Rect authoredRect = FollowerBoundsAt(follower, follower.authoredPosition, Vector2.one);
+        FollowerEndpoint fallback = new FollowerEndpoint
+        {
+            position = follower.authoredPosition,
+            localScale = follower.authoredLocalScale,
+        };
+
+        // Try moving the full-size object into the baked room first. Only reduce
+        // scale when it cannot fit there or the move would create a new overlap.
+        for (int step = 0; step <= 80; step++)
+        {
+            float reduction = Mathf.Max(0.001f, 1f - step / 80f);
+            Vector2 ratio = ScaleFollowerAxes(follower.component.scaleMode,
+                baseRatio * reduction);
+            Rect rect = FollowerBoundsAt(follower, follower.authoredPosition, ratio);
+            Vector2 roomHalf = targetFootprint * 0.5f;
+            if (rect.half.x > roomHalf.x + 0.0001f || rect.half.y > roomHalf.y + 0.0001f)
+                continue;
+
+            Vector2 desiredCenter = new Vector2(
+                Mathf.Clamp(rect.center.x, -roomHalf.x + rect.half.x, roomHalf.x - rect.half.x),
+                Mathf.Clamp(rect.center.y, -roomHalf.y + rect.half.y, roomHalf.y - rect.half.y));
+            fallback.position = follower.authoredPosition +
+                new Vector3(desiredCenter.x - rect.center.x, 0f, desiredCenter.y - rect.center.y);
+            fallback.localScale = Vector3.Scale(follower.authoredLocalScale,
+                new Vector3(ratio.x,
+                    follower.component.scaleMode == AttractionPackingScaleMode.XYZUniform ? ratio.x : 1f,
+                    ratio.y));
+            if (follower.component.avoidNewPropOverlaps &&
+                !TryFindClearFollowerCenter(authoredRect, rect, desiredCenter, roomHalf,
+                    props, attractionRoot, pose, essentialOnly, clearance, out desiredCenter))
+                continue;
+            Vector3 position = follower.authoredPosition +
+                new Vector3(desiredCenter.x - rect.center.x, 0f, desiredCenter.y - rect.center.y);
+            fallback.position = position;
+            return fallback;
+        }
+
+        Debug.LogWarning($"[AttractionPacking] Follower '{follower.transform.name}' cannot avoid every new prop overlap at the baked minimum. Keeping it inside the room bounds.");
+        return fallback;
+    }
+
+    private static FollowerEndpoint GrowFollower(FollowerItem follower,
+        Vector2 authoredFootprint, Vector2 growFootprint)
+    {
+        Vector2 roomRatio = new Vector2(
+            growFootprint.x / Mathf.Max(0.001f, authoredFootprint.x),
+            growFootprint.y / Mathf.Max(0.001f, authoredFootprint.y));
+        Vector2 ratio = ScaleFollowerAxes(follower.component.scaleMode, roomRatio);
+        Vector3 position = ScaleFromOrigin(follower.authoredPosition, roomRatio);
+        Rect rect = FollowerBoundsAt(follower, position, ratio);
+        Vector2 roomHalf = growFootprint * 0.5f;
+        Vector2 center = new Vector2(
+            Mathf.Clamp(rect.center.x, -roomHalf.x + rect.half.x, roomHalf.x - rect.half.x),
+            Mathf.Clamp(rect.center.y, -roomHalf.y + rect.half.y, roomHalf.y - rect.half.y));
+        position += new Vector3(center.x - rect.center.x, 0f, center.y - rect.center.y);
+        return new FollowerEndpoint
+        {
+            position = position,
+            localScale = Vector3.Scale(follower.authoredLocalScale,
+                new Vector3(ratio.x,
+                    follower.component.scaleMode == AttractionPackingScaleMode.XYZUniform ? ratio.x : 1f,
+                    ratio.y)),
+        };
+    }
+
+    private static Vector2 ScaleFollowerAxes(AttractionPackingScaleMode mode, Vector2 ratio)
+    {
+        if (mode == AttractionPackingScaleMode.XZIndependent) return ratio;
+        float uniform = Mathf.Min(ratio.x, ratio.y);
+        return new Vector2(uniform, uniform);
+    }
+
+    private static Rect FollowerBoundsAt(FollowerItem follower, Vector3 position, Vector2 ratio)
+    {
+        float c = Mathf.Abs(Mathf.Cos(follower.yawRadians));
+        float s = Mathf.Abs(Mathf.Sin(follower.yawRadians));
+        Vector2 halfLocal = Vector2.Scale(follower.size, ratio) * 0.5f;
+        Vector2 offset = Vector2.Scale(follower.offset, ratio);
+        float yaw = follower.yawRadians;
+        return new Rect
+        {
+            center = new Vector2(position.x + Mathf.Cos(yaw) * offset.x - Mathf.Sin(yaw) * offset.y,
+                position.z + Mathf.Sin(yaw) * offset.x + Mathf.Cos(yaw) * offset.y),
+            half = new Vector2(c * halfLocal.x + s * halfLocal.y,
+                s * halfLocal.x + c * halfLocal.y),
+        };
+    }
+
+    private static bool TryFindClearFollowerCenter(Rect authored, Rect footprint,
+        Vector2 desired, Vector2 roomHalf, List<Item> props, Transform attractionRoot,
+        Pose pose, bool essentialOnly, float clearance, out Vector2 bestCenter)
+    {
+        var candidates = new List<Vector2> { desired, Vector2.zero };
+        Vector2 min = -roomHalf + footprint.half;
+        Vector2 max = roomHalf - footprint.half;
+        for (int i = 0; i < props.Count; i++)
+        {
+            Item prop = props[i];
+            if (essentialOnly && !prop.essential) continue;
+            if (Overlaps(authored, BoundsAt(prop, prop.authoredInAttraction), clearance)) continue;
+            Vector3 local = pose == Pose.EssentialShrunk ? prop.essentialShrunk
+                : pose == Pose.Grown ? prop.grown : prop.shrunk;
+            Vector3 position = ToAttractionLocal(attractionRoot, prop.transform.parent, local);
+            Rect blocker = BoundsAt(prop, position);
+            float xPad = blocker.half.x + footprint.half.x + clearance + 0.001f;
+            float zPad = blocker.half.y + footprint.half.y + clearance + 0.001f;
+            candidates.Add(new Vector2(blocker.center.x - xPad, desired.y));
+            candidates.Add(new Vector2(blocker.center.x + xPad, desired.y));
+            candidates.Add(new Vector2(desired.x, blocker.center.y - zPad));
+            candidates.Add(new Vector2(desired.x, blocker.center.y + zPad));
+        }
+        bestCenter = desired;
+        float bestDistance = float.PositiveInfinity;
+        for (int i = 0; i < candidates.Count; i++)
+        {
+            Vector2 center = new Vector2(
+                Mathf.Clamp(candidates[i].x, min.x, max.x),
+                Mathf.Clamp(candidates[i].y, min.y, max.y));
+            Rect candidate = new Rect { center = center, half = footprint.half };
+            bool overlaps = false;
+            for (int j = 0; j < props.Count; j++)
+            {
+                Item prop = props[j];
+                if (essentialOnly && !prop.essential) continue;
+                if (Overlaps(authored, BoundsAt(prop, prop.authoredInAttraction), clearance)) continue;
+                Vector3 local = pose == Pose.EssentialShrunk ? prop.essentialShrunk
+                    : pose == Pose.Grown ? prop.grown : prop.shrunk;
+                Vector3 position = ToAttractionLocal(attractionRoot, prop.transform.parent, local);
+                if (!Overlaps(candidate, BoundsAt(prop, position), clearance)) continue;
+                overlaps = true;
+                break;
+            }
+            if (overlaps) continue;
+            float distance = (center - authored.center).sqrMagnitude;
+            if (distance >= bestDistance) continue;
+            bestDistance = distance;
+            bestCenter = center;
+        }
+        return !float.IsPositiveInfinity(bestDistance);
+    }
 
     private static Vector3[] PackInwardPositions(
         List<Item> items,
@@ -616,7 +1065,7 @@ internal static class AttractionPackingBaker
                     positions[i], translations[groupA], xAxis, probeTravel));
                 Rect b = BoundsAt(items[j], TravelPosition(
                     positions[j], translations[groupB], xAxis, probeTravel));
-                if (!Overlaps(a, b, clearance)) continue;
+                if (!ItemsOverlap(items[i], a, items[j], b, clearance)) continue;
                 merges.Add(new Vector2Int(groupA, groupB));
             }
         }
@@ -654,7 +1103,7 @@ internal static class AttractionPackingBaker
                 if (groupA == groupB) continue;
                 Rect b = BoundsAt(items[j], TravelPosition(
                     positions[j], translations[groupB], xAxis, travel));
-                if (Overlaps(a, b, clearance)) return true;
+                if (ItemsOverlap(items[i], a, items[j], b, clearance)) return true;
             }
         }
         return false;
@@ -740,7 +1189,7 @@ internal static class AttractionPackingBaker
             {
                 if (essentialOnly && !items[j].essential) continue;
                 Rect b = BoundsAt(items[j], ScaleFromOrigin(items[j].authoredInAttraction, scaleXZ));
-                if (Overlaps(a, b, clearance)) overlaps.Add(PairKey(i, j));
+                if (ItemsOverlap(items[i], a, items[j], b, clearance)) overlaps.Add(PairKey(i, j));
             }
         }
         return overlaps;
@@ -757,7 +1206,7 @@ internal static class AttractionPackingBaker
                 if (essentialOnly && !items[j].essential) continue;
                 if (ignored.Contains(PairKey(i, j))) continue;
                 Rect b = BoundsAt(items[j], ScaleFromOrigin(items[j].authoredInAttraction, scale));
-                if (Overlaps(a, b, clearance)) return true;
+                if (ItemsOverlap(items[i], a, items[j], b, clearance)) return true;
             }
         }
         return false;
@@ -834,34 +1283,96 @@ internal static class AttractionPackingBaker
         return result;
     }
 
-    private static void ApplyGroupedGrowth(Transform attractionRoot, List<Item> items, Vector2 scale)
+    private static void ApplyGroupedGrowth(
+        Transform attractionRoot,
+        List<Item> items,
+        Vector2 scale)
     {
         var sums = new Dictionary<int, Vector2>();
         var counts = new Dictionary<int, int>();
+        var members = new Dictionary<int, List<int>>();
         for (int i = 0; i < items.Count; i++)
         {
             int group = items[i].group;
             Vector2 p = new Vector2(items[i].authoredInAttraction.x, items[i].authoredInAttraction.z);
             sums[group] = sums.TryGetValue(group, out Vector2 sum) ? sum + p : p;
             counts[group] = counts.TryGetValue(group, out int count) ? count + 1 : 1;
+            if (!members.TryGetValue(group, out List<int> groupMembers))
+            {
+                groupMembers = new List<int>();
+                members[group] = groupMembers;
+            }
+            groupMembers.Add(i);
         }
 
         var deltas = new Dictionary<int, Vector2>();
+        var elasticAxes = new Dictionary<int, Vector2Int>();
         foreach (var pair in sums)
         {
             Vector2 centroid = pair.Value / counts[pair.Key];
             deltas[pair.Key] = new Vector2(
                 centroid.x * (scale.x - 1f),
                 centroid.y * (scale.y - 1f));
+            List<int> groupMembers = members[pair.Key];
+            elasticAxes[pair.Key] = new Vector2Int(
+                IsElasticRepeatedRun(items, groupMembers, true) ? 1 : 0,
+                IsElasticRepeatedRun(items, groupMembers, false) ? 1 : 0);
         }
 
         for (int i = 0; i < items.Count; i++)
         {
             Vector2 delta = deltas[items[i].group];
             Vector3 p = items[i].authoredInAttraction;
-            Vector3 grownInAttraction = new Vector3(p.x + delta.x, p.y, p.z + delta.y);
+            // A compact mixed cluster moves rigidly by its centroid. A repeated,
+            // aligned run (coins, lights, arrows, queue markers) is different:
+            // keeping the entire run rigid preserves every internal gap and only
+            // moves the trail as a block. Scale each centre on the run axis so
+            // the individual props retain their size/alignment while their
+            // spacing expands to occupy the requested hallway length.
+            Vector2Int elastic = elasticAxes[items[i].group];
+            float grownX = elastic.x != 0 ? p.x * scale.x : p.x + delta.x;
+            float grownZ = elastic.y != 0 ? p.z * scale.y : p.z + delta.y;
+            Vector3 grownInAttraction = new Vector3(grownX, p.y, grownZ);
             items[i].grown = ToParentLocal(attractionRoot, items[i].transform.parent, grownInAttraction);
         }
+    }
+
+    private static bool IsElasticRepeatedRun(
+        List<Item> items,
+        List<int> members,
+        bool xAxis)
+    {
+        if (members == null || members.Count < 3) return false;
+
+        string family = GrowthFamilyName(items[members[0]].transform.name);
+        if (string.IsNullOrEmpty(family)) return false;
+
+        float minAlong = float.PositiveInfinity;
+        float maxAlong = float.NegativeInfinity;
+        float minCross = float.PositiveInfinity;
+        float maxCross = float.NegativeInfinity;
+        for (int i = 0; i < members.Count; i++)
+        {
+            Item item = items[members[i]];
+            if (!string.Equals(
+                    family,
+                    GrowthFamilyName(item.transform.name),
+                    StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            Vector3 p = item.authoredInAttraction;
+            float along = xAxis ? p.x : p.z;
+            float cross = xAxis ? p.z : p.x;
+            minAlong = Mathf.Min(minAlong, along);
+            maxAlong = Mathf.Max(maxAlong, along);
+            minCross = Mathf.Min(minCross, cross);
+            maxCross = Mathf.Max(maxCross, cross);
+        }
+
+        float alongSpan = maxAlong - minAlong;
+        float crossSpan = maxCross - minCross;
+        return alongSpan > 0.001f
+            && alongSpan > crossSpan * 2f;
     }
 
     private enum Pose { Shrunk, Grown, EssentialShrunk }
@@ -881,18 +1392,15 @@ internal static class AttractionPackingBaker
                 : item.essentialShrunk;
             Vector3 position = ToAttractionLocal(attractionRoot, item.transform.parent, parentLocal);
             Rect rect = BoundsAt(item, position);
-            Rect authoredRect = BoundsAt(item, item.authoredInAttraction);
-            // A legacy helper that already overflows an authored axis at scale 1
-            // cannot meaningfully define that axis's shrink floor. Preserve the
-            // existing overflow while allowing normal in-bounds layout props to pack.
-            if (rect.half.x * 2f <= fallback.x + 0.001f
-                && Mathf.Abs(authoredRect.center.x) + authoredRect.half.x <= fallback.x * 0.5f + 0.001f)
+            // Use the packed pose, even when the authored prop overhangs the
+            // original room. Its shrink pose may have moved fully inside.
+            // Geometry wider than the authored room cannot set a smaller limit.
+            if (rect.half.x * 2f <= fallback.x + 0.001f)
             {
                 extentX = Mathf.Max(extentX, Mathf.Abs(rect.center.x) + rect.half.x);
                 anyX = true;
             }
-            if (rect.half.y * 2f <= fallback.y + 0.001f
-                && Mathf.Abs(authoredRect.center.y) + authoredRect.half.y <= fallback.y * 0.5f + 0.001f)
+            if (rect.half.y * 2f <= fallback.y + 0.001f)
             {
                 extentZ = Mathf.Max(extentZ, Mathf.Abs(rect.center.y) + rect.half.y);
                 anyZ = true;
@@ -937,6 +1445,91 @@ internal static class AttractionPackingBaker
         return Mathf.Abs(a.center.x - b.center.x) < a.half.x + b.half.x + pad * 2f
             && Mathf.Abs(a.center.y - b.center.y) < a.half.y + b.half.y + pad * 2f;
     }
+
+    private static bool ItemsOverlap(Item a, Rect boundsA, Item b, Rect boundsB, float clearance)
+    {
+        if (a.footprintPolygon != null && b.footprintPolygon != null)
+            return PolygonsOverlap(
+                a.footprintPolygon, boundsA.center - RotatedOffset(a),
+                b.footprintPolygon, boundsB.center - RotatedOffset(b),
+                clearance);
+        return Overlaps(boundsA, boundsB, clearance);
+    }
+
+    private static Vector2 RotatedOffset(Item item)
+    {
+        float c = Mathf.Cos(item.yawRadians);
+        float s = Mathf.Sin(item.yawRadians);
+        return new Vector2(
+            c * item.offset.x - s * item.offset.y,
+            s * item.offset.x + c * item.offset.y);
+    }
+
+    private static bool PolygonsOverlap(
+        List<Vector2> a,
+        Vector2 positionA,
+        List<Vector2> b,
+        Vector2 positionB,
+        float clearance)
+    {
+        for (int i = 0; i < a.Count; i++)
+        {
+            Vector2 a0 = a[i] + positionA;
+            Vector2 a1 = a[(i + 1) % a.Count] + positionA;
+            for (int j = 0; j < b.Count; j++)
+            {
+                Vector2 b0 = b[j] + positionB;
+                Vector2 b1 = b[(j + 1) % b.Count] + positionB;
+                if (SegmentsIntersect(a0, a1, b0, b1)) return true;
+                if (clearance > 0f
+                    && SegmentDistanceSquared(a0, a1, b0, b1) < clearance * clearance)
+                    return true;
+            }
+        }
+        return PointInPolygon(a[0] + positionA, b, positionB)
+            || PointInPolygon(b[0] + positionB, a, positionA);
+    }
+
+    private static bool PointInPolygon(Vector2 point, List<Vector2> polygon, Vector2 position)
+    {
+        bool inside = false;
+        for (int i = 0, j = polygon.Count - 1; i < polygon.Count; j = i++)
+        {
+            Vector2 a = polygon[i] + position;
+            Vector2 b = polygon[j] + position;
+            if ((a.y > point.y) != (b.y > point.y)
+                && point.x < (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x)
+                inside = !inside;
+        }
+        return inside;
+    }
+
+    private static bool SegmentsIntersect(Vector2 a0, Vector2 a1, Vector2 b0, Vector2 b1)
+    {
+        float d1 = Cross(a1 - a0, b0 - a0);
+        float d2 = Cross(a1 - a0, b1 - a0);
+        float d3 = Cross(b1 - b0, a0 - b0);
+        float d4 = Cross(b1 - b0, a1 - b0);
+        return d1 * d2 < -0.0000001f && d3 * d4 < -0.0000001f;
+    }
+
+    private static float SegmentDistanceSquared(Vector2 a0, Vector2 a1, Vector2 b0, Vector2 b1)
+    {
+        return Mathf.Min(
+            Mathf.Min(PointSegmentDistanceSquared(a0, b0, b1), PointSegmentDistanceSquared(a1, b0, b1)),
+            Mathf.Min(PointSegmentDistanceSquared(b0, a0, a1), PointSegmentDistanceSquared(b1, a0, a1)));
+    }
+
+    private static float PointSegmentDistanceSquared(Vector2 point, Vector2 start, Vector2 end)
+    {
+        Vector2 segment = end - start;
+        float lengthSquared = segment.sqrMagnitude;
+        if (lengthSquared <= Mathf.Epsilon) return (point - start).sqrMagnitude;
+        float t = Mathf.Clamp01(Vector2.Dot(point - start, segment) / lengthSquared);
+        return (point - (start + segment * t)).sqrMagnitude;
+    }
+
+    private static float Cross(Vector2 a, Vector2 b) => a.x * b.y - a.y * b.x;
 
     private static long PairKey(int a, int b) => ((long)a << 32) | (uint)b;
 
@@ -1128,12 +1721,18 @@ internal sealed class AttractionPackingPrefabSaveProcessor : AssetModificationPr
 internal sealed class AttractionTemplatePackingEditor : Editor
 {
     private static Material packingGhostMaterial;
+    private static readonly Dictionary<int, Mesh> packingGhostSkinnedMeshes = new Dictionary<int, Mesh>();
 
     private void OnDisable()
     {
-        if (packingGhostMaterial == null) return;
-        DestroyImmediate(packingGhostMaterial);
-        packingGhostMaterial = null;
+        if (packingGhostMaterial != null)
+        {
+            DestroyImmediate(packingGhostMaterial);
+            packingGhostMaterial = null;
+        }
+        foreach (Mesh mesh in packingGhostSkinnedMeshes.Values)
+            if (mesh != null) DestroyImmediate(mesh);
+        packingGhostSkinnedMeshes.Clear();
     }
 
     public override void OnInspectorGUI()
@@ -1167,6 +1766,16 @@ internal sealed class AttractionTemplatePackingEditor : Editor
             attraction.SetShowPackingGizmos(showGizmos);
             EditorUtility.SetDirty(attraction);
             SceneView.RepaintAll();
+        }
+
+        if (attraction.HasStalePackingBake)
+        {
+            AttractionPackingBake stale = attraction.PackingBake;
+            EditorGUILayout.HelpBox(
+                $"Packing bake is out of date. It was baked for {FormatFeet(stale.AuthoredFootprintMeters)}, " +
+                $"but the attraction is now {FormatFeet(attraction.DimensionsInFeet * 0.3048f)} " +
+                $"and/or its maximum multipliers changed. Re-bake to refresh the layout and debug ranges.",
+                MessageType.Warning);
         }
 
         if (attraction.HasPackingBake)
@@ -1331,10 +1940,11 @@ internal sealed class AttractionTemplatePackingEditor : Editor
             for (int meshIndex = 0; meshIndex < skinned.Length; meshIndex++)
             {
                 SkinnedMeshRenderer renderer = skinned[meshIndex];
-                Mesh mesh = renderer.sharedMesh;
-                if (mesh == null) continue;
+                if (renderer.sharedMesh == null) continue;
                 foundMesh = true;
                 if (!ShouldDrawGhostRenderer(renderer, root)) continue;
+                Mesh mesh = GetPackingGhostSkinnedMesh(renderer);
+                if (mesh == null) continue;
                 Matrix4x4 matrix = authoredToPreview * renderer.transform.localToWorldMatrix;
                 for (int subMesh = 0; subMesh < mesh.subMeshCount; subMesh++)
                 {
@@ -1356,6 +1966,27 @@ internal sealed class AttractionTemplatePackingEditor : Editor
                 Handles.matrix = previous;
             }
         }
+    }
+
+    private static Mesh GetPackingGhostSkinnedMesh(SkinnedMeshRenderer renderer)
+    {
+        int instanceId = renderer.GetInstanceID();
+        if (!packingGhostSkinnedMeshes.TryGetValue(instanceId, out Mesh mesh) || mesh == null)
+        {
+            mesh = new Mesh
+            {
+                name = renderer.name + " Packing Ghost",
+                hideFlags = HideFlags.HideAndDontSave,
+            };
+            packingGhostSkinnedMeshes[instanceId] = mesh;
+        }
+
+        // sharedMesh is the undeformed bind pose. Bake the current bone/blend-shape
+        // result so a scale-1 ghost exactly overlays the live skinned character.
+        // useScale=true compensates for the often-large scale on imported rigs;
+        // renderer.localToWorldMatrix can then place it like an ordinary mesh.
+        renderer.BakeMesh(mesh, true);
+        return mesh;
     }
 
     private static bool ShouldDrawGhostRenderer(Renderer renderer, Transform propRoot)
@@ -1403,6 +2034,7 @@ internal sealed class AttractionTemplatePackingEditor : Editor
         if (string.IsNullOrEmpty(value)) return false;
         string lower = value.ToLowerInvariant();
         return lower.Contains("occlud")
+            || lower.Contains("occlus")
             || lower.Contains("invisible")
             || lower.Contains("depthmask")
             || lower.Contains("depth mask")

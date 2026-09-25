@@ -277,6 +277,7 @@ public static class DreamParkLuaConfig {
         typeof(Action<bool>),
         typeof(Action<int>),
         typeof(Action<float>),
+        typeof(Action<float, float>),
         typeof(Action<string>),
         typeof(Action<GameObject>),
         typeof(Action<Transform>),
@@ -400,6 +401,13 @@ public static class DreamParkLuaConfig {
         // Lightmap authoring — editor-only.
         { "UnityEngine.MeshRenderer", new HashSet<string>(StringComparer.Ordinal) {
             "scaleInLightmap", "receiveGI", "stitchLightmapSeams",
+            "globalIlluminationMeshLod",
+        }},
+
+        // Used only by LevelTemplate's editor gizmo; the method itself is
+        // inside #if UNITY_EDITOR and must not be bound into player code.
+        { "DreamPark.LevelTemplate", new HashSet<string>(StringComparer.Ordinal) {
+            "GetWallHeightMeters",
         }},
 
         // Shadow/light authoring — editor-only.

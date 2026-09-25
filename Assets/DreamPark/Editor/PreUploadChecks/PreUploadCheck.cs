@@ -66,6 +66,21 @@ namespace DreamPark.PreUploadChecks
         }
     }
 
+    public enum FixActionKind
+    {
+        // Runs synchronously and reports whether the finding was resolved.
+        ImmediateRepair,
+
+        // Opens a wizard/resolver that may finish later. The completion callback is
+        // what lets the checks popup refresh itself without making the developer
+        // manually press "Re-run all checks" after every guided workflow.
+        InteractiveRepair,
+
+        // Select/open/copy-to-clipboard actions that help, but do not change the
+        // finding on their own.
+        Navigation,
+    }
+
     // A single actionable thing the dev can do about a finding.
     public sealed class FixAction
     {
@@ -73,6 +88,24 @@ namespace DreamPark.PreUploadChecks
         public string tooltip;
         public string confirmTitle;
         public string confirmMessage;       // null → no confirmation dialog
+
+        // Visible labels often contain a target ("Rename to Foo_2"), which made the
+        // old label-equality bulk rule unable to batch otherwise-identical repairs.
+        // bulkKey is stable machine identity; bulkLabel is the human-facing section
+        // button. Empty values fall back to label.
+        public string bulkKey;
+        public string bulkLabel;
+        public bool canBulk = true;
+
+        // Optional audit metadata for confirmation/reporting and future dry-runs.
+        public IReadOnlyList<string> affectedPaths;
+
+        // Other checks whose evidence this mutation can change. The popup reruns
+        // these alongside the finding's own check so a successful Fix Now cannot
+        // leave a stale blocker or warning in the shared report/cache.
+        public IReadOnlyList<string> alsoRerunCheckIds;
+
+        public FixActionKind kind = FixActionKind.ImmediateRepair;
 
         // True when this action is meant to CHANGE something, so a false return really
         // is a failure worth logging. Navigation actions ("Select", "Open scene")
@@ -84,6 +117,11 @@ namespace DreamPark.PreUploadChecks
         // Returns true if the finding should be considered resolved.
         public Func<bool> run;
 
+        // Guided workflows cannot truthfully return a result when their window is
+        // merely opened. They call completion exactly once after Apply/Generate, or
+        // with false when cancelled. The popup then reruns only this check.
+        public Action<Action<bool>> runInteractive;
+
         public FixAction(string label, Func<bool> run)
         {
             this.label = label;
@@ -92,7 +130,24 @@ namespace DreamPark.PreUploadChecks
 
         public static FixAction Navigate(string label, Action go)
         {
-            return new FixAction(label, () => { go(); return false; }) { resolvesFinding = false };
+            return new FixAction(label, () => { go(); return false; })
+            {
+                resolvesFinding = false,
+                canBulk = false,
+                kind = FixActionKind.Navigation,
+            };
+        }
+
+        public static FixAction Interactive(
+            string label, Action<Action<bool>> begin, params string[] alsoRerunCheckIds)
+        {
+            return new FixAction(label, null)
+            {
+                kind = FixActionKind.InteractiveRepair,
+                runInteractive = begin,
+                canBulk = false,
+                alsoRerunCheckIds = alsoRerunCheckIds,
+            };
         }
     }
 
@@ -182,10 +237,8 @@ namespace DreamPark.PreUploadChecks
         // same at the call site.
         public Action<float, string> onProgress;
 
-        // True when the upload path is about to compile — meaning open scenes have
-        // just been saved and it is safe to read scene YAML / open scenes. False for
-        // the advisory scan, where checks that need saved scenes should Skip rather
-        // than read stale state.
+        // True only when the caller has just saved open scenes. The explicit scene
+        // override review also checks the actual dirty state before opening scenes.
         public bool scenesAreSaved;
 
         public void Progress(float t, string message)

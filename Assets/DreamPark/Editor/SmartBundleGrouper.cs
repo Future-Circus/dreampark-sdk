@@ -67,6 +67,7 @@ namespace DreamPark
         private const string RuntimeSuffix = "Runtime";
         private const string PreviewsSuffix = "Previews";
         private const string CodeSuffix = "Code";
+        private const string BootstrapSuffix = "Bootstrap";
         private const string SharedFoundationSuffix = "Shared-Foundation";
 
         // Path prefixes whose referenced contents get promoted into the
@@ -121,6 +122,7 @@ namespace DreamPark
         // from filename alone — Addressables' AppendHash naming embeds the
         // lowercased group name in the resulting bundle filename.
         public static string CodeGroupName(string gameId) => $"{gameId}-{CodeSuffix}";
+        public static string BootstrapGroupName(string gameId) => $"{gameId}-{BootstrapSuffix}";
         public static string PreviewsGroupName(string gameId) => $"{gameId}-{PreviewsSuffix}";
         public static string SharedFoundationGroupName(string gameId) => $"{gameId}-{SharedFoundationSuffix}";
 
@@ -309,6 +311,17 @@ namespace DreamPark
             ConfigureBundleSchema(settings, runtimeGroup);
             if (runtimeCreated) result.groupsCreated++;
 
+            // The package recipe is the first runtime asset every planner needs.
+            // Keep it in a tiny, dedicated bundle whose serialized graph contains
+            // metadata and address strings only; putting it in Runtime would make a
+            // title switch wait for unrelated Lua-addressed audio/textures.
+            var bootstrapGroup = GetOrCreateGroup(settings, BootstrapGroupName(gameId), out bool bootstrapCreated);
+            ConfigureBundleSchema(settings, bootstrapGroup);
+            if (bootstrapCreated) result.groupsCreated++;
+            string packageManifestPath = Editor.DreamParkPackageCompiler.ManifestPath(gameId);
+            if (AssetDatabase.LoadAssetAtPath<DreamParkPackageManifest>(packageManifestPath) != null)
+                MoveEntryToGroup(settings, packageManifestPath, bootstrapGroup);
+
             // 5. Pre-create every root's Logic group AND a parallel "-Content"
             //    group. The Logic group holds the root prefab itself and any
             //    other prefab/.asset deps that carry user MonoBehaviour or
@@ -491,6 +504,7 @@ namespace DreamPark
                 if (group.Name == $"{gameId}-{RuntimeSuffix}") continue;
                 if (group.Name == $"{gameId}-{PreviewsSuffix}") continue;
                 if (group.Name == $"{gameId}-{CodeSuffix}") continue;
+                if (group.Name == BootstrapGroupName(gameId)) continue;
                 if (group.Name == $"{gameId}-{SharedFoundationSuffix}") continue;
                 if (group.Name.StartsWith($"{gameId}-{GroupPrefix}-")) continue;
                 if (group.Name.StartsWith($"{gameId}-{RuntimeSuffix}-", StringComparison.Ordinal)) continue;
@@ -577,6 +591,7 @@ namespace DreamPark
             if (runtimeGroup != null) allManagedEntries.AddRange(runtimeGroup.entries);
             if (previewGroup != null) allManagedEntries.AddRange(previewGroup.entries);
             if (codeGroup != null) allManagedEntries.AddRange(codeGroup.entries);
+            if (bootstrapGroup != null) allManagedEntries.AddRange(bootstrapGroup.entries);
             var foundationGroupForIndexing = settings.groups
                 .FirstOrDefault(g => g != null && g.Name == $"{gameId}-{SharedFoundationSuffix}");
             if (foundationGroupForIndexing != null)
@@ -628,6 +643,7 @@ namespace DreamPark
                 if (group.Name == $"{gameId}-{RuntimeSuffix}") continue;
                 if (group.Name == $"{gameId}-{PreviewsSuffix}") continue;
                 if (group.Name == $"{gameId}-{CodeSuffix}") continue;
+                if (group.Name == BootstrapGroupName(gameId)) continue;
                 if (group.Name == $"{gameId}-{SharedFoundationSuffix}") continue;
                 if (group.Name.StartsWith($"{gameId}-{GroupPrefix}-")) continue;
                 if (group.Name.StartsWith($"{gameId}-{SharedFoundationSuffix}-", StringComparison.Ordinal)) continue;
@@ -647,6 +663,7 @@ namespace DreamPark
             string runtimePrefix = $"{gameId}-{RuntimeSuffix}-";
             string previewsPrefix = $"{gameId}-{PreviewsSuffix}-";
             string codePrefix = $"{gameId}-{CodeSuffix}-";
+            string bootstrapPrefix = $"{gameId}-{BootstrapSuffix}-";
             string foundationPrefix = $"{gameId}-{SharedFoundationSuffix}-";
             var emptyManaged = settings.groups
                 .Where(g => g != null && g.Name.StartsWith(gameId + "-")
@@ -654,10 +671,12 @@ namespace DreamPark
                                 || g.Name == $"{gameId}-{RuntimeSuffix}"
                                 || g.Name == $"{gameId}-{PreviewsSuffix}"
                                 || g.Name == $"{gameId}-{CodeSuffix}"
+                                || g.Name == BootstrapGroupName(gameId)
                                 || g.Name == $"{gameId}-{SharedFoundationSuffix}"
                                 || g.Name.StartsWith(runtimePrefix)                        // Runtime-2, Runtime-3, ...
                                 || g.Name.StartsWith(previewsPrefix)
                                 || g.Name.StartsWith(codePrefix)
+                                || g.Name.StartsWith(bootstrapPrefix)
                                 || g.Name.StartsWith(foundationPrefix))                    // Shared-Foundation-2, ...
                             && g.entries.Count == 0)
                 .ToList();
@@ -1289,6 +1308,8 @@ namespace DreamPark
             {
                 string prefabPath = AssetDatabase.GUIDToAssetPath(guid);
                 if (string.IsNullOrEmpty(prefabPath)) continue;
+                if (prefabPath.EndsWith("/DreamSequence/Dream Sequence.prefab",
+                    StringComparison.OrdinalIgnoreCase)) continue;
                 foreach (var dep in AssetDatabase.GetDependencies(prefabPath, recursive: true))
                 {
                     if (IsFoundationCandidate(dep))

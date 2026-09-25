@@ -16,6 +16,54 @@ part you actually reuse.
 
 ## 1. What the transport actually is
 
+### Dream Sequence defaults
+
+New Dream Sequence Game Containers have one `NetId` and the generated
+`game-container.lua.txt` broadcasts absolute level state. Any player's Start,
+Next, or Back control advances the same sequence on every connected headset.
+The controller requests a snapshot when the relay connects, including after a
+reconnect, so a late player loads the current level. Creator-owned Container
+prefabs get a `NetId` on the runtime instance, but custom navigation scripts
+must send their own state. The legacy `dreamsequence-controller.lua.txt` sample
+also shares progression when its GameObject has a `NetId`.
+
+The generated Game Manager's `load_level(slot, groupId)` is the shared routing
+entry point. A creator can replace `next_level()` with a random or branching
+choice and call `load_level` there. Without a Group ID, slots are 1-based:
+Start is 1, the authored stages follow, and Game Over is last. With a Group
+ID, the index is 0-based within that Group, so `load_level(0, 'group-id')`
+requests its first stage. `dp.level_count('group-id')` reports that Group's
+stage count; `dp.level_slot(0, 'group-id')` returns its absolute slot.
+`dp.groups()` lists the Groups placed in this package in inspector order. Each
+row has `id`, `name`, `sourceId`, and `count`. Use `id` with the grouped APIs:
+it identifies that placement even when the same library Group is placed more
+than once. A `sourceId` also works as a shortcut when it belongs to exactly
+one placed Group; when the library Group is repeated, use the placement `id`.
+`dp.levels(groupId)` gives its stage names in Group order (as a Lua array).
+
+`dp.load_level(slot[, groupId])` only reports whether a request was accepted.
+The level can still fail to download or fit the calibrated room. Use
+`dp.on_level_loaded(function(absoluteSlot) ... end)` and
+`dp.on_level_failed(function(absoluteSlot) ... end)` for the result; the latter
+can read `dp.level_error()`. Remove handlers with the matching `dp.off_*`
+functions when a script is destroyed. `dp.level_loading()` reports an active
+transition, and `dp.preload_level(slot[, groupId])` resolves a stage prefab
+without activating it. `dp.level_ready(slot[, groupId])` becomes true once
+that prefab is resident; `preload_level` only reports that preloading started.
+The default Game Manager broadcasts its slot only
+after `on_level_loaded` fires. Native sequence advance calls the Game
+Manager's `next_level()`, so creator routing is used there too.
+
+On iOS, the selected Sequence's bundle closures are downloaded in authored
+order before the package is placed when the delivery index is available.
+Quest's offline snapshot includes every authored stage. Unity still keeps
+only the active stage instantiated; loading a cached prefab asset and
+activating it are separate operations.
+
+Level-specific game rules still need their own multiplayer state. A synced
+level transition does not synchronize coins, enemies, puzzles, or per-player
+scores implemented by the level's scripts. Use the patterns below for those.
+
 There is no game server. There is a **dumb relay** — either a DreamBox kiosk
 (`Tools/DreamBoxServer`) or another headset that elected itself host
 (`PeerRelayServer`) — and it does exactly one thing: rebroadcast every message

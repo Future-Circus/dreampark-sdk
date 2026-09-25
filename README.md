@@ -92,6 +92,36 @@ Guests can also **delete their saved data at any time**, so design every read to
 
 Working samples ship in `Assets/DreamPark/Samples/` — `GameStorage/`, `ProfileAPI/`, and `Multiplayer/`.
 
+### Height-aware ergonomics
+
+The selected guest profile includes physical height for reachable controls, eye-level targets, and other ergonomic placement. The authoring reference is **5 ft 8 in (68 in)**. Lua exposes absolute inches, metres, and a dimensionless factor:
+
+```lua
+local inches = dp.profile.getHeightInches() -- 68 when missing/not loaded
+local metres = dp.profile.getHeightMeters() -- 1.7272 at the reference height
+local factor = dp.profile.getHeightFactor() -- guest inches / 68
+
+-- For a target authored relative to a floor/reference plane:
+targetY = floorY + (authoredY - floorY) * factor
+
+-- Subscribe after the active profile is ready. Updates are local to this
+-- headset/profile; they are not replicated to other players or netIds.
+local unsubscribe = nil
+dp.profile.onReady(function()
+    targetY = floorY + (authoredY - floorY) * dp.profile.getHeightFactor()
+    unsubscribe = dp.profile.onHeightChanged(function(newInches, newFactor)
+        targetY = floorY + (authoredY - floorY) * newFactor
+    end)
+end)
+
+-- Call when the script/object is torn down. Safe to call more than once.
+if unsubscribe ~= nil then unsubscribe() end
+```
+
+The equivalent C# properties are `ProfileAPI.HeightInches`, `HeightMeters`, and `HeightFactor`; subscribe to `ProfileAPI.OnHeightChanged`, whose arguments are `(heightInches, heightFactor)`. Profiles support 24–96 inches; older or malformed snapshots safely use 68 inches and a factor of `1.0`.
+
+Initial profile hydration does not emit a change event: use `onReady`/`OnReady` to apply the baseline, then subscribe for live changes. `dp.profile.onHeightChanged` returns an idempotent unsubscribe function and its subscription is automatically cleared when that headset's identity is cleared. Height is a local ergonomic presentation value, so every user can render the same networked object (`netId`) at their own reachable height without moving it for anyone else. See `Assets/DreamPark/Samples/ProfileAPI/height.lua.txt` for a drop-in example.
+
 ## Uploading
 
 You don't need a finished park to publish. Every upload bundles whatever attractions and props exist in your content folder, and the catalog updates automatically — there's no manual registration step.

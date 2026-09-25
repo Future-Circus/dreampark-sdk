@@ -268,20 +268,27 @@ The game is not done when it plays in the Editor. It is done when it goes throug
 
 **1. Set the Name and Description.** The panel's **Name** and **Description** fields are the store-facing metadata for the content package — they're what a guest sees in the Attractions browser and the consumer app. The launch window shows them read-only, and an **empty Name blocks the upload outright**. Write a real description (what the attraction is, what the guest does), not a placeholder. Pick the right content package first if the project has more than one — the dropdown at the top of the panel selects which `Assets/Content/{GameName}/` gets published.
 
-**2. Run the pre-upload verification and fix everything it reports.** `Pre Launch Options → Review Pre-Upload Checks...` opens the unified checks window; the Content Uploader also runs an advisory scan when the panel is engaged and shows per-attraction tile badges. The upload path is gated by `PreUploadChecksGate.Passes(...)` — Blocking findings stop the upload. The six checks (`Assets/DreamPark/Editor/PreUploadChecks/Checks/`):
+**2. Run the pre-upload verification and fix everything it reports.** `Pre Launch Options → Review Pre-Upload Checks...` opens the unified checks window; the Content Uploader also runs an advisory scan when the panel is engaged and shows per-attraction tile badges. The upload path is gated by `PreUploadChecksGate.Passes(...)` — Blocking findings stop the upload. The ten creator-facing checks (`Assets/DreamPark/Editor/PreUploadChecks/Checks/`):
 
 | Check id | Severity | What it means |
 |---|---|---|
+| `dream-sequence-required` | **Blocking** | Every package needs a valid 12 × 18 ft Dream Sequence fallback. A missing sequence can be generated directly from the finding; damaged sequences open in Prefab Mode for deliberate repair. |
 | `duplicate-names` | **Blocking** (case-only clashes: Warning) | Two prefabs share a name → collided Addressables address, preview PNG, `PreviewMetadataStore` key and `GameArea.resourceName` (the revenue-attribution key). Always a true positive. |
-| `meta-occlusion` | **Blocking** when a material's shader definitely lacks occlusion; **Warning** when undeterminable | See the Materials & Shaders section. Fix action: *Convert selected materials to DreamPark shaders*. |
-| `opaque-alpha-clip` | **Blocking** | A DreamPark material set to Surface Type = Opaque with Alpha Clipping off. `meta-occlusion`'s blind spot — the shader has the occlusion wiring, the material discards it. No heuristic and no third state, which is why it blocks. Fix action: *Enable Alpha Clipping*. |
+| `meta-occlusion` | **Blocking** when a material's shader definitely lacks occlusion; **Warning** when undeterminable | See the Materials & Shaders section. Converts editable materials directly; embedded model materials can be extracted and converted from the finding. |
+| `opaque-alpha-clip` | **Blocking** | A DreamPark material set to Surface Type = Opaque with Alpha Clipping off. `meta-occlusion`'s blind spot — the shader has the occlusion wiring, the material discards it. Editable materials are repaired directly; embedded materials can be extracted and repaired. |
 | `sun-light` | **Blocking** (inactive lights: Warning) | A directional light shipped in content lights *every* attraction in the park and no other creator can opt out. |
+| `root-components` | **Blocking** (trigger colliders: Warning) | Physics, audio, particles, animation or lights placed on an attraction/prop root sit outside the optimizer. The check opens Prefab Mode and selects the exact component; moving it automatically is unsafe because it can change physics, animation paths and spatial-audio origin. |
 | `scene-overrides` | Warning | Unapplied prefab overrides in scenes — what you see in the test scene isn't what ships. Apply them to the prefab, or confirm the scene tweak is intentional. |
-| `outside-content-folder` | Warning (`Assets/Plugins/`-style protected folders and `ThirdPartyLocal/`: Info) | A prefab depends on an asset outside `Assets/Content/{GameName}/` — it won't be in the bundle. Move it in. |
+| `outside-content-folder` | Warning (`Assets/Plugins/`-style protected folders and `ThirdPartyLocal/`: Info) | A prefab depends on an asset outside `Assets/Content/{GameName}/` — it won't be in the bundle. The guided resolver transfers unshared assets and copies/repoints shared ones. |
+| `resource-name-address` | Warning (never-stamped: Info) | A prefab's stored revenue key disagrees with its computed Addressables address, often after `Revert All` on a variant. Re-stamp it from the finding. |
+| `badge-award` | Warning | A badge is not awarded by any shipping Attraction, Prop or Player script. The finding links to the source, can copy the Lua call, and can remove an unwired manual draft. |
+
+`net-budget-invariant` is intentionally not creator-facing: it compares two SDK-owned
+constants and is enforced by both SDK release preflight and the Editor SDK publish panel.
 
 Rules for agents working the checks list:
 
-- **Fix findings; do not ignore them.** Every finding has a fix action in the popup — use it. `Ignore` writes a permanent, typed-reason entry into `Assets/Content/{contentId}/.preupload-ignores.json` that is git-tracked and visible to the whole team. Only a human decides to ignore a Blocking finding.
+- **Fix findings; do not ignore them.** Findings offer either a direct repair, a guided resolver, or precise navigation to the object that needs a judgment call. Guided tools report completion back to the popup and re-run their check automatically. `Ignore` writes a permanent, typed-reason entry into `Assets/Content/{contentId}/.preupload-ignores.json` that is git-tracked and visible to the whole team. Only a human decides to ignore a Blocking finding.
 - **Warnings and Info still get resolved or explained.** They don't block, but `scene-overrides` and `outside-content-folder` warnings are usually real content bugs that only show up after upload, when they're expensive.
 - **A clean project shows no popup at all** — the gate opens the window only when there's at least one non-ignored Blocking or Warning finding. If the popup appears, there is work to do; don't click through it.
 - Re-run the checks after fixing. Results are cached per content id and refresh on `ReportChanged`.

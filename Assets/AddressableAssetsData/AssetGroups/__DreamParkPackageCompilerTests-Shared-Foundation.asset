@@ -1,0 +1,168 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bbb281ee3bf0b054c82ac2347e9e782c, type: 3}
+  m_Name: __DreamParkPackageCompilerTests-Shared-Foundation
+  m_EditorClassIdentifier: Unity.Addressables.Editor::UnityEditor.AddressableAssets.Settings.AddressableAssetGroup
+  m_GroupName: __DreamParkPackageCompilerTests-Shared-Foundation
+  m_GUID: 443f943bd06764895ad367ca9406f116
+  m_SerializeEntries:
+  - m_GUID: 02f38cb608b5c4bb289726d9bf6da075
+    m_Address: Assets/DreamPark/RuntimeAssets/DreamSequence/Border/Sequence Floor
+      Border.prefab
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 0460470eafbae4682b32573da9a43082
+    m_Address: Assets/DreamPark/RuntimeAssets/DreamSequence/Overlay/Elevator Controls.prefab
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 096a2e518a2c74d15be0f07111fd985f
+    m_Address: Assets/DreamPark/RuntimeAssets/DreamSequence/Border/Sequence Floor
+      Border.mat
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 0a42190438b1a4f2db850bcaeb23dffb
+    m_Address: Assets/DreamPark/Shaders/DreamPark-UniversalShader.shadergraph
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 1a8ee944c81d74ea8b07da081c8e0b16
+    m_Address: Assets/DreamPark/RuntimeAssets/DreamSequence/Overlay/Transition/Level
+      Transition Sparkle.mat
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 2e498d1c8094910479dc3e1b768306a4
+    m_Address: Assets/DreamPark/ThirdParty/TextMesh Pro/Resources/Fonts & Materials/LiberationSans
+      SDF - Fallback.asset
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 2f09138ac55984736a17191f8f0a4fce
+    m_Address: Assets/DreamPark/RuntimeAssets/DreamSequence/Overlay/Transition/Level
+      Transition Sparkle.png
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 363e02b9ace514e7db6117c6f9e448b2
+    m_Address: Assets/DreamPark/RuntimeAssets/DreamSequence/Overlay/Elevator Backplate.mat
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 383d940eb3ee042dcbdea652078fe5af
+    m_Address: Assets/DreamPark/RuntimeAssets/DreamSequence/StartButton/Sphere.001.mesh
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 40c81d00e66074b738ba29dc8aefb70f
+    m_Address: Assets/DreamPark/Shaders/DreamPark-Particles.shader
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 56eb37406a3074641b640abdb15aaf83
+    m_Address: Assets/DreamPark/RuntimeAssets/DreamSequence/Border/Sequence Floor
+      Border.png
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 5bff5652d7fa74dfa9902a1d6650b2a6
+    m_Address: Assets/DreamPark/Shaders/InvisibleOccluder.shader
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 64acd22240dba42adb7ac6e6f7070f21
+    m_Address: Assets/DreamPark/RuntimeAssets/DreamSequence/Overlay/Transition/Level
+      Transition Confetti.FBX
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 6e5ea6bc543954aa8bf1238d7130ece6
+    m_Address: Assets/DreamPark/Shaders/DreamPark-Unlit.shadergraph
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 757cc77c7f8fa4ce585fa0b624562fbd
+    m_Address: Assets/DreamPark/RuntimeAssets/DreamSequence/Overlay/Transition/level-transition-audio.lua.txt
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 822007aa112e9464d932304fdd3ea8f0
+    m_Address: Assets/DreamPark/RuntimeAssets/DreamSequence/Overlay/Transition/Level
+      Transition.wav
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 8f586378b4e144a9851e7b34d9b748ee
+    m_Address: Assets/DreamPark/ThirdParty/TextMesh Pro/Resources/Fonts & Materials/LiberationSans
+      SDF.asset
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 92daadbc9f8904f32a8d780277254506
+    m_Address: Assets/DreamPark/Materials/Occlusion.mat
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 933532a4fcc9baf4fa0491de14d08ed7
+    m_Address: Packages/com.unity.render-pipelines.universal/Shaders/Lit.shader
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 94959982184314d3ca3913400824633f
+    m_Address: Assets/DreamPark/RuntimeAssets/DreamSequence/Overlay/Elevator Arrow.mat
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 963e69cca7065429bad6b9cdfbf2bbcd
+    m_Address: Assets/DreamPark/RuntimeAssets/DreamSequence/DreamSequenceButton.lua.txt
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 96e41c81ca8e842b78cb89ec47f0679f
+    m_Address: Assets/DreamPark/RuntimeAssets/DreamSequence/StartButton/start.png
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: a8e24f91e9ac44db8b9c5c7e3cf50921
+    m_Address: Assets/DreamPark/RuntimeAssets/DreamSequence/Overlay/elevator-arrow-up.png
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: c2db952e4282f4ce393a5e2b1595f9d9
+    m_Address: Assets/DreamPark/RuntimeAssets/DreamSequence/StartButton/Start.mat
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: d0ce1d811c8bb4179a9e94966c20b2b9
+    m_Address: Assets/DreamPark/RuntimeAssets/DreamSequence/StartButton/Start Button.prefab
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: fe393ace9b354375a9cb14cdbbc28be4
+    m_Address: Assets/DreamPark/ThirdParty/TextMesh Pro/Shaders/TMP_SDF-Mobile.shader
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: ffe870793da9b40c99e4a5d12fd4c3cf
+    m_Address: Assets/DreamPark/RuntimeAssets/DreamSequence/Overlay/Transition/Level
+      Transition Effect.prefab
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  m_ReadOnly: 0
+  m_Settings: {fileID: 11400000, guid: 5e922c848874c41bc90d6a8d78c6f5a9, type: 2}
+  m_SchemaSet:
+    m_Schemas:
+    - {fileID: 11400000, guid: 9af51f1caf1134743b331177a0b484f0, type: 2}
+    - {fileID: 11400000, guid: 94b6f07df888d49cdb18318ceb4c7aff, type: 2}

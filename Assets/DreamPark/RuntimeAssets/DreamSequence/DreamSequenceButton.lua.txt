@@ -1,0 +1,17 @@
+-- Shared Dream Sequence control script. Safe to customize through the control prefabs.
+local armed = true
+
+function ontriggerenter(other)
+    if not armed or not dp.is_player(other) or not dp.button_press() then return end
+    armed = false
+    local c = dp.game_manager()
+    if action == 'start' and c ~= nil and c.start_game ~= nil then c.start_game()
+    elseif action == 'back' and c ~= nil and c.previous_level ~= nil then c.previous_level()
+    elseif action == 'back' then dp.previous_level()
+    elseif c ~= nil and c.next_level ~= nil then c.next_level()
+    else dp.next_level() end
+end
+
+function ontriggerexit(other)
+    if dp.is_player(other) then armed = true end
+end

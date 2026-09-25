@@ -392,7 +392,7 @@ namespace DreamPark.PreUploadChecks
         private void DrawSectionBulkAction(CheckResult result, List<Finding> active)
         {
             // A bulk action exists when every active finding offers the same first fix
-            // AND that fix actually changes something.
+            // identity AND that fix is an immediate, explicitly bulk-safe mutation.
             //
             // Without the resolvesFinding test this offered "Select material — all (2)",
             // which pings two assets in the Project window and calls it a batch
@@ -403,29 +403,34 @@ namespace DreamPark.PreUploadChecks
             if (active.Count < 2) return;
 
             var firstFixes = active.Select(f => f.fixes.Count > 0 ? f.fixes[0] : null).ToList();
-            if (firstFixes.Any(f => f == null || !f.resolvesFinding)) return;
+            if (firstFixes.Any(f => f == null || !f.resolvesFinding || !f.canBulk
+                                        || f.kind != FixActionKind.ImmediateRepair
+                                        || f.run == null)) return;
 
-            var firstLabels = firstFixes.Select(f => f.label).ToList();
-            if (firstLabels.Any(string.IsNullOrEmpty)) return;
-            if (firstLabels.Distinct(StringComparer.Ordinal).Count() != 1) return;
+            var firstKeys = firstFixes.Select(f => string.IsNullOrEmpty(f.bulkKey) ? f.label : f.bulkKey).ToList();
+            if (firstKeys.Any(string.IsNullOrEmpty)) return;
+            if (firstKeys.Distinct(StringComparer.Ordinal).Count() != 1) return;
+
+            string bulkLabel = firstFixes.Select(f => f.bulkLabel)
+                .FirstOrDefault(s => !string.IsNullOrEmpty(s)) ?? firstFixes[0].label;
 
             using (new EditorGUI.DisabledScope(busy))
             {
-                if (GUILayout.Button($"{firstLabels[0]} — all ({active.Count})",
+                if (GUILayout.Button($"{bulkLabel} — all ({active.Count})",
                                      EditorStyles.miniButton, GUILayout.Width(190f)))
                 {
                     // Build the confirmation from the WHOLE batch. Reusing the first
                     // finding's message would show a dialog naming one prefab and one
                     // new name, and then act on N of them.
                     string bulkMessage =
-                        $"Apply \"{firstLabels[0]}\" to all {active.Count} findings?\n\n"
+                        $"Apply \"{bulkLabel}\" to all {active.Count} findings?\n\n"
                       + string.Join("\n", active.Take(12).Select(f => "• " + (f.assetPath ?? f.title)))
                       + (active.Count > 12 ? $"\n…and {active.Count - 12} more" : "")
                       + "\n\nCannot be undone with Ctrl-Z. Use version control to revert.";
 
                     var batch = active.Select(f => f.fixes[0]).ToList();
                     string batchCheckId = result.checkId;
-                    string batchTitle = $"{firstLabels[0]} — all {batch.Count}";
+                    string batchTitle = $"{bulkLabel} — all {batch.Count}";
                     Defer(() => RunFixes(batchCheckId, batch, batchTitle, bulkMessage));
                 }
             }
@@ -483,9 +488,7 @@ namespace DreamPark.PreUploadChecks
                     {
                         var capturedFix = fix;
                         string capturedCheckId = f.checkId;
-                        Defer(() => RunFixes(capturedCheckId, new List<FixAction> { capturedFix },
-                                             capturedFix.confirmTitle ?? capturedFix.label,
-                                             capturedFix.confirmMessage));
+                        Defer(() => RunSingleFix(capturedCheckId, capturedFix));
                     }
                 }
 
@@ -654,6 +657,53 @@ namespace DreamPark.PreUploadChecks
         // ------------------------------------------------------------------
         // Fixes
 
+        private void RunSingleFix(string checkId, FixAction fix)
+        {
+            if (fix == null) return;
+
+            if (fix.kind != FixActionKind.InteractiveRepair || fix.runInteractive == null)
+            {
+                RunFixes(checkId, new List<FixAction> { fix },
+                         fix.confirmTitle ?? fix.label, fix.confirmMessage);
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(fix.confirmMessage)
+                && !EditorUtility.DisplayDialog(fix.confirmTitle ?? "DreamPark",
+                                                fix.confirmMessage, "Continue", "Cancel"))
+                return;
+
+            string idAtStart = contentId;
+            bool completed = false;
+            busy = true;
+            Repaint();
+            try
+            {
+                fix.runInteractive(resolved =>
+                {
+                    // A buggy wizard double-calling completion must not run a check
+                    // twice or race two cache publications.
+                    if (completed) return;
+                    completed = true;
+                    if (this != null)
+                    {
+                        busy = false;
+                        Repaint();
+                    }
+
+                    if (resolved)
+                        ScheduleRerunChecks(
+                            idAtStart, checkId, fix.alsoRerunCheckIds);
+                });
+            }
+            catch (Exception e)
+            {
+                busy = false;
+                Debug.LogWarning($"[DreamPark] Interactive pre-upload fix '{fix.label}' failed: {e}");
+                Repaint();
+            }
+        }
+
         private void RunFixes(string checkId, List<FixAction> fixes, string confirmTitle, string confirmMessage)
         {
             if (!string.IsNullOrEmpty(confirmMessage))
@@ -710,7 +760,39 @@ namespace DreamPark.PreUploadChecks
             // Nothing changed, so there is nothing to re-scan.
             if (applied == 0 && failed == 0) return;
 
-            RerunCheck(checkId);
+            ScheduleRerunChecks(contentId, checkId, fixes
+                    .Where(f => f != null && f.alsoRerunCheckIds != null)
+                    .SelectMany(f => f.alsoRerunCheckIds));
+        }
+
+        private void ScheduleRerunChecks(
+            string contentIdAtStart, string primaryCheckId,
+            IEnumerable<string> additionalCheckIds)
+        {
+            var ids = new[] { primaryCheckId }
+                .Concat(additionalCheckIds ?? Enumerable.Empty<string>())
+                .Where(id => !string.IsNullOrEmpty(id))
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+
+            // Re-run on the next editor tick. Some repairs intentionally coalesce
+            // their expensive follow-up work with delayCall (duplicate-name
+            // ContentProcessor restamping is one); scheduling after the mutation lets
+            // those callbacks settle before the evidence is read again.
+            EditorApplication.delayCall += () =>
+            {
+                if (this != null && report != null
+                    && string.Equals(contentId, contentIdAtStart, StringComparison.Ordinal))
+                {
+                    foreach (string id in ids) RerunCheck(id);
+                }
+                else
+                {
+                    // The checks window may have been closed while a wizard or the
+                    // delayed post-repair work was running.
+                    PreUploadCheckRunner.InvalidateCache(contentIdAtStart);
+                }
+            };
         }
 
         private void RerunCheck(string checkId)
@@ -730,12 +812,13 @@ namespace DreamPark.PreUploadChecks
         {
             try
             {
-                // scenesAreSaved: false — this button does not save anything, and the
-                // scene-override check must know that before it opens and restores
-                // scenes.
-                report = PreUploadCheckRunner.RunAll(contentId, (t, m) =>
-                    EditorUtility.DisplayProgressBar("DreamPark", m ?? "Running checks…", Mathf.Clamp01(t)),
-                    scenesAreSaved: false);
+                // Keep the same scope as the window that was opened. Re-running an
+                // upload gate must not start the scene-opening manual review check.
+                Action<float, string> progress = (t, m) =>
+                    EditorUtility.DisplayProgressBar("DreamPark", m ?? "Running checks…", Mathf.Clamp01(t));
+                report = onDecision != null
+                    ? PreUploadCheckRunner.RunForUpload(contentId, progress)
+                    : PreUploadCheckRunner.RunAll(contentId, progress, scenesAreSaved: false);
             }
             catch (Exception e)
             {
