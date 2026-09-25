@@ -24,6 +24,12 @@ using Unity.EditorCoroutines.Editor;
 namespace DreamPark {
     public partial class ContentUploaderPanel : EditorWindow
     {
+        // The public Web package document and the runtime ScriptableObject
+        // manifest are separate contracts. Manifest schema v3 added packing
+        // metadata, but the JSON sent to Web still has the v2 Arena shape.
+        // Tying these values together made the first v3 SDK upload fail Web's
+        // package validation even though both schemas were individually valid.
+        internal const int PublishedPackageSchemaVersion = 2;
         private string contentId = "";
         private string contentName = "";
         private string contentDescription = "";
@@ -4020,7 +4026,7 @@ namespace DreamPark {
                 && manifest.adventure == null && manifest.sequence == null))
                 return null;
             var packages = new JSONObject(JSONObject.Type.Object);
-            packages.AddField("schemaVersion", DreamParkPackageManifest.CurrentSchemaVersion);
+            packages.AddField("schemaVersion", PublishedPackageSchemaVersion);
             if (manifest.arena != null)
                 packages.AddField("arena", BuildPublishedPackageJson(manifest.arena, contentId));
             if (manifest.adventure != null)

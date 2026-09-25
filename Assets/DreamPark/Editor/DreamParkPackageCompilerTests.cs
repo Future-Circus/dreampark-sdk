@@ -29,6 +29,8 @@ public sealed class DreamParkPackageCompilerTests
     [Test]
     public void CompilesRepeatedGroupedOccurrencesAndBetaAddresses()
     {
+        Assert.That(ContentUploaderPanel.PublishedPackageSchemaVersion, Is.EqualTo(2),
+            "Web package JSON must not inherit the runtime manifest schema version");
         string first = CreateAttraction("A_First");
         string second = CreateAttraction("A_Second");
         var optionalProp = new GameObject("P_Optional");
