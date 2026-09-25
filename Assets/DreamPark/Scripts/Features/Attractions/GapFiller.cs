@@ -985,9 +985,7 @@ namespace DreamPark {
             
             // For rotated meshes, we need the actual convex hull or the original corner positions
             // Let's use the template's corner positions but get heights from the mesh
-            Vector2 dims = template.size == GameLevelSize.Custom
-                ? GameLevelDimensions.GetDimensionsInMeters(template.customSize)
-                : GameLevelDimensions.GetDimensionsInMeters(template.size);
+            Vector2 dims = template.RuntimeFootprintMeters;
             
             float halfWidth = dims.x / 2f;
             float halfHeight = dims.y / 2f;
@@ -1057,9 +1055,7 @@ namespace DreamPark {
         private LevelFloorData ExtractFloorDataFromTemplate(LevelTemplate template)
         {
             // Get dimensions
-            Vector2 dims = template.size == GameLevelSize.Custom
-                ? GameLevelDimensions.GetDimensionsInMeters(template.customSize)
-                : GameLevelDimensions.GetDimensionsInMeters(template.size);
+            Vector2 dims = template.RuntimeFootprintMeters;
             
             float halfWidth = dims.x / 2f;
             float halfHeight = dims.y / 2f;

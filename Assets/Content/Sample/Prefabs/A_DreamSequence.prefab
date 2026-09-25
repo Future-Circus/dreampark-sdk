@@ -57,6 +57,8 @@ MeshRenderer:
   m_RayTracingAccelStructBuildFlagsOverride: 0
   m_RayTracingAccelStructBuildFlags: 1
   m_SmallMeshCulling: 1
+  m_ForceMeshLod: -1
+  m_MeshLodSelectionBias: 0
   m_RenderingLayerMask: 1
   m_RendererPriority: 0
   m_Materials:
@@ -78,9 +80,11 @@ MeshRenderer:
   m_AutoUVMaxDistance: 0.5
   m_AutoUVMaxAngle: 89
   m_LightmapParameters: {fileID: 0}
+  m_GlobalIlluminationMeshLod: 0
   m_SortingLayerID: 0
   m_SortingLayer: 0
   m_SortingOrder: 0
+  m_MaskInteraction: 0
   m_AdditionalVertexStreams: {fileID: 0}
 --- !u!114 &3701654794111887314
 MonoBehaviour:
@@ -140,6 +144,7 @@ MonoBehaviour:
   m_VerticalAlignment: 512
   m_textAlignment: 65535
   m_characterSpacing: 0
+  m_characterHorizontalScale: 1
   m_wordSpacing: 0
   m_lineSpacing: 0
   m_lineSpacingMax: 0
@@ -307,6 +312,8 @@ MeshRenderer:
   m_RayTracingAccelStructBuildFlagsOverride: 0
   m_RayTracingAccelStructBuildFlags: 1
   m_SmallMeshCulling: 1
+  m_ForceMeshLod: -1
+  m_MeshLodSelectionBias: 0
   m_RenderingLayerMask: 1
   m_RendererPriority: 0
   m_Materials:
@@ -328,9 +335,11 @@ MeshRenderer:
   m_AutoUVMaxDistance: 0.5
   m_AutoUVMaxAngle: 89
   m_LightmapParameters: {fileID: 0}
+  m_GlobalIlluminationMeshLod: 0
   m_SortingLayerID: 0
   m_SortingLayer: 0
   m_SortingOrder: 0
+  m_MaskInteraction: 0
   m_AdditionalVertexStreams: {fileID: 0}
 --- !u!114 &5911414289493334337
 MonoBehaviour:
@@ -390,6 +399,7 @@ MonoBehaviour:
   m_VerticalAlignment: 512
   m_textAlignment: 65535
   m_characterSpacing: 0
+  m_characterHorizontalScale: 1
   m_wordSpacing: 0
   m_lineSpacing: 0
   m_lineSpacingMax: 0
@@ -512,6 +522,8 @@ MeshRenderer:
   m_RayTracingAccelStructBuildFlagsOverride: 0
   m_RayTracingAccelStructBuildFlags: 1
   m_SmallMeshCulling: 1
+  m_ForceMeshLod: -1
+  m_MeshLodSelectionBias: 0
   m_RenderingLayerMask: 1
   m_RendererPriority: 0
   m_Materials:
@@ -533,9 +545,11 @@ MeshRenderer:
   m_AutoUVMaxDistance: 0.5
   m_AutoUVMaxAngle: 89
   m_LightmapParameters: {fileID: 0}
+  m_GlobalIlluminationMeshLod: 0
   m_SortingLayerID: 0
   m_SortingLayer: 0
   m_SortingOrder: 0
+  m_MaskInteraction: 0
   m_AdditionalVertexStreams: {fileID: 0}
 --- !u!1 &2565440182817271564
 GameObject:
@@ -766,6 +780,8 @@ MeshRenderer:
   m_RayTracingAccelStructBuildFlagsOverride: 0
   m_RayTracingAccelStructBuildFlags: 1
   m_SmallMeshCulling: 1
+  m_ForceMeshLod: -1
+  m_MeshLodSelectionBias: 0
   m_RenderingLayerMask: 1
   m_RendererPriority: 0
   m_Materials:
@@ -787,9 +803,11 @@ MeshRenderer:
   m_AutoUVMaxDistance: 0.5
   m_AutoUVMaxAngle: 89
   m_LightmapParameters: {fileID: 0}
+  m_GlobalIlluminationMeshLod: 0
   m_SortingLayerID: 0
   m_SortingLayer: 0
   m_SortingOrder: 0
+  m_MaskInteraction: 0
   m_AdditionalVertexStreams: {fileID: 0}
 --- !u!114 &6549847095271789552
 MonoBehaviour:
@@ -849,6 +867,7 @@ MonoBehaviour:
   m_VerticalAlignment: 512
   m_textAlignment: 65535
   m_characterSpacing: 0
+  m_characterHorizontalScale: 1
   m_wordSpacing: 0
   m_lineSpacing: 0
   m_lineSpacingMax: 0
@@ -992,6 +1011,8 @@ MeshRenderer:
   m_RayTracingAccelStructBuildFlagsOverride: 0
   m_RayTracingAccelStructBuildFlags: 1
   m_SmallMeshCulling: 1
+  m_ForceMeshLod: -1
+  m_MeshLodSelectionBias: 0
   m_RenderingLayerMask: 1
   m_RendererPriority: 0
   m_Materials:
@@ -1013,9 +1034,11 @@ MeshRenderer:
   m_AutoUVMaxDistance: 0.5
   m_AutoUVMaxAngle: 89
   m_LightmapParameters: {fileID: 0}
+  m_GlobalIlluminationMeshLod: 0
   m_SortingLayerID: 0
   m_SortingLayer: 0
   m_SortingOrder: 0
+  m_MaskInteraction: 0
   m_AdditionalVertexStreams: {fileID: 0}
 --- !u!65 &3553637926626313525
 BoxCollider:
@@ -1181,6 +1204,370 @@ MonoBehaviour:
   gridX: 0
   gridY: 0
   floorMaterial: {fileID: 2100000, guid: 92daadbc9f8904f32a8d780277254506, type: 2}
+  walls: 0
+  showWallGizmos: 1
+  _legacyWallFront: 0
+  _legacyWallBack: 0
+  _legacyWallRight: 0
+  _legacyWallLeft: 0
+  _wallSidesMigrated: 1
+  gameRequiresAttraction: 0
+  safeAreaInset: 0
+  essentialProps: []
+  maxGrowthScale: {x: 1.25, y: 1.25}
+  shrinkClearanceMeters: 0.08
+  growGroupGapMeters: 0.35
+  growAlignmentToleranceMeters: 0.12
+  packingBake:
+    version: 4
+    authoredFootprintMeters: {x: 4.2672, y: 4.8768}
+    safeFootprintMeters: {x: 4.2672, y: 4.8768}
+    shrinkFootprintMeters: {x: 3.7219121, y: 2.2461267}
+    growFootprintMeters: {x: 5.334, y: 6.096}
+    essentialShrinkFootprintMeters: {x: 4.2672, y: 4.8768}
+    shrinkScale: {x: 0.87221414, y: 0.46057385}
+    growScale: {x: 1.25, y: 1.25}
+    essentialShrinkScale: {x: 1, y: 1}
+    props:
+    - prop: {fileID: 4236161881467925598}
+      hierarchyPath: LevelParent/Level1/P_TestProp (1)
+      displayName: P_TestProp (1)
+      resourceName: Sample/Props/Generic/P_TestProp
+      essential: 0
+      authoredActive: 1
+      growGroup: 0
+      footprintMeters: {x: 0.50001526, y: 0.50001526}
+      authoredLocalPosition: {x: 1.920851, y: 0, z: 2.2412212}
+      shrunkLocalPosition: {x: 1.6424586, y: 0, z: 1.1527827}
+      grownLocalPosition: {x: 2.4010637, y: 0, z: 2.8015265}
+      essentialShrunkLocalPosition: {x: 1.920851, y: 0, z: 2.2412212}
+    - prop: {fileID: 8824342830671307277}
+      hierarchyPath: LevelParent/Level1/P_TestProp (3)
+      displayName: P_TestProp (3)
+      resourceName: Sample/Props/Generic/P_TestProp
+      essential: 0
+      authoredActive: 1
+      growGroup: 1
+      footprintMeters: {x: 0.50001526, y: 0.50001526}
+      authoredLocalPosition: {x: 1.920851, y: 0, z: -2.1899998}
+      shrunkLocalPosition: {x: 1.6424586, y: 0, z: -1.1264367}
+      grownLocalPosition: {x: 2.4010637, y: 0, z: -2.7374997}
+      essentialShrunkLocalPosition: {x: 1.920851, y: 0, z: -2.1899998}
+    - prop: {fileID: 4964437760090823140}
+      hierarchyPath: LevelParent/Level1/P_TestProp (2)
+      displayName: P_TestProp (2)
+      resourceName: Sample/Props/Generic/P_TestProp
+      essential: 0
+      authoredActive: 1
+      growGroup: 2
+      footprintMeters: {x: 0.50001526, y: 0.50001526}
+      authoredLocalPosition: {x: -1.884, y: 0, z: 2.2412212}
+      shrunkLocalPosition: {x: -1.6109484, y: 0, z: 1.1527827}
+      grownLocalPosition: {x: -2.355, y: 0, z: 2.8015265}
+      essentialShrunkLocalPosition: {x: -1.884, y: 0, z: 2.2412212}
+    - prop: {fileID: 8381900036812682713}
+      hierarchyPath: LevelParent/Level1/P_TestProp (4)
+      displayName: P_TestProp (4)
+      resourceName: Sample/Props/Generic/P_TestProp
+      essential: 0
+      authoredActive: 1
+      growGroup: 3
+      footprintMeters: {x: 0.50001526, y: 0.50001526}
+      authoredLocalPosition: {x: -1.884, y: 0, z: -2.19}
+      shrunkLocalPosition: {x: -1.6109484, y: 0, z: -1.1264368}
+      grownLocalPosition: {x: -2.355, y: 0, z: -2.7375002}
+      essentialShrunkLocalPosition: {x: -1.884, y: 0, z: -2.19}
+    - prop: {fileID: 88612437406390526}
+      hierarchyPath: LevelParent/Level2/Portal
+      displayName: Portal
+      resourceName: Sample/Props/Generic/P_DreamPortal
+      essential: 0
+      authoredActive: 1
+      growGroup: 4
+      footprintMeters: {x: 0.45, y: 0.45}
+      authoredLocalPosition: {x: 1.5, y: 0, z: 1.746}
+      shrunkLocalPosition: {x: 1.2826023, y: 0, z: 0.89806336}
+      grownLocalPosition: {x: 1.875, y: 0, z: 2.1825001}
+      essentialShrunkLocalPosition: {x: 1.5, y: 0, z: 1.746}
+    - prop: {fileID: 2004540161463949818}
+      hierarchyPath: LevelParent/Level2/P_TestPoint
+      displayName: P_TestPoint
+      resourceName: Sample/Props/Generic/P_TestPoint
+      essential: 0
+      authoredActive: 1
+      growGroup: 5
+      footprintMeters: {x: 0.17666152, y: 0.17666152}
+      authoredLocalPosition: {x: 0, y: 0, z: 1.55}
+      shrunkLocalPosition: {x: 0, y: 0, z: 0.7972498}
+      grownLocalPosition: {x: -0.00625, y: 0, z: 1.9375}
+      essentialShrunkLocalPosition: {x: 0, y: 0, z: 1.55}
+    - prop: {fileID: 1662053219290170016}
+      hierarchyPath: LevelParent/Level2/P_TestPoint (1)
+      displayName: P_TestPoint (1)
+      resourceName: Sample/Props/Generic/P_TestPoint
+      essential: 0
+      authoredActive: 1
+      growGroup: 6
+      footprintMeters: {x: 0.17666152, y: 0.17666152}
+      authoredLocalPosition: {x: 0, y: 0, z: -1.56}
+      shrunkLocalPosition: {x: 0, y: 0, z: -0.8023933}
+      grownLocalPosition: {x: 0, y: 0, z: -1.9499999}
+      essentialShrunkLocalPosition: {x: 0, y: 0, z: -1.56}
+    - prop: {fileID: 8449877150534551876}
+      hierarchyPath: LevelParent/Level2/P_TestPoint (2)
+      displayName: P_TestPoint (2)
+      resourceName: Sample/Props/Generic/P_TestPoint
+      essential: 0
+      authoredActive: 1
+      growGroup: 7
+      footprintMeters: {x: 0.17666152, y: 0.17666152}
+      authoredLocalPosition: {x: -1.221, y: 0, z: -1.56}
+      shrunkLocalPosition: {x: -1.0440383, y: 0, z: -0.8023933}
+      grownLocalPosition: {x: -1.5281249, y: 0, z: -1.9424999}
+      essentialShrunkLocalPosition: {x: -1.221, y: 0, z: -1.56}
+    - prop: {fileID: 8647218801652102163}
+      hierarchyPath: LevelParent/Level2/P_TestPoint (3)
+      displayName: P_TestPoint (3)
+      resourceName: Sample/Props/Generic/P_TestPoint
+      essential: 0
+      authoredActive: 1
+      growGroup: 8
+      footprintMeters: {x: 0.17666152, y: 0.17666152}
+      authoredLocalPosition: {x: -1.221, y: 0, z: 0.011}
+      shrunkLocalPosition: {x: -1.0440383, y: 0, z: 0.0056579015}
+      grownLocalPosition: {x: -1.52875, y: 0, z: 0.010249999}
+      essentialShrunkLocalPosition: {x: -1.221, y: 0, z: 0.011}
+    - prop: {fileID: 2264178496756988866}
+      hierarchyPath: LevelParent/Level2/P_TestPoint (4)
+      displayName: P_TestPoint (4)
+      resourceName: Sample/Props/Generic/P_TestPoint
+      essential: 0
+      authoredActive: 1
+      growGroup: 9
+      footprintMeters: {x: 0.17666152, y: 0.17666152}
+      authoredLocalPosition: {x: 1.36, y: 0, z: 0.011}
+      shrunkLocalPosition: {x: 1.1628928, y: 0, z: 0.0056579015}
+      grownLocalPosition: {x: 1.6600001, y: 0, z: 0.076124996}
+      essentialShrunkLocalPosition: {x: 1.36, y: 0, z: 0.011}
+    - prop: {fileID: 2079144586156081140}
+      hierarchyPath: LevelParent/Level2/P_Enemy
+      displayName: P_Enemy
+      resourceName: Sample/Props/Generic/P_Enemy
+      essential: 0
+      authoredActive: 1
+      growGroup: 10
+      footprintMeters: {x: 0.47, y: 0.47}
+      authoredLocalPosition: {x: 1.23, y: 0, z: -1.55}
+      shrunkLocalPosition: {x: 1.0517339, y: 0, z: -0.7972498}
+      grownLocalPosition: {x: 1.5375, y: 0, z: -1.9375}
+      essentialShrunkLocalPosition: {x: 1.23, y: 0, z: -1.55}
+    - prop: {fileID: 2002009265136178199}
+      hierarchyPath: LevelParent/Level2/P_Enemy (1)
+      displayName: P_Enemy (1)
+      resourceName: Sample/Props/Generic/P_Enemy
+      essential: 0
+      authoredActive: 1
+      growGroup: 11
+      footprintMeters: {x: 0.47, y: 0.47}
+      authoredLocalPosition: {x: -1.12, y: 0, z: 1.64}
+      shrunkLocalPosition: {x: -0.9576764, y: 0, z: 0.8435417}
+      grownLocalPosition: {x: -1.4, y: 0, z: 2.05}
+      essentialShrunkLocalPosition: {x: -1.12, y: 0, z: 1.64}
+    - prop: {fileID: 2447695655092822584}
+      hierarchyPath: LevelParent/Level3/Portal
+      displayName: Portal
+      resourceName: Sample/Props/Generic/P_DreamPortal
+      essential: 0
+      authoredActive: 1
+      growGroup: 12
+      footprintMeters: {x: 0.45, y: 0.45}
+      authoredLocalPosition: {x: -0.16, y: 0, z: -1.54}
+      shrunkLocalPosition: {x: -0.13681091, y: 0, z: -0.7921062}
+      grownLocalPosition: {x: -0.18625, y: 0, z: -1.7987499}
+      essentialShrunkLocalPosition: {x: -0.16, y: 0, z: -1.54}
+    - prop: {fileID: 8048980096660016110}
+      hierarchyPath: LevelParent/Level3/P_TestPoint
+      displayName: P_TestPoint
+      resourceName: Sample/Props/Generic/P_TestPoint
+      essential: 0
+      authoredActive: 1
+      growGroup: 13
+      footprintMeters: {x: 0.17666152, y: 0.17666152}
+      authoredLocalPosition: {x: -1.236, y: 0, z: 1.55}
+      shrunkLocalPosition: {x: -1.0568643, y: 0, z: 0.7972498}
+      grownLocalPosition: {x: -1.545, y: 0, z: 1.9375}
+      essentialShrunkLocalPosition: {x: -1.236, y: 0, z: 1.55}
+    - prop: {fileID: 1650644527392528280}
+      hierarchyPath: LevelParent/Level3/P_TestPoint (3)
+      displayName: P_TestPoint (3)
+      resourceName: Sample/Props/Generic/P_TestPoint
+      essential: 0
+      authoredActive: 1
+      growGroup: 8
+      footprintMeters: {x: 0.17666152, y: 0.17666152}
+      authoredLocalPosition: {x: -1.236, y: 0, z: 0.51}
+      shrunkLocalPosition: {x: -1.0568643, y: 0, z: 0.2623209}
+      grownLocalPosition: {x: -1.5437499, y: 0, z: 0.50925}
+      essentialShrunkLocalPosition: {x: -1.236, y: 0, z: 0.51}
+    - prop: {fileID: 687241874902111228}
+      hierarchyPath: LevelParent/Level3/P_TestPoint (6)
+      displayName: P_TestPoint (6)
+      resourceName: Sample/Props/Generic/P_TestPoint
+      essential: 0
+      authoredActive: 1
+      growGroup: 8
+      footprintMeters: {x: 0.17666152, y: 0.17666152}
+      authoredLocalPosition: {x: -1.236, y: 0, z: -0.53}
+      shrunkLocalPosition: {x: -1.0568643, y: 0, z: -0.27260798}
+      grownLocalPosition: {x: -1.5437499, y: 0, z: -0.53075}
+      essentialShrunkLocalPosition: {x: -1.236, y: 0, z: -0.53}
+    - prop: {fileID: 3502627155982075709}
+      hierarchyPath: LevelParent/Level3/P_TestPoint (9)
+      displayName: P_TestPoint (9)
+      resourceName: Sample/Props/Generic/P_TestPoint
+      essential: 0
+      authoredActive: 1
+      growGroup: 7
+      footprintMeters: {x: 0.17666152, y: 0.17666152}
+      authoredLocalPosition: {x: -1.236, y: 0, z: -1.5}
+      shrunkLocalPosition: {x: -1.0568643, y: 0, z: -0.77153206}
+      grownLocalPosition: {x: -1.5431249, y: 0, z: -1.8824999}
+      essentialShrunkLocalPosition: {x: -1.236, y: 0, z: -1.5}
+    - prop: {fileID: 3996476977348264014}
+      hierarchyPath: LevelParent/Level3/P_TestPoint (1)
+      displayName: P_TestPoint (1)
+      resourceName: Sample/Props/Generic/P_TestPoint
+      essential: 0
+      authoredActive: 1
+      growGroup: 5
+      footprintMeters: {x: 0.17666152, y: 0.17666152}
+      authoredLocalPosition: {x: -0.05, y: 0, z: 1.55}
+      shrunkLocalPosition: {x: -0.04275341, y: 0, z: 0.7972498}
+      grownLocalPosition: {x: -0.056250002, y: 0, z: 1.9375}
+      essentialShrunkLocalPosition: {x: -0.05, y: 0, z: 1.55}
+    - prop: {fileID: 8163764513304702874}
+      hierarchyPath: LevelParent/Level3/P_TestPoint (4)
+      displayName: P_TestPoint (4)
+      resourceName: Sample/Props/Generic/P_TestPoint
+      essential: 0
+      authoredActive: 1
+      growGroup: 14
+      footprintMeters: {x: 0.17666152, y: 0.17666152}
+      authoredLocalPosition: {x: -0.05, y: 0, z: 0.51}
+      shrunkLocalPosition: {x: -0.04275341, y: 0, z: 0.2623209}
+      grownLocalPosition: {x: -0.0625, y: 0, z: 0.6375}
+      essentialShrunkLocalPosition: {x: -0.05, y: 0, z: 0.51}
+    - prop: {fileID: 2964489455701295511}
+      hierarchyPath: LevelParent/Level3/P_TestPoint (7)
+      displayName: P_TestPoint (7)
+      resourceName: Sample/Props/Generic/P_TestPoint
+      essential: 0
+      authoredActive: 1
+      growGroup: 12
+      footprintMeters: {x: 0.17666152, y: 0.17666152}
+      authoredLocalPosition: {x: -0.05, y: 0, z: -0.53}
+      shrunkLocalPosition: {x: -0.04275341, y: 0, z: -0.27260798}
+      grownLocalPosition: {x: -0.07625, y: 0, z: -0.78874993}
+      essentialShrunkLocalPosition: {x: -0.05, y: 0, z: -0.53}
+    - prop: {fileID: 4349491766911574550}
+      hierarchyPath: LevelParent/Level3/P_TestPoint (2)
+      displayName: P_TestPoint (2)
+      resourceName: Sample/Props/Generic/P_TestPoint
+      essential: 0
+      authoredActive: 1
+      growGroup: 15
+      footprintMeters: {x: 0.17666152, y: 0.17666152}
+      authoredLocalPosition: {x: 1.04, y: 0, z: 1.55}
+      shrunkLocalPosition: {x: 0.8892709, y: 0, z: 0.7972498}
+      grownLocalPosition: {x: 1.3, y: 0, z: 1.9375}
+      essentialShrunkLocalPosition: {x: 1.04, y: 0, z: 1.55}
+    - prop: {fileID: 3517129620993296069}
+      hierarchyPath: LevelParent/Level3/P_TestPoint (5)
+      displayName: P_TestPoint (5)
+      resourceName: Sample/Props/Generic/P_TestPoint
+      essential: 0
+      authoredActive: 1
+      growGroup: 9
+      footprintMeters: {x: 0.17666152, y: 0.17666152}
+      authoredLocalPosition: {x: 1.04, y: 0, z: 0.51}
+      shrunkLocalPosition: {x: 0.8892709, y: 0, z: 0.2623209}
+      grownLocalPosition: {x: 1.3399999, y: 0, z: 0.575125}
+      essentialShrunkLocalPosition: {x: 1.04, y: 0, z: 0.51}
+    - prop: {fileID: 2544511579730347716}
+      hierarchyPath: LevelParent/Level3/P_TestPoint (8)
+      displayName: P_TestPoint (8)
+      resourceName: Sample/Props/Generic/P_TestPoint
+      essential: 0
+      authoredActive: 1
+      growGroup: 16
+      footprintMeters: {x: 0.17666152, y: 0.17666152}
+      authoredLocalPosition: {x: 1.04, y: 0, z: -0.53}
+      shrunkLocalPosition: {x: 0.8892709, y: 0, z: -0.27260798}
+      grownLocalPosition: {x: 1.3, y: 0, z: -0.66249996}
+      essentialShrunkLocalPosition: {x: 1.04, y: 0, z: -0.53}
+    - prop: {fileID: 473216684147681057}
+      hierarchyPath: LevelParent/Level3/P_TestPoint (11)
+      displayName: P_TestPoint (11)
+      resourceName: Sample/Props/Generic/P_TestPoint
+      essential: 0
+      authoredActive: 1
+      growGroup: 17
+      footprintMeters: {x: 0.17666152, y: 0.17666152}
+      authoredLocalPosition: {x: 1.04, y: 0, z: -1.5}
+      shrunkLocalPosition: {x: 0.8892709, y: 0, z: -0.77153206}
+      grownLocalPosition: {x: 1.3, y: 0, z: -1.875}
+      essentialShrunkLocalPosition: {x: 1.04, y: 0, z: -1.5}
+    - prop: {fileID: 783581388382800665}
+      hierarchyPath: LevelParent/Level4/P_TestProp (5)
+      displayName: P_TestProp (5)
+      resourceName: Sample/Props/Generic/P_TestProp
+      essential: 0
+      authoredActive: 1
+      growGroup: 0
+      footprintMeters: {x: 0.50001526, y: 0.50001526}
+      authoredLocalPosition: {x: 1.920851, y: 0, z: 2.2412212}
+      shrunkLocalPosition: {x: 1.6424586, y: 0, z: 1.1527827}
+      grownLocalPosition: {x: 2.4010637, y: 0, z: 2.8015265}
+      essentialShrunkLocalPosition: {x: 1.920851, y: 0, z: 2.2412212}
+    - prop: {fileID: 8906084104053763007}
+      hierarchyPath: LevelParent/Level4/P_TestProp (6)
+      displayName: P_TestProp (6)
+      resourceName: Sample/Props/Generic/P_TestProp
+      essential: 0
+      authoredActive: 1
+      growGroup: 1
+      footprintMeters: {x: 0.50001526, y: 0.50001526}
+      authoredLocalPosition: {x: 1.920851, y: 0, z: -2.1899998}
+      shrunkLocalPosition: {x: 1.6424586, y: 0, z: -1.1264367}
+      grownLocalPosition: {x: 2.4010637, y: 0, z: -2.7374997}
+      essentialShrunkLocalPosition: {x: 1.920851, y: 0, z: -2.1899998}
+    - prop: {fileID: 1795994037243214207}
+      hierarchyPath: LevelParent/Level4/P_TestProp (7)
+      displayName: P_TestProp (7)
+      resourceName: Sample/Props/Generic/P_TestProp
+      essential: 0
+      authoredActive: 1
+      growGroup: 2
+      footprintMeters: {x: 0.50001526, y: 0.50001526}
+      authoredLocalPosition: {x: -1.8839998, y: 0, z: 2.2412212}
+      shrunkLocalPosition: {x: -1.6109483, y: 0, z: 1.1527827}
+      grownLocalPosition: {x: -2.3549998, y: 0, z: 2.8015265}
+      essentialShrunkLocalPosition: {x: -1.8839998, y: 0, z: 2.2412212}
+    - prop: {fileID: 1182242531864001402}
+      hierarchyPath: LevelParent/Level4/P_TestProp (8)
+      displayName: P_TestProp (8)
+      resourceName: Sample/Props/Generic/P_TestProp
+      essential: 0
+      authoredActive: 1
+      growGroup: 3
+      footprintMeters: {x: 0.50001526, y: 0.50001526}
+      authoredLocalPosition: {x: -1.8839998, y: 0, z: -2.19}
+      shrunkLocalPosition: {x: -1.6109483, y: 0, z: -1.1264368}
+      grownLocalPosition: {x: -2.3549998, y: 0, z: -2.7375002}
+      essentialShrunkLocalPosition: {x: -1.8839998, y: 0, z: -2.19}
+  packingPreviewScale: {x: 1, y: 1}
+  packingPreviewEssentialOnly: 0
+  showPackingGizmos: 1
 --- !u!114 &6480415932044802252
 MonoBehaviour:
   m_ObjectHideFlags: 0

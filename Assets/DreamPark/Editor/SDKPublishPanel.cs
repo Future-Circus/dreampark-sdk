@@ -218,6 +218,17 @@ namespace DreamPark
 
         private void Publish()
         {
+            int designBudget, relayCap;
+            if (!PreUploadChecks.Checks.NetBudgetInvariant.IsSatisfied(
+                    out designBudget, out relayCap))
+            {
+                string message = PreUploadChecks.Checks.NetBudgetInvariant.FailureMessage(
+                    designBudget, relayCap);
+                FailWith("Publish blocked: " + message);
+                EditorUtility.DisplayDialog("SDK publish blocked", message, "OK");
+                return;
+            }
+
             isPublishing = true;
             status = "Bumping version file and exporting package...";
             statusIsError = false;
@@ -277,7 +288,8 @@ namespace DreamPark
                 Repaint();
 
                 // 3. Upload. Server validates admin access and that version > prior latest.
-                SDKAPI.PublishVersion(newVersion, releaseNotes, bytes, fileName, (success, response) =>
+                string retiredAssets = string.Join("\n", SDKUpgradeCleanup.GetPublishedRetiredAssetPaths());
+                SDKAPI.PublishVersion(newVersion, releaseNotes, bytes, fileName, retiredAssets, (success, response) =>
                 {
                     isPublishing = false;
                     if (success)

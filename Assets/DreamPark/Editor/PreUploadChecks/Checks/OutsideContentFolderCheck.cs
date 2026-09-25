@@ -134,22 +134,22 @@ namespace DreamPark.PreUploadChecks.Checks
                     {
                         string target = TargetPathFor(depPath, ctx.contentId);
                         string source = depPath;
-                        finding.fixes.Add(new FixAction(
-                            "Move into content folder",
-                            () => MoveAsset(source, target))
+                        // The resolver is primary because a simple move can silently
+                        // transfer bundle ownership away from another content package.
+                        // It scans consumers first and defaults shared assets to Copy.
+                        string resolverRootPath = root.assetPath;
+                        string resolverOffenderPath = depPath;
+                        string resolverContentId = ctx.contentId;
+                        string resolverContentRoot = ctx.contentRoot;
+                        finding.fixes.Add(FixAction.Interactive("Resolve safely…", completed =>
                         {
-                            tooltip = "Uses AssetDatabase.MoveAsset, which preserves the GUID, so every "
-                                    + "existing reference stays valid.",
-                            confirmTitle = "Move asset",
-                            confirmMessage =
-                                $"Move\n  {source}\nto\n  {target}\n\n"
-                              + "GUIDs are preserved, so references from every project file stay valid — "
-                              + "including from OTHER content packages, which will now point into this "
-                              + "one's folder. If this asset is shared, duplicate it instead.\n\n"
-                              + "Cannot be undone with Ctrl-Z. Use version control to revert.",
-                        });
+                            OutsideContentDependencyResolverPopup.Show(
+                                resolverRootPath, resolverOffenderPath, resolverContentId,
+                                resolverContentRoot, completed);
+                        }, MetaOcclusionCheck.CheckId, OpaqueAlphaClipCheck.CheckId,
+                           SunLightCheck.CheckId));
 
-                        // "Move into content folder" above only ever touches THIS one
+                        // "Move only this asset" below only ever touches THIS one
                         // asset — CollectOffenders deliberately doesn't crawl past an
                         // offender into its own dependencies (see the comment on
                         // CollectOffenders), so an offender that itself depends on
@@ -157,15 +157,27 @@ namespace DreamPark.PreUploadChecks.Checks
                         // were after a plain Move. This opens the dedicated resolver,
                         // which walks that sub-tree and lets the dev choose Transfer
                         // or Copy per item before applying anything.
-                        string resolverRootPath = root.assetPath;
-                        string resolverOffenderPath = depPath;
-                        string resolverContentId = ctx.contentId;
-                        string resolverContentRoot = ctx.contentRoot;
-                        finding.fixes.Add(FixAction.Navigate("Resolve dependencies…", () =>
+                        finding.fixes.Add(new FixAction(
+                            "Move only this asset",
+                            () => MoveAsset(source, target))
                         {
-                            OutsideContentDependencyResolverPopup.Show(
-                                resolverRootPath, resolverOffenderPath, resolverContentId, resolverContentRoot);
-                        }));
+                            canBulk = false,
+                            affectedPaths = new[] { source, target },
+                            alsoRerunCheckIds = new[]
+                            {
+                                MetaOcclusionCheck.CheckId,
+                                OpaqueAlphaClipCheck.CheckId,
+                                SunLightCheck.CheckId,
+                            },
+                            tooltip = "Preserves the GUID, but does not inspect this asset's dependencies or "
+                                    + "other packages that use it. Prefer Resolve safely.",
+                            confirmTitle = "Move only this asset?",
+                            confirmMessage =
+                                $"Move\n  {source}\nto\n  {target}\n\n"
+                              + "This skips the dependency and shared-consumer review. GUIDs are preserved, "
+                              + "so OTHER content packages may now point into this package's folder.\n\n"
+                              + "Cannot be undone with Ctrl-Z. Use version control to revert.",
+                        });
                     }
 
                     string pingPath = depPath;

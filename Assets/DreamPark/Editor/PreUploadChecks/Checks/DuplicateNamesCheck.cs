@@ -77,16 +77,13 @@ namespace DreamPark.PreUploadChecks.Checks
                 .Where(g => g.Count() > 1)
                 .ToList();
 
-            var exactNames = new HashSet<string>(exact.Select(g => g.Key), StringComparer.Ordinal);
-
-            // Case-only groups must EXCLUDE members already reported as exact
-            // collisions. Without that, {A_Boss, A_Boss, A_boss} produced a Blocking
-            // finding and a Warning finding for the same two prefabs, with the same
-            // checkId + guid + subKey — i.e. the same ignore key. Ignoring the harmless
-            // Warning (which needs no typed reason) then also suppressed the Blocking
-            // one, and two prefabs shipped sharing an address and a revenue key.
+            // For case-only collisions, carry forward one deterministic representative
+            // from each exact-name group. This makes a mixed {Boss, Boss, boss} set
+            // produce exactly N-1 repairs: one Blocking exact rename and one Warning
+            // case-only rename. No asset is reported twice.
             var caseOnly = ctx.roots
-                .Where(r => !exactNames.Contains(r.name))
+                .GroupBy(r => r.name, StringComparer.Ordinal)
+                .Select(g => g.OrderBy(r => r.assetPath, StringComparer.Ordinal).First())
                 .GroupBy(r => r.name, StringComparer.OrdinalIgnoreCase)
                 .Where(g => g.Count() > 1)
                 .ToList();
@@ -114,10 +111,12 @@ namespace DreamPark.PreUploadChecks.Checks
             // round-trip build over build. Asset names have no such constraint.)
             group = group.OrderBy(r => r.assetPath, StringComparer.Ordinal).ToList();
 
-            for (int i = 0; i < group.Count; i++)
+            // The first path is the deterministic keeper. A collision of N assets
+            // requires N-1 renames, so the keeper is context for the other findings,
+            // not a finding of its own.
+            for (int i = 1; i < group.Count; i++)
             {
                 var root = group[i];
-                bool keeper = i == 0 && !caseOnly;
 
                 string others = string.Join(", ",
                     group.Where(g => g != root).Select(g => g.assetPath));
@@ -142,31 +141,31 @@ namespace DreamPark.PreUploadChecks.Checks
                     // case-only finding for the same prefab are independently
                     // ignorable.
                     subKey = root.name + (caseOnly ? "|case" : "|exact"),
-                    title = keeper
-                        ? $"{root.KindLabel} '{root.name}' — name shared with {group.Count - 1} other prefab(s)"
-                        : $"{root.KindLabel} '{root.name}' — duplicate name",
+                    title = $"{root.KindLabel} '{root.name}' — duplicate name",
                     detail = detail,
                 };
 
-                if (!keeper)
-                {
-                    string suggested = SuggestName(root.name, takenNames);
-                    takenNames.Add(suggested);
+                string suggested = SuggestName(root.name, takenNames);
+                takenNames.Add(suggested);
 
-                    var captured = root;
-                    var capturedName = suggested;
-                    finding.fixes.Add(new FixAction(
-                        $"Rename to {suggested}",
-                        // The name is re-derived at CLICK time, not reused from scan
-                        // time: another rename in the same batch may have taken it.
-                        () => Rename(captured, capturedName))
-                    {
-                        tooltip = "Renames the prefab, its preview image and its preview override entry, "
-                                + "then re-stamps addresses via ContentProcessor.",
-                        confirmTitle = "Rename prefab",
-                        confirmMessage = BuildRenameWarning(captured, capturedName),
-                    });
-                }
+                var captured = root;
+                var capturedName = suggested;
+                finding.fixes.Add(new FixAction(
+                    $"Rename to {suggested}",
+                    // The name is re-derived at CLICK time, not reused from scan
+                    // time: another rename in the same batch may have taken it.
+                    () => Rename(captured, capturedName))
+                {
+                    tooltip = "Renames the prefab, its preview image and its preview override entry, "
+                            + "then re-stamps addresses via ContentProcessor.",
+                    confirmTitle = "Rename prefab",
+                    confirmMessage = BuildRenameWarning(captured, capturedName),
+                    bulkKey = CheckId + "/auto-rename",
+                    bulkLabel = "Auto-rename duplicates",
+                    canBulk = true,
+                    affectedPaths = new[] { captured.assetPath },
+                    alsoRerunCheckIds = new[] { ResourceNameAddressCheck.CheckId },
+                });
 
                 string openPath = root.assetPath;
                 finding.fixes.Add(FixAction.Navigate("Open", () =>

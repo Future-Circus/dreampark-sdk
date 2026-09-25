@@ -393,6 +393,11 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
 
         scriptScopeTable.Set("self", this);
 
+        // A scope-local facade captures this script's GameObject. Package helpers
+        // therefore resolve the correct Container even with multiple packages in
+        // the same park, and creator Lua never passes game IDs or manager paths.
+        DreamPark.DreamParkLuaAPI.BindScope(scriptScopeTable);
+
         // peer_id: inside a cloned RemoteRig (another player's remote
         // representation on this headset, RemoteRig.cs) it is that player's
         // id — feed it to dp.peer(peer_id) for their anchors and state.

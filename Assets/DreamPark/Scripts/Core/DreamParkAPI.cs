@@ -261,6 +261,14 @@ namespace DreamPark.API
                 rawText,
                 data
             );
+            // UnityWebRequest.error only says "400 Bad Request". The API's
+            // JSON error names the rejected field or artifact, which the
+            // uploader needs to show instead of losing it here.
+            if (!success)
+            {
+                string serverError = response.json?.GetField("error")?.stringValue;
+                if (!string.IsNullOrWhiteSpace(serverError)) response.error = serverError;
+            }
             response.etag = req.GetResponseHeader("ETag");
             return response;
         }

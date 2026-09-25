@@ -57,8 +57,13 @@ namespace DreamPark.ParkBuilder {
                     (root.position - _boundsOrigin).sqrMagnitude <= BoundsRecomputeThresholdSqr)
                     return (Bounds)_bounds;
 
+                // Particle-only (or currently inactive) objects have no stable
+                // non-particle renderer bounds. An empty Bounds() is centered at
+                // world origin, so distance culling would park an effect at a
+                // distant venue even while the player is standing beside it.
+                Vector3 fallbackCenter = root != null ? root.position : Vector3.zero;
                 if (renderers == null || renderers.Length == 0)
-                    return new Bounds();
+                    return new Bounds(fallbackCenter, Vector3.zero);
 
                 bool init = false;
                 Bounds combined = new Bounds();
@@ -88,7 +93,7 @@ namespace DreamPark.ParkBuilder {
                     }
                 }
 
-                if (!init) combined = new Bounds();
+                if (!init) combined = new Bounds(fallbackCenter, Vector3.zero);
 
                 _bounds = combined;
                 _boundsOrigin = root != null ? root.position : Vector3.zero;

@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
+using DreamPark.ConvertReady;
 using DreamPark.EditorTools;
 using DreamPark.EditorTools.MaterialConversion;
 
@@ -128,6 +129,15 @@ namespace DreamPark.PreUploadChecks.Checks
 
         private enum Support { Supported, Missing, Unknown }
 
+        private sealed class MaterialEntry
+        {
+            public Material material;
+            public string assetPath;
+            public string key;
+            public readonly List<ContentRootInfo> users = new List<ContentRootInfo>();
+            public readonly List<string> usingPrefabs = new List<string>();
+        }
+
         // Keyed by shader ASSET GUID, not instance id: a reimported shader usually
         // keeps its instance id, so an instance-id cache would hand back the stale
         // verdict for a shader the developer just fixed and leave the upload blocked
@@ -150,9 +160,10 @@ namespace DreamPark.PreUploadChecks.Checks
         {
             var findings = new List<Finding>();
 
-            // material asset path → the roots that use it on a mesh renderer
-            var meshMaterials = new Dictionary<string, List<ContentRootInfo>>(StringComparer.OrdinalIgnoreCase);
-            var usingPrefabs = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            // Embedded materials in one model all share the model's asset path, so
+            // path alone is not an identity. The key includes the material's local
+            // file id and keeps each sub-asset independently actionable.
+            var meshMaterials = new Dictionary<string, MaterialEntry>(StringComparer.Ordinal);
 
             int i = 0;
             foreach (var root in ctx.roots)
@@ -163,7 +174,7 @@ namespace DreamPark.PreUploadChecks.Checks
 
                 try
                 {
-                    CollectMeshMaterials(root, meshMaterials, usingPrefabs);
+                    CollectMeshMaterials(root, meshMaterials);
                 }
                 catch (Exception e)
                 {
@@ -172,16 +183,15 @@ namespace DreamPark.PreUploadChecks.Checks
             }
 
             int j = 0;
-            foreach (var kv in meshMaterials)
+            foreach (var entry in meshMaterials.Values.OrderBy(e => e.key, StringComparer.Ordinal))
             {
                 ctx.Progress(0.6f + (float)j / Mathf.Max(1, meshMaterials.Count) * 0.4f,
                              "Checking shaders for Meta occlusion…");
                 j++;
 
-                string matPath = kv.Key;
-                var users = kv.Value;
-
-                var mat = AssetDatabase.LoadAssetAtPath<Material>(matPath);
+                string matPath = entry.assetPath;
+                var users = entry.users;
+                var mat = entry.material;
                 if (mat == null) continue;
 
                 var shader = mat.shader;
@@ -201,7 +211,9 @@ namespace DreamPark.PreUploadChecks.Checks
                 // A material embedded in an FBX is ReadOnlyEmbedded and cannot be
                 // converted in place. Offering a Convert button that silently no-ops
                 // is worse than saying so.
-                bool embedded = !matPath.EndsWith(".mat", StringComparison.OrdinalIgnoreCase);
+                bool embedded = AssetDatabase.IsSubAsset(mat)
+                    || !matPath.EndsWith(".mat", StringComparison.OrdinalIgnoreCase);
+                bool contentOwned = ContentRootScanner.IsUnderContentRoot(matPath, ctx.contentRoot);
 
                 var owner = users.FirstOrDefault();
                 string userList = string.Join(", ", users.Select(u => u.name).Distinct().Take(6));
@@ -212,46 +224,96 @@ namespace DreamPark.PreUploadChecks.Checks
                     severity = support == Support.Missing ? CheckSeverity.Blocking : CheckSeverity.Warning,
                     assetGuid = owner != null ? owner.guid : AssetDatabase.AssetPathToGUID(matPath),
                     assetPath = owner != null ? owner.assetPath : matPath,
-                    subKey = matPath,
+                    subKey = entry.key,
                     title = support == Support.Missing
-                        ? $"{Path.GetFileNameWithoutExtension(matPath)} — shader '{shaderName}' has no Meta occlusion"
-                        : $"{Path.GetFileNameWithoutExtension(matPath)} — could not verify occlusion on '{shaderName}'",
+                        ? $"{(embedded ? mat.name + " (in " + Path.GetFileName(matPath) + ")" : Path.GetFileNameWithoutExtension(matPath))} — shader '{shaderName}' has no Meta occlusion"
+                        : $"{(embedded ? mat.name + " (in " + Path.GetFileName(matPath) + ")" : Path.GetFileNameWithoutExtension(matPath))} — could not verify occlusion on '{shaderName}'",
                     detail = support == Support.Missing
                         ? $"{matPath}\nUsed by: {userList}\n\n"
                         + "This material will render at full opacity regardless of real-world depth, so "
                         + "it draws over the guest's hands, furniture and walls."
                         + (embedded ? "\n\nThis material is embedded in a model file and cannot be converted "
-                                    + "in place — run Extract Materials on the source asset first." : "")
+                                    + "in place. DreamPark can extract the model's materials beside it, "
+                                    + "rebind the model, and convert the affected extracted materials." : "")
                         : $"{matPath}\nUsed by: {userList}\n\n"
-                        + "The shader could not be read (compile error, unreadable package, or an "
-                        + "unresolvable subgraph reference), so this is reported rather than blocked. "
-                        + "Verify by hand.",
+                         + "The shader could not be read (compile error, unreadable package, or an "
+                         + "unresolvable subgraph reference), so this is reported rather than blocked. "
+                         + "Verify by hand.",
                 };
 
-                if (support == Support.Missing && !embedded)
+                if (!contentOwned)
+                {
+                    finding.detail += "\n\nThis asset is outside the selected content package. DreamPark "
+                                    + "will not rewrite a shared or package-owned source in place; resolve "
+                                    + "it into the content folder first, then run the material repair.";
+                }
+
+                if (support == Support.Missing)
                 {
                     string capturedPath = matPath;
-                    List<string> prefabs;
-                    usingPrefabs.TryGetValue(matPath, out prefabs);
-                    var capturedPrefabs = prefabs ?? new List<string>();
+                    var capturedPrefabs = entry.usingPrefabs.ToList();
 
-                    finding.fixes.Add(new FixAction(
-                        "Convert to DreamPark shader",
-                        () => Convert(capturedPath, capturedPrefabs))
+                    if (!contentOwned && owner != null
+                        && OutsideContentFolderCheck.Classify(capturedPath, ctx.contentId)
+                            == OutsideContentFolderCheck.Verdict.Violation
+                        && OutsideContentFolderCheck.CanOfferMove(capturedPath))
                     {
-                        tooltip = "Runs the existing MaterialConverter, preserving textures and "
-                                + "colour/scalar values.",
-                        confirmTitle = "Convert material",
-                        confirmMessage =
-                            $"Convert {Path.GetFileName(capturedPath)} to a DreamPark shader?\n\n"
-                          + "Textures and colour/scalar values are remapped by alias. GUIDs are "
-                          + "preserved — prefab references stay valid.\n\n"
-                          + "Conversion is LOSSY for anything the DreamPark shaders don't replicate: "
-                          + "screen-space refraction, gradient/LUT remapping, custom channel masks, "
-                          + "per-axis UV scrolling, rim/fresnel. Vector and int properties are not "
-                          + "carried across at all.\n\n"
-                          + "Cannot be undone via Ctrl-Z. Use version control to revert.",
-                    });
+                        string rootPath = owner.assetPath;
+                        string contentId = ctx.contentId;
+                        string contentRoot = ctx.contentRoot;
+                        finding.fixes.Add(FixAction.Interactive("Resolve into content first…", completed =>
+                        {
+                            OutsideContentDependencyResolverPopup.Show(
+                                rootPath, capturedPath, contentId, contentRoot, completed);
+                        }, OutsideContentFolderCheck.CheckId, OpaqueAlphaClipCheck.CheckId));
+                    }
+                    else if (contentOwned && embedded)
+                    {
+                        finding.fixes.Add(new FixAction(
+                            "Extract Materials + Convert",
+                            () => ExtractAndConvert(capturedPath, capturedPrefabs))
+                        {
+                            tooltip = "Extracts all embedded materials beside the model, rebinds the model, "
+                                    + "then converts extracted materials that lack Meta occlusion.",
+                            bulkKey = "extract-and-convert-embedded-materials",
+                            bulkLabel = "Extract Materials + Convert",
+                            // One extraction repairs every embedded material in this
+                            // model; sibling findings would otherwise run it twice.
+                            canBulk = false,
+                            affectedPaths = new[] { capturedPath },
+                            alsoRerunCheckIds = new[] { OpaqueAlphaClipCheck.CheckId },
+                            confirmTitle = "Extract and convert embedded materials",
+                            confirmMessage =
+                                $"Extract all embedded materials from {Path.GetFileName(capturedPath)} and "
+                              + "convert the affected materials to DreamPark shaders?\n\n"
+                              + "The .mat files will be created beside the model and the model importer will "
+                              + "be rebound to them. Conversion preserves common textures and values, but is "
+                              + "lossy for custom shader features DreamPark shaders do not replicate.\n\n"
+                              + "This modifies the model's import remaps and creates new assets. It cannot be "
+                              + "undone via Ctrl-Z; use version control to revert.",
+                        });
+                    }
+                    else if (contentOwned)
+                    {
+                        finding.fixes.Add(new FixAction(
+                            "Convert to DreamPark shader",
+                            () => Convert(capturedPath, capturedPrefabs))
+                        {
+                            tooltip = "Runs the existing MaterialConverter, preserving textures and "
+                                    + "colour/scalar values.",
+                            confirmTitle = "Convert material",
+                            confirmMessage =
+                                $"Convert {Path.GetFileName(capturedPath)} to a DreamPark shader?\n\n"
+                              + "Textures and colour/scalar values are remapped by alias. GUIDs are "
+                              + "preserved — prefab references stay valid.\n\n"
+                              + "Conversion is LOSSY for anything the DreamPark shaders don't replicate: "
+                              + "screen-space refraction, gradient/LUT remapping, custom channel masks, "
+                              + "per-axis UV scrolling, rim/fresnel. Vector and int properties are not "
+                              + "carried across at all.\n\n"
+                              + "Cannot be undone via Ctrl-Z. Use version control to revert.",
+                            alsoRerunCheckIds = new[] { OpaqueAlphaClipCheck.CheckId },
+                        });
+                    }
                 }
 
                 // Navigation last: the actionable fix should be the leftmost button,
@@ -282,8 +344,7 @@ namespace DreamPark.PreUploadChecks.Checks
 
         private static void CollectMeshMaterials(
             ContentRootInfo root,
-            Dictionary<string, List<ContentRootInfo>> meshMaterials,
-            Dictionary<string, List<string>> usingPrefabs)
+            Dictionary<string, MaterialEntry> meshMaterials)
         {
             GameObject go = PrefabUtility.LoadPrefabContents(root.assetPath);
             if (go == null) return;
@@ -302,15 +363,29 @@ namespace DreamPark.PreUploadChecks.Checks
                         if (string.IsNullOrEmpty(mp)) continue;
                         if (ContentRootScanner.IsThirdPartyLocal(mp)) continue;
 
-                        List<ContentRootInfo> users;
-                        if (!meshMaterials.TryGetValue(mp, out users))
-                            meshMaterials[mp] = users = new List<ContentRootInfo>();
-                        if (!users.Contains(root)) users.Add(root);
+                        string key = mp;
+                        string guid;
+                        long localId;
+                        // Preserve the historical path-only ignore key for ordinary
+                        // .mat assets. Only sub-assets need the local id to avoid
+                        // collapsing every material in one model into one finding.
+                        if (AssetDatabase.IsSubAsset(m)
+                            && AssetDatabase.TryGetGUIDAndLocalFileIdentifier(m, out guid, out localId))
+                            key = mp + "::" + localId;
 
-                        List<string> prefabs;
-                        if (!usingPrefabs.TryGetValue(mp, out prefabs))
-                            usingPrefabs[mp] = prefabs = new List<string>();
-                        if (!prefabs.Contains(root.assetPath)) prefabs.Add(root.assetPath);
+                        MaterialEntry entry;
+                        if (!meshMaterials.TryGetValue(key, out entry))
+                        {
+                            meshMaterials[key] = entry = new MaterialEntry
+                            {
+                                material = m,
+                                assetPath = mp,
+                                key = key,
+                            };
+                        }
+                        if (!entry.users.Contains(root)) entry.users.Add(root);
+                        if (!entry.usingPrefabs.Contains(root.assetPath))
+                            entry.usingPrefabs.Add(root.assetPath);
                     }
                 }
             }
@@ -528,6 +603,61 @@ namespace DreamPark.PreUploadChecks.Checks
 
         // ------------------------------------------------------------------
         // Fix: reuse the existing converter.
+
+        private static bool ExtractAndConvert(string modelPath, List<string> prefabPaths)
+        {
+            try
+            {
+                var extraction = new ConversionResult { sourcePath = modelPath, ok = true };
+                int extracted;
+                List<string> extractedPaths;
+                string destination = AssetClassifier.DefaultMaterialsFolder(modelPath);
+
+                if (!AssetClassifier.ExtractEmbeddedMaterials(
+                        modelPath, destination, extraction, out extracted, out extractedPaths))
+                {
+                    Debug.LogWarning($"[DreamPark] Could not extract embedded materials from "
+                                   + $"{modelPath}: {extraction.error ?? "unknown extraction error"}");
+                    return false;
+                }
+
+                bool convertedAll = true;
+                foreach (string path in extractedPaths)
+                {
+                    var material = AssetDatabase.LoadAssetAtPath<Material>(path);
+                    if (material == null) { convertedAll = false; continue; }
+                    if (Evaluate(material.shader) != Support.Missing) continue;
+                    if (!Convert(path, prefabPaths)) convertedAll = false;
+                }
+
+                AssetDatabase.SaveAssets();
+                InvalidateShaderCaches();
+
+                bool blockingExtractedRemains = extractedPaths
+                    .Select(AssetDatabase.LoadAssetAtPath<Material>)
+                    .Where(m => m != null)
+                    .Any(m => Evaluate(m.shader) == Support.Missing);
+
+                // Verify the model no longer contains a blocking embedded material.
+                // This catches partial ExtractAsset failures and importer remaps that
+                // did not persist even when the individual calls reported success.
+                bool blockingEmbeddedRemains = AssetDatabase.LoadAllAssetsAtPath(modelPath)
+                    .OfType<Material>()
+                    .Any(m => AssetDatabase.IsSubAsset(m) && Evaluate(m.shader) == Support.Missing);
+
+                return convertedAll && !blockingExtractedRemains && !blockingEmbeddedRemains;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[DreamPark] Could not extract and convert materials from {modelPath}: {e}");
+                return false;
+            }
+            finally
+            {
+                EditorUtility.ClearProgressBar();
+                InvalidateShaderCaches();
+            }
+        }
 
         private static bool Convert(string materialPath, List<string> prefabPaths)
         {

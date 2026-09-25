@@ -75,6 +75,8 @@
 -- @var autoStart bool false
 -- @var loopSequence bool false
 -- @var globalName string
+-- Add a NetId to this controller GameObject to share level progression,
+-- transitions, and its run score with other players in the same session.
 -- ============================================================
 
 local UE = CS.UnityEngine
@@ -108,6 +110,12 @@ local scoreSaved = false
 local levelStartHandlers = {}
 local levelCompleteHandlers = {}
 local sequenceCompleteHandlers = {}
+local networkRevision = 0
+local networkWriter = ""
+local applyingNetworkState = false
+local receivedRemoteState = false
+local relayWasConnected = false
+local nextSyncAt = 0
 
 local function log(message)
     Debug.Log("[DreamSequence] " .. message)
@@ -132,6 +140,20 @@ end
 local function get_transition_delay()
     if transitionDelay == nil then return 2.5 end
     return Mathf.Max(0.1, transitionDelay)
+end
+
+local function send_state(change)
+    if net_send == nil or applyingNetworkState then return end
+    if change then
+        networkRevision = networkRevision + 1
+        networkWriter = tostring(dp.me() or "")
+    end
+    net_send("dreamsequence_state", {
+        revision = networkRevision, writer = networkWriter,
+        level = currentLevelIndex, pending = pendingLevelIndex,
+        transitionLeft = math.max(0, transitionEndsAt - Time.time),
+        running = gameStarted, finished = sequenceFinished, score = score,
+    })
 end
 
 -- ── Scene helpers ────────────────────────────────────────────
@@ -309,6 +331,7 @@ local function complete_sequence_on_current_level()
     gameStarted = false
     save_run_score()
     fire(sequenceCompleteHandlers, math.floor(max0(score)))
+    send_state(true)
     log("Sequence complete. No next level; staying on " .. currentLevelName .. ".")
 end
 
@@ -333,6 +356,7 @@ local function begin_level(levelIndex)
 
     log(levelGameObject.name .. " started.")
     fire(levelStartHandlers, levelIndex, levelGameObject)
+    send_state(true)
 end
 
 local function finish_transition()
@@ -346,12 +370,13 @@ local function finish_transition()
     end
 
     if pendingLevelIndex >= 1 and pendingLevelIndex <= #levels then
-        levels[pendingLevelIndex]:SetActive(true)
+        local destination = pendingLevelIndex
+        pendingLevelIndex = -1
+        levels[destination]:SetActive(true)
         stop_transition_effect()
         transitionEndsAt = -1.0
         transitionRequested = false
-        begin_level(pendingLevelIndex)
-        pendingLevelIndex = -1
+        begin_level(destination)
         return
     end
 
@@ -364,6 +389,7 @@ local function finish_transition()
     gameStarted = false
     save_run_score()
     fire(sequenceCompleteHandlers, math.floor(max0(score)))
+    send_state(true)
     log("Sequence complete.")
 end
 
@@ -394,6 +420,7 @@ local function begin_transition(source)
 
     pendingLevelIndex = next_level_index(currentLevelIndex)
     transitionEndsAt = Time.time + get_transition_delay()
+    send_state(true)
 
     if source ~= nil then
         log("Transition requested by " .. tostring(source) .. ".")
@@ -510,11 +537,13 @@ function get_objectives_remaining() return objectivesPending end
 function add_score(amount)
     if amount == nil then return score end
     score = max0(score + amount)
+    send_state(true)
     return score
 end
 
 function set_score(value)
     score = max0(value or 0)
+    send_state(true)
     return score
 end
 
@@ -570,6 +599,47 @@ function onready()
     end
 end
 
+function onmessage(kind, p)
+    if kind == "dreamsequence_sync_request" then
+        if networkRevision > 0 then send_state(false) end
+        return
+    end
+    if kind ~= "dreamsequence_state" or p == nil then return end
+    if type(p.revision) ~= "number" or type(p.writer) ~= "string"
+        or type(p.level) ~= "number" or type(p.pending) ~= "number"
+        or type(p.score) ~= "number" then return end
+    receivedRemoteState = true
+    if p.revision < networkRevision
+        or (p.revision == networkRevision and p.writer <= networkWriter) then return end
+    if p.level < -1 or p.level > #levels
+        or p.pending < -1 or p.pending > #levels then return end
+
+    applyingNetworkState = true
+    networkRevision, networkWriter = p.revision, p.writer
+    score = max0(p.score)
+    local wasRunning, wasFinished = gameStarted, sequenceFinished
+    gameStarted = p.running == true
+    sequenceFinished = p.finished == true
+    if gameStarted and not wasRunning then
+        scoreSaved = false
+        clear_objectives()
+    end
+    currentLevelIndex = p.level
+    pendingLevelIndex = p.pending
+    transitionRequested = pendingLevelIndex >= 1
+    transitionEndsAt = transitionRequested and Time.time + math.max(0, p.transitionLeft or 0) or -1
+    local active = levels[currentLevelIndex]
+    deactivate_other_level_children(active)
+    if active ~= nil and not active.activeSelf then active:SetActive(true) end
+    regenerate_parent_floor()
+    if transitionRequested then play_transition_effect() else stop_transition_effect() end
+    if sequenceFinished and not wasFinished then
+        save_run_score()
+        fire(sequenceCompleteHandlers, math.floor(max0(score)))
+    end
+    applyingNetworkState = false
+end
+
 function ondestroy()
     if globalName ~= nil and globalName ~= "" then
         rawset(_G, globalName, nil)
@@ -577,6 +647,16 @@ function ondestroy()
 end
 
 function update()
+    if net_send ~= nil then
+        local connected = dp.relay().connected
+        if connected and (not relayWasConnected or
+            (not receivedRemoteState and Time.time >= nextSyncAt)) then
+            net_send("dreamsequence_sync_request", {})
+            nextSyncAt = Time.time + 2
+        end
+        if not connected then receivedRemoteState = false end
+        relayWasConnected = connected
+    end
     if transitionEndsAt >= 0.0 and Time.time >= transitionEndsAt then
         finish_transition()
     end

@@ -1,0 +1,47 @@
+-- Height-aware ergonomic placement
+--
+-- Put this on a LuaBehaviour and assign an interaction target authored above
+-- the attraction's local floor/reference plane. The original authored pose is
+-- retained, so applying the profile again never compounds scaling.
+--
+-- target: control, handle, UI panel, etc.
+-- floorY: local-space height of the reference plane.
+-- @var target gameobject
+-- @var floorY float 0
+
+local authoredY = nil
+local unsubscribeHeightChanged = nil
+
+local function applyProfileHeight()
+    if target == nil or authoredY == nil then return end
+
+    local position = target.transform.localPosition
+    local factor = dp.profile.getHeightFactor()
+    position.y = floorY + (authoredY - floorY) * factor
+    target.transform.localPosition = position
+end
+
+function start()
+    if target == nil then return end
+
+    authoredY = target.transform.localPosition.y
+
+    -- Safe immediately: older/not-yet-loaded profiles return 1.0.
+    applyProfileHeight()
+
+    -- Initial hydration establishes the baseline silently. Apply it once,
+    -- then subscribe to live mobile-app changes for this headset/profile.
+    dp.profile.onReady(function()
+        applyProfileHeight()
+        unsubscribeHeightChanged = dp.profile.onHeightChanged(function(heightInches, heightFactor)
+            applyProfileHeight()
+        end)
+    end)
+end
+
+function ondestroy()
+    if unsubscribeHeightChanged ~= nil then
+        unsubscribeHeightChanged()
+        unsubscribeHeightChanged = nil
+    end
+end

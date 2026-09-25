@@ -162,15 +162,47 @@ namespace DreamPark {
         private int lastVertexCount = -1;
         private bool firstUpdate = false;
 
+        /// <summary>Bind a streamed level's anchors to its package floor. The
+        /// source prefab has no runtime floor, and nearest-floor lookup can pick
+        /// an unrelated attraction while levels are being swapped.</summary>
+        public void BindToFloor(MeshFilter floor, CalibrateLevel calibration)
+        {
+            if (floor == null || calibration == null) return;
+            if (floorMeshFilter == floor && calibrator == calibration && floorMesh == floor.sharedMesh)
+                return;
+            floorMeshFilter = floor;
+            floorTransform = floor.transform;
+            calibrator = calibration;
+            floorMesh = floor.sharedMesh;
+            lastVertexCount = floorMesh != null ? floorMesh.vertexCount : -1;
+            firstUpdate = false;
+            // A streamed level may first appear after the package floor has
+            // already been calibrated. Its authored height is relative to the
+            // original flat floor (Y=0), not the nearest graded vertex.
+            if (!authoredVerticalCaptured)
+            {
+                authoredVerticalOffset = floorTransform.InverseTransformPoint(transform.position).y;
+                authoredVerticalCaptured = true;
+            }
+            if (floorMesh != null)
+            {
+                if (matchGrade) CacheCornerVertices();
+                else CacheClosestVertex();
+            }
+        }
+
         [ContextMenu("Recache Corners")]
         public void RecacheCorners()
         {
+            FindFloor();
+            if (floorMesh == null) return;
             if (matchGrade)
             {
-                FindFloor();
                 CacheCornerVertices();
                 Debug.Log($"[FloorAnchor] Recached - Center offset: {centerLocalOffset}, Corner offsets: {string.Join(", ", cornerLocalOffsets)}");
             }
+            else CacheClosestVertex();
+            firstUpdate = false;
         }
         
         [ContextMenu("Precalculate Bounds")]
@@ -220,11 +252,22 @@ namespace DreamPark {
                 return;
             }
             
-            // After calculating the world-space bounds, convert to local space relative to THIS object's position
-            Vector3 localCenter = transform.InverseTransformPoint(bounds.center);
-            Vector3 localExtents = bounds.extents; // Half the size
-            Quaternion invRotation = Quaternion.Inverse(transform.rotation);
-            localExtents = invRotation * localExtents;
+            // Convert the world-space AABB corners to this anchor's local space.
+            // InverseTransformDirection does not remove scale, and copying the
+            // world extents directly makes scaled floor borders sample a much
+            // smaller area than their visible footprint.
+            Vector3 worldMin = bounds.min;
+            Vector3 worldMax = bounds.max;
+            Bounds localBounds = new Bounds(transform.InverseTransformPoint(worldMin), Vector3.zero);
+            for (int x = 0; x < 2; x++)
+            for (int y = 0; y < 2; y++)
+            for (int z = 0; z < 2; z++)
+                localBounds.Encapsulate(transform.InverseTransformPoint(new Vector3(
+                    x == 0 ? worldMin.x : worldMax.x,
+                    y == 0 ? worldMin.y : worldMax.y,
+                    z == 0 ? worldMin.z : worldMax.z)));
+            Vector3 localCenter = localBounds.center;
+            Vector3 localExtents = localBounds.extents;
 
             // Now calculate corners relative to the local center
             precalculatedCorners[0] = localCenter + new Vector3(-localExtents.x, -localExtents.y, -localExtents.z);
@@ -365,7 +408,7 @@ namespace DreamPark {
         {
             if (calibrator == null) {
                 if (debugLogValues) Debug.Log("[FloorAnchor] No calibrator");
-                var levelTemplate = GetComponentInParent<LevelTemplate>();
+                var levelTemplate = FindAncestorWithFloor();
                 if (levelTemplate != null && levelTemplate.runtimePlane != null)
                 {
                     calibrator = levelTemplate.runtimePlane.GetComponent<CalibrateLevel>();
@@ -434,7 +477,11 @@ namespace DreamPark {
             Vector3 vertexLocal = verts[closestVertexIndex];
             Vector3 vertexWorld = floorTransform.TransformPoint(vertexLocal);
             Vector3 targetWorld = vertexWorld + floorTransform.TransformVector(localOffset);
-            Vector3 targetLocal = floorTransform.parent.InverseTransformPoint(targetWorld);
+            // An anchor can live several transforms below the floor (for
+            // example Sequence/Levels/Attraction/Prop). Convert into the
+            // anchor's parent space, not the floor's parent space.
+            Vector3 targetLocal = transform.parent != null
+                ? transform.parent.InverseTransformPoint(targetWorld) : targetWorld;
 
             if (!firstUpdate) {
                 transform.localPosition = targetLocal;
@@ -1112,12 +1159,15 @@ namespace DreamPark {
 
             closestVertexIndex = nearestIndex;
             if (nearestIndex >= 0)
+            {
                 localOffset = floorTransform.InverseTransformPoint(transform.position) - verts[nearestIndex];
+                if (authoredVerticalCaptured) localOffset.y = authoredVerticalOffset;
+            }
         }
 
         MeshFilter FindClosestFloorMesh()
         {
-            var levelTemplate = GetComponentInParent<LevelTemplate>();
+            var levelTemplate = FindAncestorWithFloor();
             if (levelTemplate != null && levelTemplate.runtimePlane != null)
             {
                 var runtimeFloor = levelTemplate.runtimePlane.GetComponent<MeshFilter>();
@@ -1126,6 +1176,12 @@ namespace DreamPark {
                     return runtimeFloor;
                 }
             }
+
+            // A streamed Sequence level has no floor of its own. Wait for its
+            // package floor instead of latching onto a nearby park attraction.
+            var package = GetComponentInParent<DreamParkPackageHost>();
+            if (package != null && package.kind == DreamParkPackageKind.Sequence)
+                return null;
 
             MeshFilter[] filters = FindObjectsByType<MeshFilter>(FindObjectsSortMode.None);
             MeshFilter closest = null;
@@ -1144,6 +1200,31 @@ namespace DreamPark {
                 }
             }
             return closest;
+        }
+
+        // Sequence attractions own cutout floors; Overlay is floorless and its
+        // anchors are explicitly bound to the active attraction by the host.
+        LevelTemplate FindAncestorWithFloor()
+        {
+            DreamParkPackageHost package = GetComponentInParent<DreamParkPackageHost>();
+            if (package != null && package.kind == DreamParkPackageKind.Sequence)
+            {
+                for (Transform ancestor = transform; ancestor != null && ancestor != package.transform;
+                     ancestor = ancestor.parent)
+                {
+                    LevelTemplate level = ancestor.GetComponent<LevelTemplate>();
+                    if (level != null) return level.runtimePlane != null ? level : null;
+                }
+                // Overlay anchors are bound to the active level by the host.
+                // The package root's plain calibration grid is never a play floor.
+                return null;
+            }
+            for (Transform ancestor = transform; ancestor != null; ancestor = ancestor.parent)
+            {
+                LevelTemplate level = ancestor.GetComponent<LevelTemplate>();
+                if (level != null && level.runtimePlane != null) return level;
+            }
+            return null;
         }
 
     #if UNITY_EDITOR

@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
+using DreamPark.ConvertReady;
 using DreamPark.EditorTools.Shaders;
 
 namespace DreamPark.PreUploadChecks.Checks
@@ -167,15 +168,69 @@ namespace DreamPark.PreUploadChecks.Checks
                       + "check passes and the object still renders over the guest's real room."
                       + (entry.embedded
                             ? "\n\nThis material is embedded in a model file and is read-only, so it "
-                            + "cannot be fixed in place. Select the model, set Materials → Location to "
-                            + "'Use External Materials' or run Extract Materials, then fix the "
-                            + "extracted material."
+                            + "cannot be fixed in place. DreamPark can extract the model's materials "
+                            + "beside it, rebind the model, and enable clipping on the affected "
+                            + "extracted materials."
                             : ""),
                 };
 
-                if (!entry.embedded)
+                string capturedPath = entry.ownerPath;
+                bool contentOwned = ContentRootScanner.IsUnderContentRoot(capturedPath, ctx.contentRoot);
+                if (!contentOwned)
                 {
-                    string capturedPath = entry.ownerPath;
+                    finding.detail += "\n\nThis asset is outside the selected content package. DreamPark "
+                                    + "will not rewrite a shared or package-owned source in place; resolve "
+                                    + "it into the content folder first, then run the material repair.";
+                }
+
+                if (!contentOwned && owner != null
+                    && OutsideContentFolderCheck.Classify(capturedPath, ctx.contentId)
+                        == OutsideContentFolderCheck.Verdict.Violation
+                    && OutsideContentFolderCheck.CanOfferMove(capturedPath))
+                {
+                    string rootPath = owner.assetPath;
+                    string contentId = ctx.contentId;
+                    string contentRoot = ctx.contentRoot;
+                    finding.fixes.Add(FixAction.Interactive("Resolve into content first…", completed =>
+                    {
+                        OutsideContentDependencyResolverPopup.Show(
+                            rootPath, capturedPath, contentId, contentRoot, completed);
+                    }, OutsideContentFolderCheck.CheckId, MetaOcclusionCheck.CheckId));
+                }
+                else if (contentOwned && entry.embedded)
+                {
+                    finding.fixes.Add(new FixAction(
+                        "Extract Materials + Enable Alpha Clipping",
+                        () => ExtractAndFix(capturedPath))
+                    {
+                        tooltip = "Extracts all embedded materials beside the model, rebinds the model, "
+                                + "then enables Alpha Clipping on affected DreamPark materials.",
+                        bulkKey = "extract-and-enable-alpha-clipping",
+                        bulkLabel = "Extract Materials + Enable Alpha Clipping",
+                        // One extraction repairs every embedded material in this
+                        // model; sibling findings would otherwise run it twice.
+                        canBulk = false,
+                        affectedPaths = new[] { capturedPath },
+                        alsoRerunCheckIds = new[]
+                        {
+                            MetaOcclusionCheck.CheckId,
+                            OutsideContentFolderCheck.CheckId,
+                        },
+                        confirmTitle = "Extract materials and enable Alpha Clipping",
+                        confirmMessage =
+                            $"Extract all embedded materials from {Path.GetFileName(capturedPath)} and "
+                          + "enable Alpha Clipping where required?\n\n"
+                          + "The .mat files will be created beside the model and the model importer will "
+                          + "be rebound to them. Affected Opaque materials will move from Geometry to "
+                          + "AlphaTest; fully opaque textures will look unchanged.\n\n"
+                          + "WATCH FOR: asset packs sometimes contain empty or garbage albedo alpha. If "
+                          + "an object disappears, its texture alpha needs repair.\n\n"
+                          + "This modifies model import remaps and creates new assets. It cannot be "
+                          + "undone via Ctrl-Z; use version control to revert.",
+                    });
+                }
+                else if (contentOwned)
+                {
                     finding.fixes.Add(new FixAction(
                         "Enable Alpha Clipping",
                         () => Fix(capturedPath))
@@ -241,7 +296,13 @@ namespace DreamPark.PreUploadChecks.Checks
                         var mat = obj as Material;
                         if (mat == null) continue;
                         if (!DreamParkMaterialRules.IsGoverned(mat)) continue;
-                        Add(entries, dep + "::" + mat.name, dep, mat, true, root);
+                        string key = dep + "::" + mat.name;
+                        string guid;
+                        long localId;
+                        if (AssetDatabase.TryGetGUIDAndLocalFileIdentifier(
+                                mat, out guid, out localId))
+                            key = dep + "::" + localId;
+                        Add(entries, key, dep, mat, true, root);
                     }
                 }
             }
@@ -283,6 +344,53 @@ namespace DreamPark.PreUploadChecks.Checks
             // report "resolved" having had nothing done to it.
             return DreamParkMaterialRules.IsGoverned(mat)
                 && DreamParkMaterialRules.IsSatisfied(mat);
+        }
+
+        private static bool ExtractAndFix(string modelPath)
+        {
+            try
+            {
+                var extraction = new ConversionResult { sourcePath = modelPath, ok = true };
+                int extracted;
+                List<string> extractedPaths;
+                string destination = AssetClassifier.DefaultMaterialsFolder(modelPath);
+
+                if (!AssetClassifier.ExtractEmbeddedMaterials(
+                        modelPath, destination, extraction, out extracted, out extractedPaths))
+                {
+                    Debug.LogWarning($"[DreamPark] Could not extract embedded materials from "
+                                   + $"{modelPath}: {extraction.error ?? "unknown extraction error"}");
+                    return false;
+                }
+
+                bool fixedAll = true;
+                foreach (string path in extractedPaths)
+                {
+                    var material = AssetDatabase.LoadAssetAtPath<Material>(path);
+                    if (material == null) { fixedAll = false; continue; }
+                    if (!DreamParkMaterialRules.IsBrokenForOcclusion(material)) continue;
+                    if (!Fix(path)) fixedAll = false;
+                }
+
+                AssetDatabase.SaveAssets();
+
+                bool blockingExtractedRemains = extractedPaths
+                    .Select(AssetDatabase.LoadAssetAtPath<Material>)
+                    .Where(m => m != null)
+                    .Any(DreamParkMaterialRules.IsBrokenForOcclusion);
+
+                bool blockingEmbeddedRemains = AssetDatabase.LoadAllAssetsAtPath(modelPath)
+                    .OfType<Material>()
+                    .Any(m => AssetDatabase.IsSubAsset(m)
+                           && DreamParkMaterialRules.IsBrokenForOcclusion(m));
+
+                return fixedAll && !blockingExtractedRemains && !blockingEmbeddedRemains;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[DreamPark] Could not extract and repair materials from {modelPath}: {e}");
+                return false;
+            }
         }
     }
 }

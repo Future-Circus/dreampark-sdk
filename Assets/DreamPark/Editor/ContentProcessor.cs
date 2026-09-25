@@ -11,6 +11,7 @@ using System;
 using UnityEditor.AddressableAssets.Settings.GroupSchemas;
 using System.Text;
 using System.Text.RegularExpressions;
+using DreamPark.Editor;
 
 namespace DreamPark {
     [InitializeOnLoad]
@@ -131,7 +132,7 @@ namespace DreamPark {
                 .ToArray();
 
             foreach (string contentId in contentIds) {
-                ForceUpdateContentInternal(contentId);
+                ForceUpdateContentInternal(contentId, contentId);
             }
         }
 
@@ -345,22 +346,72 @@ namespace DreamPark {
 
         public static void ForceUpdateContent(string contentId)
         {
-            ExecuteWithWatchdogPaused(() => ForceUpdateContentInternal(contentId));
+            ForceUpdateContent(contentId, contentId);
         }
 
-        private static void ForceUpdateContentInternal(string contentId)
+        // Builds addressable/runtime identity from targetContentId while reading
+        // assets from sourceContentId's one real folder. Beta uploads use this
+        // to produce a completely separate catalog and bundle namespace without
+        // requiring (or creating) a duplicate Assets/Content folder.
+        public static void ForceUpdateContent(string sourceContentId, string targetContentId)
         {
-            Debug.Log("🔄 Assigning contentId " + contentId + " to files in Assets/Content/" + contentId + "..");
+            ExecuteWithWatchdogPaused(() => ForceUpdateContentInternal(sourceContentId, targetContentId));
+        }
+
+        // Beta compilation temporarily stamps the target id into prefab fields
+        // and moves entries into target-named Addressables groups so the built
+        // bytes are self-consistent. Restore the author's one real source tree
+        // immediately after the bundles have been emitted; the already-built
+        // ServerData files are untouched.
+        public static void RestoreContentAfterTargetBuild(string sourceContentId, string targetContentId)
+        {
+            if (string.IsNullOrEmpty(sourceContentId)
+                || string.IsNullOrEmpty(targetContentId)
+                || string.Equals(sourceContentId, targetContentId, StringComparison.Ordinal))
+                return;
+
+            ExecuteWithWatchdogPaused(() =>
+            {
+                ForceUpdateContentInternal(sourceContentId, sourceContentId);
+
+                var settings = AddressableAssetSettingsDefaultObject.Settings;
+                string root = $"Assets/Content/{sourceContentId}/";
+                if (settings != null)
+                {
+                    foreach (var group in settings.groups.Where(g => g != null))
+                    {
+                        foreach (var entry in group.entries)
+                        {
+                            string path = AssetDatabase.GUIDToAssetPath(entry.guid).Replace('\\', '/');
+                            if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;
+                            if (entry.labels.Contains(targetContentId))
+                                entry.SetLabel(targetContentId, false, false);
+                        }
+                    }
+                    EditorUtility.SetDirty(settings);
+                    AssetDatabase.SaveAssets();
+                }
+
+                // The restore pass moves entries back to source-named groups.
+                // This removes the now-empty transient target groups.
+                CleanupAddressableSettings();
+            });
+        }
+
+        private static void ForceUpdateContentInternal(string sourceContentId, string targetContentId)
+        {
+            if (string.IsNullOrEmpty(targetContentId)) targetContentId = sourceContentId;
+            Debug.Log("🔄 Assigning target contentId " + targetContentId + " to files in Assets/Content/" + sourceContentId + "..");
             if (EditorApplication.isCompiling || EditorApplication.isUpdating) return;
 
-            string contentRoot = $"Assets/Content/{contentId}";
+            string contentRoot = $"Assets/Content/{sourceContentId}";
             if (!AssetDatabase.IsValidFolder(contentRoot))
             {
                 Debug.LogWarning($"⚠️ No folder found at {contentRoot}");
                 return;
             }
 
-            Debug.Log($"🔄 Force updating all prefabs and addressables for {contentId}...");
+            Debug.Log($"🔄 Force updating all prefabs from {sourceContentId} for target {targetContentId}...");
 
             // Process all prefabs under this content folder, EXCLUDING
             // ThirdPartyLocal — those prefabs never ship and frequently
@@ -371,15 +422,29 @@ namespace DreamPark {
             string[] allPrefabs = AssetDatabase.FindAssets("t:Prefab", new[] { contentRoot })
                 .Select(AssetDatabase.GUIDToAssetPath)
                 .Where(p => !string.IsNullOrEmpty(p))
+                .Where(p => !p.EndsWith("/DreamSequence/Dream Sequence.prefab", StringComparison.OrdinalIgnoreCase))
                 .Where(p => p.IndexOf("/ThirdPartyLocal/", StringComparison.OrdinalIgnoreCase) < 0)
                 .ToArray();
 
-            UpdateSpecificPrefabs(allPrefabs.ToList(), contentId);
+            UpdateSpecificPrefabs(allPrefabs.ToList(), targetContentId);
+            // A beta catalog uses the beta id in every runtime recipe address.
+            // The lazy Sequence definition must also be retargeted before the
+            // manifest is compiled; otherwise beta level swaps request source
+            // catalog addresses. The restore pass returns both to source id.
+            if (AssetDatabase.LoadAssetAtPath<DreamParkPackageManifest>(
+                    DreamParkPackageCompiler.ManifestPath(sourceContentId)) != null)
+            {
+                DreamSequencePackageCompiler.Compile(sourceContentId, targetContentId);
+                DreamParkPackageCompiler.Compile(sourceContentId, targetContentId);
+            }
             // Pin particle-system seeds so FX-bearing bundles build
             // deterministically and borrow on patches (idempotent).
-            NormalizeParticleSeeds(contentId);
-            GenerateAllLevelPreviews(contentId);
-            ApplyGameIdLabelToContentEntries(AddressableAssetSettingsDefaultObject.Settings, contentId);
+            NormalizeParticleSeeds(sourceContentId);
+            GenerateAllLevelPreviews(sourceContentId);
+            ApplyGameIdLabelToContentEntries(
+                AddressableAssetSettingsDefaultObject.Settings,
+                sourceContentId,
+                targetContentId);
 
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
@@ -467,12 +532,12 @@ namespace DreamPark {
                 if (prefabPaths.Count > 0)
                 {
                     UpdateSpecificPrefabs(prefabPaths, gameId);
-                    ApplyGameIdLabelToContentEntries(settings, gameId, prefabPaths);
+                    ApplyGameIdLabelToContentEntries(settings, gameId, gameId, prefabPaths);
                 }
 
                 if (otherAssets.Count > 0)
                 {
-                    ApplyGameIdLabelToContentEntries(settings, gameId, otherAssets);
+                    ApplyGameIdLabelToContentEntries(settings, gameId, gameId, otherAssets);
                 }
 
                 if (scriptPaths.Count > 0)
@@ -731,6 +796,18 @@ namespace DreamPark {
         {
             assetPath = assetPath.Replace("\\", "/");
 
+            // Legacy compiled Sequence prefabs are no longer shipped. The
+            // addressable package definition is the runtime entry point now.
+            if (assetPath.EndsWith("/DreamSequence/Dream Sequence.prefab",
+                    StringComparison.OrdinalIgnoreCase)) return true;
+
+            // Version-controlled uploader metadata is published through the content
+            // API / release manifest, not shipped as a runtime Addressable.
+            if (assetPath.EndsWith("/.dreampark-sequence.json", StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (assetPath.EndsWith("/.dreampark-arena.json", StringComparison.OrdinalIgnoreCase))
+                return true;
+
             if (disallowedExtensionsList.Any(ext => assetPath.EndsWith(ext, StringComparison.OrdinalIgnoreCase)))
             {
                 Debug.LogWarning($"⏭️ Skipped disallowed extension asset: {assetPath}");
@@ -827,6 +904,9 @@ namespace DreamPark {
         {
             if (string.IsNullOrEmpty(assetPath)) return true;
             assetPath = assetPath.Replace("\\", "/");
+            if (assetPath.EndsWith("/.dreampark-sequence.json", StringComparison.OrdinalIgnoreCase)) return true;
+            if (assetPath.EndsWith("/.dreampark-arena.json", StringComparison.OrdinalIgnoreCase)) return true;
+            if (assetPath.EndsWith("/DreamSequence/Dream Sequence.prefab", StringComparison.OrdinalIgnoreCase)) return true;
             if (disallowedExtensionsList.Any(ext => assetPath.EndsWith(ext, StringComparison.OrdinalIgnoreCase))) return true;
             if (assetPath.Contains("/Editor/")) return true;
             if (assetPath.IndexOf("/ThirdPartyLocal/", StringComparison.OrdinalIgnoreCase) >= 0) return true;
@@ -886,11 +966,16 @@ namespace DreamPark {
         // ---------------------------------------------------------------------
         // Addressable Updates (targeted)
         // ---------------------------------------------------------------------
-        private static void ApplyGameIdLabelToContentEntries(AddressableAssetSettings settings, string gameId, List<string> specificPaths = null)
+        private static void ApplyGameIdLabelToContentEntries(
+            AddressableAssetSettings settings,
+            string sourceGameId,
+            string targetGameId,
+            List<string> specificPaths = null)
         {
             if (settings == null) return;
+            if (string.IsNullOrEmpty(targetGameId)) targetGameId = sourceGameId;
 
-            EnsureGlobalLabel(settings, gameId);
+            EnsureGlobalLabel(settings, targetGameId);
 
             // Determine which asset paths to operate on
             IEnumerable<string> assetPaths;
@@ -900,7 +985,7 @@ namespace DreamPark {
             }
             else
             {
-                string contentRoot = $"Assets/Content/{gameId}/";
+                string contentRoot = $"Assets/Content/{sourceGameId}/";
                 // FindAssets accepts paths with or without trailing slash, but
                 // we strip it defensively because some Unity versions handle
                 // the trailing slash inconsistently and silently return fewer
@@ -908,7 +993,7 @@ namespace DreamPark {
                 string contentRootForFind = contentRoot.TrimEnd('/');
                 Debug.Log($"🔍 Searching for assets in {contentRoot}");
 
-                RestoreAssetSaveability(gameId);
+                RestoreAssetSaveability(sourceGameId);
 
                 // Build the initial list from AssetDatabase.FindAssets.
                 var foundAssets = new HashSet<string>(
@@ -992,7 +1077,7 @@ namespace DreamPark {
                 }
             }
 
-            Debug.Log($"🔍 Found {assetPaths.Count()} assets to process for gameId={gameId}.");
+            Debug.Log($"🔍 Found {assetPaths.Count()} assets to process from {sourceGameId} for target contentId={targetGameId}.");
 
             int labeled = 0, moved = 0;
             foreach (var assetPath in assetPaths)
@@ -1001,13 +1086,13 @@ namespace DreamPark {
                 if (string.IsNullOrEmpty(guid)) continue;
 
                 var rel = assetPath.Replace("\\", "/");
-                int idx = rel.IndexOf($"{gameId}/");
+                int idx = rel.IndexOf($"{sourceGameId}/", StringComparison.OrdinalIgnoreCase);
                 if (idx < 0) continue;
 
-                var subPath = rel.Substring(idx + gameId.Length + 1);
+                var subPath = rel.Substring(idx + sourceGameId.Length + 1);
                 var firstSlash = subPath.IndexOf('/');
                 string folderName = firstSlash > 0 ? subPath.Substring(0, firstSlash) : "Root";
-                string groupName = $"{Sanitize(gameId)}-{folderName}";
+                string groupName = $"{Sanitize(targetGameId)}-{folderName}";
 
                 var group = settings.groups.FirstOrDefault(g => g != null && g.Name == groupName)
                     ?? settings.CreateGroup(groupName, false, false, true,
@@ -1052,7 +1137,7 @@ namespace DreamPark {
                 // specificPaths == null), so this is the right place to
                 // protect Smart membership.
                 bool inSmartGroup = entry?.parentGroup != null
-                    && IsSmartManagedGroupName(gameId, entry.parentGroup.Name);
+                    && IsSmartManagedGroupName(targetGameId, entry.parentGroup.Name);
                 bool isIncremental = specificPaths != null && specificPaths.Count > 0;
                 bool preserveSmart = isIncremental
                     && BundlingStrategyPrefs.Current == BundlingStrategy.Smart
@@ -1093,20 +1178,20 @@ namespace DreamPark {
                     var levelTemplate = prefab.GetComponent<LevelTemplate>();
                     var propTemplate = prefab.GetComponent<PropTemplate>();
                     if (levelTemplate != null) {
-                        desiredAddress = $"{gameId}/Levels/{levelTemplate.size.ToString()}/{Path.GetFileNameWithoutExtension(assetPath)}";
-                        string filePreview = $"Assets/Content/{gameId}/Previews/{Path.GetFileNameWithoutExtension(assetPath)}.png";
+                        desiredAddress = $"{targetGameId}/Levels/{levelTemplate.size.ToString()}/{Path.GetFileNameWithoutExtension(assetPath)}";
+                        string filePreview = $"Assets/Content/{sourceGameId}/Previews/{Path.GetFileNameWithoutExtension(assetPath)}.png";
                         // if (!File.Exists(filePreview)) {
                         //     GeneratePreview(prefab).ContinueWith(t => SavePreview(t.Result, filePreview));
                         // }
                     } else if (propTemplate != null) {
-                        desiredAddress = $"{gameId}/Props/{propTemplate.category.ToString()}/{Path.GetFileNameWithoutExtension(assetPath)}";
+                        desiredAddress = $"{targetGameId}/Props/{propTemplate.category.ToString()}/{Path.GetFileNameWithoutExtension(assetPath)}";
                     } else {
-                        desiredAddress = $"{gameId}/{Path.GetFileNameWithoutExtension(assetPath)}";
+                        desiredAddress = $"{targetGameId}/{Path.GetFileNameWithoutExtension(assetPath)}";
                     }
                 } else if (typeFolder == "Textures" && assetPath.Contains("Previews")) {
-                    desiredAddress =  $"{gameId}/Previews/{Path.GetFileNameWithoutExtension(assetPath)}";
+                    desiredAddress =  $"{targetGameId}/Previews/{Path.GetFileNameWithoutExtension(assetPath)}";
                 } else if (!string.IsNullOrEmpty(typeFolder)) {
-                    desiredAddress = $"{gameId}/{typeFolder}/{Path.GetFileNameWithoutExtension(assetPath)}";
+                    desiredAddress = $"{targetGameId}/{typeFolder}/{Path.GetFileNameWithoutExtension(assetPath)}";
                 } else {
                     desiredAddress = assetPath;
                 }
@@ -1118,18 +1203,24 @@ namespace DreamPark {
                     entry.address = desiredAddress;
                 }
 
-                if (!entry.labels.Contains(gameId))
+                if (!string.Equals(sourceGameId, targetGameId, StringComparison.Ordinal)
+                    && entry.labels.Contains(sourceGameId))
+                {
+                    entry.SetLabel(sourceGameId, false, false);
+                }
+
+                if (!entry.labels.Contains(targetGameId))
                 {
                     Debug.Log("🔍 Label changed for: " + assetPath);
-                    Debug.Log("gameId: " + gameId);
+                    Debug.Log("gameId: " + targetGameId);
                     Debug.Log("entry.labels: " + string.Join(", ", entry.labels));
-                    entry.SetLabel(gameId, true, true);
+                    entry.SetLabel(targetGameId, true, true);
                     labeled++;
                 }
             }
 
             if (labeled > 0 || moved > 0)
-                Debug.Log($"🏷 Addressables: {moved} moved/created, {labeled} labeled for '{gameId}'.");
+                Debug.Log($"🏷 Addressables: {moved} moved/created, {labeled} labeled for '{targetGameId}'.");
 
             // ── Bundling strategy ────────────────────────────────────────
             // After the folder-based grouping has finished assigning every
@@ -1148,8 +1239,8 @@ namespace DreamPark {
             // editing is recovered by the time we build.
             if (specificPaths == null && BundlingStrategyPrefs.Current == BundlingStrategy.Smart)
             {
-                var result = SmartBundleGrouper.ApplyDependencyAwareGrouping(settings, gameId);
-                Debug.Log($"📦 Smart bundling for '{gameId}': " +
+                var result = SmartBundleGrouper.ApplyDependencyAwareGrouping(settings, targetGameId);
+                Debug.Log($"📦 Smart bundling for '{targetGameId}': " +
                           $"{result.rootBundles} root bundles, {result.runtimeAssets} runtime assets, " +
                           $"+{result.groupsCreated}/-{result.groupsRemoved} groups, " +
                           $"{result.orphanFilesRemoved} orphan files cleaned.");
@@ -1161,7 +1252,7 @@ namespace DreamPark {
             // 2026). Runs on BOTH strategies and on incremental passes — the
             // groups exist in every project that ever published, and a project
             // that hasn't run the Smart pass yet still must not build them.
-            SmartBundleGrouper.ExcludeRetiredArtGroupsFromBuild(settings, gameId);
+            SmartBundleGrouper.ExcludeRetiredArtGroupsFromBuild(settings, targetGameId);
         }
 
         public static Texture2D CreateAlphaMask(Texture2D original, Color bg, float threshold = 0.1f)
@@ -1205,6 +1296,8 @@ namespace DreamPark {
             // Find all prefabs with LevelTemplate or PropTemplate component
             string[] allPrefabs = AssetDatabase.FindAssets("t:Prefab", new[] { contentRoot })
                 .Select(AssetDatabase.GUIDToAssetPath)
+                .Where(path => !path.EndsWith("/DreamSequence/Dream Sequence.prefab",
+                    StringComparison.OrdinalIgnoreCase))
                 .ToArray();
 
             int generated = 0;
@@ -1212,6 +1305,7 @@ namespace DreamPark {
 
             foreach (string prefabPath in allPrefabs)
             {
+                bool isSequenceLevel = Editor.DreamSequenceGenerator.IsSpecialLevelPath(contentId, prefabPath);
                 var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
                 if (prefab == null) continue;
 
@@ -1259,14 +1353,15 @@ namespace DreamPark {
                 // historical output, so untouched previews don't churn.
                 string prefabName = Path.GetFileNameWithoutExtension(prefabPath);
                 PreviewSettings settings = PreviewMetadataStore.GetOrDefault(contentId, prefabName);
-                Texture2D preview = PrefabPreviewRenderer.RenderPreview(prefab, settings);
+                int resolution = isSequenceLevel ? 1024 : 512;
+                Texture2D preview = PrefabPreviewRenderer.RenderPreview(prefab, settings, resolution);
                 if (preview == null)
                 {
                     Debug.LogWarning($"⚠️ Could not generate preview for {prefabPath}");
                     continue;
                 }
 
-                WritePreviewPng(previewPath, preview);
+                WritePreviewPng(previewPath, preview, resolution);
                 UnityEngine.Object.DestroyImmediate(preview);
 
                 generated++;
@@ -1275,6 +1370,37 @@ namespace DreamPark {
 
             AssetDatabase.Refresh();
             Debug.Log($"✅ Preview generation complete. Generated {generated}, skipped {skipped} (already up-to-date).");
+        }
+
+        public static bool HasSequenceLevelPreviews(string contentId)
+        {
+            if (string.IsNullOrEmpty(contentId)) return false;
+            string[] paths =
+            {
+                Editor.DreamSequenceGenerator.StartLevelPath(contentId),
+                Editor.DreamSequenceGenerator.OverlayLevelPath(contentId),
+                Editor.DreamSequenceGenerator.GameOverLevelPath(contentId)
+            };
+            return paths.All(path => File.Exists(
+                $"Assets/Content/{contentId}/Previews/{Path.GetFileNameWithoutExtension(path)}.png"));
+        }
+
+        public static void GenerateSequenceLevelPreviews(string contentId, bool forceRegenerate = false)
+        {
+            if (string.IsNullOrEmpty(contentId)) return;
+            string[] paths =
+            {
+                Editor.DreamSequenceGenerator.StartLevelPath(contentId),
+                Editor.DreamSequenceGenerator.OverlayLevelPath(contentId),
+                Editor.DreamSequenceGenerator.GameOverLevelPath(contentId)
+            };
+            foreach (string path in paths)
+            {
+                if (AssetDatabase.LoadAssetAtPath<GameObject>(path) == null) continue;
+                string preview = $"Assets/Content/{contentId}/Previews/{Path.GetFileNameWithoutExtension(path)}.png";
+                if (forceRegenerate || !File.Exists(preview))
+                    RegeneratePreviewForPrefab(contentId, path);
+            }
         }
 
         // Regenerates the preview PNG for a single prefab using whatever
@@ -1305,14 +1431,16 @@ namespace DreamPark {
                     Directory.CreateDirectory(previewDir);
 
                 PreviewSettings settings = PreviewMetadataStore.GetOrDefault(contentId, prefabName);
-                Texture2D preview = PrefabPreviewRenderer.RenderPreview(prefab, settings);
+                int resolution = Editor.DreamSequenceGenerator.IsSpecialLevelPath(contentId, prefabPath)
+                    ? 1024 : 512;
+                Texture2D preview = PrefabPreviewRenderer.RenderPreview(prefab, settings, resolution);
                 if (preview == null)
                 {
                     Debug.LogWarning($"⚠️ Could not generate preview for {prefabPath}");
                     return false;
                 }
 
-                WritePreviewPng(previewPath, preview);
+                WritePreviewPng(previewPath, preview, resolution);
                 UnityEngine.Object.DestroyImmediate(preview);
 
                 AssetDatabase.Refresh();
@@ -1330,7 +1458,7 @@ namespace DreamPark {
         // thumbnail importer settings, and preserves the asset GUID across
         // the reimport. Extracted verbatim from the batch loop so the single-
         // prefab and full-batch paths can never drift apart.
-        private static void WritePreviewPng(string previewPath, Texture2D preview)
+        private static void WritePreviewPng(string previewPath, Texture2D preview, int resolution)
         {
             // GUID preservation. Unity's v2 asset pipeline regenerates
             // the .meta — and the GUID — when a file's content changes
@@ -1368,14 +1496,13 @@ namespace DreamPark {
                 //  - Compressed + crunched (~5-10× smaller on disk
                 //    than the Uncompressed default this code shipped
                 //    with originally; ASTC/BC compression for runtime).
-                //  - Cap at 512 — that's what PrefabPreviewRenderer
-                //    outputs, so no reason to leave maxTextureSize
-                //    at the 1024 default.
+                //  - Match the rendered size. The three Sequence special
+                //    levels use 1024px HD previews; ordinary cards use 512px.
                 importer.alphaIsTransparency = true;
                 importer.sRGBTexture = true;
                 importer.isReadable = false;
                 importer.mipmapEnabled = false;
-                importer.maxTextureSize = 512;
+                importer.maxTextureSize = resolution;
                 importer.textureCompression = TextureImporterCompression.Compressed;
                 importer.crunchedCompression = true;
                 importer.compressionQuality = 50;
@@ -1761,9 +1888,14 @@ namespace DreamPark {
         }
 
         public static bool BuildUnityPackage(string contentId) {
-            Debug.Log($"Building unity package for {contentId}");
+            return BuildUnityPackage(contentId, contentId);
+        }
+
+        public static bool BuildUnityPackage(string sourceContentId, string targetContentId) {
+            if (string.IsNullOrEmpty(targetContentId)) targetContentId = sourceContentId;
+            Debug.Log($"Building unity package from {sourceContentId} for target {targetContentId}");
             try {
-                string sourceFolder = "Assets/Content/" + contentId;
+                string sourceFolder = "Assets/Content/" + sourceContentId;
                 string[] guids = AssetDatabase.FindAssets("t:Script", new[] { sourceFolder })
                     .Where(g => !g.Contains("/Editor/")).ToArray();
 
@@ -1776,7 +1908,7 @@ namespace DreamPark {
                 // left over from a previous build that did ship code.
                 string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
                 string unityPath = Path.Combine(projectRoot, "ServerData", "Unity");
-                string destPath = Path.Combine(unityPath, $"{contentId}.unitypackage");
+                string destPath = Path.Combine(unityPath, $"{targetContentId}.unitypackage");
 
                 if (assetPaths.Length == 0)
                 {
@@ -1811,7 +1943,7 @@ namespace DreamPark {
                 // causing "Could not produce class with ID X" errors at runtime
                 // when bundles try to deserialize prefabs with those components.
                 // See ContentLinkXmlGenerator for the full rationale.
-                string linkXmlPath = ContentLinkXmlGenerator.GenerateForContent(contentId);
+                string linkXmlPath = ContentLinkXmlGenerator.GenerateForContent(sourceContentId);
 
                 // Include the generated link.xml in the export alongside the
                 // scripts. If GenerateForContent returned null (no preservable
@@ -1822,7 +1954,7 @@ namespace DreamPark {
                 }
 
                 // Export to a temporary location
-                string tempPath = Path.Combine(Application.dataPath, $"../{contentId}.unitypackage");
+                string tempPath = Path.Combine(Application.dataPath, $"../{targetContentId}.unitypackage");
                 AssetDatabase.ExportPackage(assetPaths, tempPath, ExportPackageOptions.Default);
 
                 // Ensure the "ServerData" and "Unity" directories exist

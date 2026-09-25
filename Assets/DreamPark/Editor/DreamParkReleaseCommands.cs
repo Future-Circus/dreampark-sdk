@@ -343,6 +343,14 @@ namespace DreamPark
             Add(result, "sdk-assets", AssetDatabase.IsValidFolder(SDKAssetPath) ? "passed" : "failed",
                 AssetDatabase.IsValidFolder(SDKAssetPath) ? SDKAssetPath + " is exportable." : SDKAssetPath + " is missing.");
 
+            int designBudget, relayCap;
+            bool validNetworkBudget = PreUploadChecks.Checks.NetBudgetInvariant.IsSatisfied(
+                out designBudget, out relayCap);
+            Add(result, "network-budget-invariant", validNetworkBudget ? "passed" : "failed",
+                validNetworkBudget
+                    ? $"DreamBoxClient.DesignBudget ({designBudget}/s) is within the peer relay cap ({relayCap}/s)."
+                    : PreUploadChecks.Checks.NetBudgetInvariant.FailureMessage(designBudget, relayCap));
+
             if (authenticated)
             {
                 var admin = await AwaitAPI(callback => SDKAPI.CheckCanPublish(callback));
@@ -380,8 +388,9 @@ namespace DreamPark
 
                     byte[] bytes = File.ReadAllBytes(tempPath);
                     string sha256 = SHA256Hex(bytes);
+                    string retiredAssets = string.Join("\n", SDKUpgradeCleanup.GetPublishedRetiredAssetPaths());
                     var published = await AwaitAPI(callback => SDKAPI.PublishVersion(
-                        version, releaseNotes.Trim(), bytes, Path.GetFileName(tempPath), callback));
+                        version, releaseNotes.Trim(), bytes, Path.GetFileName(tempPath), retiredAssets, callback));
                     if (!published.success)
                         throw new InvalidOperationException(ErrorOf(published.response, "SDK publish failed."));
 

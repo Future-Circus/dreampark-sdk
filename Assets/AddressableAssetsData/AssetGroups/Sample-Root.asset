@@ -14,15 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   m_GroupName: Sample-Root
   m_GUID: ec77e052ec1ca4a0e8b84673be755dd8
-  m_SerializeEntries:
-  - m_GUID: 9fc0d4010bbf28b4594072e72b8655ab
-    m_Address: Assets/Content/Sample/Sample.unity
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - Sample
-    - SampleGame
-    - YOUR_GAME_HERE
-    FlaggedDuringContentUpdateRestriction: 0
+  m_SerializeEntries: []
   m_ReadOnly: 0
   m_Settings: {fileID: 11400000, guid: 5e922c848874c41bc90d6a8d78c6f5a9, type: 2}
   m_SchemaSet:

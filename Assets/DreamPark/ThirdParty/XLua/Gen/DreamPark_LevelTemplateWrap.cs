@@ -21,7 +21,7 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(DreamPark.LevelTemplate);
-			Utils.BeginObjectRegister(type, L, translator, 0, 8, 27, 23);
+			Utils.BeginObjectRegister(type, L, translator, 0, 7, 27, 23);
 			
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "RegenerateCeiling", _m_RegenerateCeiling);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "RegenerateFloor", _m_RegenerateFloor);
@@ -30,7 +30,7 @@ namespace XLua.CSObjectWrap
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "HideSelect", _m_HideSelect);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "RenderDimensions", _m_RenderDimensions);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "TestRealWorldCalibration", _m_TestRealWorldCalibration);
-			Utils.RegisterFunc(L, Utils.METHOD_IDX, "GetWallHeightMeters", _m_GetWallHeightMeters);
+
 			
 			
 			Utils.RegisterFunc(L, Utils.GETTER_IDX, "WallsWireValue", _g_get_WallsWireValue);
@@ -343,34 +343,7 @@ namespace XLua.CSObjectWrap
             }
             
         }
-        
-        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
-        static int _m_GetWallHeightMeters(RealStatePtr L)
-        {
-		    try {
-            
-                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
-            
-            
-                DreamPark.LevelTemplate gen_to_be_invoked = (DreamPark.LevelTemplate)translator.FastGetCSObj(L, 1);
-            
-            
-                
-                {
-                    
-                        var gen_ret = gen_to_be_invoked.GetWallHeightMeters(  );
-                        LuaAPI.lua_pushnumber(L, gen_ret);
-                    
-                    
-                    
-                    return 1;
-                }
-                
-            } catch(System.Exception gen_e) {
-                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
-            }
-            
-        }
+
         
         
         

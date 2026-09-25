@@ -116,6 +116,19 @@ namespace DreamPark.API
         public static string AvatarUrl   { get; private set; }
         public static bool   IsAnonymous { get; private set; }
 
+        // Physical height belongs to the selected sub-profile, just like the
+        // display name and avatar. The backend sends absolute inches; the SDK
+        // derives metres and a dimensionless scale from that one source of
+        // truth. Content authored for a 5'8" adult can multiply a vertical
+        // offset by HeightFactor without knowing anything about profile JSON.
+        public const float MinimumSupportedHeightInches = 24f;
+        public const float MaximumSupportedHeightInches = 96f;
+        public const float ReferenceHeightInches        = 68f;
+        public const float InchesToMeters               = 0.0254f;
+        public static float HeightInches { get; private set; } = ReferenceHeightInches;
+        public static float HeightMeters => HeightInches * InchesToMeters;
+        public static float HeightFactor => HeightInches / ReferenceHeightInches;
+
         // Player wallet — populated from the snapshot's `dreamPoints` field
         // when bound to a user account. Always 0 for anonymous DreamID
         // bindings (the backend doesn't issue points to unclaimed identities).
@@ -255,6 +268,12 @@ namespace DreamPark.API
         public static event Action OnIdentityBound;
         public static event Action OnIdentityCleared;
         public static event Action OnProfileLoaded;
+        /// <summary>Fired after an already-loaded profile's physical height
+        /// changes. The arguments are canonical whole inches and the scale
+        /// relative to the 68-inch authoring reference. Initial hydration is
+        /// deliberately silent; use OnReady plus the Height* properties for
+        /// the active profile's baseline.</summary>
+        public static event Action<float /* heightInches */, float /* heightFactor */> OnHeightChanged;
         public static event Action OnInventoryChanged;
         public static event Action<ProfileAchievement> OnAchievementUpdated;
         public static event Action<ProfileBadge> OnBadgeAwarded;
@@ -269,6 +288,13 @@ namespace DreamPark.API
         // ── Pending callbacks (Lua scripts can call .onReady before data lands) ─
         static readonly List<Action> _onReadyQueue = new List<Action>();
 
+        // Persistent Lua callbacks cannot hang directly off the public C#
+        // event: attraction scripts need a deterministic unsubscribe handle,
+        // and callbacks from one guest must never survive into the next guest.
+        static readonly Dictionary<int, Action<float, float>> _luaHeightChangedSubscriptions
+            = new Dictionary<int, Action<float, float>>();
+        static int _nextLuaHeightSubscriptionId = 1;
+
         /// <summary>Bind an identity (called by the core QR pairing handler).
         /// Sets Source = Headset — all reads/writes go through /app/profile/*
         /// which the backend authorizes by looking up the headset's binding.</summary>
@@ -279,6 +305,7 @@ namespace DreamPark.API
             BoundDreamId = string.IsNullOrEmpty(dreamId) ? null : dreamId;
             ContentFilter    = string.IsNullOrEmpty(contentFilter) ? null : contentFilter;
             IsLoaded         = false;
+            HeightInches     = ReferenceHeightInches;
             try { OnIdentityBound?.Invoke(); } catch (Exception e) { Debug.LogWarning($"[ProfileAPI] OnIdentityBound subscriber threw: {e}"); }
 
             // If the caller already holds the authoritative snapshot (the
@@ -335,6 +362,7 @@ namespace DreamPark.API
             BoundDreamId = null;
             ContentFilter    = string.IsNullOrEmpty(contentFilter) ? null : contentFilter;
             IsLoaded         = false;
+            HeightInches     = ReferenceHeightInches;
             Debug.Log($"[ProfileAPI] BindToLoggedInUser — minting pairing token for uid {BoundUserId}…");
             try { OnIdentityBound?.Invoke(); } catch (Exception e) { Debug.LogWarning($"[ProfileAPI] OnIdentityBound subscriber threw: {e}"); }
 
@@ -409,10 +437,12 @@ namespace DreamPark.API
             DisplayName = null;
             AvatarUrl   = null;
             IsAnonymous = false;
+            HeightInches = ReferenceHeightInches;
             IsLoaded = false;
             _items.Clear();
             _achievements.Clear();
             _badges.Clear();
+            _luaHeightChangedSubscriptions.Clear();
             try { OnIdentityCleared?.Invoke(); } catch (Exception e) { Debug.LogWarning($"[ProfileAPI] OnIdentityCleared subscriber threw: {e}"); }
         }
 
@@ -516,6 +546,10 @@ namespace DreamPark.API
                 DisplayName = snapshot.displayName;
                 AvatarUrl   = snapshot.avatarUrl;
                 IsAnonymous = snapshot.isAnonymous;
+                // IsLoaded is false for the first hydration, making this a
+                // silent baseline. Refreshes of the active profile take the
+                // exact same validation/change path and notify subscribers.
+                ApplyHeightUpdate(snapshot.heightInches);
             }
             else
             {
@@ -571,6 +605,60 @@ namespace DreamPark.API
             if (callback == null) return;
             if (IsLoaded) { try { callback(); } catch (Exception e) { Debug.LogWarning($"[ProfileAPI] OnReady subscriber threw: {e}"); } return; }
             _onReadyQueue.Add(callback);
+        }
+
+        /// <summary>
+        /// Applies a host-delivered height update for the currently bound
+        /// profile. Invalid, fractional, NaN, infinite, or out-of-range input
+        /// resolves to the safe 68-inch fallback. Returns true only when the
+        /// cached value actually changed. Changes received before the initial
+        /// profile load establish the baseline silently; once loaded, both C#
+        /// and Lua height subscribers are notified.
+        /// </summary>
+        public static bool ApplyHeightUpdate(float heightInches)
+        {
+            float canonical = NormalizeHeightInches(heightInches);
+            if (HeightInches == canonical) return false;
+
+            HeightInches = canonical;
+            if (!IsLoaded) return true;
+
+            float factor = HeightFactor;
+            var csharpSubscribers = OnHeightChanged;
+            if (csharpSubscribers != null)
+            {
+                foreach (Action<float, float> callback in csharpSubscribers.GetInvocationList())
+                {
+                    try { callback(HeightInches, factor); }
+                    catch (Exception e) { Debug.LogWarning($"[ProfileAPI] OnHeightChanged subscriber threw: {e}"); }
+                }
+            }
+
+            if (_luaHeightChangedSubscriptions.Count > 0)
+            {
+                var callbacks = new List<Action<float, float>>(_luaHeightChangedSubscriptions.Values);
+                for (int i = 0; i < callbacks.Count; i++)
+                {
+                    try { callbacks[i]?.Invoke(HeightInches, factor); }
+                    catch (Exception e) { Debug.LogWarning($"[ProfileAPI] Lua onHeightChanged callback threw: {e}"); }
+                }
+            }
+            return true;
+        }
+
+        static int SubscribeLuaHeightChanged(Action<float, float> callback)
+        {
+            if (callback == null) return 0;
+
+            int id = _nextLuaHeightSubscriptionId++;
+            if (_nextLuaHeightSubscriptionId <= 0) _nextLuaHeightSubscriptionId = 1;
+            _luaHeightChangedSubscriptions[id] = callback;
+            return id;
+        }
+
+        static void UnsubscribeLuaHeightChanged(int subscriptionId)
+        {
+            if (subscriptionId > 0) _luaHeightChangedSubscriptions.Remove(subscriptionId);
         }
 
         // ── Reads (synchronous; return null if no data yet) ──────────────
@@ -1104,6 +1192,8 @@ namespace DreamPark.API
             public string displayName;
             public string avatarUrl;
             public bool   isAnonymous;
+            public float  heightInches = ReferenceHeightInches;
+            public float  heightFactor => heightInches / ReferenceHeightInches;
             public int    dreamPoints;
             public List<ProfileItem>        items        = new List<ProfileItem>();
             public List<ProfileAchievement> achievements = new List<ProfileAchievement>();
@@ -1132,6 +1222,7 @@ namespace DreamPark.API
                 b.displayName = profile.GetField("displayName")?.stringValue;
                 b.avatarUrl   = profile.GetField("avatarUrl")?.stringValue;
                 b.isAnonymous = profile.GetField("isAnonymous")?.boolValue ?? (b.identityKind == "dreamid");
+                b.heightInches = ReadHeightInches(profile);
             }
 
             // DreamPoints balance — 0 for anonymous DreamID bindings.
@@ -1224,6 +1315,27 @@ namespace DreamPark.API
             return b;
         }
 
+        // Keep transport validation at the boundary. Older backends omit the
+        // field, and malformed/custom responses must never produce NaN or a
+        // dangerous ergonomic scale inside game logic.
+        static float ReadHeightInches(JSONObject profile)
+        {
+            var value = profile?.GetField("heightInches");
+            if (value == null || value.type != JSONObject.Type.Number) return ReferenceHeightInches;
+            return NormalizeHeightInches(value.floatValue);
+        }
+
+        static float NormalizeHeightInches(float inches)
+        {
+            if (float.IsNaN(inches) || float.IsInfinity(inches)
+                || inches != Mathf.Round(inches)
+                || inches < MinimumSupportedHeightInches
+                || inches > MaximumSupportedHeightInches)
+                return ReferenceHeightInches;
+
+            return inches;
+        }
+
         // ── Helpers ──────────────────────────────────────────────────────
         static string UnityWebRequestEscape(string s) =>
             System.Uri.EscapeDataString(s ?? "");
@@ -1290,6 +1402,10 @@ namespace DreamPark.API
                 env.Global.Set("dp_profile_identity",      new Func<string>(()                    => IdentitySegment()));
                 env.Global.Set("dp_profile_content_id",    new Func<string>(()                    => ContentFilter));
                 env.Global.Set("dp_profile_on_ready",      new Action<Action>(cb                  => OnReady(cb)));
+                env.Global.Set("dp_profile_subscribe_height_changed",
+                    new Func<Action<float, float>, int>(cb => SubscribeLuaHeightChanged(cb)));
+                env.Global.Set("dp_profile_unsubscribe_height_changed",
+                    new Action<int>(id => UnsubscribeLuaHeightChanged(id)));
                 env.Global.Set("dp_profile_refresh",       new Action(()                          => FetchProfile(ContentFilter, null)));
 
                 // ── readers — return LuaTable (or nil), not C# types ────
@@ -1303,6 +1419,9 @@ namespace DreamPark.API
                 env.Global.Set("dp_profile_get_badge",         new Func<string, LuaTable>(id => BadgeToLuaTable(env, GetBadge(id))));
                 env.Global.Set("dp_profile_has_badge",         new Func<string, bool>(HasBadge));
                 env.Global.Set("dp_profile_get_dreampoints",   new Func<int>(()                       => DreamPoints));
+                env.Global.Set("dp_profile_get_height_inches", new Func<float>(()                     => HeightInches));
+                env.Global.Set("dp_profile_get_height_meters", new Func<float>(()                     => HeightMeters));
+                env.Global.Set("dp_profile_get_height_factor", new Func<float>(()                     => HeightFactor));
 
                 // ── writers ─────────────────────────────────────────────
                 // awardItem accepts a makeUnique bool — when true, we
@@ -1356,6 +1475,24 @@ namespace DreamPark.API
                         hasBadge         = function(id)   return dp_profile_has_badge(id) end,
 
                         getDreamPoints   = function()     return dp_profile_get_dreampoints() end,
+                        -- Absolute values plus a scale relative to the 5ft 8in
+                        -- authoring reference. All three safely return the
+                        -- reference values until an older/missing profile loads.
+                        getHeightInches  = function()     return dp_profile_get_height_inches() end,
+                        getHeightMeters  = function()     return dp_profile_get_height_meters() end,
+                        getHeightFactor  = function()     return dp_profile_get_height_factor() end,
+                        -- Persistent subscription for the active profile.
+                        -- Returns an idempotent unsubscribe closure. Register
+                        -- after/onReady; identity clear also removes it.
+                        onHeightChanged  = function(cb)
+                            local id = dp_profile_subscribe_height_changed(cb)
+                            local active = true
+                            return function()
+                                if not active then return end
+                                active = false
+                                if id ~= 0 then dp_profile_unsubscribe_height_changed(id) end
+                            end
+                        end,
 
                         awardItem        = function(id, amt, unique) dp_profile_award_item(id, amt or 1, unique or false) end,
                         -- One distinct instance per call. For a one-of-a-kind
