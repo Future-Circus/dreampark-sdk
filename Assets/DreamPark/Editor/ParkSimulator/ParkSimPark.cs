@@ -49,8 +49,32 @@ namespace DreamPark.ParkSim
         public bool grounded;
     }
 
+    /// <summary>
+    /// Keeps the changing Arena footprint legible in the Scene view without
+    /// rendering a filled floor. The real cube remains only as calibration and
+    /// collision geometry.
+    /// </summary>
+    public sealed class ParkSimArenaGroundOutline : MonoBehaviour
+    {
+        private void OnDrawGizmos()
+        {
+            Matrix4x4 previous = Gizmos.matrix;
+            Color previousColor = Gizmos.color;
+            Gizmos.matrix = transform.localToWorldMatrix;
+            Gizmos.color = new Color(0.47f, 0f, 1f, 0.85f);
+            const float top = 0.5f;
+            Gizmos.DrawLine(new Vector3(-0.5f, top, -0.5f), new Vector3(0.5f, top, -0.5f));
+            Gizmos.DrawLine(new Vector3(0.5f, top, -0.5f), new Vector3(0.5f, top, 0.5f));
+            Gizmos.DrawLine(new Vector3(0.5f, top, 0.5f), new Vector3(-0.5f, top, 0.5f));
+            Gizmos.DrawLine(new Vector3(-0.5f, top, 0.5f), new Vector3(-0.5f, top, -0.5f));
+            Gizmos.matrix = previous;
+            Gizmos.color = previousColor;
+        }
+    }
+
     public static class ParkSimPark
     {
+        private const float FeetToMeters = 0.3048f;
         /// Where the park mesh has lived at various points. Tried in order
         /// before falling back to a project-wide search, so the common case
         /// costs one AssetDatabase lookup rather than a scan.
@@ -63,8 +87,43 @@ namespace DreamPark.ParkSim
 
         private static string _resolvedParkPath;
         public const string EnvironmentName = "[ParkSim] Park Environment";
+        public const string ArenaGroundName = "[ParkSim] Arena Ground";
         private const string ARMeshLayerName = "ARMesh";
         private const float DropProbeRange = 400f;
+
+        /// <summary>
+        /// Arena Test deliberately avoids park.fbx. Its only scanned surface is
+        /// a flat rectangle whose dimensions are driven by the Arena preview.
+        /// An invisible shallow cube gives calibration a real collider while
+        /// a Scene-view outline shows the footprint without a gray slab.
+        /// </summary>
+        public static GameObject SpawnArenaGround(Vector2 footprintFeet, List<string> notes)
+        {
+            GameObject ground = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            ground.name = ArenaGroundName;
+            ground.transform.position = new Vector3(0f, -0.01f, 0f);
+            ResizeArenaGround(ground, footprintFeet);
+            MeshRenderer renderer = ground.GetComponent<MeshRenderer>();
+            if (renderer != null) renderer.enabled = false;
+            ground.AddComponent<ParkSimArenaGroundOutline>();
+
+            int arMeshLayer = LayerMask.NameToLayer(ARMeshLayerName);
+            if (arMeshLayer >= 0) ground.layer = arMeshLayer;
+            else notes?.Add("Layer \"" + ARMeshLayerName
+                + "\" is missing; Arena Test content cannot calibrate against its floor.");
+
+            if (ground.GetComponent<OptimizedAFIgnore>() == null)
+                ground.AddComponent<OptimizedAFIgnore>();
+            return ground;
+        }
+
+        public static void ResizeArenaGround(GameObject ground, Vector2 footprintFeet)
+        {
+            if (ground == null) return;
+            float width = Mathf.Max(1f, footprintFeet.x) * FeetToMeters;
+            float length = Mathf.Max(1f, footprintFeet.y) * FeetToMeters;
+            ground.transform.localScale = new Vector3(width, 0.02f, length);
+        }
 
         /// <summary>
         /// Instantiate park.fbx as the environment mesh: ARMesh layer top to

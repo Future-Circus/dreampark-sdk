@@ -208,6 +208,87 @@ namespace DreamPark {
         }
 
         /// <summary>
+        /// Carry a live floor's grade into a rebuilt package floor. A Sequence may
+        /// change cutouts or physical footprint while playing; replacing its mesh
+        /// with a flat one would make floor anchors and physics jump. Sample the
+        /// old calibrated surface in world X/Z so this works across grid sizes.
+        /// Fresh AR calibration may subsequently refine the transferred grade.
+        /// </summary>
+        public Vector3[] CaptureGradeWorldSamples()
+        {
+            if (!calibrated) return null;
+            Mesh sourceMesh = dynamicMesh != null ? dynamicMesh
+                : GetComponent<MeshFilter>()?.sharedMesh;
+            if (sourceMesh == null) return null;
+            Vector3[] vertices = sourceMesh.vertices;
+            Vector3[] samples = new Vector3[vertices.Length];
+            for (int i = 0; i < vertices.Length; i++)
+                samples[i] = transform.TransformPoint(vertices[i]);
+            return samples;
+        }
+
+        public bool TransferGradeFrom(CalibrateLevel previous)
+            => TransferGradeFrom(previous != null ? previous.CaptureGradeWorldSamples() : null);
+
+        public bool TransferGradeFrom(Vector3[] oldWorld)
+        {
+            meshFilter = meshFilter != null ? meshFilter : GetComponent<MeshFilter>();
+            meshCollider = meshCollider != null ? meshCollider : GetComponent<MeshCollider>();
+            dynamicMesh = dynamicMesh != null ? dynamicMesh : meshFilter?.sharedMesh;
+            if (oldWorld == null || oldWorld.Length == 0 || dynamicMesh == null || meshCollider == null) return false;
+            Vector3[] vertices = dynamicMesh.vertices;
+            if (vertices.Length == 0) return false;
+            for (int i = 0; i < vertices.Length; i++)
+            {
+                Vector3 point = transform.TransformPoint(vertices[i]);
+                float[] nearestDistances = {
+                    float.PositiveInfinity, float.PositiveInfinity,
+                    float.PositiveInfinity, float.PositiveInfinity
+                };
+                float[] nearestHeights = new float[4];
+                for (int j = 0; j < oldWorld.Length; j++)
+                {
+                    float dx = oldWorld[j].x - point.x;
+                    float dz = oldWorld[j].z - point.z;
+                    float distanceSquared = dx * dx + dz * dz;
+                    if (distanceSquared >= nearestDistances[3]) continue;
+                    int insert = 3;
+                    while (insert > 0 && distanceSquared < nearestDistances[insert - 1])
+                    {
+                        nearestDistances[insert] = nearestDistances[insert - 1];
+                        nearestHeights[insert] = nearestHeights[insert - 1];
+                        insert--;
+                    }
+                    nearestDistances[insert] = distanceSquared;
+                    nearestHeights[insert] = oldWorld[j].y;
+                }
+                float worldY = nearestHeights[0];
+                if (nearestDistances[0] >= 0.000001f)
+                {
+                    float sum = 0f, weightSum = 0f;
+                    for (int j = 0; j < nearestDistances.Length; j++)
+                    {
+                        if (float.IsInfinity(nearestDistances[j])) continue;
+                        float weight = 1f / nearestDistances[j];
+                        sum += nearestHeights[j] * weight;
+                        weightSum += weight;
+                    }
+                    if (weightSum > 0f) worldY = sum / weightSum;
+                }
+                vertices[i].y = transform.InverseTransformPoint(
+                    new Vector3(point.x, worldY, point.z)).y;
+            }
+            dynamicMesh.vertices = vertices;
+            dynamicMesh.RecalculateNormals();
+            dynamicMesh.RecalculateBounds();
+            meshCollider.sharedMesh = dynamicMesh;
+            calibrated = true;
+            RequestNavMeshRebake();
+            LevelTemplate.NotifyLevelTemplateChanged();
+            return true;
+        }
+
+        /// <summary>
         /// Compute the world-space footprint of the floor grid, used to size the
         /// ground search before any per-vertex probing happens.
         ///

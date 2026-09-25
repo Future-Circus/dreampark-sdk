@@ -741,54 +741,105 @@ function ondestroy() if globalName ~= nil and globalName ~= '' then rawset(_G, g
         private const string ContainerLua = @"-- This is your game's persistent Game Manager. DreamPark creates it once.
 -- Edit or replace these functions to own routing, score, coins, achievements,
 -- randomizers, hub worlds, or anything else that should survive level changes.
--- dp.load_level(index) is the low-level platform loading/AR transition primitive.
+-- dp.load_level(index) requests an asynchronous platform load. Use this
+-- manager's load_level(index[, groupId]) for shared gameplay navigation.
 -- Index 1 is Start; subsequent indices are the package's ordered attractions;
--- the last index is Game Over. Your routing does not have to be linear.
+-- the last index is Game Over. Group indices start at 0. Your routing does
+-- not have to be linear: next_level can call load_level(0, 'your-group-id').
 -- The Container has one NetId. Navigation is shared by every connected player.
 local slot = 1
 local revision = 0
 local writer = ''
+local pendingSlot, pendingRevision, pendingWriter, pendingLocal = nil, nil, nil, false
 local receivedRemoteState = false
 local relayWasConnected = false
 local nextSyncAt = 0
 
-local function newer(r, u)
-    return r > revision or (r == revision and u > writer)
+local function newer(r, u, oldRevision, oldWriter)
+    return r > oldRevision or (r == oldRevision and u > oldWriter)
 end
 
-local function apply_level(index, r, u)
-    if type(index) ~= 'number' or index < 1 or index > dp.level_count() then return false end
-    if not newer(r, u) then return false end
-    if not dp.load_level(index) then return false end
-    slot, revision, writer = index, r, u
-    return true
+local function clear_pending()
+    pendingSlot, pendingRevision, pendingWriter, pendingLocal = nil, nil, nil, false
 end
 
-local function change_level(index)
-    local mine = tostring(dp.me() or '')
-    local next_revision = revision + 1
-    if not apply_level(index, next_revision, mine) then return false end
+local function publish_state()
     if net_send ~= nil then
         net_send('sequence_state', {slot = slot, revision = revision, writer = writer})
     end
+end
+
+local function on_level_loaded(index)
+    if pendingSlot == index then
+        slot, revision, writer = index, pendingRevision, pendingWriter
+        local publish = pendingLocal
+        clear_pending()
+        if publish then publish_state() end
+    elseif pendingSlot ~= nil or index ~= slot then
+        -- A creator may still use the low-level dp.load_level directly,
+        -- including while a manager request is pending. Unity cancels the
+        -- older request when the new one wins.
+        local nextRevision = math.max(revision, pendingRevision or revision) + 1
+        clear_pending()
+        slot, revision, writer = index, nextRevision, tostring(dp.me() or '')
+        publish_state()
+    end
+end
+
+local function on_level_failed(index)
+    local superseded = pendingSlot ~= nil and pendingSlot ~= index
+    if pendingSlot ~= index and not superseded then return end
+    local wasRemote = not pendingLocal or superseded
+    clear_pending()
+    if wasRemote then
+        receivedRemoteState = false
+        nextSyncAt = 0
+    end
+    print('[DreamSequence] Level ' .. tostring(index) .. ' failed: ' .. tostring(dp.level_error()))
+end
+
+local function request_level(index, r, u, localRequest)
+    if type(index) ~= 'number' or index < 1 or index > dp.level_count() then return false end
+    if not newer(r, u, revision, writer) then return false end
+    if pendingRevision ~= nil and not newer(r, u, pendingRevision, pendingWriter) then return false end
+    pendingSlot, pendingRevision, pendingWriter, pendingLocal = index, r, u, localRequest
+    if not dp.load_level(index) then
+        clear_pending()
+        return false
+    end
     return true
+end
+
+-- Public creator policy entry point. Absolute slots remain 1-based. Passing
+-- a Group ID makes the index zero-based within that authored Group.
+function load_level(index, groupId)
+    if pendingSlot ~= nil then return false end
+    if groupId ~= nil and groupId ~= '' then index = dp.level_slot(index, groupId) end
+    local mine = tostring(dp.me() or '')
+    return request_level(index, revision + 1, mine, true)
 end
 
 function onmessage(kind, p)
     if p == nil then return end
     if kind == 'sequence_sync_request' then
-        if net_send ~= nil then
-            net_send('sequence_state', {slot = slot, revision = revision, writer = writer})
-        end
+        publish_state()
     elseif kind == 'sequence_state' and type(p.revision) == 'number'
-        and type(p.writer) == 'string' then
+        and type(p.writer) == 'string' and type(p.slot) == 'number'
+        and p.slot >= 1 and p.slot <= dp.level_count() then
         receivedRemoteState = true
-        apply_level(p.slot, p.revision, p.writer)
+        request_level(p.slot, p.revision, p.writer, false)
     end
 end
 
-function onready()
+function awake()
     slot = math.max(1, dp.current_level_index())
+    dp.on_level_loaded(on_level_loaded)
+    dp.on_level_failed(on_level_failed)
+end
+
+function ondestroy()
+    dp.off_level_loaded(on_level_loaded)
+    dp.off_level_failed(on_level_failed)
 end
 
 function update()
@@ -804,15 +855,15 @@ function update()
 end
 
 function start_game()
-    return change_level(2)
+    return load_level(2)
 end
 
 function next_level()
-    return change_level(slot + 1)
+    return load_level(slot + 1)
 end
 
 function previous_level()
-    return change_level(slot - 1)
+    return load_level(slot - 1)
 end
 ";
 

@@ -220,16 +220,61 @@ namespace DreamPark
 
         public static int CurrentLevelIndex(GameObject go) => Package(go)?.CurrentLevelIndex ?? 0;
 
-        public static int LevelCount(GameObject go) => Package(go)?.LevelCount ?? 0;
+        public static int LevelCount(GameObject go, string groupId = null)
+        {
+            DreamParkPackageHost package = Package(go);
+            return package == null ? 0 : string.IsNullOrEmpty(groupId)
+                ? package.LevelCount : package.GroupLevelCount(groupId);
+        }
+
+        public static int LevelSlot(GameObject go, int index, string groupId)
+            => Package(go)?.ResolveGroupSlot(index, groupId) ?? 0;
+
+        /// <summary>Placed Groups in package order, with IDs accepted by grouped level APIs.</summary>
+        public static LuaTable Groups(GameObject go)
+        {
+            DreamParkPackageHost package = Package(go);
+            if (package == null) return null;
+            LuaTable result = LuaBehaviour.GetLuaEnv().NewTable();
+            var levels = package.GetComponent<DreamSequenceTemplate>()?.levels;
+            if (package.kind != DreamParkPackageKind.Sequence || levels == null) return result;
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            int position = 1;
+            foreach (DreamSequenceLevel level in levels)
+            {
+                if (level == null || string.IsNullOrEmpty(level.groupOccurrenceId)
+                    || !seen.Add(level.groupOccurrenceId)) continue;
+                LuaTable group = LuaBehaviour.GetLuaEnv().NewTable();
+                group.Set("id", level.groupOccurrenceId);
+                group.Set("name", level.groupName ?? string.Empty);
+                group.Set("sourceId", level.sourceGroupId ?? string.Empty);
+                group.Set("count", package.GroupLevelCount(level.groupOccurrenceId));
+                result.Set(position++, group);
+            }
+            return result;
+        }
 
         /// <summary>1-based display names in package order; no Addressable IDs.</summary>
-        public static LuaTable Levels(GameObject go)
+        public static LuaTable Levels(GameObject go, string groupId = null)
         {
             DreamParkPackageHost package = Package(go);
             if (package == null) return null;
             LuaTable result = LuaBehaviour.GetLuaEnv().NewTable();
             if (package.kind == DreamParkPackageKind.Sequence)
             {
+                if (!string.IsNullOrEmpty(groupId))
+                {
+                    var grouped = package.GetComponent<DreamSequenceTemplate>()?.levels;
+                    string resolvedGroupId = package.ResolveGroupId(groupId);
+                    int position = 1;
+                    if (grouped != null)
+                        foreach (DreamSequenceLevel level in grouped)
+                            if (level != null && string.Equals(level.groupOccurrenceId,
+                                resolvedGroupId, StringComparison.Ordinal)
+                                && resolvedGroupId != null)
+                                result.Set(position++, level.displayName ?? "Level");
+                    return result;
+                }
                 result.Set(1, package.startLevel != null ? package.startLevel.name : "Start Level");
                 var sequence = package.GetComponent<DreamSequenceTemplate>();
                 if (sequence != null && sequence.levels != null)
@@ -255,10 +300,66 @@ namespace DreamPark
             return result;
         }
 
-        public static bool LoadLevel(GameObject go, int slot)
+        public static bool LoadLevel(GameObject go, int slot, string groupId = null)
         {
             var package = Package(go);
-            return package != null && package.LoadLevel(slot);
+            if (package == null) return false;
+            int resolved = string.IsNullOrEmpty(groupId) ? slot
+                : package.ResolveGroupSlot(slot, groupId);
+            return resolved > 0 && package.LoadLevel(resolved);
+        }
+
+        public static bool PreloadLevel(GameObject go, int slot, string groupId = null)
+        {
+            var package = Package(go);
+            if (package == null) return false;
+            int resolved = string.IsNullOrEmpty(groupId) ? slot
+                : package.ResolveGroupSlot(slot, groupId);
+            return resolved > 0 && package.PreloadLevel(resolved);
+        }
+
+        public static bool LevelReady(GameObject go, int slot, string groupId = null)
+        {
+            var package = Package(go);
+            if (package == null) return false;
+            int resolved = string.IsNullOrEmpty(groupId) ? slot
+                : package.ResolveGroupSlot(slot, groupId);
+            return resolved > 0 && package.IsLevelReady(resolved);
+        }
+
+        public static bool LevelLoading(GameObject go) => Package(go)?.IsChangingLevel ?? false;
+        public static string LevelError(GameObject go) => Package(go)?.LastLevelError;
+
+        public static bool OnLevelLoaded(GameObject go, Action<int> callback)
+        {
+            var package = Package(go);
+            if (package == null || callback == null) return false;
+            package.LevelActivated += callback;
+            return true;
+        }
+
+        public static bool OffLevelLoaded(GameObject go, Action<int> callback)
+        {
+            var package = Package(go);
+            if (package == null || callback == null) return false;
+            package.LevelActivated -= callback;
+            return true;
+        }
+
+        public static bool OnLevelFailed(GameObject go, Action<int> callback)
+        {
+            var package = Package(go);
+            if (package == null || callback == null) return false;
+            package.LevelChangeFailed += callback;
+            return true;
+        }
+
+        public static bool OffLevelFailed(GameObject go, Action<int> callback)
+        {
+            var package = Package(go);
+            if (package == null || callback == null) return false;
+            package.LevelChangeFailed -= callback;
+            return true;
         }
 
         public static void ShowOverlay(GameObject go, bool visible)
@@ -288,9 +389,19 @@ dp = setmetatable({
     is_adventure = function() return dp_is_adventure(self.gameObject) end,
     is_arena = function() return dp_is_arena(self.gameObject) end,
     current_level_index = function() return dp_current_level_index(self.gameObject) end,
-    level_count = function() return dp_level_count(self.gameObject) end,
-    levels = function() return dp_levels(self.gameObject) end,
-    load_level = function(slot) return dp_load_level(self.gameObject, slot) end,
+    level_count = function(groupId) return dp_level_count(self.gameObject, groupId or '') end,
+    groups = function() return dp_groups(self.gameObject) end,
+    levels = function(groupId) return dp_levels(self.gameObject, groupId or '') end,
+    level_slot = function(index, groupId) return dp_level_slot(self.gameObject, index, groupId or '') end,
+    load_level = function(slot, groupId) return dp_load_level(self.gameObject, slot, groupId or '') end,
+    preload_level = function(slot, groupId) return dp_preload_level(self.gameObject, slot, groupId or '') end,
+    level_ready = function(slot, groupId) return dp_level_ready(self.gameObject, slot, groupId or '') end,
+    level_loading = function() return dp_level_loading(self.gameObject) end,
+    level_error = function() return dp_level_error(self.gameObject) end,
+    on_level_loaded = function(fn) return dp_on_level_loaded(self.gameObject, fn) end,
+    off_level_loaded = function(fn) return dp_off_level_loaded(self.gameObject, fn) end,
+    on_level_failed = function(fn) return dp_on_level_failed(self.gameObject, fn) end,
+    off_level_failed = function(fn) return dp_off_level_failed(self.gameObject, fn) end,
     show_overlay = function(visible) dp_show_overlay(self.gameObject, visible) end,
     overlay_auto_visibility = function(enabled) dp_overlay_auto_visibility(self.gameObject, enabled) end,
     next_level = function()
@@ -615,9 +726,19 @@ dp = setmetatable({
                 env.Global.Set("dp_is_adventure",     new Func<GameObject, bool>(IsAdventure));
                 env.Global.Set("dp_is_arena",         new Func<GameObject, bool>(IsArena));
                 env.Global.Set("dp_current_level_index", new Func<GameObject, int>(CurrentLevelIndex));
-                env.Global.Set("dp_level_count",      new Func<GameObject, int>(LevelCount));
-                env.Global.Set("dp_levels",           new Func<GameObject, LuaTable>(Levels));
-                env.Global.Set("dp_load_level",       new Func<GameObject, int, bool>(LoadLevel));
+                env.Global.Set("dp_level_count",      new Func<GameObject, string, int>(LevelCount));
+                env.Global.Set("dp_groups",           new Func<GameObject, LuaTable>(Groups));
+                env.Global.Set("dp_levels",           new Func<GameObject, string, LuaTable>(Levels));
+                env.Global.Set("dp_level_slot",       new Func<GameObject, int, string, int>(LevelSlot));
+                env.Global.Set("dp_load_level",       new Func<GameObject, int, string, bool>(LoadLevel));
+                env.Global.Set("dp_preload_level",    new Func<GameObject, int, string, bool>(PreloadLevel));
+                env.Global.Set("dp_level_ready",      new Func<GameObject, int, string, bool>(LevelReady));
+                env.Global.Set("dp_level_loading",    new Func<GameObject, bool>(LevelLoading));
+                env.Global.Set("dp_level_error",      new Func<GameObject, string>(LevelError));
+                env.Global.Set("dp_on_level_loaded",  new Func<GameObject, Action<int>, bool>(OnLevelLoaded));
+                env.Global.Set("dp_off_level_loaded", new Func<GameObject, Action<int>, bool>(OffLevelLoaded));
+                env.Global.Set("dp_on_level_failed",  new Func<GameObject, Action<int>, bool>(OnLevelFailed));
+                env.Global.Set("dp_off_level_failed", new Func<GameObject, Action<int>, bool>(OffLevelFailed));
                 env.Global.Set("dp_show_overlay",     new Action<GameObject, bool>(ShowOverlay));
                 env.Global.Set("dp_overlay_auto_visibility", new Action<GameObject, bool>(SetOverlayAutoVisibility));
                 env.Global.Set("dp_ensure_pump",      new Action(EnsurePump));
@@ -665,9 +786,19 @@ dp.is_sequence = function(go) return dp_is_sequence(go) end
 dp.is_adventure = function(go) return dp_is_adventure(go) end
 dp.is_arena = function(go) return dp_is_arena(go) end
 dp.current_level_index = function(go) return dp_current_level_index(go) end
-dp.level_count = function(go) return dp_level_count(go) end
-dp.levels = function(go) return dp_levels(go) end
-dp.load_level  = function(go, slot) return dp_load_level(go, slot) end
+dp.level_count = function(go, groupId) return dp_level_count(go, groupId or '') end
+dp.groups = function(go) return dp_groups(go) end
+dp.levels = function(go, groupId) return dp_levels(go, groupId or '') end
+dp.level_slot = function(go, index, groupId) return dp_level_slot(go, index, groupId or '') end
+dp.load_level  = function(go, slot, groupId) return dp_load_level(go, slot, groupId or '') end
+dp.preload_level = function(go, slot, groupId) return dp_preload_level(go, slot, groupId or '') end
+dp.level_ready = function(go, slot, groupId) return dp_level_ready(go, slot, groupId or '') end
+dp.level_loading = function(go) return dp_level_loading(go) end
+dp.level_error = function(go) return dp_level_error(go) end
+dp.on_level_loaded = function(go, fn) return dp_on_level_loaded(go, fn) end
+dp.off_level_loaded = function(go, fn) return dp_off_level_loaded(go, fn) end
+dp.on_level_failed = function(go, fn) return dp_on_level_failed(go, fn) end
+dp.off_level_failed = function(go, fn) return dp_off_level_failed(go, fn) end
 dp.show_overlay = function(go, visible) dp_show_overlay(go, visible) end
 dp.overlay_auto_visibility = function(go, enabled) dp_overlay_auto_visibility(go, enabled) end
 

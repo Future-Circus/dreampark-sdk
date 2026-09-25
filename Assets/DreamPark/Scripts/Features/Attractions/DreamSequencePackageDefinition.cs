@@ -161,6 +161,10 @@ namespace DreamPark
                         sourceGuid = source.sourceGuid,
                         displayName = source.displayName,
                         address = address,
+                        occurrenceId = source.occurrenceId,
+                        groupOccurrenceId = source.groupOccurrenceId,
+                        sourceGroupId = source.sourceGroupId,
+                        groupName = source.groupName,
                     });
                     loader.levelAddresses.Add(address);
                 }

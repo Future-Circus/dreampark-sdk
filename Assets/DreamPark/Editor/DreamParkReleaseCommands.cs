@@ -343,6 +343,14 @@ namespace DreamPark
             Add(result, "sdk-assets", AssetDatabase.IsValidFolder(SDKAssetPath) ? "passed" : "failed",
                 AssetDatabase.IsValidFolder(SDKAssetPath) ? SDKAssetPath + " is exportable." : SDKAssetPath + " is missing.");
 
+            int designBudget, relayCap;
+            bool validNetworkBudget = PreUploadChecks.Checks.NetBudgetInvariant.IsSatisfied(
+                out designBudget, out relayCap);
+            Add(result, "network-budget-invariant", validNetworkBudget ? "passed" : "failed",
+                validNetworkBudget
+                    ? $"DreamBoxClient.DesignBudget ({designBudget}/s) is within the peer relay cap ({relayCap}/s)."
+                    : PreUploadChecks.Checks.NetBudgetInvariant.FailureMessage(designBudget, relayCap));
+
             if (authenticated)
             {
                 var admin = await AwaitAPI(callback => SDKAPI.CheckCanPublish(callback));

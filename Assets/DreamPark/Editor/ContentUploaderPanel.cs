@@ -4528,6 +4528,8 @@ namespace DreamPark {
 
             bool newParkAssetsFold = DrawOrganizerSectionHeader(headerRect,
                 foldoutRect, parkAssetsFold, summary);
+            DrawGroupIssueBadge(new Rect(refreshBtnRect.x - 22f, headerRect.y + 2f, 18f, 18f),
+                contentRoots.Select(e => e.guid), contentRoots, false);
             if (newParkAssetsFold != parkAssetsFold)
             {
                 parkAssetsFold = newParkAssetsFold;
@@ -4560,6 +4562,11 @@ namespace DreamPark {
                 EditorGUIUtility.singleLineHeight + 4f, GUILayout.ExpandWidth(true));
             bool expanded = DrawOrganizerSectionHeader(headerRect, headerRect,
                 packagesFold, "Packages");
+            IEnumerable<string> packageGuids = organizerMode == OrganizerMode.Arena
+                ? contentRoots.Where(e => e.kind != ContentRootKind.Player).Select(e => e.guid)
+                : ContentSequenceStore.Flatten(sequenceLayout);
+            DrawGroupIssueBadge(new Rect(headerRect.xMax - 23f, headerRect.y + 2f, 18f, 18f),
+                packageGuids, contentRoots, organizerMode != OrganizerMode.Arena);
             if (expanded != packagesFold)
             {
                 packagesFold = expanded;
@@ -5173,7 +5180,7 @@ namespace DreamPark {
             if (nextExpanded != expanded) EditorPrefs.SetBool(foldKey, nextExpanded);
             Rect menuRect = new Rect(header.xMax - 28f, header.y + 5f, 24f, 20f);
             Rect nameRect = new Rect(foldRect.xMax + 4f, header.y + 4f,
-                Mathf.Max(60f, menuRect.x - foldRect.xMax - 8f), 21f);
+                Mathf.Max(60f, menuRect.x - foldRect.xMax - 30f), 21f);
             string nextName = EditorGUI.TextField(nameRect, group.name ?? "New Group");
             if (nextName != group.name)
             {
@@ -5183,6 +5190,8 @@ namespace DreamPark {
             }
             GUI.Label(menuRect, new GUIContent("≡", "Drag this Group into either Package or reorder it in Park Assets."),
                 EditorStyles.centeredGreyMiniLabel);
+            DrawGroupIssueBadge(new Rect(menuRect.x - 22f, header.y + 6f, 18f, 18f),
+                group.attractionGuids, entries, false);
             GUI.color = prior;
             DrawLibraryGroupContextMenu(header, group, hidden);
 
@@ -5553,7 +5562,7 @@ namespace DreamPark {
             GUILayout.Space(CardSpacing);
             EditorGUILayout.BeginVertical(GUILayout.Width(CardWidth));
             EditorGUILayout.LabelField("PLAYER", EditorStyles.boldLabel, GUILayout.Width(CardWidth));
-            if (player != null) DrawCard(player, showAssetWarning: false);
+            if (player != null) DrawCard(player);
             else DrawAddGridTile("Player Required", "Add a Player prefab to this content package.");
             EditorGUILayout.EndVertical();
             GUILayout.FlexibleSpace();
@@ -5571,7 +5580,7 @@ namespace DreamPark {
             Rect rect;
             if (entry != null)
             {
-                rect = DrawCard(entry, true, false);
+                rect = DrawCard(entry, true);
                 int position = target == "start-slot" ? 1 : Mathf.Max(2, ContentSequenceStore.Flatten(sequenceLayout).Count());
                 var badge = new Rect(rect.x + 4f, rect.y + 4f, 24f, 24f);
                 DrawPositionEditor(badge, "endpoint:" + target, position,
@@ -5580,8 +5589,18 @@ namespace DreamPark {
             }
             else
             {
-                rect = DrawAddGridTile(target == "start-slot" ? "Assign Start Point" : "Assign End Point",
-                    "Drag an attraction here. This slot is required.");
+                rect = !string.IsNullOrEmpty(guid)
+                    ? DrawMissingPlacementCard(guid)
+                    : DrawAddGridTile(target == "start-slot" ? "Assign Start Point" : "Assign End Point",
+                        "Drag an attraction here. This slot is required.");
+                if (!string.IsNullOrEmpty(guid))
+                    DrawMissingPlacementContextMenu(rect, () =>
+                    {
+                        BeginSequenceChange("Clear Missing Endpoint");
+                        if (target == "start-slot") sequenceLayout.startGuid = null;
+                        else sequenceLayout.endGuid = null;
+                        SaveSequenceLayout();
+                    });
             }
             HandleEndpointDrop(rect, target);
             GUILayout.FlexibleSpace();
@@ -5684,6 +5703,14 @@ namespace DreamPark {
                         HandleTopLevelCardDrop(card, placementToken);
                         DrawPackageContextMenu(card, entry, item.id);
                     }
+                    else
+                    {
+                        Rect card = DrawMissingPlacementCard(item.attractionGuid);
+                        string placementToken = ContentSequenceStore.PlacementToken(item);
+                        DrawSequenceDrag(card, placementToken);
+                        HandleTopLevelCardDrop(card, placementToken);
+                        DrawMissingPlacementContextMenu(card, () => RemoveMissingPlacement(item.id));
+                    }
                     if (slot + 1 < rowEnd) GUILayout.Space(CardSpacing);
                 }
                 GUILayout.FlexibleSpace();
@@ -5719,9 +5746,11 @@ namespace DreamPark {
             Rect dragRect = new Rect(removeRect.x - 28f, header.y + 5f, 24f, 20f);
             GUI.Label(dragRect, new GUIContent("≡", "Drag to reorder this Group"), EditorStyles.centeredGreyMiniLabel);
             Rect nameRect = new Rect(foldRect.xMax + 4f, header.y + 4f,
-                Mathf.Max(60f, dragRect.x - foldRect.xMax - 8f), 21f);
+                Mathf.Max(60f, dragRect.x - foldRect.xMax - 30f), 21f);
             GUI.Label(nameRect, new GUIContent(world.name ?? "Group",
                 "Rename this Group in Park Assets."), EditorStyles.boldLabel);
+            DrawGroupIssueBadge(new Rect(dragRect.x - 22f, header.y + 6f, 18f, 18f),
+                world.attractionGuids, attractions, true);
 
             if (GUI.Button(removeRect, new GUIContent("Remove", "Remove the Group from this Package."), EditorStyles.miniButton))
             {
@@ -5775,9 +5804,9 @@ namespace DreamPark {
                 .Select((guid, sourceIndex) => new
                 {
                     sourceIndex,
+                    guid,
                     entry = attractions.FirstOrDefault(candidate => candidate.guid == guid),
                 })
-                .Where(child => child.entry != null)
                 .OrderBy(child => IsPackageEntryCompatible(child.entry) ? 0 : 1)
                 .ToList();
             int perRow = SequenceCardsPerRow();
@@ -5803,6 +5832,16 @@ namespace DreamPark {
                         DrawSequenceDrag(card, placementToken);
                         HandleWorldCardDrop(card, world.id, childIndex, placementToken);
                         DrawPackageContextMenu(card, entry, placementToken.Substring(2));
+                    }
+                    else
+                    {
+                        Rect card = DrawMissingPlacementCard(child.guid);
+                        pointerOverCard |= card.Contains(Event.current.mousePosition);
+                        string placementToken = ContentSequenceStore.ChildPlacementToken(world, childIndex);
+                        DrawSequenceDrag(card, placementToken);
+                        HandleWorldCardDrop(card, world.id, childIndex, placementToken);
+                        DrawMissingPlacementContextMenu(card,
+                            () => RemoveMissingPlacement(placementToken.Substring(2)));
                     }
                     if (displayIndex + 1 < rowEnd) GUILayout.Space(CardSpacing);
                 }
@@ -5848,6 +5887,14 @@ namespace DreamPark {
                             DrawSequenceDrag(card, placementToken);
                             HandleTopLevelCardDrop(card, placementToken);
                             DrawAttractionContextMenu(card, entry, false);
+                        }
+                        else
+                        {
+                            Rect card = DrawMissingPlacementCard(item.attractionGuid);
+                            string placementToken = ContentSequenceStore.PlacementToken(item);
+                            DrawSequenceDrag(card, placementToken);
+                            HandleTopLevelCardDrop(card, placementToken);
+                            DrawMissingPlacementContextMenu(card, () => RemoveMissingPlacement(item.id));
                         }
                     }
                     else if (slot < activeCount + hidden.Count)
@@ -6122,7 +6169,7 @@ namespace DreamPark {
             Color previous = GUI.color;
             if (!string.IsNullOrEmpty(incompatibility))
                 GUI.color = new Color(previous.r, previous.g, previous.b, previous.a * 0.5f);
-            Rect card = DrawCard(entry, true, false);
+            Rect card = DrawCard(entry, true);
             GUI.color = previous;
 
             if (!string.IsNullOrEmpty(incompatibility))
@@ -6137,6 +6184,87 @@ namespace DreamPark {
             return card;
         }
 
+        private void DrawGroupIssueBadge(Rect rect, IEnumerable<string> childGuids,
+            List<ContentRootEntry> entries, bool packageGroup)
+        {
+            if (childGuids == null) return;
+            int count = 0;
+            PreUploadChecks.CheckSeverity worst = PreUploadChecks.CheckSeverity.Info;
+            string first = null;
+            foreach (string guid in childGuids)
+            {
+                ContentRootEntry entry = entries.FirstOrDefault(e => e.guid == guid);
+                if (entry == null)
+                {
+                    if (!packageGroup) continue;
+                    count++;
+                    if (worst < PreUploadChecks.CheckSeverity.Blocking)
+                        first = "A placed prefab is missing or invalid. Expand this Group to find it.";
+                    worst = PreUploadChecks.CheckSeverity.Blocking;
+                    continue;
+                }
+
+                KeyValuePair<PreUploadChecks.CheckSeverity, string> badge;
+                if (preUploadBadges == null
+                    || !preUploadBadges.TryGetValue(entry.assetPath, out badge)) continue;
+                count++;
+                if (badge.Key > worst)
+                {
+                    worst = badge.Key;
+                    first = badge.Value;
+                }
+                else if (first == null) first = badge.Value;
+            }
+            if (count == 0) return;
+            GUIContent icon = EditorGUIUtility.IconContent(worst == PreUploadChecks.CheckSeverity.Blocking
+                ? "console.erroricon.sml" : "console.warnicon.sml");
+            string tooltip = count == 1 ? first : count + " items have issues. Expand this Group to find them.\n\n" + first;
+            GUI.Label(rect, new GUIContent(icon != null ? icon.image : null, tooltip));
+        }
+
+        private Rect DrawMissingPlacementCard(string guid)
+        {
+            float totalHeight = CardImageSize + CardLabelHeight + 2f;
+            Rect card = GUILayoutUtility.GetRect(CardWidth, totalHeight,
+                GUILayout.Width(CardWidth), GUILayout.Height(totalHeight));
+            Rect image = new Rect(card.x, card.y, CardWidth, CardImageSize);
+            EditorGUI.DrawRect(image, new Color(0.32f, 0.10f, 0.09f, 0.85f));
+            GUIContent icon = EditorGUIUtility.IconContent("console.erroricon");
+            Rect iconRect = new Rect(image.center.x - 18f, image.center.y - 18f, 36f, 36f);
+            GUI.Label(iconRect, icon ?? new GUIContent("!"));
+            string tooltip = "Missing or invalid prefab (" + (guid ?? "no GUID")
+                + "). Drop a replacement here or right-click to remove this placement. Click to review checks.";
+            GUI.Label(image, new GUIContent(string.Empty, tooltip), GUIStyle.none);
+            Rect label = new Rect(card.x, image.yMax + 2f, CardWidth, CardLabelHeight);
+            GUI.Label(label, new GUIContent("Missing Prefab", tooltip), EditorStyles.centeredGreyMiniLabel);
+            if (Event.current.type == EventType.MouseUp && Event.current.button == 0
+                && card.Contains(Event.current.mousePosition) && !sequenceDragWasStarted)
+            {
+                string path = string.IsNullOrEmpty(guid) ? "" : AssetDatabase.GUIDToAssetPath(guid);
+                PreUploadChecks.PreUploadChecksPopup.ShowForAsset(this, contentId,
+                    string.IsNullOrEmpty(path) ? "Assets/Content/" + contentId : path);
+                Event.current.Use();
+            }
+            return card;
+        }
+
+        private void DrawMissingPlacementContextMenu(Rect card, Action remove)
+        {
+            Event evt = Event.current;
+            if (evt.type != EventType.ContextClick || !card.Contains(evt.mousePosition)) return;
+            var menu = new GenericMenu();
+            menu.AddItem(new GUIContent("Remove Missing Placement"), false, () => remove());
+            menu.ShowAsContext();
+            evt.Use();
+        }
+
+        private void RemoveMissingPlacement(string placementId)
+        {
+            BeginSequenceChange("Remove Missing Placement");
+            if (ContentSequenceStore.RemovePlacementFromPackage(sequenceLayout, placementId))
+                SaveSequenceLayout();
+        }
+
         private string SequenceIncompatibilityMessage(ContentRootEntry entry)
         {
             if (organizerMode != OrganizerMode.Sequence || entry == null) return null;
@@ -6149,9 +6277,9 @@ namespace DreamPark {
 
         private bool IsPackageEntryCompatible(ContentRootEntry entry)
         {
+            if (entry == null) return false;
             if (organizerMode != OrganizerMode.Sequence) return true;
-            return entry != null
-                && entry.kind == ContentRootKind.Attraction
+            return entry.kind == ContentRootKind.Attraction
                 && entry.sequenceCompatible;
         }
 

@@ -91,6 +91,53 @@ public sealed class DreamParkPackageHostTests
     }
 
     [Test]
+    public void SequenceGroupIndicesResolveToAbsoluteSlotsWithoutChangingLegacyIndexing()
+    {
+        firstRoot = new GameObject("Sequence");
+        var sequence = firstRoot.AddComponent<DreamSequenceTemplate>();
+        sequence.levels = new List<DreamSequenceLevel> {
+            new DreamSequenceLevel { displayName = "A", groupOccurrenceId = "group-a", sourceGroupId = "library-a", groupName = "First" },
+            new DreamSequenceLevel { displayName = "B", groupOccurrenceId = "group-b", sourceGroupId = "library-b", groupName = "Second" },
+            new DreamSequenceLevel { displayName = "C", groupOccurrenceId = "group-a", sourceGroupId = "library-a", groupName = "First" },
+        };
+        var loader = firstRoot.AddComponent<DreamLevelLoader>();
+        loader.levelAddresses.AddRange(new[] { "A", "B", "C" });
+        var host = firstRoot.AddComponent<DreamParkPackageHost>();
+        host.levelLoader = loader;
+
+        Assert.That(DreamParkLuaAPI.LevelCount(firstRoot), Is.EqualTo(5));
+        Assert.That(DreamParkLuaAPI.LevelCount(firstRoot, "group-a"), Is.EqualTo(2));
+        Assert.That(DreamParkLuaAPI.LevelCount(firstRoot, "library-a"), Is.EqualTo(2));
+        Assert.That(DreamParkLuaAPI.LevelSlot(firstRoot, 0, "group-a"), Is.EqualTo(2));
+        Assert.That(DreamParkLuaAPI.LevelReady(firstRoot, 0, "group-a"), Is.False);
+        Assert.That(DreamParkLuaAPI.LevelSlot(firstRoot, 1, "library-a"), Is.EqualTo(4));
+        Assert.That(DreamParkLuaAPI.LevelSlot(firstRoot, 1, "group-a"), Is.EqualTo(4));
+        Assert.That(DreamParkLuaAPI.LevelSlot(firstRoot, 2, "group-a"), Is.Zero);
+        Assert.That(DreamParkLuaAPI.LevelSlot(firstRoot, 0, "missing"), Is.Zero);
+        Assert.That(DreamParkLuaAPI.LoadLevel(firstRoot, 0, "missing"), Is.False);
+        using (var levels = DreamParkLuaAPI.Levels(firstRoot, "group-a"))
+        {
+            Assert.That(levels.Get<int, string>(1), Is.EqualTo("A"));
+            Assert.That(levels.Get<int, string>(2), Is.EqualTo("C"));
+        }
+        using (var groups = DreamParkLuaAPI.Groups(firstRoot))
+        {
+            var first = groups.Get<int, XLua.LuaTable>(1);
+            var second = groups.Get<int, XLua.LuaTable>(2);
+            Assert.That(first.Get<string>("id"), Is.EqualTo("group-a"));
+            Assert.That(first.Get<string>("sourceId"), Is.EqualTo("library-a"));
+            Assert.That(first.Get<string>("name"), Is.EqualTo("First"));
+            Assert.That(first.Get<int>("count"), Is.EqualTo(2));
+            Assert.That(second.Get<string>("id"), Is.EqualTo("group-b"));
+            Assert.That(second.Get<int>("count"), Is.EqualTo(1));
+        }
+        sequence.levels[1].sourceGroupId = "library-a";
+        Assert.That(DreamParkLuaAPI.LevelCount(firstRoot, "library-a"), Is.Zero);
+        Assert.That(DreamParkLuaAPI.LevelSlot(firstRoot, 0, "library-a"), Is.Zero);
+        Assert.That(DreamParkLuaAPI.LevelCount(firstRoot, "group-a"), Is.EqualTo(2));
+    }
+
+    [Test]
     public void AdventureProgressionNeverHidesSpatialAttractions()
     {
         firstRoot = new GameObject("Adventure");

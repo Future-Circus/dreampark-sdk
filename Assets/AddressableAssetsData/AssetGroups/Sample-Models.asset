@@ -14,19 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   m_GroupName: Sample-Models
   m_GUID: 59d611383330d473d91529359e4f78e4
-  m_SerializeEntries:
-  - m_GUID: 15ba79b238b6a470baefc6393b48f4c1
-    m_Address: Sample/Models/DreamCube
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - Sample
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: 9fadf0c8637f34f5eadd2bf29f8a774c
-    m_Address: Sample/Models/TestPit
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - Sample
-    FlaggedDuringContentUpdateRestriction: 0
+  m_SerializeEntries: []
   m_ReadOnly: 0
   m_Settings: {fileID: 11400000, guid: 5e922c848874c41bc90d6a8d78c6f5a9, type: 2}
   m_SchemaSet:

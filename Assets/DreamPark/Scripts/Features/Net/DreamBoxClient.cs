@@ -179,10 +179,10 @@ public class DreamBoxClient : MonoBehaviour
     /// will ever enforce, and changing it is a breaking change for every park
     /// that budgeted against it.
     ///
-    /// The invariant is enforced at AUTHOR time, by
-    /// PreUploadChecks/Checks/NetBudgetInvariantCheck — it guards a source edit,
-    /// so it should fail a build rather than log on a headset in a park where
-    /// nobody is reading the console.
+    /// The invariant is enforced by the SDK release preflight in
+    /// DreamParkReleaseCommands. It guards an SDK source edit, so publishing the
+    /// SDK fails before the mismatch can reach a headset in a park where nobody is
+    /// reading the console. It is deliberately not a creator-content finding.
     /// </summary>
     public const int DesignBudget = 60;
 

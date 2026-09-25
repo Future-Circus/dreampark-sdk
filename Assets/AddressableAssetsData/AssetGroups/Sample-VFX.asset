@@ -14,13 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   m_GroupName: Sample-VFX
   m_GUID: b815dc6a519534efbb1d7fb6e2a91227
-  m_SerializeEntries:
-  - m_GUID: 6ddb1bbd9ebe2444f808388c90651ffa
-    m_Address: Sample/FX_DreamTransition
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - Sample
-    FlaggedDuringContentUpdateRestriction: 0
+  m_SerializeEntries: []
   m_ReadOnly: 0
   m_Settings: {fileID: 11400000, guid: 5e922c848874c41bc90d6a8d78c6f5a9, type: 2}
   m_SchemaSet:

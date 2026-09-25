@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
 
 namespace DreamPark.PreUploadChecks.Checks
@@ -232,15 +233,11 @@ namespace DreamPark.PreUploadChecks.Checks
                     };
 
                     string path = root.assetPath;
-                    finding.fixes.Add(FixAction.Navigate("Select prefab", () =>
+                    string componentKind = kind;
+                    int componentOrdinal = ordinal;
+                    finding.fixes.Add(FixAction.Navigate("Open prefab & select component", () =>
                     {
-                        var asset = AssetDatabase.LoadMainAssetAtPath(path);
-                        if (asset != null) { Selection.activeObject = asset; EditorGUIUtility.PingObject(asset); }
-                    }));
-                    finding.fixes.Add(FixAction.Navigate("Open in Prefab Mode", () =>
-                    {
-                        var asset = AssetDatabase.LoadMainAssetAtPath(path);
-                        if (asset != null) AssetDatabase.OpenAsset(asset);
+                        OpenAndSelectComponent(path, componentKind, componentOrdinal);
                     }));
 
                     findings.Add(finding);
@@ -248,6 +245,36 @@ namespace DreamPark.PreUploadChecks.Checks
             }
 
             return CheckResult.From(CheckId, findings);
+        }
+
+        private static void OpenAndSelectComponent(string prefabPath, string kind, int ordinal)
+        {
+            try
+            {
+                var stage = PrefabStageUtility.OpenPrefab(prefabPath);
+                var root = stage != null ? stage.prefabContentsRoot : null;
+                if (root == null) return;
+
+                int seen = 0;
+                foreach (var component in root.GetComponents<Component>())
+                {
+                    if (component == null || RejectedKind(component) != kind) continue;
+                    if (seen++ != ordinal) continue;
+
+                    Selection.activeObject = component;
+                    EditorGUIUtility.PingObject(component);
+                    return;
+                }
+
+                // If the prefab changed since the scan, still leave the developer at
+                // the correct root rather than selecting a stale asset object.
+                Selection.activeGameObject = root;
+                EditorGUIUtility.PingObject(root);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[DreamPark] Could not open '{prefabPath}' in Prefab Mode: {e.Message}");
+            }
         }
 
         private static string Detail(ContentRootInfo root, string typeName, bool isTriggerVolume)

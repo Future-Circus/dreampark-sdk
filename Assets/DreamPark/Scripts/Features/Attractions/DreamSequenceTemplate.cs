@@ -15,6 +15,17 @@ namespace DreamPark
         public string address;
 
         public string displayName;
+
+        [Tooltip("Stable placement identity from the Sequence organizer.")]
+        public string occurrenceId;
+
+        [Tooltip("Stable parent Group identity, or empty for an ungrouped stage.")]
+        public string groupOccurrenceId;
+
+        [Tooltip("Source library Group ID; may be shared by multiple placed Groups.")]
+        public string sourceGroupId;
+
+        public string groupName;
     }
 
     /// <summary>

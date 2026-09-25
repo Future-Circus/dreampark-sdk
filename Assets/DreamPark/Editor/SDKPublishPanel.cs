@@ -218,6 +218,17 @@ namespace DreamPark
 
         private void Publish()
         {
+            int designBudget, relayCap;
+            if (!PreUploadChecks.Checks.NetBudgetInvariant.IsSatisfied(
+                    out designBudget, out relayCap))
+            {
+                string message = PreUploadChecks.Checks.NetBudgetInvariant.FailureMessage(
+                    designBudget, relayCap);
+                FailWith("Publish blocked: " + message);
+                EditorUtility.DisplayDialog("SDK publish blocked", message, "OK");
+                return;
+            }
+
             isPublishing = true;
             status = "Bumping version file and exporting package...";
             statusIsError = false;

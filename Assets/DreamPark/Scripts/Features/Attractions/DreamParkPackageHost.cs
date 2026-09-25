@@ -33,6 +33,7 @@ namespace DreamPark
         private int currentLevelIndex = 1;
         private int requestVersion;
         private bool changingLevel;
+        private string lastLevelError;
         private Vector2 roomFootprintMeters;
         private readonly Dictionary<GameObject, Quaternion> authoredLevelRotations =
             new Dictionary<GameObject, Quaternion>();
@@ -44,10 +45,68 @@ namespace DreamPark
 
         public int CurrentLevelIndex => currentLevelIndex;
         public bool IsChangingLevel => changingLevel;
+        public string LastLevelError => lastLevelError;
+        /// <summary>Raised when the requested slot has finished activating.</summary>
+        public event Action<int> LevelActivated;
+        /// <summary>Raised when a requested slot cannot be activated.</summary>
+        public event Action<int> LevelChangeFailed;
         public int LevelCount => kind == DreamParkPackageKind.Sequence
             ? (levelLoader != null ? levelLoader.LevelCount : 0) + 2
             : adventureLevelCount > 0 ? adventureLevelCount
                 : levelParent != null ? levelParent.childCount : 0;
+
+        /// <summary>Number of playable stages in an authored Sequence Group.</summary>
+        public int GroupLevelCount(string groupId)
+        {
+            groupId = ResolveGroupId(groupId);
+            if (groupId == null) return 0;
+            var levels = GetComponent<DreamSequenceTemplate>()?.levels;
+            if (levels == null) return 0;
+            int count = 0;
+            foreach (DreamSequenceLevel level in levels)
+                if (level != null && string.Equals(level.groupOccurrenceId, groupId,
+                    StringComparison.Ordinal)) count++;
+            return count;
+        }
+
+        /// <summary>Map a zero-based Group index to the package's one-based slot.</summary>
+        public int ResolveGroupSlot(int groupIndex, string groupId)
+        {
+            if (groupIndex < 0) return 0;
+            groupId = ResolveGroupId(groupId);
+            if (groupId == null) return 0;
+            var levels = GetComponent<DreamSequenceTemplate>()?.levels;
+            if (levels == null) return 0;
+            for (int i = 0; i < levels.Count; i++)
+            {
+                if (levels[i] == null || !string.Equals(levels[i].groupOccurrenceId,
+                    groupId, StringComparison.Ordinal)) continue;
+                if (groupIndex-- == 0) return i + 2;
+            }
+            return 0;
+        }
+
+        /// <summary>Package Group ID, or an unambiguous library Group ID alias.</summary>
+        public string ResolveGroupId(string groupId)
+        {
+            if (kind != DreamParkPackageKind.Sequence || string.IsNullOrEmpty(groupId)) return null;
+            var levels = GetComponent<DreamSequenceTemplate>()?.levels;
+            if (levels == null) return null;
+            foreach (DreamSequenceLevel level in levels)
+                if (level != null && string.Equals(level.groupOccurrenceId, groupId,
+                    StringComparison.Ordinal)) return groupId;
+
+            string match = null;
+            foreach (DreamSequenceLevel level in levels)
+            {
+                if (level == null || !string.Equals(level.sourceGroupId, groupId,
+                    StringComparison.Ordinal) || string.IsNullOrEmpty(level.groupOccurrenceId)) continue;
+                if (match != null && !string.Equals(match, level.groupOccurrenceId,
+                    StringComparison.Ordinal)) return null;
+                match = level.groupOccurrenceId;
+            }
+            return match;
+        }
 
         private void Awake()
         {
@@ -93,19 +152,46 @@ namespace DreamPark
         /// </summary>
         public bool LoadLevel(int slot)
         {
-            if (slot < 1 || slot > LevelCount || !isActiveAndEnabled) return false;
+            if (slot < 1 || slot > LevelCount || !isActiveAndEnabled)
+            {
+                lastLevelError = "invalid-or-inactive-slot";
+                return false;
+            }
+            lastLevelError = null;
             if (kind != DreamParkPackageKind.Sequence)
             {
                 // An Adventure is spatial: every attraction remains deployed.
                 // The Container may use this as its current progression stop,
                 // but changing it must never hide the rest of the park.
                 currentLevelIndex = slot;
+                LevelActivated?.Invoke(slot);
                 return true;
             }
-            if (slot == currentLevelIndex && !changingLevel) return true;
+            if (slot == currentLevelIndex && !changingLevel)
+            {
+                LevelActivated?.Invoke(slot);
+                return true;
+            }
             int version = ++requestVersion;
             StartCoroutine(ChangeLevel(slot, version));
             return true;
+        }
+
+        /// <summary>Resolve a stage's prefab before it is requested for display.</summary>
+        public bool PreloadLevel(int slot)
+        {
+            if (kind != DreamParkPackageKind.Sequence || levelLoader == null
+                || slot < 2 || slot >= LevelCount) return false;
+            levelLoader.LoadPrefabAsync(slot - 2).Forget();
+            return true;
+        }
+
+        /// <summary>Whether the stage prefab is resident after a preload or load.</summary>
+        public bool IsLevelReady(int slot)
+        {
+            return kind == DreamParkPackageKind.Sequence && levelLoader != null
+                && slot >= 2 && slot < LevelCount
+                && levelLoader.IsPrefabResident(slot - 2);
         }
 
         public void ShowOverlay(bool visible)
@@ -150,7 +236,7 @@ namespace DreamPark
             int loaderIndex = slot - 2;
             if (kind == DreamParkPackageKind.Sequence && slot > 1 && slot < LevelCount)
             {
-                if (levelLoader == null) { FailChange(version); yield break; }
+                if (levelLoader == null) { FailChange(version, slot, "missing-loader"); yield break; }
                 UniTask<GameObject> pending = levelLoader.LoadPrefabAsync(loaderIndex);
                 var awaiter = pending.GetAwaiter();
                 while (!awaiter.IsCompleted)
@@ -160,12 +246,12 @@ namespace DreamPark
                 }
                 GameObject prefab;
                 try { prefab = awaiter.GetResult(); }
-                catch (Exception e) { Debug.LogException(e, this); FailChange(version); yield break; }
-                if (prefab == null) { FailChange(version); yield break; }
+                catch (Exception e) { Debug.LogException(e, this); FailChange(version, slot, "load-exception"); yield break; }
+                if (prefab == null) { FailChange(version, slot, "download-or-load-failed"); yield break; }
                 if (!CanFit(prefab.GetComponent<AttractionTemplate>(), roomFootprintMeters))
                 {
                     Debug.LogError($"[DreamParkPackage] {prefab.name} cannot fit this calibrated room; level remains unchanged.", this);
-                    FailChange(version);
+                    FailChange(version, slot, "room-fit-failed");
                     yield break;
                 }
             }
@@ -192,15 +278,15 @@ namespace DreamPark
                         yield return null;
                     }
                     try { next = awaiter.GetResult(); }
-                    catch (Exception e) { Debug.LogException(e, this); FailChange(version); yield break; }
+                    catch (Exception e) { Debug.LogException(e, this); FailChange(version, slot, "spawn-exception"); yield break; }
                 }
             }
             else if (levelParent != null && slot <= levelParent.childCount)
                 next = levelParent.GetChild(slot - 1).gameObject;
 
-            if (next == null) { FailChange(version); yield break; }
+            if (next == null) { FailChange(version, slot, "spawn-failed"); yield break; }
             if (version != requestVersion) yield break;
-            if (!PresentLevel(slot, next)) { FailChange(version); yield break; }
+            if (!PresentLevel(slot, next)) { FailChange(version, slot, "presentation-failed"); yield break; }
             // The new LevelTemplate builds its cutout floor in Start. Keep the
             // transition covering that frame, then transfer the reference grade
             // before revealing the level without particles.
@@ -209,6 +295,7 @@ namespace DreamPark
             SynchronizeSequenceFloor();
             changingLevel = false;
             StopTransition();
+            LevelActivated?.Invoke(slot);
         }
 
         /// <summary>
@@ -230,7 +317,9 @@ namespace DreamPark
                     : levelLoader != null ? levelLoader.GetInstance(slot - 2) : null;
             else if (levelParent != null && slot <= levelParent.childCount)
                 next = levelParent.GetChild(slot - 1).gameObject;
-            return PresentLevel(slot, next);
+            bool presented = PresentLevel(slot, next);
+            if (presented) LevelActivated?.Invoke(slot);
+            return presented;
         }
 
         private bool PresentLevel(int slot, GameObject next)
@@ -251,7 +340,8 @@ namespace DreamPark
             SynchronizeSequenceFloor();
             BindActiveAnchorsToPackageFloor();
             if (Application.isPlaying && kind == DreamParkPackageKind.Sequence
-                && levelLoader != null && slot > 1 && slot < LevelCount)
+                && levelLoader != null && levelLoader.preloadNextOnBegin
+                && slot > 1 && slot < LevelCount)
                 levelLoader.PreloadNext(slot - 2);
             return true;
         }
@@ -481,11 +571,13 @@ namespace DreamPark
             transitionEffect.SetActive(false);
         }
 
-        private void FailChange(int version)
+        private void FailChange(int version, int slot, string reason)
         {
             if (version != requestVersion) return;
             changingLevel = false;
             StopTransition();
+            lastLevelError = reason;
+            LevelChangeFailed?.Invoke(slot);
         }
     }
 }

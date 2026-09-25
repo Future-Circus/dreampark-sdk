@@ -27,6 +27,7 @@ namespace DreamPark.PreUploadChecks
             {
                 return new IPreUploadCheck[]
                 {
+                    new Checks.PackageReferencesCheck(),
                     new Checks.DreamSequenceRequiredCheck(),
                     new Checks.DuplicateNamesCheck(),
                     new Checks.SunLightCheck(),
@@ -48,7 +49,6 @@ namespace DreamPark.PreUploadChecks
                     new Checks.RootComponentsCheck(),
                     new Checks.SceneOverridesCheck(),
                     new Checks.OutsideContentFolderCheck(),
-                    new Checks.NetBudgetInvariantCheck(),
 
                     // Warning, so it sorts after the blocking checks above. It
                     // catches a PropTemplate/GameArea whose resourceName has
@@ -337,17 +337,24 @@ namespace DreamPark.PreUploadChecks
             return e.checkId + "|" + (e.assetGuid ?? "") + "|" + (e.subKey ?? "");
         }
 
-        // The full suite.
-        //
-        // scenesAreSaved must ONLY be true when the caller has genuinely just flushed
-        // open scenes to disk — the upload gate does, the "Review…" button and the
-        // popup's Re-run button do not. The scene-override check uses it to decide
-        // whether it is safe to open and restore scenes at all, and getting it wrong
-        // there costs somebody their unsaved work.
+        // The full suite, including the scene-opening check, is for explicit Review.
+        // Set scenesAreSaved to true only if the caller just saved open scenes.
         public static PreUploadReport RunAll(string contentId, Action<float, string> onProgress,
                                              bool scenesAreSaved = false)
         {
             return Run(contentId, AllChecks, onProgress, scenesAreSaved, advisoryOnly: false);
+        }
+
+        // Scenes are editor-only authoring aids and never enter the uploaded bundles.
+        // Opening every scene at the upload gate can emit Unity errors for old missing
+        // prefab instances and can disturb the creator's scene setup. Keep that check
+        // available in explicit Review, but do not run it when starting an upload.
+        public static PreUploadReport RunForUpload(string contentId, Action<float, string> onProgress,
+                                                   bool scenesAreSaved = false)
+        {
+            return Run(contentId,
+                AllChecks.Where(check => check.Id != Checks.SceneOverridesCheck.CheckId),
+                onProgress, scenesAreSaved, advisoryOnly: false);
         }
 
         // Convenience: the cheap checks only, when the panel is opened.
@@ -372,7 +379,7 @@ namespace DreamPark.PreUploadChecks
 
             // publishToCache: false — otherwise the single-check report would briefly
             // replace the cached full report and the badge map would be rebuilt from
-            // it, blanking every badge that belongs to the other four checks.
+            // it, blanking every badge that belongs to the other checks.
             var fresh = Run(report.contentId, new[] { check }, null, scenesAreSaved,
                             advisoryOnly: false, publishToCache: false);
 

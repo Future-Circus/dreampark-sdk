@@ -3,6 +3,9 @@ namespace DreamPark
     using System.Collections.Generic;
     using Defective.JSON;
     using UnityEngine;
+#if UNITY_EDITOR
+    using UnityEditor;
+#endif
 
     /// <summary>
     /// FROZEN. Serialized by integer value into every prop prefab and read back
@@ -34,6 +37,42 @@ namespace DreamPark
         Right = 1,
         Left = 2
     }
+
+#if UNITY_EDITOR
+    [CustomEditor(typeof(PropTemplate), true)]
+    public sealed class PropTemplateEditor : Editor
+    {
+        private const float FeetPerMeter = 1f / 0.3048f;
+
+        public override void OnInspectorGUI()
+        {
+            base.OnInspectorGUI();
+            if (!(target is PropTemplate template)) return;
+
+            if (!template.TryGetAuthoredFootprintMeters(out Vector2 meters))
+            {
+                EditorGUILayout.HelpBox(
+                    "Arena footprint unavailable — this Prop is excluded from Arena. "
+                    + "Add a supported enabled collider, or disable Use Collider Bounds "
+                    + "and enter positive manual dimensions.", MessageType.Warning);
+                return;
+            }
+
+            Vector2 feet = meters * FeetPerMeter;
+            int widthFeet = Mathf.Max(1, Mathf.FloorToInt(feet.x));
+            int lengthFeet = Mathf.Max(1, Mathf.FloorToInt(feet.y));
+            int bucketWidth = Mathf.Min(widthFeet, lengthFeet);
+            int bucketLength = Mathf.Max(widthFeet, lengthFeet);
+            string source = template.useColliderBounds
+                ? "measured from enabled colliders" : "manual footprint";
+            EditorGUILayout.HelpBox(
+                $"Arena footprint: {feet.x:0.##} × {feet.y:0.##} ft "
+                + $"(width × length, {source})\n"
+                + $"Arena bucket: {bucketWidth} × {bucketLength} ft",
+                MessageType.None);
+        }
+    }
+#endif
 
     [DisallowMultipleComponent][RequireComponent(typeof(GameArea))]
     public class PropTemplate : MonoBehaviour
@@ -414,6 +453,30 @@ namespace DreamPark
         }
 
         /// <summary>
+        /// Returns only a footprint actually authored for this prop. Unlike
+        /// FootprintMeters, this does not substitute the legacy 1 m fallback when
+        /// collider measurement fails or manual dimensions are invalid. Arena uses
+        /// this strict path so missing size data can never manufacture a placement.
+        /// </summary>
+        public bool TryGetAuthoredFootprintMeters(out Vector2 footprintMeters)
+        {
+            footprintMeters = Vector2.zero;
+            if (useColliderBounds)
+            {
+                if (!TryMeasureLocalColliderFootprint(out Vector2 measured, requireAllShapes: true)
+                    || !IsFinitePositive(measured.x) || !IsFinitePositive(measured.y))
+                    return false;
+                footprintMeters = measured;
+                return true;
+            }
+
+            if (!IsFinitePositive(customFootprintMeters.x)
+                || !IsFinitePositive(customFootprintMeters.y)) return false;
+            footprintMeters = customFootprintMeters;
+            return true;
+        }
+
+        /// <summary>
         /// Guarantees a positive, finite footprint. A zero, negative or NaN axis is not
         /// a small prop, it is an unusable answer, and shipping it would divide through
         /// the scale curve on the server.
@@ -427,6 +490,9 @@ namespace DreamPark
             return new Vector2(x, y);
         }
 
+        private static bool IsFinitePositive(float value)
+            => value > 0f && !float.IsNaN(value) && !float.IsInfinity(value);
+
         /// <summary>
         /// Axis-aligned extent of every enabled collider, expressed in this prop's
         /// ORIENTED frame — the root's position and rotation removed, its SCALE kept.
@@ -438,7 +504,8 @@ namespace DreamPark
         /// out — correct there, because it transforms straight back out again and the
         /// round trip cancels. This one does not round-trip, so it must not.)
         /// </summary>
-        private bool TryMeasureLocalColliderFootprint(out Vector2 footprintMeters)
+        private bool TryMeasureLocalColliderFootprint(out Vector2 footprintMeters,
+            bool requireAllShapes = false)
         {
             footprintMeters = Vector2.zero;
 
@@ -457,7 +524,14 @@ namespace DreamPark
                 if (collider == null || !collider.enabled)
                     continue;
                 if (!TryGetLocalShapeBounds(collider, out Bounds shape))
+                {
+                    // A partial collider union is not a trustworthy authored size.
+                    // Procedural props often have an unbaked primary MeshCollider
+                    // plus a small interaction collider; measuring only the latter
+                    // made large props look 1 ft wide in Arena.
+                    if (requireAllShapes) return false;
                     continue;
+                }
 
                 Matrix4x4 shapeToProp = worldToProp * collider.transform.localToWorldMatrix;
                 Vector3 c = shape.center;

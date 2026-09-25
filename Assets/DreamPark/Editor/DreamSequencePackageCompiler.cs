@@ -77,8 +77,9 @@ namespace DreamPark.Editor
             maximum = ExpandMaximum(maximum, definition.gameOverLevelPrefab.GetComponent<AttractionTemplate>(), false);
             definition.levels ??= new List<DreamSequenceLevel>();
             definition.levels.Clear();
-            foreach (string guid in ContentSequenceStore.Flatten(layout))
+            foreach (var stage in Stages(layout))
             {
+                string guid = stage.guid;
                 string path = AssetDatabase.GUIDToAssetPath(guid);
                 GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
                 AttractionTemplate attraction = prefab != null ? prefab.GetComponent<AttractionTemplate>() : null;
@@ -98,6 +99,10 @@ namespace DreamPark.Editor
                     sourceGuid = guid,
                     displayName = prefab.name,
                     address = $"{targetContentId}/Levels/{attraction.size}/{System.IO.Path.GetFileNameWithoutExtension(path)}",
+                    occurrenceId = stage.occurrenceId,
+                    groupOccurrenceId = stage.groupId,
+                    sourceGroupId = stage.sourceGroupId,
+                    groupName = stage.groupName,
                 });
             }
             if (minimum.x > authored.x + 0.001f || minimum.y > authored.y + 0.001f)
@@ -115,6 +120,28 @@ namespace DreamPark.Editor
             EditorUtility.SetDirty(definition);
             AssetDatabase.SaveAssets();
             return definition;
+        }
+
+        private static IEnumerable<(string guid, string occurrenceId, string groupId,
+            string sourceGroupId, string groupName)> Stages(
+            ContentSequenceStore.Data layout)
+        {
+            foreach (ContentSequenceStore.Entry item in layout.items ?? new List<ContentSequenceStore.Entry>())
+            {
+                if (item == null || item.hidden) continue;
+                if (!item.IsWorld)
+                {
+                    if (!string.IsNullOrEmpty(item.attractionGuid))
+                        yield return (item.attractionGuid, item.id, null, null, null);
+                    continue;
+                }
+                for (int i = 0; i < (item.attractionGuids?.Count ?? 0); i++)
+                {
+                    string id = i < (item.attractionIds?.Count ?? 0) ? item.attractionIds[i] : null;
+                    yield return (item.attractionGuids[i], id, item.id,
+                        item.sourceGroupId, item.name);
+                }
+            }
         }
 
         private static GameObject LoadSpecial(string path)

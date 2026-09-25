@@ -157,9 +157,46 @@ public sealed class DreamParkPackageCompilerTests
         });
         AssetDatabase.DeleteAsset(AssetDatabase.GUIDToAssetPath(missing));
 
+        var reconciled = ContentSequenceStore.LoadAndReconcile(SourceId, new[] { first },
+            new[] { first }, false);
+        ContentSequenceStore.Save(SourceId, reconciled);
+
         Assert.Throws<System.InvalidOperationException>(() =>
             DreamParkPackageCompiler.CompileRecipe(SourceId, SourceId, false,
                 SourceId + "/Player", SourceId + "/Game Container"));
+    }
+
+    [Test]
+    public void MissingGroupChildAppearsInAdvisoryFindings()
+    {
+        string missing = CreateAttraction("A_Deleted");
+        ContentSequenceStore.Save(SourceId, new ContentSequenceStore.Data
+        {
+            hasExplicitEndpoints = true,
+            items = new List<ContentSequenceStore.Entry>
+            {
+                new ContentSequenceStore.Entry
+                {
+                    kind = "world", id = "group", name = "BlockLand",
+                    attractionGuids = new List<string> { missing },
+                    attractionIds = new List<string> { "child" },
+                },
+            },
+        });
+        AssetDatabase.DeleteAsset(AssetDatabase.GUIDToAssetPath(missing));
+
+        var result = new DreamPark.PreUploadChecks.Checks.PackageReferencesCheck().Run(
+            new DreamPark.PreUploadChecks.PreUploadCheckContext
+            {
+                contentId = SourceId,
+                contentRoot = Root,
+            });
+
+        Assert.That(result.findings, Has.Count.EqualTo(1));
+        Assert.That(result.findings[0].severity,
+            Is.EqualTo(DreamPark.PreUploadChecks.CheckSeverity.Blocking));
+        Assert.That(result.findings[0].title, Does.Contain("BlockLand"));
+        Assert.That(result.findings[0].detail, Does.Contain(missing));
     }
 
     [Test]

@@ -56,9 +56,12 @@ namespace DreamPark.Editor
             if (string.IsNullOrWhiteSpace(contentId)) throw new ArgumentException("contentId is required");
             if (string.IsNullOrWhiteSpace(platform)) throw new ArgumentException("platform is required");
 
-            string layoutPath = Path.Combine(Addressables.LibraryPath, "aa", "buildlayout.json");
+            // Addressables keeps its build layout at the library root. The
+            // aa/<platform>/ subtree holds the runtime catalog, not reports.
+            string layoutPath = Path.Combine(Addressables.LibraryPath, "buildlayout.json");
             if (!File.Exists(layoutPath))
-                throw new InvalidOperationException("Addressables did not emit buildlayout.json; delivery index cannot be generated.");
+                throw new InvalidOperationException(
+                    $"Addressables did not emit {layoutPath}; delivery index cannot be generated.");
 
             BuildLayout layout = BuildLayout.Open(layoutPath, readHeader: true, readFullFile: true);
             if (layout == null) throw new InvalidOperationException("Addressables build layout could not be read.");
@@ -99,6 +102,17 @@ namespace DreamPark.Editor
                 }
             }
 
+            // SBP lists the Unity built-in assets and MonoScript bundles
+            // outside Groups. Content bundles still depend on them, so they
+            // need rows in the delivery graph as shared bundles.
+            foreach (BuildLayout.Bundle bundle in layout.BuiltInBundles ?? new List<BuildLayout.Bundle>())
+            {
+                string fileName = BundleFileName(bundle, physicalNames);
+                if (string.IsNullOrEmpty(fileName)) continue;
+                allBundles[fileName] = bundle;
+                allRoles[fileName] = "shared";
+            }
+
             // Content groups can depend on Addressables-owned/shared bundles
             // whose group names do not start with the title id. Include that
             // entire reachable graph: a closure entry with no corresponding
@@ -112,6 +126,9 @@ namespace DreamPark.Editor
                 foreach (BuildLayout.Bundle dependency in bundle.Dependencies ?? new List<BuildLayout.Bundle>())
                 {
                     string dependencyName = BundleFileName(dependency, physicalNames);
+                    if (!string.IsNullOrEmpty(dependencyName) && !allBundles.ContainsKey(dependencyName))
+                        throw new InvalidOperationException(
+                            $"Addressables dependency '{dependencyName}' has no build-layout bundle row.");
                     if (!string.IsNullOrEmpty(dependencyName)
                         && requiredNames.Add(dependencyName)) pendingBundles.Push(dependencyName);
                 }

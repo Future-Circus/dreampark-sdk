@@ -77,11 +77,9 @@ namespace DreamPark.Editor
             data.hiddenGuids = data.hiddenGuids ?? new List<string>();
             data.hiddenGuids = data.hiddenGuids.Where(available.Contains)
                 .Distinct(StringComparer.Ordinal).ToList();
-            if (data.hasExplicitEndpoints)
-            {
-                if (!available.Contains(data.startGuid)) data.startGuid = null;
-                if (!available.Contains(data.endGuid)) data.endGuid = null;
-            }
+            // Explicit package placements are authored references. Keep broken
+            // references visible so the organizer can show and repair them; the
+            // compiler must still reject them until they are replaced or removed.
 
             data.items = (data.items ?? new List<Entry>()).Where(item => item != null).ToList();
             var usedIds = new HashSet<string>(StringComparer.Ordinal);
@@ -96,8 +94,8 @@ namespace DreamPark.Editor
             }
 
             data.items = data.items.Where(item => item.IsWorld
-                || (!string.IsNullOrEmpty(item.attractionGuid)
-                    && available.Contains(item.attractionGuid)
+                || ((data.hasExplicitEndpoints || !string.IsNullOrEmpty(item.attractionGuid))
+                    && (data.hasExplicitEndpoints || available.Contains(item.attractionGuid))
                     && (data.hasExplicitEndpoints || claimed.Add(item.attractionGuid)))).ToList();
 
             if (data.hasExplicitEndpoints)
@@ -693,7 +691,8 @@ namespace DreamPark.Editor
             for (int i = 0; i < group.attractionGuids.Count; i++)
             {
                 string guid = group.attractionGuids[i];
-                if (!available.Contains(guid) || (!reusablePlacements && !claimed.Add(guid))) continue;
+                if (!reusablePlacements && (string.IsNullOrEmpty(guid)
+                    || !available.Contains(guid) || !claimed.Add(guid))) continue;
                 string id = group.attractionIds[i];
                 if (string.IsNullOrEmpty(id) || !usedIds.Add(id))
                 {

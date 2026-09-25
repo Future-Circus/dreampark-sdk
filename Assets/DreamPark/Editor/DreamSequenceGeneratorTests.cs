@@ -292,8 +292,11 @@ public sealed class DreamSequenceGeneratorTests
         finally { Object.DestroyImmediate(authored); }
         string guid = AssetDatabase.AssetPathToGUID(attractionPath);
         var layout = new ContentSequenceStore.Data { hasExplicitEndpoints = true };
-        layout.items.Add(new ContentSequenceStore.Entry { kind = "attraction", id = "one", attractionGuid = guid });
-        layout.items.Add(new ContentSequenceStore.Entry { kind = "attraction", id = "two", attractionGuid = guid });
+        layout.items.Add(new ContentSequenceStore.Entry {
+            kind = "world", id = "group-one", sourceGroupId = "library-one", name = "First Group",
+            attractionGuids = new List<string> { guid, guid },
+            attractionIds = new List<string> { "one", "two" },
+        });
         ContentSequenceStore.Save(ContentId, layout, true);
 
         DreamSequencePackageDefinition definition = DreamSequencePackageCompiler.Compile(ContentId);
@@ -301,6 +304,12 @@ public sealed class DreamSequenceGeneratorTests
         Assert.That(definition.levels.Count, Is.EqualTo(2));
         Assert.That(definition.levels[0].sourceGuid, Is.EqualTo(guid));
         Assert.That(definition.levels[1].sourceGuid, Is.EqualTo(guid));
+        Assert.That(definition.levels[0].occurrenceId, Is.EqualTo("one"));
+        Assert.That(definition.levels[1].occurrenceId, Is.EqualTo("two"));
+        Assert.That(definition.levels[0].groupOccurrenceId, Is.EqualTo("group-one"));
+        Assert.That(definition.levels[1].groupOccurrenceId, Is.EqualTo("group-one"));
+        Assert.That(definition.levels[0].sourceGroupId, Is.EqualTo("library-one"));
+        Assert.That(definition.levels[0].groupName, Is.EqualTo("First Group"));
         Assert.That(AssetDatabase.GetDependencies(DreamSequencePackageCompiler.DefinitionPath(ContentId), true),
             Does.Not.Contain(attractionPath));
     }

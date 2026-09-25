@@ -338,6 +338,34 @@ public sealed class ContentSequenceStoreTests
     }
 
     [Test]
+    public void ExplicitPackage_ReconcileKeepsMissingReferencesForRepair()
+    {
+        var data = new ContentSequenceStore.Data
+        {
+            hasExplicitEndpoints = true,
+            startGuid = "missing-start",
+            endGuid = "live-end",
+            items = new List<ContentSequenceStore.Entry>
+            {
+                new ContentSequenceStore.Entry
+                {
+                    kind = "world", id = "group", name = "BlockLand",
+                    attractionGuids = new List<string> { "live", "missing-child" },
+                    attractionIds = new List<string> { "child-one", "child-two" },
+                },
+                new ContentSequenceStore.Entry { id = "missing-placement", attractionGuid = "missing-leaf" },
+            },
+        };
+
+        ContentSequenceStore.Reconcile(data, new[] { "live", "live-end" });
+
+        Assert.That(data.startGuid, Is.EqualTo("missing-start"));
+        Assert.That(data.items[0].attractionGuids, Is.EqualTo(new[] { "live", "missing-child" }));
+        Assert.That(data.items[0].attractionIds, Is.EqualTo(new[] { "child-one", "child-two" }));
+        Assert.That(data.items[1].attractionGuid, Is.EqualTo("missing-leaf"));
+    }
+
+    [Test]
     public void ExplicitPackage_MovesOnlyTheDraggedPlacementInstance()
     {
         var data = new ContentSequenceStore.Data

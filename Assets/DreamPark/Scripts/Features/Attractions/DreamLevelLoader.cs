@@ -43,6 +43,7 @@ using System;
 using System.Collections.Generic;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
+using DreamPark.ParkBuilder;
 
 namespace DreamPark
 {
@@ -68,6 +69,19 @@ namespace DreamPark
         [Tooltip("Start fetching level N+1 as soon as level N begins playing, rather than " +
                  "waiting for the transition. See PreloadNext.")]
         public bool preloadNextOnBegin = true;
+
+        /// <summary>
+        /// Optional source override for simulator/integration tests. Production
+        /// leaves this null and resolves each address through Addressables.
+        /// </summary>
+        [NonSerialized] public Func<int, UniTask<GameObject>> prefabProvider;
+
+        /// <summary>
+        /// Backward-compatible source override for integrations that resolve by
+        /// address rather than sequence index. The index-based provider wins when
+        /// both are assigned.
+        /// </summary>
+        [NonSerialized] public Func<string, UniTask<GameObject>> AssetResolver;
 
         // ── Runtime state ────────────────────────────────────────────────
 
@@ -100,9 +114,78 @@ namespace DreamPark
         /// <summary>Raised when a level fails to load. (index, address)</summary>
         public event Action<int, string> LevelLoadFailed;
 
+        /// <summary>
+        /// The ordered occurrence currently playing. A negative value means the
+        /// configured sequence has not started or has completed.
+        /// </summary>
+        public int CurrentSequenceIndex { get; private set; } = -1;
+
+        public event Action SequenceCompleted;
+
         public int LevelCount => levelAddresses != null ? levelAddresses.Count : 0;
 
         public bool IsValidIndex(int index) => index >= 0 && index < LevelCount;
+
+        /// <summary>
+        /// Replace the ordered sequence. Duplicate addresses are deliberately kept:
+        /// each list index is a distinct occurrence in the package.
+        /// </summary>
+        public void ConfigureSequence(IEnumerable<string> orderedResourceNames)
+        {
+            foreach (int index in new List<int>(_instances.Keys)) DespawnLevel(index);
+            levelAddresses = orderedResourceNames != null
+                ? new List<string>(orderedResourceNames)
+                : new List<string>();
+            CurrentSequenceIndex = -1;
+        }
+
+        /// <summary>Spawn and begin the first configured sequence occurrence.</summary>
+        public async UniTask<bool> StartSequenceAsync()
+        {
+            if (LevelCount == 0) return false;
+
+            GameObject first = await SpawnLevelAsync(0);
+            if (first == null) return false;
+
+            CurrentSequenceIndex = 0;
+            if (preloadNextOnBegin) PreloadNext(0);
+            return true;
+        }
+
+        /// <summary>
+        /// Advance one ordered occurrence. The current level remains live if the
+        /// next asset cannot be loaded. Advancing past the final occurrence completes
+        /// the sequence and restores <see cref="CurrentSequenceIndex"/> to -1.
+        /// </summary>
+        public async UniTask<bool> AdvanceSequenceAsync()
+        {
+            if (CurrentSequenceIndex < 0) return false;
+
+            int next = CurrentSequenceIndex + 1;
+            if (next >= LevelCount)
+            {
+                DespawnLevel(CurrentSequenceIndex);
+                CurrentSequenceIndex = -1;
+                SequenceCompleted?.Invoke();
+                return true;
+            }
+
+            // Resolve first so a failed download never removes the playable level.
+            if (await LoadPrefabAsync(next) == null) return false;
+
+            int previous = CurrentSequenceIndex;
+            DespawnLevel(previous);
+            GameObject instance = await SpawnLevelAsync(next);
+            if (instance == null)
+            {
+                await SpawnLevelAsync(previous);
+                return false;
+            }
+
+            CurrentSequenceIndex = next;
+            if (preloadNextOnBegin) PreloadNext(next);
+            return true;
+        }
 
         public GameObject GetInstance(int index)
         {
@@ -159,11 +242,18 @@ namespace DreamPark
             if (_prefabs.TryGetValue(address, out var cached) && cached != null) return cached;
             if (_inFlight.TryGetValue(address, out var pending)) return await pending;
 
-            var task = ResolveAsync(index, address);
+            // UniTask's ordinary async source is single-consumer. Preloading and
+            // advancing can await this same address simultaneously, so preserve
+            // the in-flight result for multiple awaiters.
+            var task = (prefabProvider != null
+                ? prefabProvider(index)
+                : ResolveAsync(index, address)).Preserve();
             _inFlight[address] = task;
             try
             {
-                return await task;
+                GameObject loaded = await task;
+                if (loaded != null) _prefabs[address] = loaded;
+                return loaded;
             }
             finally
             {
@@ -177,7 +267,9 @@ namespace DreamPark
             // nothing here can (or tries to) release anything. It contains its own
             // failures: a corrupt or missing bundle comes back as null rather than an
             // exception, having already raised CoreExtensions.AssetLoadFailed.
-            GameObject prefab = await address.GetAsset<GameObject>();
+            GameObject prefab = AssetResolver != null
+                ? await AssetResolver(address)
+                : await address.GetAsset<GameObject>();
 
             if (prefab == null)
             {
@@ -220,17 +312,27 @@ namespace DreamPark
         /// while it is still inert, then activate it. Returns the live instance, or null
         /// if the level could not be loaded.
         /// </summary>
-        public async UniTask<GameObject> SpawnLevelAsync(int index)
+        public async UniTask<GameObject> SpawnLevelAsync(int index, bool activate = true)
         {
             var existing = GetInstance(index);
             if (existing != null)
             {
-                if (!existing.activeSelf) existing.SetActive(true);
+                if (activate && !existing.activeSelf) existing.SetActive(true);
                 return existing;
             }
 
             GameObject prefab = await LoadPrefabAsync(index);
             if (prefab == null) return null;
+
+            // Two callers can reach this point after the same in-flight fetch.
+            // Unity resumes them serially; the first creates the instance and the
+            // second must reuse it instead of cloning a duplicate level.
+            existing = GetInstance(index);
+            if (existing != null)
+            {
+                if (activate && !existing.activeSelf) existing.SetActive(true);
+                return existing;
+            }
 
             // ── THE ORDERING THAT MAKES THE FLOOR HANDOFF WORK ───────────
             //
@@ -245,15 +347,25 @@ namespace DreamPark
 
             ConfigureBeforeActivation(instance);
 
+            // Keep the instance inert while moving it out of staging. The package
+            // host can then make the old level inactive before the new one boots.
+            instance.SetActive(false);
+
             // Reparenting out of inactive staging into the live parent is what runs
             // the level's Awake/OnEnable — with its configuration already applied.
             instance.transform.SetParent(ResolveLevelParent(), false);
             instance.transform.localPosition = Vector3.zero;
             instance.transform.localRotation = Quaternion.identity;
 
-            if (!instance.activeSelf) instance.SetActive(true);
+            if (activate) instance.SetActive(true);
 
             _instances[index] = instance;
+
+#if DREAMPARKCORE
+            // Streamed children do not pass through CoreExtensions' spawn path.
+            // Registration must happen here for build/play parking and culling.
+            LevelObjectManager.Instance?.RegisterLevelObject(instance);
+#endif
 
             // NOTE for whoever wires this to the park loader: a streamed-in level is
             // NOT registered with LevelObjectManager by this call.
@@ -274,28 +386,12 @@ namespace DreamPark
         /// </summary>
         private void ConfigureBeforeActivation(GameObject instance)
         {
-            // ── THE FLOOR BELONGS TO THE DREAMTEMPLATE, NOT THE LEVEL ────
-            //
-            // The DreamTemplate generates ONE floor for the whole sequence and every
-            // level plays on it. A child level that also generated its own floor would
-            // stack a second collider and a second NavMeshSurface on top of the
-            // parent's, at the same height, for every level in the run.
-            //
-            // generateFloor is a per-instance serialized bool (LevelTemplate.cs:101), so
-            // this needs no new mechanism — only correct ordering, which staging gives us.
-            //
-            // The prefab asset itself is left alone and should ship with
-            // generateFloor = TRUE. That direction is deliberate: pulled into a Layout
-            // and placed standalone, the attraction then generates its own floor with
-            // zero code and zero authoring change. And if this override ever fails, the
-            // failure is a redundant visible floor — obvious and debuggable — rather
-            // than no floor at all, which drops content through the world silently.
-            var templates = instance.GetComponentsInChildren<LevelTemplate>(true);
-            for (int i = 0; i < templates.Length; i++)
-            {
-                if (templates[i] == null) continue;
-                templates[i].generateFloor = false;
-            }
+            // The attraction owns its cutouts and NavMesh. Enable its floor
+            // before first activation so LevelTemplate.Start builds the packed
+            // geometry. The package root retains a separate, non-colliding
+            // calibration reference; never share its mesh with streamed levels.
+            LevelTemplate template = instance.GetComponent<LevelTemplate>();
+            if (template != null) template.generateFloor = true;
         }
 
         /// <summary>
@@ -312,30 +408,16 @@ namespace DreamPark
             _instances.Remove(index);
             if (go == null) return;
 
+#if DREAMPARKCORE
+            UnregisterInstance(go);
+#endif
+
             if (Application.isPlaying) Destroy(go);
             else DestroyImmediate(go);
         }
 
         /// <summary>
-        /// Regenerate the floor of the template that actually OWNS it, guarded.
-        ///
-        /// A Dream level may cut holes in the shared floor (FloorCutout), so the floor
-        /// is rebuilt when the active level changes — which is what the Lua controller's
-        /// regenerate_parent_floor does today
-        /// (dreamsequence-controller.lua.txt:150-157).
-        ///
-        /// THE TRAP THIS EXISTS TO CLOSE: LevelTemplate.RegenerateFloor() did not check
-        /// generateFloor (LevelTemplate.cs:254-259), unlike its sibling
-        /// RegenerateCeiling() which does check generateCeiling (:218-220). The ONLY
-        /// thing standing between that and a floorless template growing a floor was a
-        /// guard written in Lua, at dreamsequence-controller.lua.txt:153 — and a new C#
-        /// caller inherits nothing from a Lua guard. Under this design floorless child
-        /// levels are the NORMAL case, not the exception, so that trap would have been
-        /// stepped on immediately.
-        ///
-        /// It is now closed at the source (RegenerateFloor checks its own toggle), and
-        /// this method is the guarded entry point regardless, so the invariant does not
-        /// depend on remembering it at each call site.
+        /// Regenerate the floor of the template that actually owns it, guarded.
         /// </summary>
         public void RegenerateOwningFloor(LevelTemplate owner)
         {
@@ -348,10 +430,26 @@ namespace DreamPark
         {
             // Instances are children and Unity destroys them with us. The prefab ASSETS
             // in _prefabs are deliberately not touched — see ReleaseOwnership.
+#if DREAMPARKCORE
+            foreach (GameObject instance in _instances.Values)
+                UnregisterInstance(instance);
+#endif
             _instances.Clear();
             _prefabs.Clear();
             _inFlight.Clear();
         }
+
+#if DREAMPARKCORE
+        private static void UnregisterInstance(GameObject instance)
+        {
+            LevelObjectManager manager = LevelObjectManager.Instance;
+            if (manager == null || instance == null) return;
+            // RegisterLevelObject recurses through a LevelTemplate's descendants;
+            // unregistering only its root would leave stale culling entries.
+            foreach (Transform child in instance.GetComponentsInChildren<Transform>(true))
+                manager.UnregisterLevelObject(child.gameObject);
+        }
+#endif
 
         // ─────────────────────────────────────────────────────────────────
         //  ReleaseOwnership — why there is no unload path in this file, and

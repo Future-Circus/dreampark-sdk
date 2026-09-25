@@ -378,6 +378,18 @@ namespace DreamPark.Editor
             return id;
         }
 
+        internal static bool IsValidAuthoredReference(string contentId, string guid)
+        {
+            if (string.IsNullOrEmpty(guid) || string.IsNullOrEmpty(contentId)) return false;
+            string path = AssetDatabase.GUIDToAssetPath(guid);
+            string root = $"Assets/Content/{contentId}/";
+            return !string.IsNullOrEmpty(path)
+                && path.StartsWith(root, StringComparison.OrdinalIgnoreCase)
+                && path.IndexOf("/ThirdPartyLocal/", StringComparison.OrdinalIgnoreCase) < 0
+                && !DreamSequenceGenerator.IsSpecialLevelPath(contentId, path)
+                && IsPlacementPrefab(path);
+        }
+
         private static bool IsPlacementPrefab(string path)
         {
             GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
