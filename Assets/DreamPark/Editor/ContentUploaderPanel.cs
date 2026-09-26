@@ -3431,6 +3431,67 @@ namespace DreamPark {
             Repaint();
         }
 
+        // Mirrors the server's releases/prepare formula:
+        // max(committed versionNumber, content.nextContentReleaseVersion) + 1.
+        // Only a PREDICTION — another prepare can land first — so it is used
+        // only where the uploader cannot reserve (Check Patch Size, reupload
+        // with no readable catalog). ContentAPI's upload-time guard catches
+        // a race. Never go back to versions.Count + 1.
+        private static int PredictNextReleaseVersion(JSONObject contentDirectory)
+        {
+            var payload = GetContentPayload(contentDirectory);
+            if (payload == null) return 1;
+            int maxCommitted = 0;
+            var versions = payload.GetField("versions");
+            if (versions != null && versions.type == JSONObject.Type.Array && versions.list != null)
+            {
+                foreach (var versionNode in versions.list)
+                {
+                    if (versionNode == null || versionNode.type != JSONObject.Type.Object || !versionNode.HasField("versionNumber"))
+                        continue;
+                    maxCommitted = Mathf.Max(maxCommitted, versionNode.GetField("versionNumber").intValue);
+                }
+            }
+            int nextReserved = payload.HasField("nextContentReleaseVersion")
+                ? payload.GetField("nextContentReleaseVersion").intValue
+                : 0;
+            return Mathf.Max(maxCommitted, nextReserved) + 1;
+        }
+
+        // The release reserved for the build currently sitting in ServerData,
+        // per upload contentId, so "Try Reupload" of a build whose upload
+        // failed rides the same release (and therefore the same folder its
+        // catalog points at) instead of preparing v+1 and being refused.
+        private const string BuildReservationPrefPrefix = "DreamPark.ContentUploader.BuildReservation.";
+
+        private static void SaveBuildReservation(string reservationContentId, string releaseId, int versionNumber)
+        {
+            if (string.IsNullOrEmpty(reservationContentId) || string.IsNullOrEmpty(releaseId) || versionNumber <= 0) return;
+            EditorPrefs.SetString(BuildReservationPrefPrefix + reservationContentId, $"{versionNumber}|{releaseId}");
+        }
+
+        private static bool TryLoadBuildReservation(string reservationContentId, out string releaseId, out int versionNumber)
+        {
+            releaseId = null;
+            versionNumber = 0;
+            if (string.IsNullOrEmpty(reservationContentId)) return false;
+            string raw = EditorPrefs.GetString(BuildReservationPrefPrefix + reservationContentId, "");
+            if (string.IsNullOrEmpty(raw)) return false;
+            int bar = raw.IndexOf('|');
+            if (bar <= 0 || bar >= raw.Length - 1) return false;
+            int parsedVersion;
+            if (!int.TryParse(raw.Substring(0, bar), out parsedVersion) || parsedVersion <= 0) return false;
+            versionNumber = parsedVersion;
+            releaseId = raw.Substring(bar + 1);
+            return true;
+        }
+
+        private static void ClearBuildReservation(string reservationContentId)
+        {
+            if (string.IsNullOrEmpty(reservationContentId)) return;
+            EditorPrefs.DeleteKey(BuildReservationPrefPrefix + reservationContentId);
+        }
+
         private static JSONObject GetContentPayload(JSONObject contentDirectory)
         {
             if (contentDirectory == null) return null;
@@ -3715,18 +3776,30 @@ namespace DreamPark {
             BuildManifest currentManifest,
             HashSet<string> skipSet,
             JSONObject manifestSummary,
-            List<DreamPark.API.UploadedFileRecord> preUploadedFiles)
+            List<DreamPark.API.UploadedFileRecord> preUploadedFiles,
+            string reservedReleaseId = null,
+            bool versionNumberIsBaked = true)
         {
             SetUploadStatus(
                 activeUploadTarget == ContentUploadTarget.Beta ? "Uploading beta" : "Uploading release",
                 $"Sending changed files to the isolated '{uploadContentId}' target. Live file progress will appear below.",
                 1f);
 
-            ContentAPI.UploadContent(uploadContentId, uploadReleaseNotes, lastSchemaVersion, skipSet, manifestSummary, preUploadedFiles, (success, apiResponse) =>
+            // reservedReleaseId: reuse the release reserved before the build.
+            // expectedVersionNumber: what this build baked into its catalog —
+            // ContentAPI aborts before sending any file if the server's
+            // release version differs (it also scans the catalog itself).
+            ContentAPI.UploadContent(uploadContentId, uploadReleaseNotes, lastSchemaVersion, skipSet, manifestSummary, preUploadedFiles,
+                reservedReleaseId, versionNumberIsBaked ? versionNumber : 0, (success, apiResponse) =>
             {
                 if (success)
                 {
                     Debug.Log("✅ Content uploaded successfully");
+                    ClearBuildReservation(uploadContentId);
+                    // The committed version is the server's answer; prefer it
+                    // over the local number for everything shown below.
+                    int committedVersion = apiResponse?.json?.GetField("versionNumber")?.intValue ?? 0;
+                    if (committedVersion > 0) versionNumber = committedVersion;
 
                     if (patchingEnabled && currentManifest != null)
                     {
@@ -8264,6 +8337,14 @@ namespace DreamPark {
 
                 ContentAPI.GetContent(uploadContentId, (exists, response) =>
                 {
+                    // The release this build rides. Filled by
+                    // reserveReleaseThenBuild (build path) or from the saved
+                    // reservation (reupload path) before uploadBuiltContent
+                    // runs, and handed to the upload so it reuses the SAME
+                    // release instead of preparing a second one.
+                    int reservedVersionNumber = 0;
+                    string reservedReleaseId = null;
+
                     Action uploadBuiltContent = () =>
                     {
                         var contentDirectory = response != null ? response.json : null;
@@ -8271,14 +8352,52 @@ namespace DreamPark {
                             betaContentDirectorySnapshot = contentDirectory;
                         else
                             latestContentDirectorySnapshot = contentDirectory;
-                        // Note the `.list != null` guard: a freshly-registered
-                        // content can come back with `versions: null`, where
-                        // HasField() is true but the JSON node has no list.
-                        var versionNumber = contentDirectory != null && contentDirectory.HasField("content")
-                                            && contentDirectory.GetField("content").HasField("versions")
-                                            && contentDirectory.GetField("content").GetField("versions").list != null
-                            ? contentDirectory.GetField("content").GetField("versions").list.Count + 1
-                            : 1;
+                        // THE CATALOG'S BAKED VERSION MUST EQUAL THE SERVER-
+                        // RESERVED RELEASE VERSION. versionNumber is baked into
+                        // every bundle URL below (addressables-v2/{id}/{v}/…),
+                        // while /uploadUrl stores files under the release's
+                        // version. This used to be versions.Count + 1, which
+                        // diverges from the server's max(versionNumber,
+                        // nextContentReleaseVersion) + 1 whenever an old prepare
+                        // never committed — SuperAdventureLandBeta v2 shipped a
+                        // /1/ catalog over /2/ bundles and 404'd everywhere.
+                        //   • real build   → the version reserved up front
+                        //   • reupload     → whatever ServerData's catalog bakes
+                        //   • estimate     → a prediction (never uploaded as-is;
+                        //                    the upload-time guard catches races)
+                        int versionNumber;
+                        bool versionNumberIsBaked = true;
+                        if (reservedVersionNumber > 0)
+                        {
+                            versionNumber = reservedVersionNumber;
+                        }
+                        else if (!build)
+                        {
+                            var bakedOnDisk = ContentAPI.DetectBakedCatalogVersionsOnDisk(uploadContentId);
+                            if (bakedOnDisk.Count == 1)
+                            {
+                                versionNumber = bakedOnDisk.Min;
+                                string savedReleaseId;
+                                int savedVersion;
+                                if (TryLoadBuildReservation(uploadContentId, out savedReleaseId, out savedVersion)
+                                    && savedVersion == versionNumber)
+                                {
+                                    reservedReleaseId = savedReleaseId;
+                                    Debug.Log($"🔖 Reupload reuses release {savedReleaseId} (v{savedVersion}) reserved for this build.");
+                                }
+                            }
+                            else
+                            {
+                                // Unreadable or mixed catalogs: the upload-time
+                                // guard reports it; this number is display-only.
+                                versionNumber = PredictNextReleaseVersion(contentDirectory);
+                                versionNumberIsBaked = false;
+                            }
+                        }
+                        else
+                        {
+                            versionNumber = PredictNextReleaseVersion(contentDirectory);
+                        }
                         var targetUrl = $"{DreamParkAPI.baseUrl}/app/content/addressables-v2/{uploadContentId}/{versionNumber}";
                         bool singlePlatformEstimate = pendingProductionEstimateOnly;
                         EstimateBuildTargetInfo estimateTargetInfo = default;
@@ -8899,7 +9018,9 @@ namespace DreamPark {
                                 currentManifest,
                                 skipSet,
                                 manifestSummary,
-                                preUploadedFiles);
+                                preUploadedFiles,
+                                reservedReleaseId,
+                                versionNumberIsBaked);
                         }
                         catch (Exception e)
                         {
@@ -8926,6 +9047,56 @@ namespace DreamPark {
                         }
                     };
 
+                    // Reserve the release BEFORE compiling so the catalog is
+                    // baked with the version the server will actually store
+                    // the bundles under (see the note in uploadBuiltContent).
+                    Action reserveReleaseThenBuild = () =>
+                    {
+                        // Reupload keeps whatever ServerData already bakes.
+                        // Check Patch Size never uploads — reserving there would
+                        // burn a version per estimate, and notes may still be
+                        // empty. Both lean on the upload-time guard instead.
+                        if (!build || pendingProductionEstimateOnly)
+                        {
+                            uploadBuiltContent();
+                            return;
+                        }
+
+                        SetUploadStatus(
+                            "Reserving release",
+                            "Reserving this release's version number so the build points at the right folder.",
+                            0.14f);
+                        ContentAPI.PrepareContentRelease(uploadContentId, releaseNotes, (reserveOk, reserveReleaseId, reserveVersion, reserveResponse) =>
+                        {
+                            if (!reserveOk)
+                            {
+                                string reserveError = reserveResponse != null && !string.IsNullOrEmpty(reserveResponse.error)
+                                    ? reserveResponse.error
+                                    : "The server did not return a release version.";
+                                if (string.IsNullOrWhiteSpace(releaseNotes))
+                                    reserveError = "Release notes are required. " + reserveError;
+                                Debug.LogError($"❌ Could not reserve a release for {uploadContentId}: {reserveError}");
+                                CompleteUploadStatus(false, $"Could not reserve a release: {reserveError}");
+                                if (!automatedReleaseMode)
+                                {
+                                    EditorUtility.DisplayDialog(
+                                        "Release Reservation Failed",
+                                        $"Could not reserve a release version for '{uploadContentId}' before building:\n\n{reserveError}",
+                                        "OK");
+                                }
+                                pendingFailedOnly = false;
+                                isUploading = false;
+                                return;
+                            }
+
+                            reservedReleaseId = reserveReleaseId;
+                            reservedVersionNumber = reserveVersion;
+                            SaveBuildReservation(uploadContentId, reserveReleaseId, reserveVersion);
+                            Debug.Log($"🔖 Reserved release {reserveReleaseId} → v{reserveVersion} for {uploadContentId}; baking that version into the catalog.");
+                            uploadBuiltContent();
+                        });
+                    };
+
                     Action continueAfterSchemaSync = () =>
                     {
                         SetUploadStatus(
@@ -8942,7 +9113,7 @@ namespace DreamPark {
                                 isUploading = false;
                                 return;
                             }
-                            uploadBuiltContent();
+                            reserveReleaseThenBuild();
                         });
                     };
 

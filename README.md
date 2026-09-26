@@ -53,11 +53,11 @@ Everything you ship is built from three pieces.
 
 | | What it is |
 |---|---|
-| **`Player.prefab`** | Your game's global systems. Persists across all your attractions — score managers, audio, park-wide state. One per game. |
+| **`Player.prefab`** | The guest's body in your game — head, hands, body and feet colliders, plus anything that belongs to *this* player (hand-held tools, damage effects). Persists across all your attractions. One per game. |
 | **`AttractionTemplate`** | A self-contained experience (`A_MyAttraction.prefab`) — an arcade game, a boss fight, a challenge course. This is the unit players play, operators install, and revenue attributes to. Auto-adds a `GameArea` (presence detection, **and the playtime your revenue share is measured on**) and a `MusicArea`. |
 | **`PropTemplate`** | An interactive object (`P_MyProp.prefab`) — a coin, a hammer, an enemy, a block. Lives inside attractions, and operators can also place props individually when decorating. |
 
-Parks contain Attractions. Attractions contain Props. The Player runs your global systems above all of it.
+Parks contain Attractions. Attractions contain Props. The Player carries the guest through all of it — and when your game runs as a package (below), a **Game Manager** holds your title-wide rules and state above it.
 
 All of your work lives in `Assets/Content/<your game ID>/`. Never hand-edit Addressables — the SDK's `ContentProcessor` stamps addresses, labels and `gameId` fields for you. Preview tile art is auto-generated into `Previews/`.
 
@@ -121,6 +121,20 @@ if unsubscribe ~= nil then unsubscribe() end
 The equivalent C# properties are `ProfileAPI.HeightInches`, `HeightMeters`, and `HeightFactor`; subscribe to `ProfileAPI.OnHeightChanged`, whose arguments are `(heightInches, heightFactor)`. Profiles support 24–96 inches; older or malformed snapshots safely use 68 inches and a factor of `1.0`.
 
 Initial profile hydration does not emit a change event: use `onReady`/`OnReady` to apply the baseline, then subscribe for live changes. `dp.profile.onHeightChanged` returns an idempotent unsubscribe function and its subscription is automatically cleared when that headset's identity is cleared. Height is a local ergonomic presentation value, so every user can render the same networked object (`netId`) at their own reachable height without moving it for anyone else. See `Assets/DreamPark/Samples/ProfileAPI/height.lua.txt` for a drop-in example.
+
+## Packages: Arena, Sequence & Adventure
+
+Every venue is a different shape, so you don't ship "a park" — you ship **packages** the app can build in whatever space an operator scanned. You author all three in `DreamPark → Content Uploader` → **Packages**, from the same library of Attractions and Props:
+
+| | What it is |
+|---|---|
+| **Arena** | Instant. Every Attraction and Prop is sorted by its smallest whole-foot size; for each free space the app places your top-priority piece from the largest size that fits. You only set priority (and exclude anything that can't stand alone). |
+| **Sequence** | Your whole game in one 12 × 18 ft room that shrinks and grows to fit. A **Start Level**, your attractions streamed in one at a time, a **Game Over Level**, and a persistent **Overlay Level** for navigation — all three are editable prefabs. **Required to upload**: it's the fallback that makes your title playable anywhere. |
+| **Adventure** | Your game across the whole venue: a Start Point, your attractions and Groups in order along a walking route, and an End Point. If the required pieces don't fit, the app falls back to your Sequence. |
+
+All three share one **Game Manager** (`Prefabs/Game Container.prefab` + `Scripts/game-container.lua.txt` — your routing, score and state, generated once and never overwritten) and your **Player**. Lua reaches them with `dp.game_manager()`, `dp.load_level(slot)`, `dp.on_level_loaded(fn)` and friends.
+
+Full guide — including how to edit the Start, Overlay and Game Over levels, and a deep dive on the Game Manager and Player rig: **[`PACKAGES.md`](./PACKAGES.md)**.
 
 ## Uploading
 

@@ -30,7 +30,12 @@ Assets/
 │   └── YOUR_GAME_HERE/        ← Renamed via the in-editor setup popup (ContentIdSetupPopup, auto-opened by PlaceholderContentDetector; letters+digits, starts with a letter, 2–64 chars). Folder name = content ID. Also reserved until renamed. Multiple content folders may coexist — each is an independent package; the Content Uploader's dropdown picks which to publish.
 │       ├── Prefabs/            ← Player.prefab + Attraction.prefab ship in the template;
 │       │                         A_*.prefab attractions (AttractionTemplate root),
-│       │                         P_*.prefab props (PropTemplate root)
+│       │                         P_*.prefab props (PropTemplate root);
+│       │                         Game Container.prefab = the Game Manager (generated once)
+│       ├── DreamSequence/      ← Start / Overlay / Game Over Level prefabs (creator-owned)
+│       │                         + generated Dream Sequence Package.asset (see § Packages)
+│       ├── .dreampark-*.json   ← package authoring (library, arena, dream-sequence,
+│       │                         sequence = ADVENTURE). Commit them.
 │       ├── Previews/           ← {prefabName}.png tile art
 │       ├── Scripts/            ← Game-specific C# (minimal — prefer Lua) + .lua.txt
 │       ├── ThirdParty/         ← Only used assets (git-tracked, shipped in builds)
@@ -44,8 +49,9 @@ There are no `1. Scenes/` or `2. Features/` folders — that layout predates the
 ## SDK Sync
 The files in Assets/DreamPark/ must match dreampark-core exactly (~240 first-party C# files; 661 including vendored `ThirdParty/`). `#if DREAMPARKCORE` blocks (core-only code) are conditionally compiled out of this SDK distribution — the source remains visible but doesn't compile in SDK builds. Use conditional compilation to mark what's core-specific. Anything entirely core-only (no SDK reason to exist at all, e.g. consumer-app pairing flows, internal admin tooling) should live in dreampark-core's own `Assets/Scripts/` outside `Assets/DreamPark/` rather than as an empty SDK file.
 
-## The Three Primitives
-- **Player.prefab** (`Assets/Content/{GameName}/Prefabs/`): Root player object (persists across attractions). Global systems (audio, score, park state) live here as LuaBehaviours.
+## The Three Primitives (plus the Game Manager)
+- **Player.prefab** (`Assets/Content/{GameName}/Prefabs/`): the guest's body in your game — `PlayerRig` root with Head/Body/Feet/Hand trackers. Persists across attractions. Per-guest systems (hand-held tools, damage screens, per-player audio) live here as LuaBehaviours, and so does anything that must work when attractions are placed loose.
+- **Game Manager** (`Prefabs/Game Container.prefab`, generated once by the Content Uploader): title-wide rules, progression and shared state for the Arena/Sequence/Adventure packages. Networked, never distance-culled, not a spatial parent — and absent when the title runs as loose placements. See § Packages.
 - **AttractionTemplate** (: LevelTemplate): root component of an attraction prefab — a self-contained experience (arcade game, boss battle, challenge course). LevelTemplate's `[RequireComponent]`s auto-add GameArea (presence detection — drives PlayerRig show/hide AND playtime-based revenue attribution) and MusicArea. Defines the physical space (size/customSize, floor generation, calibration).
 - **PropTemplate**: root component of a prop prefab — the individual interactive elements that make up an attraction (coin, hammer, enemy). Auto-adds its own GameArea at priority -1 (self-suppressed when nested inside an attraction). Props are also placeable standalone in parks.
 
@@ -63,6 +69,78 @@ An attraction is a prefab under `Assets/Content/{GameName}/` with an `Attraction
 - **Stamping pass** (`ContentProcessor`, EditPrefabContentsScope + SaveAsPrefabAsset): injects `gameId` into any component with a `gameId` field and stamps the per-attraction ADDRESS onto `GameArea`/`PropTemplate.resourceName` — the revenue-attribution key. It is the address form, NOT the catalog's stem form (see the two-namespaces bullet above); the join happens at spawn, not by the two strings matching. Skips `ThirdPartyLocal/`. Prefabs get edited + saved dirty by this pass; that's expected — commit the churn.
 - **Previews**: `Assets/Content/{GameName}/Previews/{prefabName}.png` (or sibling `{name}_preview.png`) — powers Attractions-browser/level-picker tiles and the consumer map. Auto-generated for every attraction/prop; regenerate via `DreamPark → Troubleshooting → Regenerate Level Previews` after visual changes. **They do NOT ship in a bundle (July 2026)**: the uploader pushes each PNG to the backend (`POST /api/content/:id/attractions/preview`) after a successful commit, and every client reads the backend image. Same story for the content logo (`POST /api/content/:id/logo` → `content.logoImageUrl`). The `{gameId}-Previews` / `{gameId}-Logos` Addressables groups still exist but are build-excluded (`SmartBundleGrouper.ExcludeRetiredArtGroupsFromBuild`), so preview churn can no longer abort a Code-only upload — which is why `UploadMode.PreviewsOnly` is gone.
 - **Catalog population is automated**: uploading a build publishes the attractions catalog server-side (discovered from the catalog's `m_InternalIds`). There is no manual registration step — if an attraction is missing from the browser, check that the prefab root has the right template component (the prefix is not what's checked; see Naming above).
+
+## Packages: Arena, Sequence & Adventure (Sept 2026)
+
+Creator guide: `PACKAGES.md` (repo root). Engineering spec: `PACKAGE_RUNTIME_SPEC.md` (predates Arena). Website: `dreampark.app/docs?s=packages`.
+
+A **package** is how a title turns whatever floor an operator scanned into a playable experience without losing authored intent (order, Start/End, Groups, `required`). Core loads a **package occurrence**, not a random prefab. All three are authored in `DreamPark → Content Uploader` → **Packages** (tabs Arena · Sequence · Adventure) from the same **Park Assets** library, and all three share one **Game Manager** and one **Player**.
+
+| | Arena | Sequence | Adventure |
+|---|---|---|---|
+| Space | any scanned rect, ≥ 1×1 ft | one room, authored 12 × 18 ft (`DreamSequenceTemplate.StandardWidthFeet/LengthFeet`), packs within the levels' bakes | whole scanned park |
+| Runtime | per rect: largest bucket that fits, its first mounted+fitting entry (`SpaceMapPacker.PackArenaPackage`) | assembled root streams ONE attraction at a time between Start and Game Over (`DreamSequencePackageRuntime` + `DreamParkPackageHost` + `DreamLevelLoader`) | Start → ordered stages → End along a walk route, each faces its predecessor, all deployed (`PackAdventurePackage`) |
+| On failure | fails (`no_arena_bucket_fits`) — no fallback | fails (`no_room_supports_sequence`) | **atomic** fallback to the compiled Sequence |
+| Required? | optional | **required** — `dream-sequence-required` blocks upload | optional; needs BOTH Start and End Point or it isn't compiled |
+| Authoring file | `.dreampark-arena.json` (schema 2) | `.dreampark-dream-sequence.json` | `.dreampark-sequence.json` ⚠ historical name — it IS Adventure |
+
+Library file: `.dreampark-library.json` (Groups, hidden). `ContentSequenceStore` (schema 6) owns library/Sequence/Adventure JSON; `ArenaPackageStore` owns Arena. Commit all of them.
+
+### Compile output (Test or upload — never hand-edit)
+- `Assets/Content/{id}/DreamPark Package Manifest.asset` — `DreamParkPackageManifest` (schema 3), address `{id}/Assets/DreamPark Package Manifest`. One `PackageRecipe` per kind (`arena`/`adventure`/`sequence`; null = absent, which is different from empty): `playerAddress`, `gameManagerAddress`, `sequenceDefinitionAddress`, ordered `occurrences` (`occurrenceId`, `resourceAddress` in ContentProcessor form, `role` start|stage|end|prop, `required`, `groupOccurrenceId`, packing envelope), `groups`, `arenaBuckets`. `packageRevision` = SHA-256 of the manifest. Built by `DreamParkPackageCompiler.Compile`. **Runtime reads THIS, never the Web package endpoint** (that one is approved-release-only).
+- `Assets/Content/{id}/DreamSequence/Dream Sequence Package.asset` — `DreamSequencePackageDefinition`: refs to Start/Overlay/Game Over/Game Manager prefabs, level addresses, `minimumRoomMeters`/`maximumRoomMeters`. Built by `DreamSequencePackageCompiler`. Manifest Sequence order and definition order are asserted equal.
+- Upload also bakes every attraction's packing variants (`AttractionPackingBaker.BakeAllInContent`), and sends Web a normalized `packages` object (schemaVersion **2**; Arena as `buckets[]`, smallest→largest) via `commitUpload` — `BuildPublishedPackagesJson`. Web's `resourceName` there is the catalog asset-path STEM, not the address.
+- **No per-title `Dream Sequence.prefab` exists.** Don't generate one, don't look for one.
+
+### Arena rules
+- Every Attraction + Prop (except the three Sequence special levels, and `ThirdPartyLocal/`) is included automatically in ONE bucket: baked shrink footprint → feet, **floored** to whole feet, rotation-normalized short × long (`ArenaPackageStore.CandidateForPrefab`). A plain `LevelTemplate` is NOT a candidate.
+- Order inside a bucket = priority; the first entry wins. Authors can override a bucket size (`sizeOverrides`) or exclude (`excludedGuids`).
+- Arena occurrences are never `required` (Web rejects `required:true`). Occurrence ids are `arena-{guid}`.
+- An active Arena replaced by the SAME title's Sequence/Adventure needs `promotionConsent:true` on `PACK_PARK`; without it Core refuses with `PromotionConsentRequired`.
+
+### Sequence rules
+- Slots are 1-based: `1` Start Level, `2…N+1` streamed attractions (organizer order, Groups flattened), `N+2` = `LevelCount` Game Over.
+- Compatible = authored size OR baked shrink footprint fits 12 × 18 ft either way round (`DreamSequenceCompatibility.IsCompatible`). Incompatible optional items are dimmed + skipped; incompatible `gameRequiresAttraction` items throw at compile. **Props never become Sequence levels.**
+- Minimum room = max shrink footprint of Start/Overlay/Game Over + every included level; maximum = max grow. One unshrinkable object on the Start Level raises the whole game's minimum room. An EMPTY Game Over is deliberately baked at a 0.1 m shrink (`AllowEmptySpecialLevelShrink`).
+- Each level is packed between its own shrink/grow limits (`ApplyPackingVariant`), rotated 90° when needed, and **never stretched** past its grow limit. The package root owns the one calibrated floor; its grade is transferred to each level; level cutouts stay per level.
+- Level change: `transitionDelaySeconds` (2.5 s) minimum, swap at the END, after download + fit check; newest request wins (`requestVersion`); failure leaves the level unchanged and raises `LevelChangeFailed`.
+
+### The special levels (the Sequence boilerplate)
+`Assets/Content/{id}/DreamSequence/{Start Level|Overlay Level|Game Over Level}.prefab`, generated by `DreamSequenceGenerator.EnsureScaffold` when the Sequence tab opens. Creator-owned `AttractionTemplate`s, Custom 12 × 18 ft, `generateFloor = false`, each with a `Sequence Floor Border` (an `AttractionPackingFollower`, XZ-independent).
+- **Start Level**: `START — Super Adventure Land Button` = instance of SDK `RuntimeAssets/DreamSequence/StartButton/Start Button.prefab` (trigger + `LuaBehaviour` running `DreamSequenceButton.lua.txt` with string injection `action=start` + `DreamSequenceButtonFeedback` squashing child `Press Visual`, ~2 s cooldown via `dp.button_press()`). Calls `dp.game_manager().start_game()`.
+- **Overlay Level**: `Default 3D Level Navigation` (instance of `Overlay/Elevator Controls.prefab`, children `BACK` action=back and `FORWARD` action=forward) at local x −1.72 facing in, plus `Default Level Transition` (`Overlay/Transition/Level Transition Effect.prefab`). Auto-visible only on ordinary levels (not Start/Game Over); no floor of its own — its FloorAnchors bind to the active level's floor.
+- **`Default Level Transition` is found BY NAME** (`DreamSequencePackageRuntime.FindRecursive`) and copied out to `Persistent Level Transition` with `OptimizedAFIgnore`. Renaming it silently removes every transition. It must contain a `ParticleSystem`.
+- **Game Over Level**: empty by default.
+- Scaffold refresh (`NeedsLevelRefresh`) resets size to Custom 12 × 18, removes `DreamSequenceSpecialLevelTemplate` markers and children named `12 ft × 18 ft Level Floor` / `LevelFloor` / `Game Over Backdrop`. Migrations are one-time, stamped in the importer's `userData`, so creator edits (including deleting the default button) survive. Deleting a special-level prefab regenerates it.
+- Agents: customize with prefab-instance overrides or creator-owned objects in the content folder. Do not edit the shared control prefabs under `Assets/DreamPark/` for one title — they are SDK files (synced to core, replaced on SDK update).
+
+### Adventure rules
+- Explicit Start Point + End Point required (`hasExplicitEndpoints`); stages may be Attractions, Props or Groups; repeats are distinct occurrences; `hidden` placements are skipped. A non-prop occurrence without a packing bake throws at compile.
+- Core commits only after every required occurrence has a slot AND spawned; otherwise it rolls back and tries the Sequence. Occurrences are culled independently; the manager is not.
+- `DreamParkPackageHost.LoadLevel` on Adventure/Arena **never hides anything** — it moves `CurrentLevelIndex` and fires `LevelActivated` (a progress marker for the Game Manager).
+
+### Game Manager
+- File: `Assets/Content/{id}/Prefabs/Game Container.prefab` (historical name; runtime address `{id}/Game Container`, spawned as `Game Manager`), script `Scripts/game-container.lua.txt`. Created once by `DreamSequenceGenerator.EnsureContainer` with `LuaBehaviour` + `NetId` + `OptimizedAFIgnore`. **Never overwritten** by compiles (`WriteStarterTextAsset` writes only when missing). Core adds `NetId`/`OptimizedAFIgnore` at runtime to older manager prefabs.
+- One per package instance, created BEFORE attraction gameplay, parented under the package owner OUTSIDE every calibrated LevelAnchor, survives level swaps, exempt from distance culling but still paused/torn down with the park. Not a spatial parent; never contributes to a footprint.
+- **Exists only when the title runs as a package.** Loose placements have no manager → `dp.game_manager()` is nil. Every caller nil-checks (the shipped button falls back to `dp.next_level()`).
+- Default script exports `start_game`, `next_level`, `previous_level`, `load_level(index[, groupId])` (1-based absolute; 0-based inside a Group) and syncs navigation over its NetId (`sequence_state {slot, revision, writer}` + `sequence_sync_request` on relay connect; newest revision wins, ties by writer id). **Controls call the manager's `load_level`, not `dp.load_level`** — the raw call is local and unsynced.
+- Title-wide rules/state → Game Manager. Body/senses/per-guest presentation, and anything that must also work in loose mode → Player. The injected `storage` proxy is a no-op on the manager (no GameArea above it) — use `dp.storage.game(contentId)`.
+
+### Player rig in packages
+- `FindPlayerAddress`: first prefab with `PlayerRig` under the content folder, preferring the one named `Player` → `{id}/Player`. A recipe without one fails to compile ("package has no PlayerRig prefab"). Keep exactly one.
+- Created once per package owner before gameplay, outside calibrated anchors, claimed via `ContentManager.TryClaimPlayerLoad`; an Adventure↔Sequence replacement BORROWS the live rig and transfers the claim at commit. `DreamParkPackageMembership` links the Player, the manager and every Adventure/Arena occurrence to their `DreamParkPackageHost` (they are not its children).
+- Template rig: `Head` (HeadTracker), `Body` (BodyTracker), `Feet` (FeetTracker), `LeftHand`/`RightHand`/`BothHands` (HandTracker, with `… Handheld Pivot` children), example effect children. Optional `RemoteRig` child = what other players see (see Multiplayer).
+
+### Lua package API (scope-local; resolved from the CALLING object — ancestor host, else `DreamParkPackageMembership`; never a global "current package")
+`dp.package()` · `dp.game_manager()` (scope) / `dp.game_manager_object()` · `dp.container()` / `dp.container_object()` (aliases) · `dp.is_arena()` / `is_sequence()` / `is_adventure()` · `dp.current_level_index()` · `dp.level_count([groupId])` · `dp.levels([groupId])` · `dp.groups()` → `{id,name,sourceId,count}` (Sequence only) · `dp.level_slot(i, groupId)` · `dp.load_level(slot[, groupId])` · `dp.preload_level` / `dp.level_ready` (Sequence stages only) · `dp.level_loading()` · `dp.level_error()` (`invalid-or-inactive-slot|missing-loader|download-or-load-failed|load-exception|room-fit-failed|spawn-exception|spawn-failed|presentation-failed`) · `dp.on_level_loaded(fn)` / `off_…` · `dp.on_level_failed(fn)` / `off_…` · `dp.show_overlay(b)` · `dp.overlay_auto_visibility(b)` · `dp.next_level()` / `dp.previous_level()` (delegate to the manager; false if absent) · `dp.button_press()`. Bound in `DreamParkLuaAPI.BindScope`; C# host is `DreamParkPackageHost`. Always `off_level_loaded` in `ondestroy()` — the host's C# event holds the delegate.
+
+### Checks & tests
+- `dream-sequence-required` (Blocking): definition compiled + current order, all four parts present, special levels baked, ≥1 compatible attraction, no oversize required attraction. Fix: *Rebuild Sequence Package*.
+- `package-references` (Blocking): every Sequence/Adventure placement resolves to an Attraction/Prop in this content folder (broken refs stay visible in the organizer on purpose; the compiler refuses them rather than silently dropping required content).
+- Uploader buttons `▶ Test Arena|Sequence|Adventure in Park Simulator`. EditMode suites: `DreamParkPackageCompilerTests`, `DreamParkPackageHostTests`, `ArenaPackageStoreTests`, `ContentSequenceStoreTests`, `DreamSequenceGeneratorTests`, `DreamSequencePackageRuntimeTests`, `DreamSequenceRequiredCheckTests`, `ParkSimArenaPreviewStateTests`, `ParkSimPackageTestTests`.
+
+### Don't confuse with the in-prefab Dream Sequence
+`Sample/Prefabs/A_DreamSequence.prefab` + `dreamsequence-controller.lua.txt` (§ The Dream Sequence attraction format, below) is ONE attraction that swaps its own `Level*` children. It is not the Sequence package: it doesn't stream, doesn't use the Game Manager, and doesn't satisfy `dream-sequence-required`.
 
 ## Materials & Shaders — use the DreamPark universal shaders for EVERYTHING
 DreamPark is mixed reality. Every pixel of virtual geometry has to be clipped by the guest's real room via Meta's Depth API, or it draws on top of their hands, furniture and walls. That integration lives in the shader, so **shader choice is a correctness requirement, not an art preference.**
@@ -258,8 +336,9 @@ below. Both are further down this file.
 2. On first editor open, the setup popup renames YOUR_GAME_HERE to the game name (e.g., CoinCollector). (There is no new-park.sh — the popup is the rename mechanism.)
 3. Creator adds game content, Lua scripts, and prefabs to Assets/Content/{GameName}/.
 4. All gameplay logic is Lua via LuaBehaviour. Not "Lua-first" — Lua. C# in `Assets/Content/` should be interop shims and nothing else, and EasyEvent components are deprecated (see above).
-5. Built Addressable prefabs are deployed to DreamPark servers via DreamPark → Content Uploader: fill the panel's **Name** and **Description** fields (the launch window shows them read-only, and an empty Name blocks the upload), clear the pre-upload checks (see Shipping below), hit **Compile & Upload**, then **Start · All** in the launch window. One attraction at a time or a whole park's worth; each upload publishes the attractions catalog automatically and is immediately playable in the iOS app with Experimental Mode on. The launch window's **Upload Scope** picker selects All / Patch / Code-only; the first release for a content ID is locked to All, and Patch is the default choice after that. Smart (dependency-aware) bundling is the default strategy as of Aug 2026 and is what makes the partial modes work — Legacy is deprecated, hidden behind `DreamPark → Troubleshooting → Use Legacy Bundling`, and forces a full re-upload when active.
-6. Sign-in (`DreamPark → Sign In`) is passwordless as of July 2026 — email + 6-digit OTP, and `/auth/otp/verify` get-or-creates the account, so there is no separate sign-up path and no password to reset.
+5. Creator authors the three packages in the Content Uploader's **Packages** section — Arena priorities, the Sequence order plus its Start/Overlay/Game Over levels, the Adventure's Start/End route — and puts title-wide rules in the Game Manager (see § Packages). A valid Sequence is required to upload.
+6. Built Addressable prefabs are deployed to DreamPark servers via DreamPark → Content Uploader: fill the panel's **Name** and **Description** fields (the launch window shows them read-only, and an empty Name blocks the upload), clear the pre-upload checks (see Shipping below), hit **Compile & Upload**, then **Start · All** in the launch window. One attraction at a time or a whole park's worth; each upload publishes the attractions catalog automatically and is immediately playable in the iOS app with Experimental Mode on. The launch window's **Upload Scope** picker selects All / Patch / Code-only; the first release for a content ID is locked to All, and Patch is the default choice after that. Smart (dependency-aware) bundling is the default strategy as of Aug 2026 and is what makes the partial modes work — Legacy is deprecated, hidden behind `DreamPark → Troubleshooting → Use Legacy Bundling`, and forces a full re-upload when active.
+7. Sign-in (`DreamPark → Sign In`) is passwordless as of July 2026 — email + 6-digit OTP, and `/auth/otp/verify` get-or-creates the account, so there is no separate sign-up path and no password to reset.
 
 ## Shipping: the Content Uploader (`DreamPark → Content Uploader`)
 Open it from the **`DreamPark` menu in the Unity Editor's top menu bar** — a first-party menu the SDK adds, alongside File/Edit/Assets/GameObject. `DreamPark → Content Uploader` is the first item. The same menu holds `Sign In`, `Optimization → Material Optimizer...`, `Troubleshooting → …` and `Startup Scene...`; every SDK tool referenced in this file lives under it.
@@ -268,11 +347,12 @@ The game is not done when it plays in the Editor. It is done when it goes throug
 
 **1. Set the Name and Description.** The panel's **Name** and **Description** fields are the store-facing metadata for the content package — they're what a guest sees in the Attractions browser and the consumer app. The launch window shows them read-only, and an **empty Name blocks the upload outright**. Write a real description (what the attraction is, what the guest does), not a placeholder. Pick the right content package first if the project has more than one — the dropdown at the top of the panel selects which `Assets/Content/{GameName}/` gets published.
 
-**2. Run the pre-upload verification and fix everything it reports.** `Pre Launch Options → Review Pre-Upload Checks...` opens the unified checks window; the Content Uploader also runs an advisory scan when the panel is engaged and shows per-attraction tile badges. The upload path is gated by `PreUploadChecksGate.Passes(...)` — Blocking findings stop the upload. The ten creator-facing checks (`Assets/DreamPark/Editor/PreUploadChecks/Checks/`):
+**2. Run the pre-upload verification and fix everything it reports.** `Pre Launch Options → Review Pre-Upload Checks...` opens the unified checks window; the Content Uploader also runs an advisory scan when the panel is engaged and shows per-attraction tile badges. The upload path is gated by `PreUploadChecksGate.Passes(...)` — Blocking findings stop the upload. The eleven creator-facing checks (`Assets/DreamPark/Editor/PreUploadChecks/Checks/`):
 
 | Check id | Severity | What it means |
 |---|---|---|
-| `dream-sequence-required` | **Blocking** | Every package needs a valid 12 × 18 ft Dream Sequence fallback. A missing sequence can be generated directly from the finding; damaged sequences open in Prefab Mode for deliberate repair. |
+| `dream-sequence-required` | **Blocking** | Every title needs a valid **Sequence package**: its recipe compiled and current, Start/Overlay/Game Over/Game Manager prefabs present, special levels baked, at least one attraction that fits 12 × 18 ft, and no required attraction too big to fit. Fix: *Rebuild Sequence Package*. No Dream Sequence prefab is involved. See § Packages. |
+| `package-references` | **Blocking** | A Sequence or Adventure placement points at a deleted or invalid prefab. Remove or replace it in the Packages organizer. |
 | `duplicate-names` | **Blocking** (case-only clashes: Warning) | Two prefabs share a name → collided Addressables address, preview PNG, `PreviewMetadataStore` key and `GameArea.resourceName` (the revenue-attribution key). Always a true positive. |
 | `meta-occlusion` | **Blocking** when a material's shader definitely lacks occlusion; **Warning** when undeterminable | See the Materials & Shaders section. Converts editable materials directly; embedded model materials can be extracted and converted from the finding. |
 | `opaque-alpha-clip` | **Blocking** | A DreamPark material set to Surface Type = Opaque with Alpha Clipping off. `meta-occlusion`'s blind spot — the shader has the occlusion wiring, the material discards it. Editable materials are repaired directly; embedded materials can be extracted and repaired. |
@@ -399,6 +479,8 @@ dp.game_id(self.gameObject)          -- the containing gameId
 dp.on_global(name, fn)       -- fn(value) now if bound, else the moment it appears
 dp.storage.game(gameId)      -- game-scope storage outside an attraction
 dp.profile.*                 -- profile reads
+dp.game_manager()            -- this package's Game Manager scope, or nil (see § Packages
+                             --   for the full package/level API: load_level, levels, groups…)
 ```
 
 ### Lifecycle hooks
@@ -536,6 +618,13 @@ production logs stay quiet.
   nothing to wait for.
 
 ## The Dream Sequence attraction format
+
+> **This is the in-prefab pattern, not the Sequence package.** Everything in this
+> section is about ONE attraction (`A_DreamSequence`) that swaps its own `Level*`
+> children with a Lua controller. The **Sequence package** — the required,
+> streamed, single-room form of a whole title with Start/Overlay/Game Over levels
+> and the Game Manager — is documented in § Packages above and in `PACKAGES.md`.
+> An in-prefab Dream Sequence is just one attraction inside your packages.
 
 A **Dream Sequence** is one attraction that plays a *sequence of small levels*
 back to back in a single physical play space, with a particle transition
