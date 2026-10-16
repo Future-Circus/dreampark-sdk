@@ -15,6 +15,11 @@
 --     amount < 0   → remove |N| copies
 --     amount == 0  → no-op
 --
+-- Unique items with per-instance METADATA (Oct 2026) — a caught creature,
+-- a rolled sword — are shown further down: awardWithMetadata(meta),
+-- levelUp(instanceId), list(). Each instance is its own inventory row with
+-- its own table of your data, which you can change later with updateItem.
+--
 -- `makeUnique` produces a metadata-tagged inventory entry. Every call
 -- creates a distinct row keyed by `<itemId>_<random>`, so the same
 -- catalog id can stack as multiple unique instances. The backend forces
@@ -25,7 +30,15 @@
 -- NOT how you make an item non-stacking — every call mints another row, and
 -- each row is worth profile XP. For a one-of-a-kind item (a wand, a key, a
 -- costume), untick "Stacks" on the catalog entry in the developer portal
--- instead; awardItem then becomes a no-op once the player has it.
+-- (or on the item's card in Content Uploader → Items) instead; awardItem
+-- then becomes a no-op once the player has it. A unique/metadata item must
+-- KEEP Stacks ticked: a non-stacking item is a singleton and the server
+-- ignores award metadata for it.
+--
+-- The item's catalog entry (title, icon, type, rarity, Stacks) is authored
+-- in Content Uploader → Park Assets → Items: every id this script passes is
+-- found there automatically (the @var's Inspector value included) and is
+-- pushed to the backend with Push Items to Portal or with every upload.
 --
 --
 -- Requires the player to have ENTERED one of your attractions. Awards made
@@ -76,7 +89,7 @@ function trigger(overrideAmount)
             end
         end)
         Debug.Log("[award-item] +" .. tostring(amt) .. " '" .. tostring(id) .. "'"
-            .. (unique and " (unique)" or ""))
+            .. (makeUnique and " (unique)" or ""))
     else
         local toRemove = -amt
         pcall(function()
@@ -87,6 +100,56 @@ function trigger(overrideAmount)
 
     fired = true
     return true
+end
+
+-- ── Unique items with metadata ───────────────────────────────────
+-- Metadata is your own table: strings, numbers, booleans and nested tables,
+-- at most 4 KB of JSON per item. The SDK adds `contentId` (this game) for you.
+-- Keep ids as strings. Writes share a budget of 60 per minute per player, so
+-- update on game events (a battle won), never every frame.
+
+-- awardWithMetadata({ level = 1, nickname = 'Rusty' }) → mints ONE new
+-- instance. The callback gets the exact row written; keep its instanceId,
+-- that's the key for updateItem / removeItem later.
+function awardWithMetadata(meta)
+    local id = itemId
+    if id == nil or id == "" then return false end
+    if not dp.profile.supportsItemMetadata then
+        dp.profile.awardUniqueItem(id)              -- older SDK: no metadata
+        return true
+    end
+    dp.profile.awardUniqueItem(id, meta or { level = 1, xp = 0 }, function(ok, item)
+        if not ok or item == nil then
+            Debug.LogWarning("[award-item] unique award failed for '" .. tostring(id) .. "'")
+            return
+        end
+        Debug.Log("[award-item] minted " .. tostring(item.instanceId)
+            .. " level " .. tostring(item.metadata and item.metadata.level))
+    end)
+    return true
+end
+
+-- levelUp(instanceId) → merges { level = level + 1 } into that instance's
+-- metadata. Other keys are kept; pass replace = true as the 4th argument of
+-- updateItem to swap the whole table instead.
+function levelUp(instanceId)
+    local row = dp.profile.getItem(instanceId)
+    local level = (row and row.metadata and row.metadata.level) or 1
+    dp.profile.updateItem(instanceId, { level = level + 1 }, function(ok, item)
+        Debug.Log("[award-item] levelUp " .. tostring(instanceId) .. " ok=" .. tostring(ok)
+            .. " level=" .. tostring(item and item.metadata and item.metadata.level))
+    end)
+end
+
+-- list() → every instance of this item the player owns, each with its own
+-- metadata. getItems also takes { baseItemId =, type =, contentId = }.
+function list()
+    local rows = dp.profile.getItems(itemId)
+    for i, it in ipairs(rows) do
+        Debug.Log("[award-item] #" .. i .. " " .. tostring(it.instanceId)
+            .. " level=" .. tostring(it.metadata and it.metadata.level))
+    end
+    return rows
 end
 
 -- ── Lifecycle ────────────────────────────────────────────────────

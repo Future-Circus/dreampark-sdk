@@ -28,6 +28,19 @@
 //
 //  Spec: dreampark-core Docs/Game-Storage-Spec.md.
 //
+//  ── BETA AND RELEASE SHARE ONE SAVE (Oct 13 2026, Aidan: "Share") ──
+//  A Beta upload stamps a title's ids to "<id>Beta". Storage is twin-aware:
+//  every entry point (dp.storage.game(id), the auto `storage` scope, the C#
+//  API) maps the content id through ContentGate.StorageId ("<id>Beta" →
+//  "<id>") and the attraction slug through StorageSlug ("<id>beta__levels__…"
+//  → "<id>__levels__…"), so a beta build reads and writes the SAME store, op
+//  queue and server doc (/app/profile/storage/<id>) as release. One store per
+//  title means one queue and one flush — never a double write — and merges are
+//  the server's normal per-op semantics (max/min/increment/set/delete on the
+//  same doc). ContentGate opens "<id>" when "<id>Beta" is entered. Lua still
+//  sees its own stamped id in storage.gameId. Scores / leaderboards are NOT
+//  merged: ScoreAPI posts to /app/profile/scores/<its own id>.
+//
 //  Model:
 //    - TWO scopes per game: "game" (shared across the game's attractions)
 //      and per-attraction buckets keyed by the slug of the attraction's
@@ -42,9 +55,13 @@
 //      set, so cross-device merge semantics survive batching:
 //      max(high_score, 50) from this device can never clobber an 80
 //      another device wrote.
-//    - Guest play just works: unbound sessions read/write the local cache
-//      and the op queue holds. When an identity binds mid-session the
-//      server doc is fetched and queued ops REPLAY on top — guest progress
+//    - Guest play just works: unbound sessions read/write the local cache.
+//      With a guest id (the open visit's, set by the host through
+//      ProfileAPI.GuestIdProvider) the queue flushes as that guest
+//      (guestId in the body) and the server keeps it under the guest's
+//      anonymous DreamID; with none, the op queue holds. When an identity
+//      binds mid-session the server doc is fetched (the claim merged the
+//      guest's doc into it) and queued ops REPLAY on top — guest progress
 //      merges into the account automatically.
 //    - HARD CAPS (server-authoritative, mirrored here): 64 keys / 8 KB per
 //      scope, values are string(≤1 KB)/number/bool only. A game cannot
@@ -99,7 +116,11 @@ namespace DreamPark.API
         const int   MaxFetchRetries      = 3;
         const int   QueueWarnThreshold   = 256; // coalescing keeps real queues tiny — big = bug in the game
 
-        static readonly Regex KeyRe = new Regex("^[A-Za-z0-9_-]{1,64}$");
+        // internal, not private: ScoreAPI validates metric names against the
+        // identical charset (a metric is embedded in a server-side boardId
+        // the same way a storage key is embedded in a scope doc) — reusing
+        // this instance means the two can never drift apart.
+        internal static readonly Regex KeyRe = new Regex("^[A-Za-z0-9_-]{1,64}$");
 
         // ── State ────────────────────────────────────────────────────────
         class PendingOp
@@ -120,6 +141,10 @@ namespace DreamPark.API
             public int    fetchRetries;
             public bool   flushScheduled;
             public bool   flushInFlight;
+            // A guest id the server refused (403: an older server with no guest
+            // writes, or GUEST_ID_IN_USE). Its ops stay queued for a bind instead
+            // of retrying every few seconds.
+            public string guestRefused;
             // scopes[""] = game scope; scopes[slug] = attraction bucket.
             public readonly Dictionary<string, Dictionary<string, object>> scopes = new Dictionary<string, Dictionary<string, object>>();
             public readonly List<PendingOp> queue      = new List<PendingOp>();
@@ -183,7 +208,7 @@ namespace DreamPark.API
         {
             var store = EnsureStore(contentId);
             if (store == null || string.IsNullOrEmpty(key)) return null;
-            var bucket = GetBucket(store, Slugify(attraction), create: false);
+            var bucket = GetBucket(store, StorageSlug(contentId, attraction), create: false);
             if (bucket == null) return null;
             return bucket.TryGetValue(key, out var v) ? v : null;
         }
@@ -251,7 +276,7 @@ namespace DreamPark.API
                 Debug.LogWarning($"[GameStorageAPI] Set('{key}') rejected — values must be a string (≤{MaxStringValueBytes} bytes), finite number, or bool.");
                 return false;
             }
-            var slug = Slugify(attraction);
+            var slug = StorageSlug(contentId, attraction);
             var bucket = GetBucketForWrite(store, slug, key);
             if (bucket == null) return false;
 
@@ -295,11 +320,35 @@ namespace DreamPark.API
             return NumericOp(contentId, attraction, key, "min", value);
         }
 
+        // ── Progress convention (Docs/Game-Storage-Spec.md §5) ────────────
+        // "Progress" is NOT a second storage system — it's ONE reserved key
+        // in the existing GAME scope (never per-attraction: a title has one
+        // overall "how far along" number, the same way a title can have many
+        // high-score boards but only one progress bar). The mobile app will
+        // eventually read this key straight off the game-storage doc it
+        // already fetches — zero new endpoint, zero new cap, one convention.
+        //
+        // Recommended range is 0-100, UNENFORCED — this is a documented
+        // convention, not a server rule, same as every other storage key.
+        // Set(contentId, null, ProgressKey, ...) works identically; these
+        // exist so the convention has ONE spelling to autocomplete instead
+        // of a magic string that can silently drift ("Progress" vs
+        // "progress" is a guest-visible bug, not a compile error).
+        public const string ProgressKey = "progress";
+
+        /// <summary>Set this title's overall progress (recommended 0-100,
+        /// unenforced — see Docs/Game-Storage-Spec.md §5). Always game-scoped:
+        /// there is one progress value per title, never one per attraction.</summary>
+        public static bool SetProgress(string contentId, double value) => Set(contentId, null, ProgressKey, value);
+
+        /// <summary>Read this title's overall progress, or null if never set.</summary>
+        public static object GetProgress(string contentId) => Get(contentId, null, ProgressKey);
+
         public static void Delete(string contentId, string attraction, string key)
         {
             var store = EnsureStore(contentId);
             if (store == null || !ValidateKey(key)) return;
-            var slug = Slugify(attraction);
+            var slug = StorageSlug(contentId, attraction);
             var bucket = GetBucket(store, slug, create: false);
             bucket?.Remove(key);
             Enqueue(store, slug, key, "delete", null);
@@ -316,6 +365,29 @@ namespace DreamPark.API
             foreach (var store in _stores.Values) Flush(store);
         }
 
+        /// <summary>True while a write of the CURRENT identity is in flight or could
+        /// flush now (queued, gate open). Lets a caller wait — bounded — for
+        /// FlushAll's POSTs to land before the headset's binding moves (a claim over
+        /// a guest session, a release, a guest-session rotation). Held ops for a
+        /// content whose gate never opened don't count: they cannot flush.</summary>
+        public static bool HasPendingFlushes
+        {
+            get
+            {
+                // Unbound, a guest's queue can flush too (unless the server refused that guest).
+                string guestId = ProfileAPI.IsBound ? null : ProfileAPI.GuestWriteId;
+                bool canSend = ProfileAPI.IsBound || guestId != null;
+                foreach (var store in _stores.Values)
+                {
+                    if (store.epoch != _epoch) continue;
+                    if (store.flushInFlight) return true;
+                    if (store.queue.Count > 0 && canSend && ContentGate.IsOpen(store.contentId)
+                        && (guestId == null || store.guestRefused != guestId)) return true;
+                }
+                return false;
+            }
+        }
+
         static double NumericOp(string contentId, string attraction, string key, string opName, double amount)
         {
             var store = EnsureStore(contentId);
@@ -325,7 +397,7 @@ namespace DreamPark.API
                 Debug.LogWarning($"[GameStorageAPI] {opName}('{key}') rejected — amount must be finite.");
                 return 0;
             }
-            var slug = Slugify(attraction);
+            var slug = StorageSlug(contentId, attraction);
             var bucket = GetBucketForWrite(store, slug, key);
             if (bucket == null) return 0;
 
@@ -346,9 +418,30 @@ namespace DreamPark.API
 
         // ── Store / bucket plumbing ──────────────────────────────────────
 
+        /// <summary>The attraction scope key a write/read lands in: the normal
+        /// slug, with a beta twin's stamped prefix folded back onto the release
+        /// one ("&lt;id&gt;Beta/Levels/M/Arena" slugs to "&lt;id&gt;beta__levels__m__arena"
+        /// and is stored as "&lt;id&gt;__levels__m__arena"), so beta and release
+        /// share attraction buckets as well as the game scope. Only the title's
+        /// OWN prefix is touched. "" = game scope. Pure.</summary>
+        internal static string StorageSlug(string contentId, string attraction)
+        {
+            var slug = Slugify(attraction);
+            if (slug.Length == 0) return slug;
+            var baseSlug = Slugify(ContentGate.StorageId(contentId));
+            if (baseSlug.Length == 0) return slug;
+            var betaSlug = baseSlug + Slugify(ContentGate.BetaSuffix); // "<id>beta"
+            if (slug == betaSlug) return baseSlug;
+            if (slug.StartsWith(betaSlug + "__", StringComparison.Ordinal))
+                return baseSlug + slug.Substring(betaSlug.Length);
+            return slug;
+        }
+
         static ContentStore EnsureStore(string contentId)
         {
             if (string.IsNullOrEmpty(contentId)) return null;
+            // Beta twin → the release id: one store, one queue, one server doc.
+            contentId = ContentGate.StorageId(contentId);
             if (!_stores.TryGetValue(contentId, out var store))
             {
                 store = new ContentStore { contentId = contentId, epoch = _epoch };
@@ -639,7 +732,13 @@ namespace DreamPark.API
         {
             if (store.epoch != _epoch) return; // stale store — never flush player A's ops as player B
             if (store.flushInFlight || store.queue.Count == 0) return;
-            if (!ProfileAPI.IsBound) return; // stays queued; replays after bind + fetch
+            // Unbound: a guest with a guest id SENDS its ops as that guest
+            // (guestId in the body, guest-transfer.md), so a doff/pause no longer
+            // throws away progress; signing in adopts the guest's doc. With no
+            // guest id the ops stay queued and replay after bind + fetch.
+            string guestId = ProfileAPI.IsBound ? null : ProfileAPI.GuestWriteId;
+            if (!ProfileAPI.IsBound && guestId == null) return;
+            if (guestId != null && store.guestRefused == guestId) return;
 
             // Consent latch: no save data leaves the device until the player
             // has physically walked into one of this content's attractions.
@@ -669,6 +768,7 @@ namespace DreamPark.API
                 opsArr.Add(o);
             }
             body.AddField("ops", opsArr);
+            if (guestId != null) body.AddField("guestId", guestId);
 
             DreamParkAPI.POST($"/app/profile/storage/{Uri.EscapeDataString(store.contentId)}", ProfileAPI.AuthHeader(), body, (ok, resp) =>
             {
@@ -684,6 +784,15 @@ namespace DreamPark.API
                 if (store.epoch != _epoch) return; // identity changed mid-request — drop silently
 
                 long code = resp?.statusCode ?? 0;
+                if (guestId != null && (code == 401 || code == 403))
+                {
+                    // The server will not take this guest's writes. Hold them (a
+                    // later sign-in replays them onto the account) rather than retry.
+                    store.queue.InsertRange(0, chunk);
+                    store.guestRefused = guestId;
+                    Debug.LogWarning($"[GameStorageAPI] '{store.contentId}' guest write refused ({code}): {resp?.rawText}. Holding {store.queue.Count} op(s) until a sign-in.");
+                    return;
+                }
                 if (code == 400 || code == 413)
                 {
                     // Validation / cap rejection — the batch can NEVER
@@ -820,7 +929,12 @@ namespace DreamPark.API
         // by walking up to the stamped template components. GameArea first
         // (attractions always carry one, and it holds BOTH ids), then
         // PropTemplate, then LevelTemplate (gameId only).
-        static LuaTable ResolveScopeTable(GameObject go)
+        // internal, not private: ScoreAPI's Lua bridge resolves the calling
+        // script's (gameId, attraction) the same way `storage` does, and
+        // duplicating this GetComponentInParent walk would risk the two
+        // resolvers drifting on which template wins (see the ordering
+        // reasoning above — GameArea first because it holds both ids).
+        internal static LuaTable ResolveScopeTable(GameObject go)
         {
             if (go == null) return null;
             string gameId = null, resourceName = null;
@@ -898,6 +1012,17 @@ namespace DreamPark.API
                         s.onReady   = function(cb)          dp_storage_on_ready(gameId, cb) end
                         s.gameId     = gameId
                         s.attraction = attraction
+                        -- Progress convention (Docs/Game-Storage-Spec.md §5):
+                        -- ALWAYS game-scoped (attraction is ignored on
+                        -- purpose, even when this `storage` is an
+                        -- attraction-scoped proxy) — one progress value per
+                        -- title, not one per attraction.
+                        s.setProgress = function(value)   return dp_storage_set(gameId, nil, 'progress', value) end
+                        s.getProgress = function(default)
+                            local v = dp_storage_get(gameId, nil, 'progress')
+                            if v == nil then return default end
+                            return v
+                        end
                         return s
                     end
 
@@ -911,6 +1036,8 @@ namespace DreamPark.API
                         delete    = function() dp_storage_warn_unscoped() end,
                         isReady   = function() return false end,
                         onReady   = function() dp_storage_warn_unscoped() end,
+                        setProgress = function() dp_storage_warn_unscoped() return false end,
+                        getProgress = function(default) dp_storage_warn_unscoped() return default end,
                     }
                     __dp_storage_unscoped.game = __dp_storage_unscoped
 

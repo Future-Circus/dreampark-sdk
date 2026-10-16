@@ -14,43 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   m_GroupName: Sample-Previews
   m_GUID: f24f04d25dbbb45f5904e9cca1155635
-  m_SerializeEntries:
-  - m_GUID: 172be79cdd891491897eb94c42804c65
-    m_Address: Sample/Previews/P_TestProp
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - Sample
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: 4d331027ccc13451cb0a2b4b2d47567a
-    m_Address: Sample/Previews/P_Pit
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - Sample
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: 92fde4924eef44324bf9406f2889059b
-    m_Address: Sample/Previews/P_TestPoint
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - Sample
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: b475883e649a9463b92ff9649ba20c4c
-    m_Address: Sample/Previews/A_TestAttraction
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - Sample
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: d5345622197a24650a5621a583e54b25
-    m_Address: Sample/Previews/A_DreamSequence
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - Sample
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: e2d26dc9289df4e69bf3a4b9373e4065
-    m_Address: Sample/Previews/P_Enemy
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - Sample
-    FlaggedDuringContentUpdateRestriction: 0
+  m_SerializeEntries: []
   m_ReadOnly: 0
   m_Settings: {fileID: 11400000, guid: 5e922c848874c41bc90d6a8d78c6f5a9, type: 2}
   m_SchemaSet:

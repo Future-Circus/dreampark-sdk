@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
 
 namespace DreamPark.PreUploadChecks.Checks
@@ -59,13 +60,11 @@ namespace DreamPark.PreUploadChecks.Checks
     // on the root.
     //
     // That is not an oversight and it is not a soft spot to be tightened later. The
-    // SDK's own documented Dream Sequence format REQUIRES a LuaBehaviour on the root:
-    // "The controller goes on the attraction ROOT — the GameObject carrying
-    // AttractionTemplate / GameArea / MusicArea", and dp.attraction() resolves to
-    // exactly that root scope. A check that rejected root MonoBehaviours would block
-    // the SDK's own A_DreamSequence sample, every attraction authored from it, and
-    // most shipped content — which is the failure mode PreUploadCheck.cs's policy
-    // comment is about: "spend it on a finding that is wrong often enough to be
+    // common pattern of a Lua controller on the attraction ROOT (the GameObject
+    // carrying AttractionTemplate / GameArea / MusicArea) depends on it, and
+    // dp.attraction() resolves to exactly that root scope. A check that rejected
+    // root MonoBehaviours would block most shipped content — which is the failure
+    // mode PreUploadCheck.cs's policy comment is about: "spend it on a finding that is wrong often enough to be
     // dismissed and it stops meaning anything."
     //
     // The rule a creator can act on is narrow and always true: physics, audio,
@@ -232,15 +231,11 @@ namespace DreamPark.PreUploadChecks.Checks
                     };
 
                     string path = root.assetPath;
-                    finding.fixes.Add(FixAction.Navigate("Select prefab", () =>
+                    string componentKind = kind;
+                    int componentOrdinal = ordinal;
+                    finding.fixes.Add(FixAction.Navigate("Open prefab & select component", () =>
                     {
-                        var asset = AssetDatabase.LoadMainAssetAtPath(path);
-                        if (asset != null) { Selection.activeObject = asset; EditorGUIUtility.PingObject(asset); }
-                    }));
-                    finding.fixes.Add(FixAction.Navigate("Open in Prefab Mode", () =>
-                    {
-                        var asset = AssetDatabase.LoadMainAssetAtPath(path);
-                        if (asset != null) AssetDatabase.OpenAsset(asset);
+                        OpenAndSelectComponent(path, componentKind, componentOrdinal);
                     }));
 
                     findings.Add(finding);
@@ -248,6 +243,36 @@ namespace DreamPark.PreUploadChecks.Checks
             }
 
             return CheckResult.From(CheckId, findings);
+        }
+
+        private static void OpenAndSelectComponent(string prefabPath, string kind, int ordinal)
+        {
+            try
+            {
+                var stage = PrefabStageUtility.OpenPrefab(prefabPath);
+                var root = stage != null ? stage.prefabContentsRoot : null;
+                if (root == null) return;
+
+                int seen = 0;
+                foreach (var component in root.GetComponents<Component>())
+                {
+                    if (component == null || RejectedKind(component) != kind) continue;
+                    if (seen++ != ordinal) continue;
+
+                    Selection.activeObject = component;
+                    EditorGUIUtility.PingObject(component);
+                    return;
+                }
+
+                // If the prefab changed since the scan, still leave the developer at
+                // the correct root rather than selecting a stale asset object.
+                Selection.activeGameObject = root;
+                EditorGUIUtility.PingObject(root);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[DreamPark] Could not open '{prefabPath}' in Prefab Mode: {e.Message}");
+            }
         }
 
         private static string Detail(ContentRootInfo root, string typeName, bool isTriggerVolume)

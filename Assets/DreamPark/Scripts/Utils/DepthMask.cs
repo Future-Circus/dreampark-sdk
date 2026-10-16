@@ -59,7 +59,10 @@ public class DepthMask : MonoBehaviour
         }
 
         environmentDepthManager.MaskMeshFilters = mgrList;
-        environmentDepthManager.MaskBias = _someOffsetFloatValue;
+        // Oct 11 2026: MaskBias is GLOBAL and is no longer stamped per object here (the
+        // last DepthMask to enable used to win for the whole park). DreamPark.
+        // DepthMaskCeiling owns it and writes it every LateUpdate; _someOffsetFloatValue
+        // stays serialized but is unused.
     }
 
     // Call this whenever objects may have been created/destroyed/changed meshes.

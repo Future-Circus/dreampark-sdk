@@ -56,11 +56,11 @@ namespace DreamPark.EditorTools.TextureOptimization
             // mid-session), fail loudly instead of silently doing nothing.
             if (!MagickNetBootstrap.IsAvailable)
             {
-                EditorUtility.DisplayDialog(
-                    "Texture Optimizer not ready",
-                    "Magick.NET isn't loaded. Close and reopen the Texture Optimizer window — "
-                    + "it auto-installs on first use.",
-                    "OK");
+                // Oct 2026: never a modal from the executor — it runs under
+                // automation (agent builders, CLI). The window shows result.error.
+                result.error = "Magick.NET isn't loaded. Close and reopen the Texture Optimizer window — "
+                    + "it auto-installs on first use.";
+                Debug.LogError("[TextureOptimizer] " + result.error);
                 return result;
             }
 
@@ -348,9 +348,52 @@ namespace DreamPark.EditorTools.TextureOptimization
             defaultSettings.maxTextureSize = row.targetImporterMaxSize;
             defaultSettings.crunchedCompression = importer.crunchedCompression;
             importer.SetPlatformTextureSettings(defaultSettings);
+            ApplyPlatformOverrides(importer, row.targetImporterMaxSize, importer.crunchedCompression,
+                row.usage.hasAlphaChannel, importer.compressionQuality);
 
             EditorUtility.SetDirty(importer);
             importer.SaveAndReimport();
+        }
+
+        /// Oct 2026: the Default platform alone doesn't decide what ships.
+        ///   - An existing Android or iPhone override still wins, so its max
+        ///     size is clamped to the target (never raised).
+        ///   - iOS "Automatic" resolves to ASTC, which ignores crunch: a crunched
+        ///     row would ship uncrunched on iPhone. Pin iPhone to the crunched
+        ///     ETC2 formats (ETC_RGB4Crunched / ETC2_RGBA8Crunched) for crunched
+        ///     rows, at the target size.
+        internal static void ApplyPlatformOverrides(TextureImporter importer, int targetMaxSize, bool crunched,
+            bool hasAlpha, int crunchQuality)
+        {
+            foreach (string platform in new[] { "Android", "iPhone" })
+            {
+                TextureImporterPlatformSettings settings = importer.GetPlatformTextureSettings(platform);
+                if (settings == null) continue;
+                bool pinIos = platform == "iPhone" && crunched;
+                if (!settings.overridden && !pinIos) continue;
+                PlanPlatformOverride(settings, targetMaxSize, crunched, hasAlpha, crunchQuality, pinIos);
+                importer.SetPlatformTextureSettings(settings);
+            }
+        }
+
+        /// Pure: what one platform override becomes (EditMode-tested).
+        internal static void PlanPlatformOverride(TextureImporterPlatformSettings settings, int targetMaxSize,
+            bool crunched, bool hasAlpha, int crunchQuality, bool pinIosCrunch)
+        {
+            settings.maxTextureSize = settings.overridden && settings.maxTextureSize > 0
+                ? Mathf.Min(settings.maxTextureSize, targetMaxSize)
+                : targetMaxSize;
+            if (pinIosCrunch)
+            {
+                settings.overridden = true;
+                settings.format = hasAlpha ? TextureImporterFormat.ETC2_RGBA8Crunched : TextureImporterFormat.ETC_RGB4Crunched;
+                settings.crunchedCompression = true;
+                settings.compressionQuality = Mathf.Clamp(crunchQuality, 0, 100);
+            }
+            else if (crunched)
+            {
+                settings.crunchedCompression = true;
+            }
         }
     }
 }

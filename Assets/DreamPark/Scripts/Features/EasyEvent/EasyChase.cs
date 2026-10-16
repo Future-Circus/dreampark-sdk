@@ -90,7 +90,7 @@
                 target = gameObject.transform;
             }
             if (target == null) {
-                target = Camera.main.transform;
+                target = PlayerHead.ContentCamera().transform; // Oct 11 2026: the content camera (limbo stand-in while the local player is not in the park)
             }
             if (agent != null) {
                  if (!agent.IsOnNavMesh(out NavMeshHit _)) {

@@ -26,6 +26,9 @@ namespace DreamPark
         /// constant. If a caller ever needs a different bias, the fix is to make
         /// DepthMask stop stamping a per-object value onto a global, not to pass a
         /// second number here.
+        ///
+        /// Oct 11 2026: that fix is done — DepthMask no longer writes MaskBias at all and
+        /// DepthMaskCeiling owns it (0.02 with the dome mask). This value is now inert.
         /// </summary>
         public const float DefaultMaskBias = 0.6f;
 

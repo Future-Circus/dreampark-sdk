@@ -21,7 +21,7 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(HandTracker);
-			Utils.BeginObjectRegister(type, L, translator, 0, 2, 11, 7);
+			Utils.BeginObjectRegister(type, L, translator, 0, 2, 12, 7);
 			
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "DisableChildren", _m_DisableChildren);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "EnableChildren", _m_EnableChildren);
@@ -31,6 +31,7 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "isActiveAndTracking", _g_get_isActiveAndTracking);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "isUsingLeftHand", _g_get_isUsingLeftHand);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "isUsingRightHand", _g_get_isUsingRightHand);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "DrivenByLeftAnchor", _g_get_DrivenByLeftAnchor);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "handPreference", _g_get_handPreference);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "leftHand", _g_get_leftHand);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "rightHand", _g_get_rightHand);
@@ -198,6 +199,20 @@ namespace XLua.CSObjectWrap
 			
                 HandTracker gen_to_be_invoked = (HandTracker)translator.FastGetCSObj(L, 1);
                 LuaAPI.lua_pushboolean(L, gen_to_be_invoked.isUsingRightHand);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_DrivenByLeftAnchor(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                HandTracker gen_to_be_invoked = (HandTracker)translator.FastGetCSObj(L, 1);
+                LuaAPI.lua_pushboolean(L, gen_to_be_invoked.DrivenByLeftAnchor);
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }

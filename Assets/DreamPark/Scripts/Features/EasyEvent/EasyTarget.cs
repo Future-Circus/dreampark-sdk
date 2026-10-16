@@ -14,7 +14,7 @@
         private float cooldown = 0f;
         public override void OnEvent(object arg0 = null) {
             if (targetPlayer) {
-                _target = Camera.main.gameObject;
+                _target = PlayerHead.ContentCamera().gameObject; // Oct 11 2026: the content camera (limbo stand-in while the local player is not in the park)
             } else if (targetObject) {
                 _target = target.gameObject;
             }

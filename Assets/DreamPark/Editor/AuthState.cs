@@ -71,10 +71,16 @@ namespace DreamPark
 
             EditorPrefs.SetString(LastCheckedPrefKey, now.ToString("F2"));
 
+            // An active agent key is probed on /auth/agent/me (AuthAPI.Refresh routes it
+            // there) and NEVER through /auth/refresh — a 401 for the agent drops only the
+            // agent's own key file, never the human session.
+            bool probingAgentKey = AuthAPI.IsAgentKeyActive;
             AuthAPI.Refresh(stillValid =>
             {
                 if (!stillValid)
                 {
+                    // AuthAPI.Refresh already logged why the agent key was dropped.
+                    if (probingAgentKey) return;
                     // AuthAPI.Refresh already cleared the session on 401 and fired
                     // LoginStateChanged. We log a hint so devs know why panels
                     // suddenly demand re-login.
@@ -97,6 +103,13 @@ namespace DreamPark
             if (EditorPrefs.GetString(ExpiryWarnedPrefKey, "") == stamp) return;
             EditorPrefs.SetString(ExpiryWarnedPrefKey, stamp);
 
+            if (AuthAPI.IsAgentKeyActive)
+            {
+                Debug.LogWarning(
+                    $"[DreamPark] The DreamPark agent key for {AuthAPI.email} expires in about {Mathf.CeilToInt((float)hoursLeft)}h. "
+                    + "Have the agent run dreampark_agent_request / dreampark_agent_wait again before a long upload.");
+                return;
+            }
             Debug.LogWarning(
                 $"[DreamPark] Your DreamPark session ends in about {Mathf.CeilToInt((float)hoursLeft)}h. "
                 + "Sign in again (DreamPark → Sign In) before starting a long upload.");

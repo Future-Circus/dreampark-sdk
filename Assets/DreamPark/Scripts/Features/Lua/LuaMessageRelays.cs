@@ -33,6 +33,11 @@ using XLua;
 ///   onzoneexit()                   → …and left it
 /// See LuaZoneRelay for why these exist and why polling isPlaying by hand is a
 /// trap.
+///
+/// And two are the operator / parent GAME PAUSE (Oct 2026, GamePause.cs):
+///   onpause()                      → the game master held the game (fires
+///                                    BEFORE the freeze; sticky)
+///   onresume()                     → …and released it (AFTER the thaw)
 /// </summary>
 public static class LuaMessageRelays {
 
@@ -63,6 +68,9 @@ public static class LuaMessageRelays {
         WireVoid<LuaZoneExitRelay>(go, scope, "onzoneexit", outRelays);
 
         WireVoid<LuaReadyRelay>(go, scope, "onready", outRelays);
+
+        WireVoid<LuaPauseRelay>(go, scope, "onpause", outRelays);
+        WireVoid<LuaResumeRelay>(go, scope, "onresume", outRelays);
     }
 
     /// <summary>Enable/disable all relays in the list (null-safe).</summary>
@@ -71,6 +79,18 @@ public static class LuaMessageRelays {
         for (int i = 0; i < relays.Count; i++)
             if (relays[i] != null)
                 relays[i].enabled = enabled;
+    }
+
+    /// <summary>
+    /// The host script's start() has run (LuaBehaviour.DispatchStart). Relays that
+    /// deliver STATE rather than a Unity message (the zone relays) hold their first
+    /// delivery until this point — see LuaZoneRelay.
+    /// </summary>
+    public static void NotifyHostStarted(List<Behaviour> relays) {
+        if (relays == null) return;
+        for (int i = 0; i < relays.Count; i++)
+            if (relays[i] is LuaRelay r && r != null)
+                r.MarkHostStarted();
     }
 
     static void WireVoid<T>(GameObject go, LuaTable scope, string fn, List<Behaviour> outRelays)
@@ -148,6 +168,15 @@ public abstract class LuaRelay : MonoBehaviour {
     protected virtual void OnWired() { }
 
     internal void MarkWired() => OnWired();
+
+    /// <summary>
+    /// Called once, after the host script's start() has run. Wiring happens inside
+    /// LuaBehaviour.EnsureBooted, BEFORE the script's awake() — so anything a relay
+    /// delivers from OnWired reaches a script that has not initialised yet.
+    /// </summary>
+    protected virtual void OnHostStarted() { }
+
+    internal void MarkHostStarted() => OnHostStarted();
 }
 
 public abstract class LuaVoidRelay : LuaRelay { [NonSerialized] public Action cb; }
@@ -234,6 +263,27 @@ public sealed class LuaAppFocusRelay : LuaBoolRelay { void OnApplicationFocus(bo
 //
 //  Re-entrancy is handled per relay: each tracks whether it has already
 //  reported "inside", so a re-enable during load cannot double-fire enter.
+//
+//  NOTHING IS DELIVERED BEFORE THE SCRIPT'S start() (Oct 5 2026 — playtest:
+//  "spawning inside attractions not activating attractions"). Relays are wired
+//  inside LuaBehaviour.EnsureBooted, which runs BEFORE awake(), and parked park
+//  content boots on the unpark OnEnable. GameArea is never parked, so when the
+//  player was standing in the footprint while the attraction loaded, the zone
+//  was already current by then — and the sticky replay ran onzoneenter() from
+//  OnWired: before this script's awake()/start(), and before every sibling
+//  script enabled in the same sweep had booted. The handler hit uninitialised
+//  state (or awake() then reset what it set), the baseline was recorded as
+//  delivered, and nothing re-fired until the player walked out and back in.
+//  Walking in from outside always worked because that edge lands frames later.
+//  A hand-authored scene never showed it: there GameArea.Update cannot run before
+//  every Start, so the enter always arrived after start().
+//  The baseline is now taken on the first Update after start() (by which point
+//  Unity has run Start on every script enabled alongside this one).
+//
+//  An EXIT relay's baseline is silent: onzoneexit is the inside→outside edge.
+//  A script that loads outside is not told it left (it used to be, pre-awake,
+//  where the call was effectively lost — delivering it after start() now would
+//  be new behaviour, e.g. a round torn down at load).
 // Derives from LuaVoidRelay so WireVoid<T>'s constraint is satisfied and `cb`
 // (Action) is inherited rather than redeclared — these are wired exactly like
 // fixedupdate/lateupdate, they just fire from a DreamPark event instead of a
@@ -247,6 +297,8 @@ public abstract class LuaZoneRelay : LuaVoidRelay {
     private bool _inside;
     private bool _hasState;
     private bool _subscribed;
+    // The host script's start() has run (see the header): no delivery before it.
+    private bool _hostStarted;
 
     // The owning zone cannot always be resolved at OnEnable: the park spawner
     // parents spawned content AFTER Awake (the same reason `storage` is a lazy
@@ -271,16 +323,22 @@ public abstract class LuaZoneRelay : LuaVoidRelay {
         }
     }
 
-    // First delivery happens the instant the callback is wired — see LuaRelay.
-    // Never in Awake/OnEnable: cb does not exist yet there, and delivering into
-    // null would consume the baseline and lose the event permanently.
+    // Wiring runs before the script's awake() (see the header), so OnWired
+    // delivers nothing: the baseline waits for OnHostStarted + the next Update.
     protected override void OnWired() => Sync();
 
-    // Retry only while the zone is still unresolved. A script on an object the
-    // park spawner has not parented yet cannot see its attraction at wire time,
-    // so it may take a frame or two. Early-outs on the first line once settled.
+    // Deliberately not a synchronous Sync(): start() may be running from Unity's
+    // Start phase, where scripts enabled in the same sweep may not have started
+    // yet. Update runs after every pending Start.
+    protected override void OnHostStarted() => _hostStarted = true;
+
+    // Takes the first baseline (after start()), and retries while the zone is
+    // still unresolved: a script on an object the park spawner has not parented
+    // yet cannot see its attraction, so it may take a frame or two. Early-outs on
+    // the first line once settled.
     void Update() {
         if (_hasState && _zone != null) return;
+        if (!_hostStarted) return;
         if (_resolveTries >= MaxResolveTries) return;
         _resolveTries++;
         Sync();
@@ -290,28 +348,50 @@ public abstract class LuaZoneRelay : LuaVoidRelay {
 
     private void Sync() {
         // Not wired yet (see Update): never establish or consume state while the
-        // callback is null, or the delivery is silently thrown away.
-        if (cb == null) return;
+        // callback is null, or the delivery is silently thrown away. Nor before
+        // the script's start() (see the header).
+        if (cb == null || !_hostStarted) return;
 
         if (_zone == null) _zone = ResolveZone();
         if (_zone == null) return;
 
-        bool inside = global::DreamPark.GameArea.currentGameArea == _zone;
+        bool inside = IsInside(global::DreamPark.GameArea.currentGameArea, _zone);
 
-        // First observation establishes the baseline. Deliver it only if it is
-        // the state this relay reports — that is the sticky replay: a script
-        // that loads while the player is ALREADY standing inside still gets its
-        // onzoneenter, and one that loads outside is not spuriously told it left.
+        // First observation establishes the baseline. Only "inside" is replayed —
+        // that is the sticky replay: a script that loads while the player is
+        // ALREADY standing inside still gets its onzoneenter (exactly once: the
+        // edge path below needs a real change), and one that loads outside is not
+        // spuriously told it left.
         if (!_hasState) {
             _hasState = true;
             _inside = inside;
-            if (inside == FiresOnInside) Fire();
+            if (inside && FiresOnInside) Fire();
             return;
         }
 
         if (inside == _inside) return;
         _inside = inside;
         if (inside == FiresOnInside) Fire();
+    }
+
+    /// <summary>
+    /// "The player is in MY attraction": the current zone is mine, or one zone
+    /// is nested inside the other. A Dream Sequence is the case this exists
+    /// for: the package root's GameArea owns the room (it was there first, and
+    /// an equal-priority zone never displaces it), so the streamed level's own
+    /// GameArea never becomes current — and scripts inside the active level
+    /// never heard onzoneenter (Birthday Bash music and VO stayed silent on
+    /// device, Oct 2026). In a Sequence the active level IS the attraction.
+    /// The reverse holds too: a script on the package root is inside when a
+    /// nested level's zone happens to be the current one. Only LevelTemplate /
+    /// PropTemplate carry GameAreas and nested prop zones are disabled, so the
+    /// Sequence is the only nesting that occurs in shipped content.
+    /// </summary>
+    public static bool IsInside(global::DreamPark.GameArea current, global::DreamPark.GameArea mine) {
+        if (current == null || mine == null) return false;
+        if (current == mine) return true;
+        Transform c = current.transform, m = mine.transform;
+        return m.IsChildOf(c) || c.IsChildOf(m);
     }
 
     private void Fire() {
@@ -404,5 +484,79 @@ public sealed class LuaReadyRelay : LuaVoidRelay {
         Unsubscribe();
         try { cb.Invoke(); }
         catch (Exception e) { Debug.LogError($"[LuaReadyRelay] {name}.onready threw: {e}"); }
+    }
+}
+
+// ── Game pause relays (Oct 2026, DreamPark.GamePause) ─────────────────────
+//
+//  onpause() / onresume() — an operator or parent held the game from the
+//  phone. Park content is frozen by the platform (bodies, agents, animators,
+//  particles, audio, scripts); these hooks are for what only the GAME knows:
+//  a Player.prefab manager stopping its round clock or music, a scoreboard
+//  saying "paused", a timer re-based on dp.game_time().
+//
+//  They fire whether or not the host is enabled — the freeze disables park
+//  scripts, and onpause() is delivered BEFORE it (scripts still running),
+//  onresume() AFTER the thaw. Nothing is delivered before the script's
+//  start(), same rule as the zone relays.
+//
+//  STICKY: a script that starts while the game is already held gets onpause()
+//  at start. onresume() only ever follows an onpause() this script received.
+public abstract class LuaGamePauseRelayBase : LuaVoidRelay {
+    bool _subscribed;
+    protected bool HostStarted { get; private set; }
+    protected bool PauseDelivered;
+
+    protected override void OnWired() { Subscribe(); }
+    protected override void OnHostStarted() { HostStarted = true; OnStarted(); }
+    protected virtual void OnStarted() { }
+    protected abstract void OnEdge(bool paused);
+
+    void Subscribe() {
+        if (_subscribed) return;
+        DreamPark.GamePause.OnPausedChanged += Handle;
+        _subscribed = true;
+    }
+
+    void Unsubscribe() {
+        if (!_subscribed) return;
+        DreamPark.GamePause.OnPausedChanged -= Handle;
+        _subscribed = false;
+    }
+
+    void Handle(bool paused) {
+        if (this == null) { Unsubscribe(); return; }   // destroyed without OnDestroy (never active)
+        OnEdge(paused);
+    }
+
+    protected void Fire(string fn) {
+        if (cb == null) return;
+        try { cb.Invoke(); }
+        catch (Exception e) { Debug.LogError($"[LuaGamePauseRelay] {name}.{fn} threw: {e}"); }
+    }
+
+    void OnDestroy() { Unsubscribe(); }
+}
+
+public sealed class LuaPauseRelay : LuaGamePauseRelayBase {
+    protected override void OnStarted() {
+        if (DreamPark.GamePause.IsPaused && !PauseDelivered) { PauseDelivered = true; Fire("onpause"); }
+    }
+    protected override void OnEdge(bool paused) {
+        if (!paused) { PauseDelivered = false; return; }
+        if (!HostStarted || PauseDelivered) return;
+        PauseDelivered = true;
+        Fire("onpause");
+    }
+}
+
+public sealed class LuaResumeRelay : LuaGamePauseRelayBase {
+    // The pause this script saw (it may define onresume only, so track it here).
+    protected override void OnStarted() { if (DreamPark.GamePause.IsPaused) PauseDelivered = true; }
+    protected override void OnEdge(bool paused) {
+        if (paused) { if (HostStarted) PauseDelivered = true; return; }
+        if (!PauseDelivered) return;
+        PauseDelivered = false;
+        Fire("onresume");
     }
 }

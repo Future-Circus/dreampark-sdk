@@ -15,8 +15,7 @@ namespace DreamPark
     // Unity's automatic separator below it.
     //
     // The URL derives from DreamParkAPI.baseUrl (not a hard-coded host) so
-    // internal projects built with DREAMPARK_DEV_BACKEND land on the dev
-    // portal that matches the backend they're actually uploading to.
+    // a runtime override of the backend also moves the portal link.
     internal static class DeveloperPortalMenuItem
     {
         internal static string PortalUrl => API.DreamParkAPI.baseUrl + "/developer";

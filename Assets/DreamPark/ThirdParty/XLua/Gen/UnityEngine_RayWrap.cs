@@ -63,6 +63,22 @@ namespace XLua.CSObjectWrap
                     
 					return 1;
 				}
+				if(LuaAPI.lua_gettop(L) == 3 && translator.Assignable<UnityEngine.Vector3>(L, 2) && translator.Assignable<UnityEngine.Vector3>(L, 3))
+				{
+					UnityEngine.Vector3 _origin;translator.Get(L, 2, out _origin);
+					UnityEngine.Vector3 _direction;translator.Get(L, 3, out _direction);
+					
+					var gen_ret = new UnityEngine.Ray(_origin, _direction);
+					translator.PushUnityEngineRay(L, gen_ret);
+                    translator.PushUnityEngineVector3(L, _origin);
+                        translator.UpdateUnityEngineVector3(L, 2, _origin);
+                        
+                    translator.PushUnityEngineVector3(L, _direction);
+                        translator.UpdateUnityEngineVector3(L, 3, _direction);
+                        
+                    
+					return 3;
+				}
 				
 				if (LuaAPI.lua_gettop(L) == 1)
 				{

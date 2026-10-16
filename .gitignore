@@ -98,3 +98,37 @@ Assets/Samples/A_\ Pathfinding\ Project*
 # Track the .asset files to keep group identity stable across the team.
 ServerData
 Packages/Coplay/Editor
+
+# ---------------------------------------------------------------------------
+# Local-only files: never commit (this repo is the public SDK).
+# ---------------------------------------------------------------------------
+# Office docs / internal reports
+*.docx
+*.xlsx
+*.pptx
+*.pdf
+# Local agent tooling
+/Tools/agent/
+/Tools/Builders/SmokeBuilder.cs
+# Unreleased prototypes
+/Tools/LuaFeasibilityLinter/
+# SDK-maintainer release tooling and internal plans/reviews
+/scripts/release/
+/PATCH_DIFF_PLAN.md
+/RELEASE_REVIEW.md
+/RELEASE.json
+/CASCADE_WORKAROUND_DEFERRED.md
+/CONVERT_READY_SPEC.md
+/CONVERT_READY_REVIEW.md
+/PREUPLOAD_CHECKS_SPEC.md
+/PREUPLOAD_CHECKS_SYNC.md
+/SDK_RELEASE.md
+/MULTIPLAYER_RELEASE_NOTES.md
+# Local Claude Code notes
+CLAUDE.local.md
+# Secrets and build junk
+.env
+.env.*
+**/.secrets/
+__pycache__/
+*.pyc

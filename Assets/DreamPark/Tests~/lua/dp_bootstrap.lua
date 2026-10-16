@@ -6,12 +6,80 @@ dp.is_player   = function(x)  if x == nil then return false end
                               if ok then return r end
                               local ok2, r2 = pcall(function() return dp_is_player_go(x) end)
                               return ok2 and r2 or false end
+-- dp.player() is nil whenever there is no rig: before it loads, and for the
+-- whole session on a phone whose title has no Phone Player (phones watch by
+-- default). Nil-check it; put title-wide systems on the Game Manager.
 dp.player      = function()   return dp_player() end
 dp.head        = function()   return dp_head() end
 dp.scope       = function(go) return dp_scope(go) end
 dp.attraction  = function(go) return dp_attraction_scope(go) end
 dp.attraction_root = function(go) return dp_attraction_root(go) end
 dp.game_id     = function(go) return dp_game_id(go) end
+-- Console/non-LuaBehaviour callers pass a GameObject explicitly. Each
+-- LuaBehaviour gets a bound facade where these arguments are automatic.
+dp.package     = function(go) return dp_package(go) end
+dp.container   = function(go) return dp_container(go) end
+dp.container_object = function(go) return dp_container_object(go) end
+dp.game_manager = function(go) return dp_container(go) end
+dp.game_manager_object = function(go) return dp_container_object(go) end
+dp.button_press = function(go) return dp_button_press(go) end
+dp.is_sequence = function(go) return dp_is_sequence(go) end
+dp.is_adventure = function(go) return dp_is_adventure(go) end
+dp.is_arena = function(go) return dp_is_arena(go) end
+dp.current_level_index = function(go) return dp_current_level_index(go) end
+dp.level_count = function(go, groupId) return dp_level_count(go, groupId or '') end
+dp.groups = function(go) return dp_groups(go) end
+dp.levels = function(go, groupId) return dp_levels(go, groupId or '') end
+dp.level_slot = function(go, index, groupId) return dp_level_slot(go, index, groupId or '') end
+dp.load_level  = function(go, slot, groupId) return dp_load_level(go, slot, groupId or '') end
+dp.preload_level = function(go, slot, groupId) return dp_preload_level(go, slot, groupId or '') end
+dp.level_ready = function(go, slot, groupId) return dp_level_ready(go, slot, groupId or '') end
+dp.level_loading = function(go) return dp_level_loading(go) end
+dp.level_error = function(go) return dp_level_error(go) end
+dp.on_level_loaded = function(go, fn) return dp_on_level_loaded(go, fn) end
+dp.off_level_loaded = function(go, fn) return dp_off_level_loaded(go, fn) end
+-- Same frame the new level becomes visible (dp.on_level_loaded is one drawn
+-- frame later in a Sequence, after the new level's floor is built).
+dp.on_level_presented = function(go, fn) return dp_on_level_presented(go, fn) end
+dp.off_level_presented = function(go, fn) return dp_off_level_presented(go, fn) end
+dp.on_level_failed = function(go, fn) return dp_on_level_failed(go, fn) end
+dp.off_level_failed = function(go, fn) return dp_off_level_failed(go, fn) end
+dp.show_overlay = function(go, visible) dp_show_overlay(go, visible) end
+dp.overlay_auto_visibility = function(go, enabled) dp_overlay_auto_visibility(go, enabled) end
+
+-- Rect openings (RECT_EDGES_SPEC.md): where guests can walk into the rect
+-- this attraction is seated on, per side ('front'/'back'/'right'/'left'),
+-- in the attraction's own frame. Inside a script the go argument is
+-- automatic (dp.rect_openings()). No park data = every side fully open.
+dp.rect_openings = function(go) return dp_rect_openings(go) end
+dp.rect_is_wall = function(go, side, t) return dp_rect_is_wall(go, side, t or 0) end
+dp.rect_is_open = function(go, side, t) return dp_rect_is_open(go, side, t or 0) end
+dp.rect_point = function(go, side, t) return dp_rect_point(go, side, t or 0) end
+
+-- The enabled state the GAME intends for a Renderer / Collider / Behaviour
+-- (Light, AudioSource, LuaBehaviour, Animator ...). The optimizer parks
+-- far-away and still-loading content by switching it off, so reading
+-- .enabled in start() can return the park's false; dp.enabled returns the
+-- value the unpark will restore, dp.set_enabled writes it (a write while
+-- parked lands at the unpark). Live objects: exactly .enabled. nil / false
+-- for anything without an enabled flag. Older apps lack these: feature-test
+-- with `if dp.enabled then ... end`.
+dp.enabled = function(c)
+    local r = dp_enabled(c)
+    if r < 0 then return nil end
+    return r == 1
+end
+dp.set_enabled = function(c, on) return dp_set_enabled(c, on and true or false) end
+
+-- Keep a manager / always-on system out of DISTANCE culling (like an
+-- OptimizedAFIgnore component): on ~= false exempts go and its subtree,
+-- restoring anything parked; false hands it back. The load, build mode and
+-- the operator pause still park it. Prefer the static `-- @optimizer-ignore`
+-- comment in the script, which applies before the first park. Returns the
+-- number of registered objects changed (0 = remembered until registration),
+-- -1 = go is not an object. Not for props: every exempt object costs frame
+-- time all session.
+dp.optimizer_ignore = function(go, on) return dp_optimizer_ignore(go, on ~= false) end
 
 -- Where the player's hand is, right now. side is 'left' / 'right', or
 -- omitted for the rig's own hand anchor. May be nil before the rig exists.
@@ -110,7 +178,12 @@ local function __dp_num(n)
     if math.type(n) == 'integer' or (n == math.floor(n) and math.abs(n) < 1e15) then
         return string.format('%d', n)
     end
-    return string.format('%.10g', n)
+    -- Never exponent notation (%g gave 1e-05): JSONObject cannot parse it.
+    local s = string.format('%.10f', n)
+    s = string.gsub(s, '0+$', '')
+    s = string.gsub(s, '%.$', '')
+    if s == '-0' or s == '' then s = '0' end
+    return s
 end
 
 local function __dp_has(v, k)
@@ -140,6 +213,19 @@ local function __dp_tag(tag, body)
     return '{' .. __dpq .. tag .. __dpq .. ':' .. body .. '}'
 end
 
+-- Park-local AND attraction-relative in one value. Receivers inside an
+-- attraction read the $a* form (robust even if two headsets' park frames
+-- disagree slightly); older apps and receivers outside an attraction read
+-- the park-local one. That pair is the backwards compatibility.
+local function __dp_tag2(tag, body, atag, abody)
+    if abody == nil then return __dp_tag(tag, body) end
+    return '{' .. __dpq .. tag .. __dpq .. ':' .. body .. ',' .. __dpq .. atag .. __dpq .. ':' .. abody .. '}'
+end
+
+local function __dp_q4(q)
+    return string.format('[%.4f,%.4f,%.4f,%.4f]', q.x, q.y, q.z, q.w)
+end
+
 local function __dp_is_array(t)
     local n = #t
     if n == 0 then return false end
@@ -150,26 +236,32 @@ local function __dp_is_array(t)
 end
 
 local __dp_pack_value
-local function __dp_pack_unity(v, kind, depth)
+local function __dp_pose7(p, q)
+    return string.format('[%.3f,%.3f,%.3f,%.4f,%.4f,%.4f,%.4f]', p.x, p.y, p.z, q.x, q.y, q.z, q.w)
+end
+local function __dp_pack_unity(v, kind, depth, frame)
     if kind == 'vec3' then
-        return __dp_tag('$p', __dp_v3(dp.to_park(v), '%.3f'))
+        return __dp_tag2('$p', __dp_v3(dp.to_park(v), '%.3f'),
+            '$a', frame ~= nil and __dp_v3(frame:InverseTransformPoint(v), '%.3f') or nil)
     elseif kind == 'quat' then
-        local q = dp.to_park_rot(v)
-        return __dp_tag('$q', string.format('[%.4f,%.4f,%.4f,%.4f]', q.x, q.y, q.z, q.w))
+        return __dp_tag2('$q', __dp_q4(dp.to_park_rot(v)),
+            '$aq', frame ~= nil and __dp_q4(CS.UnityEngine.Quaternion.Inverse(frame.rotation) * v) or nil)
     elseif kind == 'transform' then
-        local p = dp.to_park(v.position)
-        local q = dp.to_park_rot(v.rotation)
-        return __dp_tag('$t', string.format('[%.3f,%.3f,%.3f,%.4f,%.4f,%.4f,%.4f]',
-            p.x, p.y, p.z, q.x, q.y, q.z, q.w))
+        local abody = nil
+        if frame ~= nil then
+            abody = __dp_pose7(frame:InverseTransformPoint(v.position),
+                CS.UnityEngine.Quaternion.Inverse(frame.rotation) * v.rotation)
+        end
+        return __dp_tag2('$t', __dp_pose7(dp.to_park(v.position), dp.to_park_rot(v.rotation)), '$at', abody)
     elseif kind == 'gameobject' then
-        return __dp_pack_unity(v.transform, 'transform', depth)
+        return __dp_pack_unity(v.transform, 'transform', depth, frame)
     elseif kind == 'color' then
         return __dp_tag('$c', string.format('[%.3f,%.3f,%.3f,%.3f]', v.r, v.g, v.b, v.a))
     end
     return nil
 end
 
-__dp_pack_value = function(v, depth)
+__dp_pack_value = function(v, depth, frame)
     local tv = type(v)
     if tv == 'nil' then return 'null' end
     if tv == 'boolean' then return v and 'true' or 'false' end
@@ -178,7 +270,7 @@ __dp_pack_value = function(v, depth)
     if depth > 8 then return 'null' end
     if tv == 'userdata' or (tv == 'table' and getmetatable(v) ~= nil) then
         local kind = __dp_kind(v)
-        if kind ~= nil then return __dp_pack_unity(v, kind, depth) end
+        if kind ~= nil then return __dp_pack_unity(v, kind, depth, frame) end
         if tv == 'userdata' then
             print('[dp.pack] cannot serialize a ' .. tostring(v) .. '; sent as null')
             return 'null'
@@ -187,16 +279,17 @@ __dp_pack_value = function(v, depth)
     if tv == 'table' then
         local d = rawget(v, '$d')
         if d ~= nil then
-            return __dp_tag('$d', __dp_v3(dp.to_park_dir(d), '%.4f'))
+            return __dp_tag2('$d', __dp_v3(dp.to_park_dir(d), '%.4f'),
+                '$ad', frame ~= nil and __dp_v3(frame:InverseTransformDirection(d), '%.4f') or nil)
         end
         if __dp_is_array(v) then
             local parts = {}
-            for i = 1, #v do parts[i] = __dp_pack_value(v[i], depth + 1) end
+            for i = 1, #v do parts[i] = __dp_pack_value(v[i], depth + 1, frame) end
             return '[' .. table.concat(parts, ',') .. ']'
         end
         local parts = {}
         for k, val in pairs(v) do
-            parts[#parts + 1] = __dp_esc(tostring(k)) .. ':' .. __dp_pack_value(val, depth + 1)
+            parts[#parts + 1] = __dp_esc(tostring(k)) .. ':' .. __dp_pack_value(val, depth + 1, frame)
         end
         return '{' .. table.concat(parts, ',') .. '}'
     end
@@ -206,15 +299,36 @@ end
 -- A Vector3 that means a direction, not a point (no translation on the wire).
 dp.dir = function(v) return { ['$d'] = v } end
 
--- Lua table -> wire JSON, park-local. net_send(kind, table) calls this for you.
-dp.pack = function(t)
+-- Lua table -> wire JSON, park-local. net_send(kind, table) calls this for you,
+-- with frame = the sending script's attraction (dp_net_frame), so points
+-- ALSO travel attraction-relative ($a / $ad / $aq / $at beside $p / $d / $q / $t).
+dp.pack = function(t, frame)
     if type(t) ~= 'table' then return '{}' end
-    return __dp_pack_value(t, 0)
+    return __dp_pack_value(t, 0, frame)
 end
+-- Any single value (number, string, Vector3, table...) -> JSON fragment. SDK use.
+dp.__packv = function(v, frame) return __dp_pack_value(v, 0, frame) end
+
+local function __dp_vec(a) return CS.UnityEngine.Vector3(a[1] or 0, a[2] or 0, a[3] or 0) end
+local function __dp_quat(a, o) o = o or 0 return CS.UnityEngine.Quaternion(a[o + 1] or 0, a[o + 2] or 0, a[o + 3] or 0, a[o + 4] or 1) end
 
 local __dp_unpack_value
-__dp_unpack_value = function(v, depth)
+__dp_unpack_value = function(v, depth, frame)
     if type(v) ~= 'table' or depth > 8 then return v end
+    if frame ~= nil then
+        local a = rawget(v, '$a')
+        if a ~= nil then return frame:TransformPoint(__dp_vec(a)) end
+        local ad = rawget(v, '$ad')
+        if ad ~= nil then return frame:TransformDirection(__dp_vec(ad)) end
+        local aq = rawget(v, '$aq')
+        if aq ~= nil then return frame.rotation * __dp_quat(aq) end
+        local at = rawget(v, '$at')
+        if at ~= nil then
+            local pos = frame:TransformPoint(CS.UnityEngine.Vector3(at[1] or 0, at[2] or 0, at[3] or 0))
+            local rot = frame.rotation * __dp_quat(at, 3)
+            return { position = pos, rotation = rot, forward = rot * CS.UnityEngine.Vector3.forward }
+        end
+    end
     local p = rawget(v, '$p')
     if p ~= nil then return dp.from_park(CS.UnityEngine.Vector3(p[1] or 0, p[2] or 0, p[3] or 0)) end
     local d = rawget(v, '$d')
@@ -230,14 +344,16 @@ __dp_unpack_value = function(v, depth)
     local c = rawget(v, '$c')
     if c ~= nil then return CS.UnityEngine.Color(c[1] or 0, c[2] or 0, c[3] or 0, c[4] or 1) end
     for k, val in pairs(v) do
-        if type(val) == 'table' then v[k] = __dp_unpack_value(val, depth + 1) end
+        if type(val) == 'table' then v[k] = __dp_unpack_value(val, depth + 1, frame) end
     end
     return v
 end
 
 -- Parsed wire table -> Unity values in this headset's world. onmessage gets
--- this for free; call it yourself on json_parse(raw).payload inside onnet.
-dp.unpack = function(t) return __dp_unpack_value(t, 0) end
+-- this for free (frame = its attraction); call it yourself on
+-- json_parse(raw).payload inside onnet: dp.unpack(t, dp_net_frame(self.gameObject)).
+dp.unpack = function(t, frame) return __dp_unpack_value(t, 0, frame) end
+dp.__unpackv = function(v, frame) return __dp_unpack_value(v, 0, frame) end
 
 -- ── Players in the park ──────────────────────────────────
 -- The SDK streams every headset's head and hands (PlayerPresence.cs),
@@ -248,12 +364,17 @@ dp.unpack = function(t) return __dp_unpack_value(t, 0) end
 --   dp.me()          -> my id (stable per headset)
 --   dp.peers()       -> array (join order) of { id, game, head, left, right,
 --                        hand, active_hand, left_tracked, right_tracked,
---                        seen, age, state, rig, name }
+--                        seen, age, state, rig, name, synced, frame }
 --                        head/left/right/hand: Transforms in THIS headset's
 --                        world; state: the table they dp.set_state()d, Unity
 --                        values restored; rig: their RemoteRig clone, or
 --                        nil; name: their display name (the SDK floats it
---                        over their head by default — RemoteNameTag.cs)
+--                        over their head by default — RemoteNameTag.cs);
+--                        synced: false while their pose is not a place here
+--                        (they or you have not localized, or you are in
+--                        different locations) — rig and name hidden,
+--                        head/hands parked 10 km below the park, so skip
+--                        them for aiming, hits and proximity
 --   dp.peer(id)      -> one of the above, or nil (you are not your own peer)
 --   dp.set_state(t)  -> publish a small table to everyone (colour, team,
 --                        score). Resent to late joiners; keep it small.
@@ -262,8 +383,23 @@ dp.unpack = function(t) return __dp_unpack_value(t, 0) end
 --                        optional: the handler is dropped when it is destroyed.
 --   dp.on_peer_leave(fn(id), owner)
 --   dp.off_peer_join(fn) / dp.off_peer_leave(fn)
+-- One shared pump runs every title's peer / gesture / net handlers, so one
+-- title's error must never stop the rest (a dead pump = dead phone taps for
+-- every title). Each sub-pump runs in pcall; failures print at most once per
+-- 10 s per sub-pump.
+__dp_pump_warn_at = __dp_pump_warn_at or {}
+function __dp_pump_warn(name, err)
+    local now = (os ~= nil and os.time ~= nil) and os.time() or 0
+    local last = __dp_pump_warn_at[name]
+    if last ~= nil and now - last < 10 then return end
+    __dp_pump_warn_at[name] = now
+    print('[DreamParkLuaPump] ' .. tostring(name) .. ' threw (pump keeps running): ' .. tostring(err))
+end
 local function __dp_peer_view(p)
-    if p ~= nil and p.state ~= nil and dp.unpack ~= nil then p.state = dp.unpack(p.state) end
+    if p ~= nil and p.state ~= nil and dp.unpack ~= nil then
+        local ok, v = pcall(dp.unpack, p.state)
+        if ok then p.state = v else __dp_pump_warn('peer_view', v) end
+    end
     return p
 end
 dp.me        = function()   return dp_me() end
@@ -344,6 +480,81 @@ function __dp_pump_peers()
     end
 end
 
+-- ── Device & touch (phones) ──────────────────────────────
+--   dp.device()          -> 'phone' | 'headset' | 'editor' (this device)
+--   dp.is_phone()        -> true on a phone (or the Editor simulating one)
+--   dp.is_headset()      -> true on a headset, and in the Editor
+--   dp.device_of(id)     -> 'phone' | 'headset' for another player, nil when
+--                           unknown (older client); dp.device() for dp.me()
+--   dp.on_tap(fn(t), owner)    tap anywhere on the phone screen
+--   dp.on_touch(fn(t), owner)  finger down / up   (t.phase 'down' | 'up')
+--   dp.on_drag(fn(t), owner)   t.phase 'begin' | 'move' | 'end'
+--   dp.on_pinch(fn(t), owner)  t.scale: multiplicative since the last pinch
+--     each returns a handle: h.off() or dp.off_tap(h) (off_* also accept fn).
+--     owner (self / a GameObject) is optional — inside a LuaBehaviour it
+--     defaults to the script, and the handler drops when it is destroyed.
+--   t = { kind, phase, x, y, dx, dy, scale, fingerId,
+--         position, normal, object, distance }   x/y: 0..1 from bottom-left;
+--         position/normal/object/distance are nil when the tap hit nothing.
+--   Object hooks: ontap(t) / ontouch(t) on a LuaBehaviour fire when the ray
+--   hits it or a child; return true to stop the walk to its parents.
+dp.device     = function()   return dp_device() end
+dp.is_phone   = function()   return dp_is_phone() end
+dp.is_headset = function()   return dp_is_headset() end
+dp.device_of  = function(id) if id == nil then return nil end return dp_device_of(id) end
+
+__dp_gesture_fns = __dp_gesture_fns or { tap = {}, touch = {}, drag = {}, pinch = {} }
+
+local function __dp_gesture_on(kind)
+    return function(fn, owner)
+        if fn == nil then return nil end
+        local list = __dp_gesture_fns[kind]
+        local h = { fn = fn, owner = owner }
+        h.off = function()
+            for i = #list, 1, -1 do if list[i] == h then table.remove(list, i) end end
+        end
+        list[#list + 1] = h
+        dp_ensure_pump()
+        return h
+    end
+end
+local function __dp_gesture_off(kind)
+    return function(x)
+        if x == nil then return end
+        local list = __dp_gesture_fns[kind]
+        for i = #list, 1, -1 do
+            if list[i] == x or list[i].fn == x then table.remove(list, i) end
+        end
+    end
+end
+dp.on_tap    = __dp_gesture_on('tap')
+dp.on_touch  = __dp_gesture_on('touch')
+dp.on_drag   = __dp_gesture_on('drag')
+dp.on_pinch  = __dp_gesture_on('pinch')
+dp.off_tap   = __dp_gesture_off('tap')
+dp.off_touch = __dp_gesture_off('touch')
+dp.off_drag  = __dp_gesture_off('drag')
+dp.off_pinch = __dp_gesture_off('pinch')
+
+function __dp_pump_gestures()
+    if dp_gesture_event_count() == 0 then return end
+    local evs = dp_gesture_events()
+    for _, list in pairs(__dp_gesture_fns) do __dp_prune_fns(list) end
+    for i = 1, #evs do
+        local e = evs[i]
+        local list = __dp_gesture_fns[e.kind]
+        if list ~= nil and #list > 0 then
+            -- Snapshot: a handler may off() itself or register another.
+            local snap = {}
+            for j = 1, #list do snap[j] = list[j] end
+            for j = 1, #snap do
+                local ok, err = pcall(snap[j].fn, e)
+                if not ok then print('[dp.on_' .. tostring(e.kind) .. '] handler threw: ' .. tostring(err)) end
+            end
+        end
+    end
+end
+
 -- Live networking state. Never nil, never throws: fields report an absent
 -- client rather than making every caller wrap the lookup in a pcall.
 --   dp.relay()   -> { present, state, connected, ping, received, sent,
@@ -389,8 +600,16 @@ dp.on_global = function(name, fn)
 end
 
 function __dp_pump_globals()
-    __dp_pump_connected()
-    __dp_pump_peers()
+    local ok, err = pcall(__dp_pump_connected)
+    if not ok then __dp_pump_warn('pump_connected', err) end
+    ok, err = pcall(__dp_pump_peers)
+    if not ok then __dp_pump_warn('pump_peers', err) end
+    ok, err = pcall(__dp_pump_gestures)
+    if not ok then __dp_pump_warn('pump_gestures', err) end
+    if __dp_pump_net ~= nil then
+        ok, err = pcall(__dp_pump_net)
+        if not ok then __dp_pump_warn('pump_net', err) end
+    end
     if #__dp_global_waiters == 0 then return end
     local still = {}
     for i = 1, #__dp_global_waiters do

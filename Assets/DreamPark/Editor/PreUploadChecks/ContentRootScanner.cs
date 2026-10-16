@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using DreamPark.Editor;
 using UnityEditor;
 using UnityEngine;
 
@@ -86,6 +87,7 @@ namespace DreamPark.PreUploadChecks
                 // packages. Its prefabs never ship, and they frequently contain demo
                 // content with missing-script references that blows up prefab editing.
                 if (IsThirdPartyLocal(path)) continue;
+                if (DreamSequenceGenerator.IsSpecialLevelPath(contentId, path)) continue;
 
                 GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
                 if (prefab == null) continue;
@@ -120,6 +122,42 @@ namespace DreamPark.PreUploadChecks
             });
 
             return roots;
+        }
+
+        /// <summary>
+        /// The content roots plus the Sequence special levels (Start / Overlay / Game Over)
+        /// that exist. Scan() leaves those three out on purpose — they are not user-facing
+        /// roots for naming, previews or bundling — but they ship in the Sequence, so the
+        /// material checks (meta-occlusion, opaque-alpha-clip) must see them too (Oct 2026).
+        /// </summary>
+        public static List<ContentRootInfo> WithSequenceSpecialLevels(string contentId, IEnumerable<ContentRootInfo> roots)
+        {
+            var result = new List<ContentRootInfo>();
+            if (roots != null) result.AddRange(roots.Where(r => r != null));
+            if (string.IsNullOrEmpty(contentId)) return result;
+
+            var special = new[]
+            {
+                DreamSequenceGenerator.StartLevelPath(contentId),
+                DreamSequenceGenerator.OverlayLevelPath(contentId),
+                DreamSequenceGenerator.GameOverLevelPath(contentId),
+            };
+            var known = new HashSet<string>(result.Select(r => r.assetPath), StringComparer.OrdinalIgnoreCase);
+            var paths = PreUploadMaterialSources.WithSpecialLevels(
+                known, special, p => AssetDatabase.LoadAssetAtPath<GameObject>(p) != null);
+
+            foreach (var path in paths)
+            {
+                if (known.Contains(path)) continue;
+                result.Add(new ContentRootInfo
+                {
+                    assetPath = path,
+                    name = Path.GetFileNameWithoutExtension(path),
+                    guid = AssetDatabase.AssetPathToGUID(path),
+                    kind = ContentRootKindPublic.Attraction,
+                });
+            }
+            return result;
         }
 
         // Note the separators. "/ThirdParty/" deliberately does NOT match

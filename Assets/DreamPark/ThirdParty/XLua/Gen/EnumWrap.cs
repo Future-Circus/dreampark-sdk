@@ -1308,7 +1308,7 @@ namespace XLua.CSObjectWrap
 		    Utils.BeginObjectRegister(typeof(UnityEngine.RuntimePlatform), L, translator, 0, 0, 0, 0);
 			Utils.EndObjectRegister(typeof(UnityEngine.RuntimePlatform), L, translator, null, null, null, null, null);
 			
-			Utils.BeginClassRegister(typeof(UnityEngine.RuntimePlatform), L, null, 56, 0, 0);
+			Utils.BeginClassRegister(typeof(UnityEngine.RuntimePlatform), L, null, 58, 0, 0);
 
             Utils.RegisterEnumType(L, typeof(UnityEngine.RuntimePlatform));
 
@@ -1720,6 +1720,474 @@ namespace XLua.CSObjectWrap
             else
             {
                 return LuaAPI.luaL_error(L, "invalid lua type for TMPro.TextAlignmentOptions! Expect number or string, got + " + lua_type);
+            }
+
+            return 1;
+		}
+	}
+    
+    public class DreamParkDreamParkGestureKindWrap
+    {
+		public static void __Register(RealStatePtr L)
+        {
+		    ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+		    Utils.BeginObjectRegister(typeof(DreamPark.DreamParkGestureKind), L, translator, 0, 0, 0, 0);
+			Utils.EndObjectRegister(typeof(DreamPark.DreamParkGestureKind), L, translator, null, null, null, null, null);
+			
+			Utils.BeginClassRegister(typeof(DreamPark.DreamParkGestureKind), L, null, 8, 0, 0);
+
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Tap", DreamPark.DreamParkGestureKind.Tap);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "TouchDown", DreamPark.DreamParkGestureKind.TouchDown);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "TouchUp", DreamPark.DreamParkGestureKind.TouchUp);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "DragBegin", DreamPark.DreamParkGestureKind.DragBegin);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "DragMove", DreamPark.DreamParkGestureKind.DragMove);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "DragEnd", DreamPark.DreamParkGestureKind.DragEnd);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Pinch", DreamPark.DreamParkGestureKind.Pinch);
+            
+
+			Utils.RegisterFunc(L, Utils.CLS_IDX, "__CastFrom", __CastFrom);
+            
+            Utils.EndClassRegister(typeof(DreamPark.DreamParkGestureKind), L, translator);
+        }
+		
+		[MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int __CastFrom(RealStatePtr L)
+		{
+			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			LuaTypes lua_type = LuaAPI.lua_type(L, 1);
+            if (lua_type == LuaTypes.LUA_TNUMBER)
+            {
+                translator.PushDreamParkDreamParkGestureKind(L, (DreamPark.DreamParkGestureKind)LuaAPI.xlua_tointeger(L, 1));
+            }
+			
+            else if(lua_type == LuaTypes.LUA_TSTRING)
+            {
+
+			    if (LuaAPI.xlua_is_eq_str(L, 1, "Tap"))
+                {
+                    translator.PushDreamParkDreamParkGestureKind(L, DreamPark.DreamParkGestureKind.Tap);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "TouchDown"))
+                {
+                    translator.PushDreamParkDreamParkGestureKind(L, DreamPark.DreamParkGestureKind.TouchDown);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "TouchUp"))
+                {
+                    translator.PushDreamParkDreamParkGestureKind(L, DreamPark.DreamParkGestureKind.TouchUp);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "DragBegin"))
+                {
+                    translator.PushDreamParkDreamParkGestureKind(L, DreamPark.DreamParkGestureKind.DragBegin);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "DragMove"))
+                {
+                    translator.PushDreamParkDreamParkGestureKind(L, DreamPark.DreamParkGestureKind.DragMove);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "DragEnd"))
+                {
+                    translator.PushDreamParkDreamParkGestureKind(L, DreamPark.DreamParkGestureKind.DragEnd);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "Pinch"))
+                {
+                    translator.PushDreamParkDreamParkGestureKind(L, DreamPark.DreamParkGestureKind.Pinch);
+                }
+				else
+                {
+                    return LuaAPI.luaL_error(L, "invalid string for DreamPark.DreamParkGestureKind!");
+                }
+
+            }
+			
+            else
+            {
+                return LuaAPI.luaL_error(L, "invalid lua type for DreamPark.DreamParkGestureKind! Expect number or string, got + " + lua_type);
+            }
+
+            return 1;
+		}
+	}
+    
+    public class DreamParkAttractionPortalKindWrap
+    {
+		public static void __Register(RealStatePtr L)
+        {
+		    ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+		    Utils.BeginObjectRegister(typeof(DreamPark.AttractionPortalKind), L, translator, 0, 0, 0, 0);
+			Utils.EndObjectRegister(typeof(DreamPark.AttractionPortalKind), L, translator, null, null, null, null, null);
+			
+			Utils.BeginClassRegister(typeof(DreamPark.AttractionPortalKind), L, null, 4, 0, 0);
+
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Entry", DreamPark.AttractionPortalKind.Entry);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Exit", DreamPark.AttractionPortalKind.Exit);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Both", DreamPark.AttractionPortalKind.Both);
+            
+
+			Utils.RegisterFunc(L, Utils.CLS_IDX, "__CastFrom", __CastFrom);
+            
+            Utils.EndClassRegister(typeof(DreamPark.AttractionPortalKind), L, translator);
+        }
+		
+		[MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int __CastFrom(RealStatePtr L)
+		{
+			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			LuaTypes lua_type = LuaAPI.lua_type(L, 1);
+            if (lua_type == LuaTypes.LUA_TNUMBER)
+            {
+                translator.PushDreamParkAttractionPortalKind(L, (DreamPark.AttractionPortalKind)LuaAPI.xlua_tointeger(L, 1));
+            }
+			
+            else if(lua_type == LuaTypes.LUA_TSTRING)
+            {
+
+			    if (LuaAPI.xlua_is_eq_str(L, 1, "Entry"))
+                {
+                    translator.PushDreamParkAttractionPortalKind(L, DreamPark.AttractionPortalKind.Entry);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "Exit"))
+                {
+                    translator.PushDreamParkAttractionPortalKind(L, DreamPark.AttractionPortalKind.Exit);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "Both"))
+                {
+                    translator.PushDreamParkAttractionPortalKind(L, DreamPark.AttractionPortalKind.Both);
+                }
+				else
+                {
+                    return LuaAPI.luaL_error(L, "invalid string for DreamPark.AttractionPortalKind!");
+                }
+
+            }
+			
+            else
+            {
+                return LuaAPI.luaL_error(L, "invalid lua type for DreamPark.AttractionPortalKind! Expect number or string, got + " + lua_type);
+            }
+
+            return 1;
+		}
+	}
+    
+    public class DreamParkAttractionWallSideWrap
+    {
+		public static void __Register(RealStatePtr L)
+        {
+		    ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+		    Utils.BeginObjectRegister(typeof(DreamPark.AttractionWallSide), L, translator, 0, 0, 0, 0);
+			Utils.EndObjectRegister(typeof(DreamPark.AttractionWallSide), L, translator, null, null, null, null, null);
+			
+			Utils.BeginClassRegister(typeof(DreamPark.AttractionWallSide), L, null, 5, 0, 0);
+
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Front", DreamPark.AttractionWallSide.Front);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Back", DreamPark.AttractionWallSide.Back);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Right", DreamPark.AttractionWallSide.Right);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Left", DreamPark.AttractionWallSide.Left);
+            
+
+			Utils.RegisterFunc(L, Utils.CLS_IDX, "__CastFrom", __CastFrom);
+            
+            Utils.EndClassRegister(typeof(DreamPark.AttractionWallSide), L, translator);
+        }
+		
+		[MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int __CastFrom(RealStatePtr L)
+		{
+			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			LuaTypes lua_type = LuaAPI.lua_type(L, 1);
+            if (lua_type == LuaTypes.LUA_TNUMBER)
+            {
+                translator.PushDreamParkAttractionWallSide(L, (DreamPark.AttractionWallSide)LuaAPI.xlua_tointeger(L, 1));
+            }
+			
+            else if(lua_type == LuaTypes.LUA_TSTRING)
+            {
+
+			    if (LuaAPI.xlua_is_eq_str(L, 1, "Front"))
+                {
+                    translator.PushDreamParkAttractionWallSide(L, DreamPark.AttractionWallSide.Front);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "Back"))
+                {
+                    translator.PushDreamParkAttractionWallSide(L, DreamPark.AttractionWallSide.Back);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "Right"))
+                {
+                    translator.PushDreamParkAttractionWallSide(L, DreamPark.AttractionWallSide.Right);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "Left"))
+                {
+                    translator.PushDreamParkAttractionWallSide(L, DreamPark.AttractionWallSide.Left);
+                }
+				else
+                {
+                    return LuaAPI.luaL_error(L, "invalid string for DreamPark.AttractionWallSide!");
+                }
+
+            }
+			
+            else
+            {
+                return LuaAPI.luaL_error(L, "invalid lua type for DreamPark.AttractionWallSide! Expect number or string, got + " + lua_type);
+            }
+
+            return 1;
+		}
+	}
+    
+    public class DreamParkAttractionWallMaskWrap
+    {
+		public static void __Register(RealStatePtr L)
+        {
+		    ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+		    Utils.BeginObjectRegister(typeof(DreamPark.AttractionWallMask), L, translator, 0, 0, 0, 0);
+			Utils.EndObjectRegister(typeof(DreamPark.AttractionWallMask), L, translator, null, null, null, null, null);
+			
+			Utils.BeginClassRegister(typeof(DreamPark.AttractionWallMask), L, null, 7, 0, 0);
+
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "None", DreamPark.AttractionWallMask.None);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Front", DreamPark.AttractionWallMask.Front);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Back", DreamPark.AttractionWallMask.Back);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Right", DreamPark.AttractionWallMask.Right);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Left", DreamPark.AttractionWallMask.Left);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "All", DreamPark.AttractionWallMask.All);
+            
+
+			Utils.RegisterFunc(L, Utils.CLS_IDX, "__CastFrom", __CastFrom);
+            
+            Utils.EndClassRegister(typeof(DreamPark.AttractionWallMask), L, translator);
+        }
+		
+		[MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int __CastFrom(RealStatePtr L)
+		{
+			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			LuaTypes lua_type = LuaAPI.lua_type(L, 1);
+            if (lua_type == LuaTypes.LUA_TNUMBER)
+            {
+                translator.PushDreamParkAttractionWallMask(L, (DreamPark.AttractionWallMask)LuaAPI.xlua_tointeger(L, 1));
+            }
+			
+            else if(lua_type == LuaTypes.LUA_TSTRING)
+            {
+
+			    if (LuaAPI.xlua_is_eq_str(L, 1, "None"))
+                {
+                    translator.PushDreamParkAttractionWallMask(L, DreamPark.AttractionWallMask.None);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "Front"))
+                {
+                    translator.PushDreamParkAttractionWallMask(L, DreamPark.AttractionWallMask.Front);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "Back"))
+                {
+                    translator.PushDreamParkAttractionWallMask(L, DreamPark.AttractionWallMask.Back);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "Right"))
+                {
+                    translator.PushDreamParkAttractionWallMask(L, DreamPark.AttractionWallMask.Right);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "Left"))
+                {
+                    translator.PushDreamParkAttractionWallMask(L, DreamPark.AttractionWallMask.Left);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "All"))
+                {
+                    translator.PushDreamParkAttractionWallMask(L, DreamPark.AttractionWallMask.All);
+                }
+				else
+                {
+                    return LuaAPI.luaL_error(L, "invalid string for DreamPark.AttractionWallMask!");
+                }
+
+            }
+			
+            else
+            {
+                return LuaAPI.luaL_error(L, "invalid lua type for DreamPark.AttractionWallMask! Expect number or string, got + " + lua_type);
+            }
+
+            return 1;
+		}
+	}
+    
+    public class UnityEngineTextAnchorWrap
+    {
+		public static void __Register(RealStatePtr L)
+        {
+		    ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+		    Utils.BeginObjectRegister(typeof(UnityEngine.TextAnchor), L, translator, 0, 0, 0, 0);
+			Utils.EndObjectRegister(typeof(UnityEngine.TextAnchor), L, translator, null, null, null, null, null);
+			
+			Utils.BeginClassRegister(typeof(UnityEngine.TextAnchor), L, null, 10, 0, 0);
+
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "UpperLeft", UnityEngine.TextAnchor.UpperLeft);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "UpperCenter", UnityEngine.TextAnchor.UpperCenter);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "UpperRight", UnityEngine.TextAnchor.UpperRight);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "MiddleLeft", UnityEngine.TextAnchor.MiddleLeft);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "MiddleCenter", UnityEngine.TextAnchor.MiddleCenter);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "MiddleRight", UnityEngine.TextAnchor.MiddleRight);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "LowerLeft", UnityEngine.TextAnchor.LowerLeft);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "LowerCenter", UnityEngine.TextAnchor.LowerCenter);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "LowerRight", UnityEngine.TextAnchor.LowerRight);
+            
+
+			Utils.RegisterFunc(L, Utils.CLS_IDX, "__CastFrom", __CastFrom);
+            
+            Utils.EndClassRegister(typeof(UnityEngine.TextAnchor), L, translator);
+        }
+		
+		[MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int __CastFrom(RealStatePtr L)
+		{
+			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			LuaTypes lua_type = LuaAPI.lua_type(L, 1);
+            if (lua_type == LuaTypes.LUA_TNUMBER)
+            {
+                translator.PushUnityEngineTextAnchor(L, (UnityEngine.TextAnchor)LuaAPI.xlua_tointeger(L, 1));
+            }
+			
+            else if(lua_type == LuaTypes.LUA_TSTRING)
+            {
+
+			    if (LuaAPI.xlua_is_eq_str(L, 1, "UpperLeft"))
+                {
+                    translator.PushUnityEngineTextAnchor(L, UnityEngine.TextAnchor.UpperLeft);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "UpperCenter"))
+                {
+                    translator.PushUnityEngineTextAnchor(L, UnityEngine.TextAnchor.UpperCenter);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "UpperRight"))
+                {
+                    translator.PushUnityEngineTextAnchor(L, UnityEngine.TextAnchor.UpperRight);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "MiddleLeft"))
+                {
+                    translator.PushUnityEngineTextAnchor(L, UnityEngine.TextAnchor.MiddleLeft);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "MiddleCenter"))
+                {
+                    translator.PushUnityEngineTextAnchor(L, UnityEngine.TextAnchor.MiddleCenter);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "MiddleRight"))
+                {
+                    translator.PushUnityEngineTextAnchor(L, UnityEngine.TextAnchor.MiddleRight);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "LowerLeft"))
+                {
+                    translator.PushUnityEngineTextAnchor(L, UnityEngine.TextAnchor.LowerLeft);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "LowerCenter"))
+                {
+                    translator.PushUnityEngineTextAnchor(L, UnityEngine.TextAnchor.LowerCenter);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "LowerRight"))
+                {
+                    translator.PushUnityEngineTextAnchor(L, UnityEngine.TextAnchor.LowerRight);
+                }
+				else
+                {
+                    return LuaAPI.luaL_error(L, "invalid string for UnityEngine.TextAnchor!");
+                }
+
+            }
+			
+            else
+            {
+                return LuaAPI.luaL_error(L, "invalid lua type for UnityEngine.TextAnchor! Expect number or string, got + " + lua_type);
+            }
+
+            return 1;
+		}
+	}
+    
+    public class UnityEngineTextAlignmentWrap
+    {
+		public static void __Register(RealStatePtr L)
+        {
+		    ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+		    Utils.BeginObjectRegister(typeof(UnityEngine.TextAlignment), L, translator, 0, 0, 0, 0);
+			Utils.EndObjectRegister(typeof(UnityEngine.TextAlignment), L, translator, null, null, null, null, null);
+			
+			Utils.BeginClassRegister(typeof(UnityEngine.TextAlignment), L, null, 4, 0, 0);
+
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Left", UnityEngine.TextAlignment.Left);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Center", UnityEngine.TextAlignment.Center);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Right", UnityEngine.TextAlignment.Right);
+            
+
+			Utils.RegisterFunc(L, Utils.CLS_IDX, "__CastFrom", __CastFrom);
+            
+            Utils.EndClassRegister(typeof(UnityEngine.TextAlignment), L, translator);
+        }
+		
+		[MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int __CastFrom(RealStatePtr L)
+		{
+			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			LuaTypes lua_type = LuaAPI.lua_type(L, 1);
+            if (lua_type == LuaTypes.LUA_TNUMBER)
+            {
+                translator.PushUnityEngineTextAlignment(L, (UnityEngine.TextAlignment)LuaAPI.xlua_tointeger(L, 1));
+            }
+			
+            else if(lua_type == LuaTypes.LUA_TSTRING)
+            {
+
+			    if (LuaAPI.xlua_is_eq_str(L, 1, "Left"))
+                {
+                    translator.PushUnityEngineTextAlignment(L, UnityEngine.TextAlignment.Left);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "Center"))
+                {
+                    translator.PushUnityEngineTextAlignment(L, UnityEngine.TextAlignment.Center);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "Right"))
+                {
+                    translator.PushUnityEngineTextAlignment(L, UnityEngine.TextAlignment.Right);
+                }
+				else
+                {
+                    return LuaAPI.luaL_error(L, "invalid string for UnityEngine.TextAlignment!");
+                }
+
+            }
+			
+            else
+            {
+                return LuaAPI.luaL_error(L, "invalid lua type for UnityEngine.TextAlignment! Expect number or string, got + " + lua_type);
             }
 
             return 1;

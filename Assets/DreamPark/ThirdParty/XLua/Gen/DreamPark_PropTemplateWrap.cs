@@ -21,18 +21,20 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(DreamPark.PropTemplate);
-			Utils.BeginObjectRegister(type, L, translator, 0, 6, 13, 11);
+			Utils.BeginObjectRegister(type, L, translator, 0, 7, 14, 11);
 			
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "NotifyChanged", _m_NotifyChanged);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "ApplyCalibrationYOffset", _m_ApplyCalibrationYOffset);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "CompileCalibrationData", _m_CompileCalibrationData);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "ApplyCalibrationData", _m_ApplyCalibrationData);
+			Utils.RegisterFunc(L, Utils.METHOD_IDX, "TryGetAuthoredFootprintMeters", _m_TryGetAuthoredFootprintMeters);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "TryGetWorldFootprint", _m_TryGetWorldFootprint);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "TryGetWorldCutoutPolygons", _m_TryGetWorldCutoutPolygons);
 			
 			
 			Utils.RegisterFunc(L, Utils.GETTER_IDX, "SurfaceHeight", _g_get_SurfaceHeight);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "IsNestedUnderTemplate", _g_get_IsNestedUnderTemplate);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "FootprintMeters", _g_get_FootprintMeters);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "gameId", _g_get_gameId);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "resourceName", _g_get_resourceName);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "category", _g_get_category);
@@ -61,11 +63,12 @@ namespace XLua.CSObjectWrap
 			Utils.EndObjectRegister(type, L, translator, null, null,
 			    null, null, null);
 
-		    Utils.BeginClassRegister(type, L, __CreateInstance, 3, 0, 0);
+		    Utils.BeginClassRegister(type, L, __CreateInstance, 4, 0, 0);
 			Utils.RegisterFunc(L, Utils.CLS_IDX, "NotifyPropTemplateChanged", _m_NotifyPropTemplateChanged_xlua_st_);
             
 			Utils.RegisterFunc(L, Utils.CLS_IDX, "OnAnyPropTemplateChanged", _e_OnAnyPropTemplateChanged);
 			
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "DefaultFootprintMeters", DreamPark.PropTemplate.DefaultFootprintMeters);
             
 			
 			
@@ -238,6 +241,37 @@ namespace XLua.CSObjectWrap
         }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_TryGetAuthoredFootprintMeters(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+                DreamPark.PropTemplate gen_to_be_invoked = (DreamPark.PropTemplate)translator.FastGetCSObj(L, 1);
+            
+            
+                
+                {
+                    UnityEngine.Vector2 _footprintMeters;
+                    
+                        var gen_ret = gen_to_be_invoked.TryGetAuthoredFootprintMeters( out _footprintMeters );
+                        LuaAPI.lua_pushboolean(L, gen_ret);
+                    translator.PushUnityEngineVector2(L, _footprintMeters);
+                        
+                    
+                    
+                    
+                    return 2;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
         static int _m_TryGetWorldFootprint(RealStatePtr L)
         {
 		    try {
@@ -327,6 +361,20 @@ namespace XLua.CSObjectWrap
 			
                 DreamPark.PropTemplate gen_to_be_invoked = (DreamPark.PropTemplate)translator.FastGetCSObj(L, 1);
                 LuaAPI.lua_pushboolean(L, gen_to_be_invoked.IsNestedUnderTemplate);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_FootprintMeters(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                DreamPark.PropTemplate gen_to_be_invoked = (DreamPark.PropTemplate)translator.FastGetCSObj(L, 1);
+                translator.PushUnityEngineVector2(L, gen_to_be_invoked.FootprintMeters);
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }

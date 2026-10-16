@@ -139,14 +139,22 @@ public class Simulator : MonoBehaviour
             Camera.main.transform.rotation = sceneView.camera.transform.rotation;
         }
     }
+    // The anchors are posed in the DEVICE wrist frame (OpenXR wrist joint, HANDHELD.md §1):
+    // +Z fingers, +Y back of the hand, thumb −X on the right hand / +X on the left. They used
+    // to copy the camera rotation (+Y up for both hands), so every hand-held prop that was
+    // right on the headset looked rolled 90° here and vice versa. Now the Editor hand is a
+    // relaxed pistol grip pointing where you look: fingers forward, thumb up, palm inward —
+    // a prop mounted per the convention (dp.hold / HandheldMath) points forward, upright.
     public void UpdateHands() {
+       if (Camera.main == null) return;
+       Transform cam = Camera.main.transform;
        if (leftAnchor != null) {
-            leftAnchor.transform.position = Camera.main.transform.position + Camera.main.transform.forward * 0.5f + Camera.main.transform.right * -0.2f;
-            leftAnchor.transform.rotation = Camera.main.transform.rotation;
+            leftAnchor.transform.position = cam.position + cam.forward * 0.5f + cam.right * -0.2f;
+            leftAnchor.transform.rotation = global::DreamPark.HandheldMath.EditorAnchorRotation(cam.rotation, true);
        }
        if (rightAnchor != null) {
-            rightAnchor.transform.position = Camera.main.transform.position + Camera.main.transform.forward * 0.5f + Camera.main.transform.right * 0.2f;
-            rightAnchor.transform.rotation = Camera.main.transform.rotation;
+            rightAnchor.transform.position = cam.position + cam.forward * 0.5f + cam.right * 0.2f;
+            rightAnchor.transform.rotation = global::DreamPark.HandheldMath.EditorAnchorRotation(cam.rotation, false);
        }
     }
 

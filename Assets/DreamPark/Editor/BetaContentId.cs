@@ -58,6 +58,12 @@ using System;
 
 namespace DreamPark
 {
+    public enum ContentUploadTarget
+    {
+        Release,
+        Beta,
+    }
+
     public static class BetaContentId
     {
         /// Appended to a real contentId to name its beta upload target.

@@ -64,7 +64,11 @@ namespace DreamPark
         {
             if (peer == null || peer.head == null || _text == null) { return; }
 
-            bool visible = show && peer.seq != 0;
+            // Only over a pose that is a real place here (RemotePlayer.VisualsShown:
+            // both frames localized and the same, or this device's diorama, after
+            // its reveal hold). Unsynced, the head sits in limbo and a tag there is
+            // the "missing or way off" name of the Oct 8 2026 demo.
+            bool visible = show && peer.seq != 0 && peer.VisualsShown;
             if (_text.gameObject.activeSelf != visible) _text.gameObject.SetActive(visible);
             if (!visible) return;
 

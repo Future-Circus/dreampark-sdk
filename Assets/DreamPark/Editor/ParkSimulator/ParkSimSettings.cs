@@ -47,6 +47,18 @@ namespace DreamPark.ParkSim
             set { EditorPrefs.SetBool(Key("DriveCamera"), value); }
         }
 
+        /// Device parity for NetIds (Oct 2026), ON by default: a Sequence package
+        /// root keeps the NetScope the shipping code stamps on a device
+        /// ("{gameId}|seq", DreamSequencePackageDefinition.Create) instead of a
+        /// simulator-only key, so NetIds inside a Sequence hash as they do on a
+        /// headset. Turning it off brings back the simulator stamp that once hid a
+        /// device-only multiplayer bug.
+        public static bool DeviceParityNetScopes
+        {
+            get { return EditorPrefs.GetBool(Key("DeviceParityNetScopes"), true); }
+            set { EditorPrefs.SetBool(Key("DeviceParityNetScopes"), value); }
+        }
+
         /// Include the bundled Sample project's attractions and props.
         ///
         /// On by default: a creator who has not built anything yet still gets a

@@ -43,6 +43,15 @@ namespace DreamPark
             _hand = FindAnchor(transform, "hand");
         }
 
+        // Oct 11 2026: the remote hand-held auto-mount (Handhelds, ticked by the body runner) used
+        // to start only once something called dp.hold or dp.net_body, so a title that did neither
+        // (LaserTag) never re-mounted a peer's gun when they switched hands. A clone starts it.
+        void OnEnable()
+        {
+            DreamParkBodyRunner.Ensure();
+            Handhelds.ScanRemoteSoon();
+        }
+
         void LateUpdate()
         {
             if (peer == null) return;
@@ -107,6 +116,72 @@ namespace DreamPark
         {
             var template = rig.remoteRigTemplate != null ? rig.remoteRigTemplate : FindTemplate(rig.transform);
             if (template == null) return null;
+            return Build(template, rig.gameId, peer);
+        }
+
+        // ── Per-device templates ────────────────────────────────────
+        //
+        // By default a remote player is drawn with the RemoteRig of the rig
+        // THIS device wears for their game. A title with a Phone Player has a
+        // second rig (and a second RemoteRig — "what headset players see of a
+        // phone user"), which a headset never wears. A host app that loads it
+        // registers its RemoteRig here, keyed by the device it represents, and
+        // RemotePlayer prefers it for peers on that device.
+        //
+        // Register an INSTANTIATED rig's template (kept inactive, e.g. under
+        // an inactive holder), never a prefab asset: Build deactivates the
+        // template before cloning.
+        static readonly Dictionary<string, Transform> _templates = new Dictionary<string, Transform>();
+
+        static string TemplateKey(string gameId, string device) => (gameId ?? "") + "|" + (device ?? "");
+
+        /// <summary>Use <paramref name="template"/> (a RemoteRig subtree) for players of <paramref name="gameId"/> on <paramref name="device"/> ("phone" / "headset").</summary>
+        public static void RegisterTemplate(string gameId, string device, Transform template)
+        {
+            if (string.IsNullOrEmpty(gameId) || string.IsNullOrEmpty(device)) return;
+            if (template == null) { if (_templates.Remove(TemplateKey(gameId, device))) TemplateChanged(gameId, device); return; }
+            _templates.TryGetValue(TemplateKey(gameId, device), out var old);
+            _templates[TemplateKey(gameId, device)] = template;
+            if (old != template) TemplateChanged(gameId, device);
+        }
+
+        public static void UnregisterTemplate(string gameId, string device)
+        {
+            if (_templates.Remove(TemplateKey(gameId, device))) TemplateChanged(gameId, device);
+        }
+
+        /// <summary>
+        /// Oct 11 2026: the Phone Player template loads fire-and-forget, so a
+        /// phone's presence can land first — its RemotePlayer then built with
+        /// what was there (nothing, for a phone on a headset) and marked the
+        /// game done, forever. Every live player of that game on that device
+        /// rebuilds against the new template on its next frame.
+        /// </summary>
+        static void TemplateChanged(string gameId, string device)
+        {
+            var presence = PlayerPresence.Instance;
+            if (presence == null) return;
+            foreach (var p in presence.Peers.Values)
+                if (p != null && TemplateAffects(p.gameId, p.device, gameId, device)) p.TemplateChanged();
+        }
+
+        /// <summary>Does a template registered for (<paramref name="gameId"/>, <paramref name="device"/>) change how a peer in <paramref name="peerGame"/> on <paramref name="peerDevice"/> is drawn?</summary>
+        public static bool TemplateAffects(string peerGame, string peerDevice, string gameId, string device)
+            => !string.IsNullOrEmpty(peerGame) && peerGame == gameId && peerDevice == device;
+
+        /// <summary>The registered template for this game and device, or null.</summary>
+        public static Transform TemplateFor(string gameId, string device)
+        {
+            if (string.IsNullOrEmpty(gameId) || string.IsNullOrEmpty(device)) return null;
+            if (!_templates.TryGetValue(TemplateKey(gameId, device), out var t)) return null;
+            if (t == null) { _templates.Remove(TemplateKey(gameId, device)); return null; }
+            return t;
+        }
+
+        /// <summary>Clone an explicit RemoteRig <paramref name="template"/> for <paramref name="peer"/>.</summary>
+        public static GameObject Build(Transform template, string gameId, RemotePlayer peer)
+        {
+            if (template == null || peer == null) return null;
 
             // The template is inactive (PlayerRig hides it in Awake; this is
             // the belt to that suspender), so the clone comes out inactive
@@ -114,11 +189,11 @@ namespace DreamPark
             // scripts inside boot on the clone only.
             if (template.gameObject.activeSelf) template.gameObject.SetActive(false);
             var clone = Instantiate(template.gameObject, peer.transform, false);
-            clone.name = TemplateName + "_" + rig.gameId;
+            clone.name = TemplateName + "_" + gameId;
 
             var rr = clone.AddComponent<RemoteRig>();
             rr.peerId = peer.id;
-            rr.gameId = rig.gameId;
+            rr.gameId = gameId;
             rr.peer = peer;
 
             StripSdkMachinery(clone);

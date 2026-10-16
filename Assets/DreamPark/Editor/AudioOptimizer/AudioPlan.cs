@@ -117,6 +117,9 @@ namespace DreamPark.EditorTools.AudioOptimization
         public int currentSampleRateOverride;  // 0 if no override
         public bool currentForceToMono;
         public float currentVorbisQuality;     // 0..1; default 1.0 means "preserve everything"
+        // Oct 2026: platform overrides that win over the default settings.
+        // The planner's target never exceeds any of them; the executor clamps them.
+        public List<AudioPlatformOverride> currentOverrides = new List<AudioPlatformOverride>();
 
         // ── Usage graph ─────────────────────────────────────────────────
         public AudioUsageKind kind;
@@ -191,6 +194,16 @@ namespace DreamPark.EditorTools.AudioOptimization
                 : 0f;
     }
 
+    /// <summary>One platform override of an AudioImporter (Oct 2026).</summary>
+    [Serializable]
+    public class AudioPlatformOverride
+    {
+        public string platform;               // "Android", "iOS", "Standalone"
+        public AudioTargetCompression compression;
+        public float vorbisQuality;           // 1.0 when not Vorbis
+        public int sampleRateOverride;        // 0 = preserve
+    }
+
     /// <summary>
     /// Output of executing the plan. Aggregated across all rows so the
     /// final report can show "saved 240 MB across 412 clips".
@@ -198,6 +211,8 @@ namespace DreamPark.EditorTools.AudioOptimization
     [Serializable]
     public class AudioExecuteResult
     {
+        /// Set when the run could not start (encoder missing). No modal (Oct 2026).
+        public string error;
         public int processed;
         public int succeeded;
         public int failed;

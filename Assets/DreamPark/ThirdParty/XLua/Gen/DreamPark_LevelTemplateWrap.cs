@@ -21,9 +21,11 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(DreamPark.LevelTemplate);
-			Utils.BeginObjectRegister(type, L, translator, 0, 6, 21, 18);
+			Utils.BeginObjectRegister(type, L, translator, 0, 8, 22, 18);
 			
+			Utils.RegisterFunc(L, Utils.METHOD_IDX, "RegenerateCeiling", _m_RegenerateCeiling);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "RegenerateFloor", _m_RegenerateFloor);
+			Utils.RegisterFunc(L, Utils.METHOD_IDX, "ConfigureSequenceFloor", _m_ConfigureSequenceFloor);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "SetFloorVisibilityForMode", _m_SetFloorVisibilityForMode);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "ShowSelect", _m_ShowSelect);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "HideSelect", _m_HideSelect);
@@ -32,6 +34,7 @@ namespace XLua.CSObjectWrap
 			
 			
 			Utils.RegisterFunc(L, Utils.GETTER_IDX, "Size", _g_get_Size);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "RuntimeFootprintMeters", _g_get_RuntimeFootprintMeters);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "DimensionsInFeet", _g_get_DimensionsInFeet);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "isBuildMode", _g_get_isBuildMode);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "gameId", _g_get_gameId);
@@ -142,6 +145,33 @@ namespace XLua.CSObjectWrap
         }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_RegenerateCeiling(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+                DreamPark.LevelTemplate gen_to_be_invoked = (DreamPark.LevelTemplate)translator.FastGetCSObj(L, 1);
+            
+            
+                
+                {
+                    
+                    gen_to_be_invoked.RegenerateCeiling(  );
+                    
+                    
+                    
+                    return 0;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
         static int _m_RegenerateFloor(RealStatePtr L)
         {
 		    try {
@@ -156,6 +186,35 @@ namespace XLua.CSObjectWrap
                 {
                     
                     gen_to_be_invoked.RegenerateFloor(  );
+                    
+                    
+                    
+                    return 0;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_ConfigureSequenceFloor(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+                DreamPark.LevelTemplate gen_to_be_invoked = (DreamPark.LevelTemplate)translator.FastGetCSObj(L, 1);
+            
+            
+                
+                {
+                    UnityEngine.Vector2 _footprint;translator.Get(L, 2, out _footprint);
+                    int _density = LuaAPI.xlua_tointeger(L, 3);
+                    
+                    gen_to_be_invoked.ConfigureSequenceFloor( _footprint, _density );
                     
                     
                     
@@ -315,6 +374,20 @@ namespace XLua.CSObjectWrap
 			
                 DreamPark.LevelTemplate gen_to_be_invoked = (DreamPark.LevelTemplate)translator.FastGetCSObj(L, 1);
                 translator.PushUnityEngineVector3(L, gen_to_be_invoked.Size);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_RuntimeFootprintMeters(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                DreamPark.LevelTemplate gen_to_be_invoked = (DreamPark.LevelTemplate)translator.FastGetCSObj(L, 1);
+                translator.PushUnityEngineVector2(L, gen_to_be_invoked.RuntimeFootprintMeters);
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }

@@ -149,11 +149,7 @@ namespace DreamPark {
         public void ComputeBounds()
         {
             if (TryGetComponent(out LevelTemplate levelTemplate)) {
-                Vector2 bounds2D;
-                if (levelTemplate.size == GameLevelSize.Custom)
-                    bounds2D = GameLevelDimensions.GetDimensionsInMeters(levelTemplate.customSize);
-                else
-                    bounds2D = GameLevelDimensions.GetDimensionsInMeters(levelTemplate.size);
+                Vector2 bounds2D = levelTemplate.RuntimeFootprintMeters;
                 unpaddedHalfExtents = new Vector3(bounds2D.x / 2f, 50f, bounds2D.y / 2f);
             } else if (TryGetComponent(out PropTemplate propTemplate)) {
                 // PropTemplates use custom footprint dimensions
@@ -168,6 +164,43 @@ namespace DreamPark {
                 unpaddedHalfExtents.x + pad,
                 unpaddedHalfExtents.y,
                 unpaddedHalfExtents.z + pad);
+        }
+
+        /// <summary>What zone tracking may do this frame.</summary>
+        public enum ZoneTracking {
+            /// Poll the player's head and enter/exit as usual.
+            Live,
+            /// Change nothing: keep the current zone, enter nothing new. The player's
+            /// position relative to the park is not known right now.
+            Hold,
+            /// Nobody is playing (a staged park): leave the zone, enter nothing.
+            StandDown,
+        }
+
+        /// <summary>
+        /// Host override for the zone-tracking rule. Null = the SDK rule: stand down
+        /// while <see cref="ParkBuilder.LevelObjectManager.BuildModeParked"/>, live
+        /// otherwise. Core sets it (LiveParkContent): on the AR-first phone build mode
+        /// is on for the whole session while the park plays live, which under the SDK
+        /// rule meant no zone was EVER entered there. Evaluated once per frame.
+        /// </summary>
+        public static Func<ZoneTracking> TrackingOverride;
+
+        static int _trackingFrame = -1;
+        static ZoneTracking _tracking;
+
+        static ZoneTracking CurrentTracking() {
+            int frame = Time.frameCount;
+            if (frame == _trackingFrame) return _tracking;
+            _trackingFrame = frame;
+            ZoneTracking t = ParkBuilder.LevelObjectManager.BuildModeParked ? ZoneTracking.StandDown : ZoneTracking.Live;
+            var rule = TrackingOverride;
+            if (rule != null) {
+                try { t = rule(); }
+                catch (Exception e) { Debug.LogWarning("[GameArea] TrackingOverride threw: " + e.Message); }
+            }
+            _tracking = t;
+            return t;
         }
 
         void Update () {
@@ -185,18 +218,32 @@ namespace DreamPark {
             // get a clean zone EXIT at the moment build mode starts. A zone left stuck
             // open for the whole build session is worse than one extra exit event — the
             // event is idempotent downstream, the open zone accrues playtime.
-            if (ParkBuilder.LevelObjectManager.BuildModeParked) {
-                if (isPlaying) {
-                    Exit();
-                }
-                return;
+            //
+            // The host can refine that rule (TrackingOverride): the AR-first phone
+            // keeps build mode on for the WHOLE session while the park plays live, and
+            // must hold zones still while the player's pose relative to the park is
+            // unknown (diorama / relocalizing).
+            switch (CurrentTracking()) {
+                case ZoneTracking.StandDown:
+                    if (isPlaying) {
+                        Exit();
+                    }
+                    return;
+                case ZoneTracking.Hold:
+                    return;
             }
 
-            var cam = MainCamera;
-            if (!cam)
-                return;
+            // PlayerHead.Override: the host app has put the player's head
+            // somewhere other than the camera (the phone's playtest agent).
+            Transform head = PlayerHead.Override;
+            if (head == null) {
+                var cam = MainCamera;
+                if (!cam)
+                    return;
+                head = cam.transform;
+            }
 
-            if (IsPointWithinBounds(cam.transform.position)) {
+            if (IsPointWithinBounds(head.position)) {
                 if (!isPlaying) {
                     Enter();
                 }
@@ -224,7 +271,9 @@ namespace DreamPark {
             currentGameArea = this;
             isPlaying = true;
 
-            if (PlayerRig.instances != null && PlayerRig.instances.ContainsKey(gameId))
+            // A null key would throw here and skip OnContentZoneChanged below.
+            if (!string.IsNullOrEmpty(gameId) && PlayerRig.instances != null
+                && PlayerRig.instances.ContainsKey(gameId))
             {
                 PlayerRig.instances[gameId].Show();
             }

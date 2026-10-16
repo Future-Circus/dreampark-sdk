@@ -1,0 +1,20 @@
+{
+    "schemaVersion": 6,
+    "hasExplicitEndpoints": false,
+    "startGuid": "",
+    "endGuid": "",
+    "items": [
+        {
+            "kind": "attraction",
+            "id": "a02a5924fe6d49bd97eef577a29ff3c2",
+            "sourceGroupId": "",
+            "name": "",
+            "attractionGuid": "9fef9800a47514811adbf916c8d1442f",
+            "attractionGuids": [],
+            "attractionIds": [],
+            "hidden": false
+        }
+    ],
+    "unsortedGuids": [],
+    "hiddenGuids": []
+}

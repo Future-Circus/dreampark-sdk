@@ -21,9 +21,10 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(DreamPark.MusicArea);
-			Utils.BeginObjectRegister(type, L, translator, 0, 7, 5, 5);
+			Utils.BeginObjectRegister(type, L, translator, 0, 8, 5, 5);
 			
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "Awake", _m_Awake);
+			Utils.RegisterFunc(L, Utils.METHOD_IDX, "ComputeBounds", _m_ComputeBounds);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "Enter", _m_Enter);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "Exit", _m_Exit);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "SwapAudioClip", _m_SwapAudioClip);
@@ -107,6 +108,33 @@ namespace XLua.CSObjectWrap
                 {
                     
                     gen_to_be_invoked.Awake(  );
+                    
+                    
+                    
+                    return 0;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_ComputeBounds(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+                DreamPark.MusicArea gen_to_be_invoked = (DreamPark.MusicArea)translator.FastGetCSObj(L, 1);
+            
+            
+                
+                {
+                    
+                    gen_to_be_invoked.ComputeBounds(  );
                     
                     
                     

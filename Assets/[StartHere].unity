@@ -3881,6 +3881,14 @@ PrefabInstance:
       propertyPath: showCutoutGizmos
       value: 1
       objectReference: {fileID: 0}
+    - target: {fileID: 9215415555977935129, guid: 9fef9800a47514811adbf916c8d1442f, type: 3}
+      propertyPath: layoutPreviewFootprintMeters.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 9215415555977935129, guid: 9fef9800a47514811adbf916c8d1442f, type: 3}
+      propertyPath: layoutPreviewFootprintMeters.y
+      value: 0
+      objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []

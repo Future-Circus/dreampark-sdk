@@ -90,7 +90,12 @@ namespace DreamPark.EditorTools.TextureOptimization
         public bool isReadable;
         public bool sRGBTexture;
         public int currentMaxSize;        // TextureImporter.maxTextureSize
-        public string currentImporterType;// "Default", "NormalMap", "Sprite", "Lightmap", "Cookie"
+        public string currentImporterType;// "Default", "NormalMap", "Sprite", "Lightmap", "Cookie", "SingleChannel", "GUI"
+        // Oct 2026 (SDK optimizer fixes):
+        public bool isCubemap;            // TextureImporter.textureShape == TextureCube (NOT importer type SingleChannel)
+        public bool isAtlasLike;          // sprite / GUI / atlas, sheet, icon, label or font texture: world bounds don't say how big it must be
+        public int androidOverrideMaxSize;// > 0 when the Android platform override is on
+        public int iPhoneOverrideMaxSize; // > 0 when the iPhone platform override is on
 
         // ── Usage graph ─────────────────────────────────────────────────
         public TextureUsageKind kind;
@@ -182,6 +187,9 @@ namespace DreamPark.EditorTools.TextureOptimization
     [Serializable]
     public class ExecuteResult
     {
+        /// Set when the run could not start (e.g. the encoder is missing).
+        /// Executors never show a modal; the window decides how to report it.
+        public string error;
         public int processed;
         public int succeeded;
         public int failed;
@@ -223,6 +231,27 @@ namespace DreamPark.EditorTools.TextureOptimization
         /// from roughly 0.3-3m. Tweak in one place if telemetry says
         /// otherwise.
         /// </summary>
+        /// Names that mark a texture as an atlas or sheet: many small images
+        /// packed together, mapped onto small quads. World bounds say nothing
+        /// about the texel density such a texture needs.
+        public static bool LooksLikeAtlas(string assetPath)
+        {
+            string name = System.IO.Path.GetFileNameWithoutExtension(assetPath ?? "").ToLowerInvariant();
+            foreach (string token in new[] { "atlas", "sheet", "icon", "label", "font", "badge", "sprite", "_ui", "ui_" })
+                if (name.Contains(token)) return true;
+            return false;
+        }
+
+        /// The planner never proposes a size above what the texture already
+        /// ships at (its importer max size) nor above the source pixels.
+        public static int NeverRaise(int proposed, int currentMaxSize, int sourceLargest)
+        {
+            int target = proposed;
+            if (sourceLargest > 0) target = Mathf.Min(target, sourceLargest);
+            if (currentMaxSize > 0) target = Mathf.Min(target, currentMaxSize);
+            return target;
+        }
+
         public static int RecommendMaxSize(float largestAxisMeters)
         {
             if (largestAxisMeters <= 0f)    return 1024; // unknown → assume worst case

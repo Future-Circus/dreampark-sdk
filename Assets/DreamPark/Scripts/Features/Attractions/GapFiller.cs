@@ -242,6 +242,7 @@ namespace DreamPark {
 
         private void Update()
         {
+            TickSeamHealth();
             if (regeneratePending)
             {
                 regenerateTimer -= Time.deltaTime;
@@ -342,6 +343,9 @@ namespace DreamPark {
             public float[] cornerHeights;    // Y height at each corner
             public Vector2 center;
             public bool cutsHole = true;
+            /// Seam links (Oct 2026): this attraction asked to be walkable from the gap
+            /// ground (a "-- @gapfiller-links" Lua script inside it). See StitchAttractionSeams.
+            public bool seamLinks;
             
             public bool ContainsPoint(Vector2 point)
             {
@@ -712,6 +716,7 @@ namespace DreamPark {
                     navSurface.AddData();
                     var op = navSurface.UpdateNavMesh(navData);
                     while (!op.isDone) yield return null;
+                    StitchAttractionSeams();
                 }
             }
 
@@ -743,6 +748,7 @@ namespace DreamPark {
         /// data; the async path must keep floor data intact for the worker).
         private void DestroyRuntimeMesh()
         {
+            ClearSeamLinks();
             if (runtimeMesh != null)
             {
                 if (Application.isPlaying)
@@ -907,18 +913,21 @@ namespace DreamPark {
 
         private LevelFloorData ExtractFloorData(LevelTemplate template)
         {
+            LevelFloorData data = null;
             // Get the runtime floor mesh if it exists (this has calibrated vertices)
             if (template.runtimePlane != null)
             {
                 MeshFilter mf = template.runtimePlane.GetComponent<MeshFilter>();
                 if (mf != null && mf.sharedMesh != null)
                 {
-                    return ExtractFloorDataFromMesh(template, mf);
+                    data = ExtractFloorDataFromMesh(template, mf);
                 }
             }
             
             // Fallback to template dimensions if no runtime mesh yet
-            return ExtractFloorDataFromTemplate(template);
+            if (data == null) data = ExtractFloorDataFromTemplate(template);
+            if (data != null) data.seamLinks = WantsSeamLinks(template);
+            return data;
         }
 
         private LevelFloorData ExtractFloorData(PropTemplate template)
@@ -985,9 +994,7 @@ namespace DreamPark {
             
             // For rotated meshes, we need the actual convex hull or the original corner positions
             // Let's use the template's corner positions but get heights from the mesh
-            Vector2 dims = template.size == GameLevelSize.Custom
-                ? GameLevelDimensions.GetDimensionsInMeters(template.customSize)
-                : GameLevelDimensions.GetDimensionsInMeters(template.size);
+            Vector2 dims = template.RuntimeFootprintMeters;
             
             float halfWidth = dims.x / 2f;
             float halfHeight = dims.y / 2f;
@@ -1057,9 +1064,7 @@ namespace DreamPark {
         private LevelFloorData ExtractFloorDataFromTemplate(LevelTemplate template)
         {
             // Get dimensions
-            Vector2 dims = template.size == GameLevelSize.Custom
-                ? GameLevelDimensions.GetDimensionsInMeters(template.customSize)
-                : GameLevelDimensions.GetDimensionsInMeters(template.size);
+            Vector2 dims = template.RuntimeFootprintMeters;
             
             float halfWidth = dims.x / 2f;
             float halfHeight = dims.y / 2f;
@@ -1464,6 +1469,9 @@ namespace DreamPark {
                 mr.material = floorMaterial;
             else
                 mr.material = Resources.Load<Material>("Materials/Occlusion");
+            // Oct 8 2026: the floor occluder must never z-fight content
+            // standing at floor height (FloorOccluderMaterial).
+            mr.sharedMaterial = FloorOccluderMaterial.For(mr.sharedMaterial);
             // && DREAMPARKCORE added porting this from dreampark-core (Grid,
             // feat/grid-portal-yaw @ 2e1e940e): PlaceHasScanForFloorHiding()
             // below calls DreamPark.EnvironmentDust.EnvironmentDustManager,
@@ -1501,6 +1509,7 @@ namespace DreamPark {
             if (buildNavMeshSynchronously)
             {
                 navSurface.BuildNavMesh();
+                StitchAttractionSeams();
             }
 
             if (debugLog)
@@ -1917,6 +1926,330 @@ namespace DreamPark {
                 runtimeMesh.SetActive(true);
         }
 
+        // ── SEAM LINKS: walkable from the gap ground into an attraction (Oct 2026) ──
+        //
+        //  The gap ground and every attraction floor are SEPARATE NavMeshData (one
+        //  NavMeshSurface each), which Unity never stitches, and each surface stops an
+        //  agent radius short of the shared edge. So an agent on the gap ground can
+        //  never path into an attraction, or out of one: SetDestination across the
+        //  edge comes back partial. An attraction that wants agents to walk in from
+        //  the space around it (Zombiez: wave zombies emerge on the gap ground and walk
+        //  in) opts in with a Lua comment, "-- @gapfiller-links", in any LuaBehaviour
+        //  script inside it (the same convention as "-- @packing-ignore"). It is an
+        //  opt-in on purpose: every other title keeps enemies that cannot leave their
+        //  attraction.
+        //
+        //  For each opted-in attraction, one wide, bidirectional NavMeshLink per
+        //  footprint side spans the seam. It reaches SeamReachOut metres onto the gap
+        //  ground and SeamReachIn metres into the attraction, and its width runs along
+        //  the side, leaving SeamCornerMargin free at each corner. Both ends must sit
+        //  well ON their navmesh: the gap ground's starts ~0.55 m out (agent radius +
+        //  the hole's edge cells), the floor's ~0.3 m in, and a wide link whose end
+        //  segment grazes the eroded edge does not connect at all (measured in ParkSim:
+        //  0.45 m connected on some sides only, 0.8 m on every side). A link is a straight walk at the agent's own speed, so
+        //  nothing jumps or warps, and it only needs a polygon at each end. A side that
+        //  backs onto a wall or another attraction simply finds nothing to connect to.
+        //  The links are added after every gap navmesh bake and removed with the mesh.
+        //
+        //  CLIPPED TO OPEN FLOOR (Oct 12 2026). A side is sampled every SeamStep along
+        //  its length; a sample is open when BOTH ends are on their navmesh and nothing
+        //  carved (a prop's NavMeshObstacle) cuts the floor short between that end and
+        //  the edge. Each run of open samples gets its own link, so a prop at the edge
+        //  splits a side into narrower links instead of hiding a link end under it (an
+        //  agent let off a link inside a carved prop was pushed out ~0.4 m in a frame).
+        //  Each link is then checked by its OWN ends, never by one path from the middle
+        //  of the side (which a prop there blocked, so the side re-linked every ~15 s).
+        //  A side re-links only when its sampled floor changes and then holds still for
+        //  one more check (a carving obstacle settled, a floor rebake moved the edge), or
+        //  when a link stops joining its own two ends (SeamHeals).
+        public const string SeamLinksMarker = "@gapfiller-links";
+        public const float SeamReachOut = 0.85f;
+        public const float SeamReachIn = 0.65f;
+        public const float SeamCornerMargin = 0.4f;
+        private readonly List<UnityEngine.AI.NavMeshLinkInstance> seamLinks = new List<UnityEngine.AI.NavMeshLinkInstance>();
+        public int SeamLinkCount => seamLinks.Count;
+        /// <summary>Times a side's links were re-added because one stopped joining its own two ends (a floor rebaked under it).</summary>
+        public int SeamHeals { get; private set; }
+        /// <summary>Times a side's links were re-clipped because the floor along it changed (a carved prop settled, the edge moved).</summary>
+        public int SeamReclips { get; private set; }
+        public const float SeamStep = 0.1f;
+        public const float SeamMinWidth = 0.3f;
+        public const float SeamLaneWidth = 0.6f;
+
+        // One probe per link: the link's own two ends (side = its SeamSide). Unity does not
+        // reconnect a link to tiles that are rebaked after it was added (CalibrateLevel conforms
+        // the attraction floor and rebakes it in place after the gap bake; Scan mode keeps doing
+        // so), and a link that lost its ends silently stops joining the two floors.
+        private struct SeamProbe { public Vector3 a, b; public int misses, side; }
+        private readonly List<SeamProbe> seamProbes = new List<SeamProbe>();
+        // One per opted-in footprint side: the open/closed samples its links were clipped to.
+        private sealed class SeamSide { public LevelFloorData floor; public int edge; public bool[] open, pending; public float nextHeal; }
+        private readonly List<SeamSide> seamSides = new List<SeamSide>();
+        private UnityEngine.AI.NavMeshPath seamPath;
+        private float seamNextCheck;
+        private int seamCheckIndex, seamAgentType;
+
+        // Every 0.5 s, one side in turn: re-sample its floor; if it changed and the next look
+        // agrees, re-clip that side only. Otherwise every link of the side must still walk
+        // straight from its start to its end; two misses running re-add the side (≤ every 5 s).
+        private void TickSeamHealth()
+        {
+            if (seamSides.Count == 0 || !Application.isPlaying || Time.unscaledTime < seamNextCheck) return;
+            seamNextCheck = Time.unscaledTime + 0.5f;
+            int si = seamCheckIndex++ % seamSides.Count;
+            var s = seamSides[si];
+            var open = SampleSeamSide(s.floor, s.edge);
+            if (open == null) return;
+            if (!SameSeamMask(open, s.open))
+            {
+                if (s.pending != null && SameSeamMask(open, s.pending))
+                {
+                    s.open = open; s.pending = null;
+                    RemoveSeamSideLinks(si); AddSeamSideLinks(si);
+                    SeamReclips++;
+                }
+                else s.pending = open;                     // still moving (or just settled): look again next round
+                return;
+            }
+            s.pending = null;
+            bool broken = false;
+            for (int k = 0; k < seamProbes.Count; k++)
+            {
+                if (seamProbes[k].side != si) continue;
+                var p = seamProbes[k];
+                p.misses = UnityEngine.AI.NavMesh.IsLinkValid(seamLinks[k]) && SeamLinkJoins(p) ? 0 : p.misses + 1;
+                seamProbes[k] = p;
+                if (p.misses >= 2) broken = true;
+            }
+            if (!broken || Time.unscaledTime < s.nextHeal) return;
+            s.nextHeal = Time.unscaledTime + 5f;
+            RemoveSeamSideLinks(si); AddSeamSideLinks(si);
+            SeamHeals++;
+        }
+
+        private UnityEngine.AI.NavMeshQueryFilter SeamFilter =>
+            new UnityEngine.AI.NavMeshQueryFilter { agentTypeID = seamAgentType, areaMask = UnityEngine.AI.NavMesh.AllAreas };
+
+        private bool SeamLinkJoins(SeamProbe p)
+        {
+            var filter = SeamFilter;
+            if (!UnityEngine.AI.NavMesh.SamplePosition(p.a, out var ha, 0.3f, filter)
+                || !UnityEngine.AI.NavMesh.SamplePosition(p.b, out var hb, 0.3f, filter))
+                return true;                               // an end lost its floor: the side's re-sample handles that
+            if (seamPath == null) seamPath = new UnityEngine.AI.NavMeshPath();
+            if (!UnityEngine.AI.NavMesh.CalculatePath(ha.position, hb.position, filter, seamPath)
+                || seamPath.status != UnityEngine.AI.NavMeshPathStatus.PathComplete) return false;
+            // complete, but round through another link = this one is not connected
+            float len = 0f;
+            var cs = seamPath.corners;
+            for (int k = 1; k < cs.Length; k++) len += Vector3.Distance(cs[k - 1], cs[k]);
+            return len <= Vector3.Distance(ha.position, hb.position) * 1.3f + 0.3f;
+        }
+
+        private static bool SameSeamMask(bool[] a, bool[] b)
+        {
+            if (a == null || b == null || a.Length != b.Length) return false;
+            for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false;
+            return true;
+        }
+
+        private static bool SeamEdge(LevelFloorData f, int i, out Vector2 a, out Vector2 dir, out Vector2 outward, out float len)
+        {
+            int n = f.worldFootprint.Length;
+            a = f.worldFootprint[i];
+            Vector2 b = f.worldFootprint[(i + 1) % n];
+            len = (b - a).magnitude;
+            dir = outward = Vector2.zero;
+            if (len - 2f * SeamCornerMargin < SeamMinWidth) return false;
+            dir = (b - a) / len;
+            outward = new Vector2(dir.y, -dir.x);
+            if (Vector2.Dot(outward, (a + b) * 0.5f - f.center) < 0f) outward = -outward;
+            return true;
+        }
+
+        /// Gap-ground height at u (0..1) along side i, and the floor's own height at p.
+        private static float SeamOuterHeight(LevelFloorData f, int i, float u)
+        {
+            int n = f.worldFootprint.Length;
+            if (f.cornerHeights == null || f.cornerHeights.Length != n) return 0f;
+            return Mathf.Lerp(f.cornerHeights[i], f.cornerHeights[(i + 1) % n], u);
+        }
+        private static float SeamInnerHeight(LevelFloorData f, Vector2 p, float fallback)
+            => f.heightSampler != null && f.heightSampler.TrySample(p, out float h) ? h : fallback;
+
+        /// Open/closed per SeamStep sample along side i (inside the corner margins), or null when too short.
+        private bool[] SampleSeamSide(LevelFloorData f, int i)
+        {
+            if (f == null || f.worldFootprint == null || !SeamEdge(f, i, out var a, out var dir, out var outward, out float len)) return null;
+            var filter = SeamFilter;
+            float r = UnityEngine.AI.NavMesh.GetSettingsByID(seamAgentType).agentRadius;
+            int count = Mathf.FloorToInt((len - 2f * SeamCornerMargin) / SeamStep) + 1;
+            var open = new bool[count];
+            for (int k = 0; k < count; k++)
+            {
+                float t = SeamCornerMargin + k * SeamStep;
+                Vector2 e = a + dir * t;
+                float h = SeamOuterHeight(f, i, t / len);
+                Vector2 pin = e - outward * SeamReachIn;
+                float hin = SeamInnerHeight(f, pin, h);
+                Vector2 pout = e + outward * SeamReachOut;
+                // The floor's own edge is eroded by the agent radius (+ a voxel: ~0.31 m at r 0.25, so ~0.34 m
+                // free at 0.65 m in). The gap ground's hole edge is jagged by its grid cells (0.56-0.63 m out),
+                // so out there only a prop right at the end counts.
+                open[k] = SeamEndOpen(new Vector3(pin.x, hin, pin.y), new Vector3(e.x, hin, e.y), SeamReachIn - r - 0.15f, filter)
+                       && SeamEndOpen(new Vector3(pout.x, h, pout.y), new Vector3(e.x, h, e.y), SeamReachOut - r - 0.5f, filter);
+            }
+            return open;
+        }
+
+        /// The link end p is on the navmesh, and walking from it toward the seam edge the floor
+        /// goes on at least minFree metres (a carved prop in between ends it sooner).
+        private static bool SeamEndOpen(Vector3 p, Vector3 edge, float minFree, UnityEngine.AI.NavMeshQueryFilter filter)
+        {
+            if (!UnityEngine.AI.NavMesh.SamplePosition(p, out var hit, 0.4f, filter)) return false;
+            float dx = hit.position.x - p.x, dz = hit.position.z - p.z;
+            if (dx * dx + dz * dz > 0.05f * 0.05f) return false;
+            edge.y = hit.position.y;
+            return !UnityEngine.AI.NavMesh.Raycast(hit.position, edge, out var ray, filter) || ray.distance >= minFree;
+        }
+
+        /// Each run of open samples on side si (runs narrower than SeamMinWidth are skipped) is split into
+        /// lanes about SeamLaneWidth wide, one link each: a link carries ONE agent at a time however wide
+        /// it is (the rest wait at its start), so a single wide link made a wave queue at the seam.
+        private void AddSeamSideLinks(int si)
+        {
+            var s = seamSides[si];
+            if (s.open == null || !SeamEdge(s.floor, s.edge, out var a, out var dir, out var outward, out float len)) return;
+            for (int k = 0; k < s.open.Length; k++)
+            {
+                if (!s.open[k]) continue;
+                int k0 = k;
+                while (k + 1 < s.open.Length && s.open[k + 1]) k++;
+                float t0 = SeamCornerMargin + k0 * SeamStep, t1 = SeamCornerMargin + k * SeamStep;
+                if (t1 - t0 < SeamMinWidth) continue;
+                int lanes = Mathf.Max(1, Mathf.RoundToInt((t1 - t0) / SeamLaneWidth));
+                float lw = (t1 - t0) / lanes;
+                for (int l = 0; l < lanes; l++) AddSeamLink(si, a, dir, outward, len, t0 + l * lw, t0 + (l + 1) * lw);
+            }
+        }
+
+        private void AddSeamLink(int si, Vector2 a, Vector2 dir, Vector2 outward, float len, float t0, float t1)
+        {
+            var s = seamSides[si];
+            float tm = (t0 + t1) * 0.5f;
+            Vector2 e = a + dir * tm;
+            float h = SeamOuterHeight(s.floor, s.edge, tm / len);
+            float hin = SeamInnerHeight(s.floor, e - outward * SeamReachIn, h);
+            // Link space: origin on the side at the lane's middle, +Z pointing INTO the attraction,
+            // so the width (local X) runs along the side.
+            var origin = new Vector3(e.x, h, e.y);
+            var rot = Quaternion.LookRotation(new Vector3(-outward.x, 0f, -outward.y), Vector3.up);
+            var data = new UnityEngine.AI.NavMeshLinkData
+            {
+                startPosition = new Vector3(0f, 0f, -SeamReachOut),
+                endPosition = new Vector3(0f, hin - h, SeamReachIn),
+                width = t1 - t0,
+                costModifier = -1f,
+                bidirectional = true,
+                area = 0,
+                agentTypeID = seamAgentType,
+            };
+            var inst = UnityEngine.AI.NavMesh.AddLink(data, origin, rot);
+            if (!UnityEngine.AI.NavMesh.IsLinkValid(inst)) return;
+            seamLinks.Add(inst);
+            seamProbes.Add(new SeamProbe { side = si, a = origin + rot * data.startPosition, b = origin + rot * data.endPosition });
+        }
+
+        private void RemoveSeamSideLinks(int si)
+        {
+            for (int k = seamLinks.Count - 1; k >= 0; k--)
+            {
+                if (seamProbes[k].side != si) continue;
+                if (UnityEngine.AI.NavMesh.IsLinkValid(seamLinks[k])) UnityEngine.AI.NavMesh.RemoveLink(seamLinks[k]);
+                seamLinks.RemoveAt(k);
+                seamProbes.RemoveAt(k);
+            }
+        }
+
+        /// <summary>The marker must be in a Lua comment ("-- @gapfiller-links"), not just any string.</summary>
+        public static bool ScriptHasSeamLinks(string source)
+        {
+            if (string.IsNullOrEmpty(source)) return false;
+            int at = source.IndexOf(SeamLinksMarker, System.StringComparison.Ordinal);
+            while (at >= 0)
+            {
+                int lineStart = source.LastIndexOf('\n', at) + 1;
+                if (source.IndexOf("--", lineStart, at - lineStart, System.StringComparison.Ordinal) >= 0) return true;
+                at = source.IndexOf(SeamLinksMarker, at + SeamLinksMarker.Length, System.StringComparison.Ordinal);
+            }
+            return false;
+        }
+
+#if !UNITY_EDITOR
+        private static readonly Dictionary<int, bool> s_seamScriptMarked = new Dictionary<int, bool>();
+#endif
+
+        private static bool WantsSeamLinks(LevelTemplate template)
+        {
+            if (template == null) return false;
+            foreach (var lb in template.GetComponentsInChildren<LuaBehaviour>(true))
+            {
+                var src = lb != null ? lb.luaScript : null;
+                if (src == null) continue;
+#if UNITY_EDITOR
+                if (ScriptHasSeamLinks(src.text)) return true;   // edited between Play sessions: always re-read
+#else
+                int id = src.GetInstanceID();
+                if (!s_seamScriptMarked.TryGetValue(id, out bool marked))
+                {
+                    marked = ScriptHasSeamLinks(src.text);        // .text allocates: once per script asset
+                    s_seamScriptMarked[id] = marked;
+                }
+                if (marked) return true;
+#endif
+            }
+            return false;
+        }
+
+        private void StitchAttractionSeams()
+        {
+            ClearSeamLinks();
+            if (runtimeMesh == null || levelFloors == null) return;
+            var gapSurface = runtimeMesh.GetComponent<NavMeshSurface>();
+            seamAgentType = gapSurface != null ? gapSurface.agentTypeID : 0;
+            foreach (var f in levelFloors)
+            {
+                if (f == null || !f.seamLinks || !f.cutsHole || f.worldFootprint == null || f.worldFootprint.Length < 3) continue;
+                // A floor baked for another agent type has no polygons this link could reach.
+                var floorSurface = f.runtimeFloor != null ? f.runtimeFloor.GetComponent<NavMeshSurface>() : null;
+                if (floorSurface != null && floorSurface.agentTypeID != seamAgentType) continue;
+                for (int i = 0; i < f.worldFootprint.Length; i++)
+                {
+                    var open = SampleSeamSide(f, i);
+                    if (open == null) continue;            // too short for a link
+                    // Kept even with nothing open yet: the health tick links it once floor appears.
+                    seamSides.Add(new SeamSide { floor = f, edge = i, open = open });
+                    AddSeamSideLinks(seamSides.Count - 1);
+                }
+            }
+            if (seamLinks.Count > 0)
+                Debug.Log($"[GapFiller] {seamLinks.Count} seam links on {seamSides.Count} sides: the gap ground is walkable into opted-in attractions");
+        }
+
+        private void ClearSeamLinks()
+        {
+            for (int i = 0; i < seamLinks.Count; i++)
+                if (UnityEngine.AI.NavMesh.IsLinkValid(seamLinks[i])) UnityEngine.AI.NavMesh.RemoveLink(seamLinks[i]);
+            seamLinks.Clear();
+            seamProbes.Clear();
+            seamSides.Clear();
+        }
+
+        private void OnDestroy()
+        {
+            ClearSeamLinks();
+        }
+
         public void ClearMesh()
         {
             DestroyRuntimeMesh();
@@ -1983,13 +2316,74 @@ namespace DreamPark {
         /// SDK repo — see IsBuildMode()/IsLeavingBuildTransition() above for
         /// the same pattern with NativeInterfaceManager. Core's own commit
         /// used bare UNITY_IOS; do not drop DREAMPARKCORE re-syncing this.
+        /// `global::` IS LOAD-BEARING, do not "tidy" it away — same reason as
+        /// LevelTemplate.PlaceHasScanForFloorHiding. This file opens with
+        /// `namespace DreamPark {`, and core has a CLASS named `DreamPark`
+        /// inside that namespace, so the bare name binds to the class and
+        /// core's iOS compile fails with CS0117. Costs nothing in this repo
+        /// (DREAMPARKCORE undefined, body never compiles), which is precisely
+        /// why it keeps getting dropped on the way back in.
         private static bool PlaceHasScanForFloorHiding()
         {
-            var mesh = DreamPark.EnvironmentDust.EnvironmentDustManager.ActiveMeshStore;
+            var mesh = global::DreamPark.EnvironmentDust.EnvironmentDustManager.ActiveMeshStore;
             if (mesh != null && mesh.HasMesh) return true;
-            var dust = DreamPark.EnvironmentDust.EnvironmentDustManager.ActiveGrid;
+            var dust = global::DreamPark.EnvironmentDust.EnvironmentDustManager.ActiveGrid;
             return dust != null && dust.Count > 0;
         }
 #endif
+    }
+
+    /// <summary>
+    /// THE FLOOR OCCLUDER (Oct 8 2026 — Aidan: "alot of the content has digital
+    /// floor content and i dont love it. it often flickers like the occlusion
+    /// is clashing w the floor"). The generated floors (LevelTemplate's
+    /// `LevelFloor`, the `GapFillerMesh`) are depth-only occluders at EXACTLY
+    /// the height content floors are authored at, so the two z-fought. A
+    /// depth-only InvisibleOccluder material on them is swapped, at runtime,
+    /// for the player's `DreamPark/FloorOccluder` (Resources, core-owned):
+    /// the same occluder whose depth sits a few millimetres behind its surface
+    /// along the view ray, so content at floor height always wins and only
+    /// what is really below the floor is hidden. Rendering only — the mesh,
+    /// its collider, the NavMesh and every floor raycast are unchanged. Any
+    /// other floor material (a visible authored floor) is left alone, and
+    /// where the shader is absent (the SDK) nothing changes.
+    /// </summary>
+    public static class FloorOccluderMaterial
+    {
+        public const string ShaderResource = "Shaders/DreamPark-FloorOccluder";
+        private static Shader s_shader;
+        private static bool s_looked;
+        private static readonly System.Collections.Generic.Dictionary<Material, Material> s_swaps =
+            new System.Collections.Generic.Dictionary<Material, Material>();
+
+        /// Is `material` a depth-only occluder (Meta's InvisibleOccluder family)?
+        public static bool IsDepthOnlyOccluder(Material material)
+        {
+            if (material == null || material.shader == null) return false;
+            string name = material.shader.name ?? "";
+            return name.IndexOf("InvisibleOccluder", System.StringComparison.OrdinalIgnoreCase) >= 0
+                && name.IndexOf("Radius", System.StringComparison.OrdinalIgnoreCase) < 0;
+        }
+
+        /// The material a generated floor should draw with: the floor occluder
+        /// for a depth-only occluder (one shared copy per source material,
+        /// same render queue), else `source` itself.
+        public static Material For(Material source)
+        {
+            if (!Application.isPlaying || !IsDepthOnlyOccluder(source)) return source;
+            if (s_swaps.TryGetValue(source, out Material cached) && cached != null) return cached;
+            if (!s_looked)
+            {
+                s_looked = true;
+                s_shader = Resources.Load<Shader>(ShaderResource);
+                if (s_shader == null) Debug.Log("[FloorOccluder] " + ShaderResource + " not in this build — floors keep their occluder");
+            }
+            if (s_shader == null || !s_shader.isSupported) return source;
+            var swap = new Material(s_shader) { name = source.name + " (floor occluder)" };
+            swap.renderQueue = source.renderQueue;
+            swap.enableInstancing = source.enableInstancing;
+            s_swaps[source] = swap;
+            return swap;
+        }
     }
 }

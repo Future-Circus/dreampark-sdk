@@ -3,6 +3,9 @@ namespace DreamPark
     using System.Collections.Generic;
     using Defective.JSON;
     using UnityEngine;
+#if UNITY_EDITOR
+    using UnityEditor;
+#endif
 
     /// <summary>
     /// FROZEN. Serialized by integer value into every prop prefab and read back
@@ -21,31 +24,41 @@ namespace DreamPark
         Custom
     }
 
-    /// <summary>
-    /// Which side of a prop's footprint mounts flush against a real wall — a
-    /// torch, a sign, a portal window. A prop only ever needs ONE side (unlike
-    /// LevelTemplate's 4 combinable wall bools), along the prop's local X axis
-    /// (Right/Left), matching the right/forward convention
-    /// TryGetManualFootprint and TryGetColliderFootprint already use. A plain
-    /// (non-[Flags]) enum keeps "no wall" and "one wall" the only
-    /// representable states.
-    ///
-    /// AXIS SETTLED ON X (2026-08-31, Scan Layout group): Mesh's
-    /// GENERATE_LAYOUT solver initially assumed a fixed "-z" (wall BEHIND the
-    /// prop, prop facing +Z into the room) to match PlaceOnWalls' facing
-    /// convention. Web independently re-read Aidan's original ask while
-    /// building the backend contract and confirmed it specifies X, same as
-    /// this file always has — Mesh is updating the solver to accept the X
-    /// token rather than this enum changing to Z. Server does not restrict
-    /// props to one side either (only validates tokens), so a future
-    /// multi-side prop needs no backend change if this enum ever grows.
-    /// </summary>
-    public enum PropWallSide
+#if UNITY_EDITOR
+    [CustomEditor(typeof(PropTemplate), true)]
+    public sealed class PropTemplateEditor : Editor
     {
-        None,
-        Right,
-        Left
+        private const float FeetPerMeter = 1f / 0.3048f;
+
+        public override void OnInspectorGUI()
+        {
+            base.OnInspectorGUI();
+            if (!(target is PropTemplate template)) return;
+
+            if (!template.TryGetAuthoredFootprintMeters(out Vector2 meters))
+            {
+                EditorGUILayout.HelpBox(
+                    "Arena footprint unavailable — this Prop is excluded from Arena. "
+                    + "Add a supported enabled collider, or disable Use Collider Bounds "
+                    + "and enter positive manual dimensions.", MessageType.Warning);
+                return;
+            }
+
+            Vector2 feet = meters * FeetPerMeter;
+            int widthFeet = Mathf.Max(1, Mathf.FloorToInt(feet.x));
+            int lengthFeet = Mathf.Max(1, Mathf.FloorToInt(feet.y));
+            int bucketWidth = Mathf.Min(widthFeet, lengthFeet);
+            int bucketLength = Mathf.Max(widthFeet, lengthFeet);
+            string source = template.useColliderBounds
+                ? "measured from enabled colliders" : "manual footprint";
+            EditorGUILayout.HelpBox(
+                $"Arena footprint: {feet.x:0.##} × {feet.y:0.##} ft "
+                + $"(width × length, {source})\n"
+                + $"Arena bucket: {bucketWidth} × {bucketLength} ft",
+                MessageType.None);
+        }
     }
+#endif
 
     [DisallowMultipleComponent][RequireComponent(typeof(GameArea))]
     public class PropTemplate : MonoBehaviour
@@ -106,10 +119,6 @@ namespace DreamPark
         [ShowIf("_isManualFootprint")] public Vector2 customFootprintMeters = new Vector2(1f, 1f);
         public Vector2 footprintOffsetMeters = Vector2.zero;
         public bool showFootprintGizmos = true;
-        [Tooltip("If this prop mounts flush against a wall (e.g. a torch or a portal window), which side of its footprint the wall sits on. Published with the prop's dimensions so layout/AI tools can place it against a real wall.")]
-        public PropWallSide wallSide = PropWallSide.None;
-        [Tooltip("Draw the required wall as a gizmo plane when this prop is selected.")]
-        public bool showWallGizmo = true;
         [HideInInspector] public JSONObject pointData;
         [HideInInspector] public GameObject runtimePlane;
         [SerializeField, HideInInspector] private bool _isManualFootprint;
@@ -121,29 +130,6 @@ namespace DreamPark
         private bool _isSuppressedByTemplateParent;
 
         public float SurfaceHeight => transform.position.y + _calibratedYOffset;
-
-        /// <summary>
-        /// The wall height this prop needs, in meters: the 10 ft default, or
-        /// taller if the prop's own content reaches higher — never shorter.
-        /// Delegates to WallHeightMeasurement (collider-shape based, safe on a
-        /// disk-loaded prefab asset) rather than Renderer.bounds — see that
-        /// class's docblock, which is this exact component's own
-        /// FootprintMeters reasoning applied to Y instead of X/Z. Floor
-        /// reference is SurfaceHeight, not transform.position.y, so a
-        /// calibrated prop measures from its real floor.
-        /// </summary>
-        public float GetWallHeightMeters() => WallHeightMeasurement.GetWallHeightMeters(transform, SurfaceHeight);
-
-        /// <summary>
-        /// This prop's wall side as a wire axis token ("+x"/"-x"), or "" if
-        /// wallSide is None. Always emitted on every dimensions row (never
-        /// omitted) per the backend contract: undefined means "don't touch
-        /// the stored value", "" is the explicit clear a re-authored prop
-        /// needs to actually turn a wall off.
-        /// </summary>
-        public string PublishedWallSideToken =>
-            wallSide == PropWallSide.Right ? "+x" :
-            wallSide == PropWallSide.Left ? "-x" : "";
 
         public static void NotifyPropTemplateChanged()
         {
@@ -411,6 +397,30 @@ namespace DreamPark
         }
 
         /// <summary>
+        /// Returns only a footprint actually authored for this prop. Unlike
+        /// FootprintMeters, this does not substitute the legacy 1 m fallback when
+        /// collider measurement fails or manual dimensions are invalid. Arena uses
+        /// this strict path so missing size data can never manufacture a placement.
+        /// </summary>
+        public bool TryGetAuthoredFootprintMeters(out Vector2 footprintMeters)
+        {
+            footprintMeters = Vector2.zero;
+            if (useColliderBounds)
+            {
+                if (!TryMeasureLocalColliderFootprint(out Vector2 measured, requireAllShapes: true)
+                    || !IsFinitePositive(measured.x) || !IsFinitePositive(measured.y))
+                    return false;
+                footprintMeters = measured;
+                return true;
+            }
+
+            if (!IsFinitePositive(customFootprintMeters.x)
+                || !IsFinitePositive(customFootprintMeters.y)) return false;
+            footprintMeters = customFootprintMeters;
+            return true;
+        }
+
+        /// <summary>
         /// Guarantees a positive, finite footprint. A zero, negative or NaN axis is not
         /// a small prop, it is an unusable answer, and shipping it would divide through
         /// the scale curve on the server.
@@ -424,6 +434,9 @@ namespace DreamPark
             return new Vector2(x, y);
         }
 
+        private static bool IsFinitePositive(float value)
+            => value > 0f && !float.IsNaN(value) && !float.IsInfinity(value);
+
         /// <summary>
         /// Axis-aligned extent of every enabled collider, expressed in this prop's
         /// ORIENTED frame — the root's position and rotation removed, its SCALE kept.
@@ -435,7 +448,8 @@ namespace DreamPark
         /// out — correct there, because it transforms straight back out again and the
         /// round trip cancels. This one does not round-trip, so it must not.)
         /// </summary>
-        private bool TryMeasureLocalColliderFootprint(out Vector2 footprintMeters)
+        private bool TryMeasureLocalColliderFootprint(out Vector2 footprintMeters,
+            bool requireAllShapes = false)
         {
             footprintMeters = Vector2.zero;
 
@@ -454,7 +468,14 @@ namespace DreamPark
                 if (collider == null || !collider.enabled)
                     continue;
                 if (!TryGetLocalShapeBounds(collider, out Bounds shape))
+                {
+                    // A partial collider union is not a trustworthy authored size.
+                    // Procedural props often have an unbaked primary MeshCollider
+                    // plus a small interaction collider; measuring only the latter
+                    // made large props look 1 ft wide in Arena.
+                    if (requireAllShapes) return false;
                     continue;
+                }
 
                 Matrix4x4 shapeToProp = worldToProp * collider.transform.localToWorldMatrix;
                 Vector3 c = shape.center;
@@ -489,9 +510,6 @@ namespace DreamPark
         /// type not listed is skipped rather than guessed at, and a prop made entirely
         /// of skipped colliders falls back to customFootprintMeters.
         /// </summary>
-        // internal rather than private: WallHeightMeasurement (shared by
-        // LevelTemplate's wall gizmo) reuses this exact shape-reading logic
-        // rather than duplicating the Box/Sphere/Capsule/Mesh switch.
         internal static bool TryGetLocalShapeBounds(Collider collider, out Bounds bounds)
         {
             bounds = default;
@@ -677,64 +695,23 @@ namespace DreamPark
         }
 
 #if UNITY_EDITOR
-        // Was OnDrawGizmos (ran for EVERY prop every editor frame). TryGetWorldFootprint
-        // calls GetComponentsInChildren<Collider> — a hierarchy walk + array allocation —
-        // so per-prop-per-frame it was a major editor-only cost and GC source. Drawing
-        // only for the selected prop keeps the footprint visualization while removing the
-        // per-frame tax across all unselected props.
+        // The orange footprint is selection-only: it is useful only while
+        // sizing a prop, and drawing it for every prop would walk every
+        // collider hierarchy on every editor frame.
         private void OnDrawGizmosSelected()
         {
-            if (!TryGetWorldFootprint(out var footprint, out var surfaceHeight))
+            if (!showFootprintGizmos || !TryGetWorldFootprint(out var footprint, out var surfaceHeight))
                 return;
 
-            if (showFootprintGizmos)
+            Gizmos.color = new Color(1f, 0.6f, 0f, 1f);
+            for (int i = 0; i < footprint.Length; i++)
             {
-                Gizmos.color = new Color(1f, 0.6f, 0f, 1f);
-                for (int i = 0; i < footprint.Length; i++)
-                {
-                    Vector2 a = footprint[i];
-                    Vector2 b = footprint[(i + 1) % footprint.Length];
-                    Gizmos.DrawLine(new Vector3(a.x, surfaceHeight, a.y), new Vector3(b.x, surfaceHeight, b.y));
-                }
-            }
-
-            if (showWallGizmo && wallSide != PropWallSide.None)
-            {
-                DrawWallGizmo(footprint, surfaceHeight);
+                Vector2 a = footprint[i];
+                Vector2 b = footprint[(i + 1) % footprint.Length];
+                Gizmos.DrawLine(new Vector3(a.x, surfaceHeight, a.y), new Vector3(b.x, surfaceHeight, b.y));
             }
         }
 
-        /// <summary>
-        /// footprint[] is ordered (-x,-z),(+x,-z),(+x,+z),(-x,+z) in the prop's
-        /// own oriented frame — see TryGetManualFootprint/TryGetColliderFootprint,
-        /// which both build it in that winding. Right is the +x edge (indices
-        /// 1,2), Left is the -x edge (indices 0,3). Drawn from those world-space
-        /// corners directly, the same frame the footprint outline above already
-        /// uses, rather than re-deriving a local frame via Gizmos.matrix — see
-        /// the FootprintMeters docblock on why this component avoids a second
-        /// position/rotation/scale convention living alongside the first.
-        /// </summary>
-        private void DrawWallGizmo(Vector2[] footprint, float surfaceHeight)
-        {
-            int a = wallSide == PropWallSide.Right ? 1 : 0;
-            int b = wallSide == PropWallSide.Right ? 2 : 3;
-
-            float wallHeight = GetWallHeightMeters();
-            Vector3 baseA = new Vector3(footprint[a].x, surfaceHeight, footprint[a].y);
-            Vector3 baseB = new Vector3(footprint[b].x, surfaceHeight, footprint[b].y);
-            Vector3 topA = baseA + Vector3.up * wallHeight;
-            Vector3 topB = baseB + Vector3.up * wallHeight;
-
-            Gizmos.color = new Color(0.1f, 0.6f, 1f, 1f);
-            Gizmos.DrawLine(baseA, baseB);
-            Gizmos.DrawLine(baseB, topB);
-            Gizmos.DrawLine(topB, topA);
-            Gizmos.DrawLine(topA, baseA);
-            // Diagonal cross so the rectangle reads as a plane rather than a
-            // frame, matching what "a gizmo plane wall" is meant to show.
-            Gizmos.DrawLine(baseA, topB);
-            Gizmos.DrawLine(baseB, topA);
-        }
 #endif
     }
 }

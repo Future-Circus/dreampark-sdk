@@ -219,6 +219,9 @@ namespace DreamPark.EditorTools.AnimationOptimization
     [Serializable]
     public class ExecuteResult
     {
+        /// FBX sub-clip rows put back on their previous compression because
+        /// the new one moved them too far between keyframes (AnimationErrorProbe).
+        public int revertedForError;
         public int processed;
         public int succeeded;
         public int failed;

@@ -1,0 +1,85 @@
+-- ============================================================
+-- mp_encounter_sample.lua.txt — a networked encounter on the platform APIs
+-- (MULTIPLAYER.md §2). Late join, one fight per room, leader hand-off and
+-- per-player damage are all the platform's job; this script is only the game.
+--
+-- Setup: on the attraction's manager GameObject put a NetId and a
+-- LuaBehaviour with this script. Nothing else is networked by hand.
+--
+-- Test it without a headset (Play mode, DreamPark → Multiplayer → Simulated
+-- Peers, or the CLI):
+--   unity command --project-path . --timeout 400 dreampark_peers_scenario --name all --wait true \
+--     --params "$(cat Assets/DreamPark/Samples/Multiplayer/mp_encounter_sample.peers.json)"
+-- (edit "target" in that file to your object's path first)
+-- ============================================================
+
+local s            -- the whole encounter: phase, hp, epoch, t0, target
+
+-- Leader only: every change to the encounter is decided here. Anyone else's
+-- s.request('start') arrives here, so two players pressing Start in the same
+-- frame produce ONE fight (the second request finds phase ~= 'idle').
+local function on_request(kind, p, from)
+    if kind == 'start' and s.get('phase', 'idle') ~= 'fight' then
+        s.set('epoch', s.get('epoch', 0) + 1)
+        s.set('hp', 50)
+        s.set('t0', dp.clock())                 -- shared clock: same timeline on every headset
+        s.set('target', pick_target())          -- the leader picks; everyone sees the same target
+        s.set('phase', 'fight')
+    elseif kind == 'hit' and s.get('phase') == 'fight' then
+        local hp = math.max(0, s.get('hp', 0) - (p.n or 1))
+        s.set('hp', hp)
+        if hp == 0 then s.set('phase', 'won') end
+    end
+end
+
+function start()
+    -- start(), never file scope (net_send is not injected yet) or awake() (the NetId is not final until Start).
+    s = dp.shared_state('encounter')
+    s.on_request(on_request)
+    s.on_change(function(key, value)
+        if key == 'phase' then print('[mp_encounter] phase ' .. tostring(value)) end
+    end)
+end
+
+-- The players this encounter can target: me and every peer playing THIS title
+-- (presence is park-wide: players of other titles are in dp.peers() too). Sorted,
+-- so every device builds the same list; dp.random(key, n) is identical everywhere
+-- once dp.clock_synced() (the writer runs this, and the writer is synced).
+function pick_target()
+    local ids = { dp.me() }
+    local game = dp.game_id(self.gameObject)
+    for _, p in ipairs(dp.peers()) do
+        if p.game == nil or p.game == '' or p.game == game then ids[#ids + 1] = p.id end
+    end
+    table.sort(ids)
+    return ids[dp.random('target:' .. tostring(s.get('epoch', 0)), #ids)]
+end
+
+-- Called by the game (a touch, a button): a request, never a direct write.
+-- An unsynced late joiner may not start anything — the room may already be fighting.
+function begin()
+    if s == nil or not s.synced() then return false end
+    s.request('start', {})
+    return true
+end
+
+-- A hit by THIS player: the leader applies the damage; my own running total is a
+-- per-player cell every device merges (s.add / s.total — no leader round trip).
+function hit(n)
+    if s == nil or not s.synced() then return end
+    n = n or 1
+    s.request('hit', { n = n })
+    s.add('damage', n)
+end
+
+-- Everyone animates from the same state and the same clock.
+function update()
+    if s == nil or not s.synced() or s.get('phase') ~= 'fight' then return end
+    local t = dp.clock() - s.get('t0', dp.clock())
+    local spin = (t * 30) % 360
+    self.transform.localRotation = CS.UnityEngine.Quaternion.Euler(0, spin, 0)
+end
+
+-- Test hooks (used by the simulated-peer scenarios' params).
+function healthy() return s ~= nil and s.get('phase') == 'fight' and s.get('epoch') == 1 end
+function one_encounter() return s ~= nil and s.get('epoch') == 1 and s.get('phase') == 'fight' end

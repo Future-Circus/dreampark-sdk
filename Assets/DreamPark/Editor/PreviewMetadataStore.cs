@@ -99,6 +99,53 @@ namespace DreamPark
             if (removed > 0) Save(contentId, model);
         }
 
+        // ── Layout frames ───────────────────────────────────────────────
+        // An attraction's layout frames (Previews/Frames/{prefab}@{frameId}.png)
+        // store their overrides in the same file under
+        // AttractionLayoutFramePreviewPaths.MetadataKey — "{prefab}@{frameId}".
+        // A frame with no override of its own renders with its prefab's (Base)
+        // settings, so re-angling the Base preview re-angles every frame that
+        // was never customised. Base itself ("base", null or empty frame id)
+        // is the plain prefab entry above.
+
+        public static bool IsBaseFrame(string frameId)
+            => string.IsNullOrEmpty(frameId) || frameId == AttractionTemplate.BaseFrameId;
+
+        private static string FrameKey(string prefabName, string frameId)
+            => IsBaseFrame(frameId)
+                ? prefabName
+                : AttractionLayoutFramePreviewPaths.MetadataKey(prefabName, frameId);
+
+        // True (with the frame's own settings) only when THIS frame has an
+        // explicit override — never the Base fallback.
+        public static bool TryGetFrame(string contentId, string prefabName, string frameId, out PreviewSettings settings)
+            => TryGet(contentId, FrameKey(prefabName, frameId), out settings);
+
+        public static bool HasFrame(string contentId, string prefabName, string frameId)
+            => TryGetFrame(contentId, prefabName, frameId, out _);
+
+        // What a frame renders with: its own override → the prefab's Base
+        // override → PreviewSettings.Default.
+        public static PreviewSettings GetOrDefaultForFrame(string contentId, string prefabName, string frameId)
+        {
+            if (!IsBaseFrame(frameId) && TryGetFrame(contentId, prefabName, frameId, out var own))
+                return own;
+            return GetOrDefault(contentId, prefabName);
+        }
+
+        public static void SetFrame(string contentId, string prefabName, string frameId, PreviewSettings settings)
+        {
+            if (string.IsNullOrEmpty(prefabName)) return;
+            Set(contentId, FrameKey(prefabName, frameId), settings);
+        }
+
+        // Drops a frame's own override so it follows the Base settings again.
+        public static void ClearFrame(string contentId, string prefabName, string frameId)
+        {
+            if (string.IsNullOrEmpty(prefabName)) return;
+            Clear(contentId, FrameKey(prefabName, frameId));
+        }
+
         private static FileModel Load(string contentId)
         {
             try

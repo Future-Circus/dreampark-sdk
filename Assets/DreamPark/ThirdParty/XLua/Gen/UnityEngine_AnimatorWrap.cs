@@ -21,7 +21,7 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(UnityEngine.Animator);
-			Utils.BeginObjectRegister(type, L, translator, 0, 55, 46, 21);
+			Utils.BeginObjectRegister(type, L, translator, 0, 56, 46, 21);
 			
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "GetFloat", _m_GetFloat);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "SetFloat", _m_SetFloat);
@@ -68,6 +68,7 @@ namespace XLua.CSObjectWrap
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "CrossFade", _m_CrossFade);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "PlayInFixedTime", _m_PlayInFixedTime);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "Play", _m_Play);
+			Utils.RegisterFunc(L, Utils.METHOD_IDX, "ResetControllerState", _m_ResetControllerState);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "SetTarget", _m_SetTarget);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "GetBoneTransform", _m_GetBoneTransform);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "StartPlayback", _m_StartPlayback);
@@ -2088,6 +2089,47 @@ namespace XLua.CSObjectWrap
             }
             
             return LuaAPI.luaL_error(L, "invalid arguments to UnityEngine.Animator.Play!");
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_ResetControllerState(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+                UnityEngine.Animator gen_to_be_invoked = (UnityEngine.Animator)translator.FastGetCSObj(L, 1);
+            
+            
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 2&& LuaTypes.LUA_TBOOLEAN == LuaAPI.lua_type(L, 2)) 
+                {
+                    bool _resetParameters = LuaAPI.lua_toboolean(L, 2);
+                    
+                    gen_to_be_invoked.ResetControllerState( _resetParameters );
+                    
+                    
+                    
+                    return 0;
+                }
+                if(gen_param_count == 1) 
+                {
+                    
+                    gen_to_be_invoked.ResetControllerState(  );
+                    
+                    
+                    
+                    return 0;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to UnityEngine.Animator.ResetControllerState!");
             
         }
         

@@ -21,7 +21,7 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(UnityEngine.Component);
-			Utils.BeginObjectRegister(type, L, translator, 0, 12, 3, 1);
+			Utils.BeginObjectRegister(type, L, translator, 0, 12, 4, 1);
 			
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "GetComponent", _m_GetComponent);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "TryGetComponent", _m_TryGetComponent);
@@ -38,6 +38,7 @@ namespace XLua.CSObjectWrap
 			
 			
 			Utils.RegisterFunc(L, Utils.GETTER_IDX, "transform", _g_get_transform);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "transformHandle", _g_get_transformHandle);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "gameObject", _g_get_gameObject);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "tag", _g_get_tag);
             
@@ -668,6 +669,20 @@ namespace XLua.CSObjectWrap
 			
                 UnityEngine.Component gen_to_be_invoked = (UnityEngine.Component)translator.FastGetCSObj(L, 1);
                 translator.Push(L, gen_to_be_invoked.transform);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_transformHandle(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                UnityEngine.Component gen_to_be_invoked = (UnityEngine.Component)translator.FastGetCSObj(L, 1);
+                translator.Push(L, gen_to_be_invoked.transformHandle);
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }

@@ -106,10 +106,15 @@ namespace DreamPark.EditorTools.TextureOptimization
 
             // ── Resolution decision ─────────────────────────────────────
             int recommended = TextureSizingPolicy.RecommendMaxSize(u.maxRendererSizeMeters);
-            // Never propose a larger size than the source — we don't
-            // upsample, only down.
             int srcLargest = Mathf.Max(u.sourceWidth, u.sourceHeight);
-            int target = srcLargest > 0 ? Mathf.Min(recommended, srcLargest) : recommended;
+            // Oct 2026: atlases, sheets, UI and sprites are mapped onto small
+            // quads, so world bounds would shrink them until they're
+            // unreadable (badge sheets, UI atlases, labels). Keep their size;
+            // only the format may change.
+            if (u.isAtlasLike) recommended = srcLargest > 0 ? srcLargest : u.currentMaxSize;
+            // Never raise: not above the source pixels, and not above the size
+            // the texture already ships at (its current importer max size).
+            int target = TextureSizingPolicy.NeverRaise(recommended, u.currentMaxSize, srcLargest);
 
             row.targetMaxSize = target;
             row.targetImporterMaxSize = target;

@@ -21,7 +21,7 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(UnityEngine.TrailRenderer);
-			Utils.BeginObjectRegister(type, L, translator, 0, 9, 20, 19);
+			Utils.BeginObjectRegister(type, L, translator, 0, 9, 21, 20);
 			
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "SetPosition", _m_SetPosition);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "GetPosition", _m_GetPosition);
@@ -49,6 +49,7 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "textureScale", _g_get_textureScale);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "shadowBias", _g_get_shadowBias);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "generateLightingData", _g_get_generateLightingData);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "applyActiveColorSpace", _g_get_applyActiveColorSpace);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "textureMode", _g_get_textureMode);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "alignment", _g_get_alignment);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "maskInteraction", _g_get_maskInteraction);
@@ -69,6 +70,7 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "textureScale", _s_set_textureScale);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "shadowBias", _s_set_shadowBias);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "generateLightingData", _s_set_generateLightingData);
+            Utils.RegisterFunc(L, Utils.SETTER_IDX, "applyActiveColorSpace", _s_set_applyActiveColorSpace);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "textureMode", _s_set_textureMode);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "alignment", _s_set_alignment);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "maskInteraction", _s_set_maskInteraction);
@@ -726,6 +728,20 @@ namespace XLua.CSObjectWrap
         }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_applyActiveColorSpace(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                UnityEngine.TrailRenderer gen_to_be_invoked = (UnityEngine.TrailRenderer)translator.FastGetCSObj(L, 1);
+                LuaAPI.lua_pushboolean(L, gen_to_be_invoked.applyActiveColorSpace);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
         static int _g_get_textureMode(RealStatePtr L)
         {
 		    try {
@@ -1003,6 +1019,21 @@ namespace XLua.CSObjectWrap
 			
                 UnityEngine.TrailRenderer gen_to_be_invoked = (UnityEngine.TrailRenderer)translator.FastGetCSObj(L, 1);
                 gen_to_be_invoked.generateLightingData = LuaAPI.lua_toboolean(L, 2);
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_applyActiveColorSpace(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                UnityEngine.TrailRenderer gen_to_be_invoked = (UnityEngine.TrailRenderer)translator.FastGetCSObj(L, 1);
+                gen_to_be_invoked.applyActiveColorSpace = LuaAPI.lua_toboolean(L, 2);
             
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);

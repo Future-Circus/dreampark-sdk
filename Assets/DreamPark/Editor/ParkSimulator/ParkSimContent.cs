@@ -41,6 +41,7 @@
 // ─────────────────────────────────────────────────────────────────────
 
 using System.Collections.Generic;
+using DreamPark.Editor;
 using UnityEditor;
 using UnityEngine;
 
@@ -56,6 +57,10 @@ namespace DreamPark.ParkSim
         /// The prefab asset to instantiate. Null when this entry is sourced
         /// from a scene instance that carries unapplied overrides.
         public GameObject prefabAsset;
+        // A Sequence Test builds this recipe into a transient root at spawn
+        // time; there is deliberately no generated per-title prefab asset.
+        public DreamSequencePackageDefinition sequenceDefinition;
+        public string sequenceContentId;
 
         /// A disabled scene instance to duplicate instead of the asset,
         /// preserving the developer's un-applied edits. Null otherwise.
@@ -95,7 +100,8 @@ namespace DreamPark.ParkSim
         /// one per content package, not one per park.
         public string contentFolder;
 
-        public GameObject Source { get { return sceneTemplate != null ? sceneTemplate : prefabAsset; } }
+        public UnityEngine.Object Source { get { return sceneTemplate != null ? sceneTemplate
+            : prefabAsset != null ? (UnityEngine.Object)prefabAsset : sequenceDefinition; } }
     }
 
     public class ScanResult
@@ -177,6 +183,7 @@ namespace DreamPark.ParkSim
                 }
             }
 
+            var scenePhoneRigs = new List<ContentEntry>();
             foreach (var rig in Object.FindObjectsByType<PlayerRig>(FindObjectsInactive.Include, FindObjectsSortMode.None))
             {
                 // A PlayerRig nested inside an attraction belongs to that
@@ -189,7 +196,14 @@ namespace DreamPark.ParkSim
 
                 // No early break: a scene can legitimately hold one rig per
                 // content package and every one of them has to come along.
-                AddPlayer(result, BuildEntry(rig.gameObject, ContentKind.Player, claimedAssets, sceneOriginAssets));
+                var rigEntry = BuildEntry(rig.gameObject, ContentKind.Player, claimedAssets, sceneOriginAssets);
+                // A Phone Player is never the headset Player; it only comes
+                // back in through ApplyPhoneSimulation below.
+                if (rigEntry != null && PhonePlayerStore.IsPhonePlayerPrefab(rigEntry.contentFolder, rigEntry.assetPath)) {
+                    scenePhoneRigs.Add(rigEntry);
+                    continue;
+                }
+                AddPlayer(result, rigEntry);
             }
 
             // ── Project scan ─────────────────────────────────────────────
@@ -207,6 +221,11 @@ namespace DreamPark.ParkSim
                 else if (includeProps && prefab.GetComponent<PropTemplate>() != null) kind = ContentKind.Prop;
                 else if (prefab.GetComponent<PlayerRig>() != null) kind = ContentKind.Player;
                 else continue;
+
+                // Headset scan: the Phone Player slot prefab (and anything named
+                // "Phone Player") must never be picked as a folder's Player.
+                if (kind == ContentKind.Player
+                    && PhonePlayerStore.IsPhonePlayerPrefab(ContentFolders.FolderOfAsset(path), path)) continue;
 
                 // Filter applied AFTER the kind is known: excluding Sample is a
                 // choice about what gets PLACED, and dropping the Sample rig
@@ -237,6 +256,8 @@ namespace DreamPark.ParkSim
                     result.placeables.Add(entry);
                 }
             }
+
+            ApplyPhoneSimulation(result, scenePhoneRigs);
 
             // ── Injected content ─────────────────────────────────────────
             AppendExternal(result, includeProps);
@@ -333,6 +354,68 @@ namespace DreamPark.ParkSim
                     result.placeables.Add(entry);
                 }
             }
+        }
+
+        /// <summary>
+        /// `DreamPark → Simulate Phone Player`: a phone spawns each content
+        /// package's Phone Player instead of its Player, and NO rig when the
+        /// package's slot is empty (phone users are spectators by default).
+        /// Off: Phone Player instances in the scene are put to sleep so they
+        /// never run as a second rig. Scan runs in Play mode, so deactivating
+        /// scene objects here is reverted when Play ends.
+        /// </summary>
+        private static void ApplyPhoneSimulation(ScanResult result, List<ContentEntry> scenePhoneRigs)
+        {
+            if (!DreamParkDevice.SimulatePhone) {
+                foreach (var e in scenePhoneRigs)
+                    if (e != null && e.sceneTemplate != null && e.sceneTemplate.activeSelf) e.sceneTemplate.SetActive(false);
+                return;
+            }
+
+            for (int i = result.players.Count - 1; i >= 0; i--) {
+                var headset = result.players[i];
+                if (headset == null) continue;
+                string folder = headset.contentFolder ?? string.Empty;
+                string phonePath = PhonePlayerStore.SlotPrefabPath(folder);
+                string problem = phonePath != null ? PhonePlayerStore.ValidateCandidate(folder, phonePath) : null;
+                if (problem != null) {
+                    result.notes.Add($"Phone simulation: {folder}'s Phone Player slot is invalid ({problem}); spawning no rig.");
+                    phonePath = null;
+                }
+
+                if (headset.sceneTemplate != null && headset.sceneTemplate.activeSelf)
+                    headset.sceneTemplate.SetActive(false);
+
+                if (phonePath == null) {
+                    result.players.RemoveAt(i);
+                    result.notes.Add($"Phone simulation: {folder} has no Phone Player, so the phone joins as a spectator with no rig (dp.player() is nil). Set one in Content Uploader → Packages.");
+                    continue;
+                }
+
+                ContentEntry scene = scenePhoneRigs.Find(e => e != null
+                    && string.Equals(e.assetPath, phonePath, System.StringComparison.OrdinalIgnoreCase));
+                if (scene != null) {
+                    result.players[i] = scene;
+                    scenePhoneRigs.Remove(scene);
+                } else {
+                    var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(phonePath);
+                    result.players[i] = new ContentEntry {
+                        displayName = prefab != null ? prefab.name : System.IO.Path.GetFileNameWithoutExtension(phonePath),
+                        kind = ContentKind.Player,
+                        prefabAsset = prefab,
+                        assetPath = phonePath,
+                        hasUnappliedOverrides = false,
+                        fromSample = ContentFolders.IsUnderSample(phonePath),
+                        fromScene = false,
+                        contentFolder = folder,
+                    };
+                }
+                result.notes.Add($"Phone simulation: {folder} spawns its Phone Player ({System.IO.Path.GetFileName(phonePath)}).");
+            }
+
+            // Anything left was not chosen by a slot: keep it asleep.
+            foreach (var e in scenePhoneRigs)
+                if (e != null && e.sceneTemplate != null && e.sceneTemplate.activeSelf) e.sceneTemplate.SetActive(false);
         }
 
         /// <summary>

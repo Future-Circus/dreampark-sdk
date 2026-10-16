@@ -167,6 +167,19 @@ namespace DreamPark
             AssetDatabase.importPackageFailed -= OnImportFailed;
             AssetDatabase.importPackageFailed += OnImportFailed;
 
+            // A .unitypackage can add and overwrite assets, but it cannot remove
+            // files that disappeared from a newer SDK. Remove the exact retired
+            // files now, while this (old) SDK assembly is still running, so stale
+            // generated code cannot break the compile triggered by the import.
+            if (!SDKUpgradeCleanup.PrepareForUpgrade(SDKUpdateChecker.LatestRetiredAssets, out string cleanupError))
+            {
+                UnsubscribeAll();
+                statusMessage = "SDK upgrade cleanup failed: " + cleanupError;
+                Debug.LogError("[DreamPark] " + statusMessage);
+                Repaint();
+                yield break;
+            }
+
             // Record the intent BEFORE importing. The import rewrites every SDK .cs
             // file, which forces a recompile and a domain reload — and that reload
             // destroys the in-flight importPackageCompleted callback we just
@@ -215,12 +228,19 @@ namespace DreamPark
         private static void OnImportCancelled(string packageName)
         {
             UnsubscribeAll();
+            SessionState.EraseString(SDKUpdateChecker.PendingVersionKey);
+            SDKUpgradeCleanup.RestorePendingBackup();
             Debug.Log($"[DreamPark] SDK update import cancelled for '{packageName}'. Local version unchanged.");
         }
 
         private static void OnImportFailed(string packageName, string errorMessage)
         {
             UnsubscribeAll();
+            SessionState.EraseString(SDKUpdateChecker.PendingVersionKey);
+            // A failed import may still have applied a subset of the package. Do
+            // not restore retired generated files into that mixed state; retaining
+            // the exact deletions is the safest compileable outcome.
+            SDKUpgradeCleanup.CommitPendingUpgrade();
             Debug.LogWarning($"[DreamPark] SDK update import failed for '{packageName}': {errorMessage}");
         }
 

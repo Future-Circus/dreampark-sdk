@@ -1,0 +1,15 @@
+{
+  "target": "MP Encounter/Manager",
+  "start": "begin()",
+  "healthy": "healthy()",
+  "one_encounter": "one_encounter()",
+  "state": "encounter",
+  "peer_request": "start",
+  "body": "MP Encounter/Box",
+  "body_touch": "claim()",
+  "prop": "",
+  "activity": "hit(1)",
+  "seconds": 8,
+  "roster": "",
+  "ignore": []
+}

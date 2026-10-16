@@ -72,6 +72,13 @@ namespace DreamPark
         public int versionNumber;            // Backend version this build was uploaded under (e.g. 12).
         public string buildTimestampUtc;     // ISO-8601.
         public string sdkVersion;
+        // Oct 9 2026: SmartBundleGrouper.BundleLayoutVersion this build used
+        // (from its delivery-index.json). 0 = unknown: an older baseline, or a
+        // backend parent whose index could not be read — treated as layout 1.
+        public int bundleLayoutVersion;
+        // Oct 10 2026: BuildInfoCollector's JSON for this build (versions,
+        // settings as built, counts, upload mode). Empty on older baselines.
+        public string buildInfoJson;
         public List<BuildManifestPlatform> platforms = new List<BuildManifestPlatform>();
 
         public BuildManifestPlatform GetPlatform(string platform)
@@ -236,9 +243,28 @@ namespace DreamPark
                     pm.files.Sort((a, b) => string.CompareOrdinal(a.fileName, b.fileName));
                 }
                 manifest.platforms.Add(pm);
+                if (manifest.bundleLayoutVersion == 0)
+                {
+                    string index = Path.Combine(platformDir, "delivery-index.json");
+                    try
+                    {
+                        if (File.Exists(index))
+                            manifest.bundleLayoutVersion = ReadBundleLayoutVersion(new JSONObject(File.ReadAllText(index)));
+                    }
+                    catch (Exception e) { Debug.LogWarning($"[BuildManifest] Could not read {index}: {e.Message}"); }
+                }
             }
 
             return manifest;
+        }
+
+        /// The bundleLayoutVersion a delivery index (local file or the
+        /// backend's /delivery-index response) was stamped with; 0 when absent
+        /// (built before Oct 9 2026 → layout 1) or unreadable.
+        public static int ReadBundleLayoutVersion(JSONObject deliveryIndex)
+        {
+            JSONObject field = deliveryIndex?.GetField("bundleLayoutVersion");
+            return field != null && field.type == JSONObject.Type.Number ? Math.Max(0, field.intValue) : 0;
         }
 
         // Deletes any {contentId}-previews / {contentId}-logos bundle left in

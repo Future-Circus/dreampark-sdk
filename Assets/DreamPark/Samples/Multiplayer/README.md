@@ -4,6 +4,13 @@ Ready-to-run examples that demonstrate SDK features. Open with `DreamPark → ..
 
 ---
 
+## Simulated peers (start here for game testing)
+
+To test YOUR game's multiplayer without a headset, use **DreamPark → Multiplayer → Simulated Peers** (or the
+`dreampark_peers_*` CLI): simulated players join your Play session over the real relay rules and real presence, and six
+built-in scenarios (late join, simultaneous start, leader leaves, shared prop, budget, another title) check your game.
+See `MULTIPLAYER.md` § 7. The test scene below only checks the transport itself.
+
 ## Multiplayer Test
 
 End-to-end sanity check for the networking stack. Talks to the bundled local dev server (no hardware required).

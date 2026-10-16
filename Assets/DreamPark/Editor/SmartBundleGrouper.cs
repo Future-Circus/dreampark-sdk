@@ -12,11 +12,21 @@ namespace DreamPark
 {
     // Dependency-aware bundle grouper. Replaces the Legacy "one bundle per
     // top-level folder" assignment with one bundle per user-facing root —
-    // a prefab carrying LevelTemplate, PropTemplate, or PlayerRig (see
-    // IsUserFacingRoot for the rationale). Each root's bundle also contains
-    // the deps it uniquely owns; deps shared by multiple roots land in a
-    // Shared bundle. The DreamPark SDK doesn't ship scenes — content is
-    // exclusively prefab-based.
+    // a prefab carrying LevelTemplate, PropTemplate, or PlayerRig, plus the
+    // package's Game Container (see IsUserFacingRoot for the rationale). Each
+    // root's bundle also contains the deps it uniquely owns; a dep used by
+    // several roots lands in the bundle of exactly THAT SET of roots (see
+    // PlanDependencyOwnership). The DreamPark SDK doesn't ship scenes —
+    // content is exclusively prefab-based.
+    //
+    // gameId is the UPLOAD id. A Beta upload ("{id}Beta") names its groups
+    // with the Beta id but reads every path from the source folder
+    // Assets/Content/{id}/ (Editor.DreamParkPackageCompiler.SourceContentIdFor).
+    // Before Oct 9 2026 every path below used the Beta id, so Beta builds had
+    // no dep ownership, no Shared-Foundation, Code or Bootstrap group: every
+    // root bundle held just its prefab and all content fell into 40 MB
+    // Runtime shards that depended on one another (CrashCourseBeta: one
+    // attraction needed 1.29 GB of a 1.73 GB title).
     //
     // Why this matters for patch size:
     //   With Legacy bundling, editing one texture in Models/Textures invalidates
@@ -28,11 +38,20 @@ namespace DreamPark
     //   1. Enumerate all addressable entries the Legacy pass produced and pick
     //      "user-facing roots" — Level/Attraction prefabs, Prop prefabs, and
     //      the Player rig prefab (the things players load by address).
-    //   2. For each root, walk AssetDatabase.GetDependencies(path, recursive: true)
-    //      and build a reverse-ref map: dep -> set of roots that reference it.
-    //   3. For each root, create a group named "{contentId}-Bundle-{root}".
-    //      Move the root + every dep with refCount == 1 into that group.
-    //   4. For deps with refCount > 1, move them to "{contentId}-Shared".
+    //   2. For each root, walk its EXCLUSIVE deps (direct references, not
+    //      through other roots) inside the content folder and build a
+    //      reverse map: dep -> set of roots that use it.
+    //   3. For each root, create "{contentId}-Bundle-{root}" (logic: the
+    //      prefab + script-bearing deps) and "{contentId}-Bundle-{root}-Content"
+    //      (presentation). A dep used by ONE root goes there.
+    //   4. A dep used by roots {R1..Rk} goes to "{contentId}-SharedSet-{h}",
+    //      h = 8 hex of MD5 over the sorted root GUIDs — so a root's closure
+    //      only contains bundles whose every asset it uses, and the name is
+    //      stable across builds and machines. Sets whose total input size is
+    //      under SmallSharedSetBytes go to one "{contentId}-SharedSet-Small"
+    //      bucket so tiny sets don't multiply the bundle count (Oct 9 2026;
+    //      this replaces "the first root in priority order claims it", which
+    //      made every other user download that root's whole Content chunk).
     //   5. Addressable entries that aren't roots and aren't picked up as deps
     //      (e.g. AudioClips referenced only by Lua via address strings) stay
     //      in a "{contentId}-Runtime" bundle so they're still loadable by name.
@@ -50,9 +69,10 @@ namespace DreamPark
     // questions while Smart was opt-in and are listed here as the behaviour
     // to expect, not as unfinished work — but they are the first places to
     // look if a creator reports surprising bundle churn:
-    //   - Materials shared by many props: should land in Shared (typically a
-    //     few hundred KB total). Verify by running and inspecting groups.
-    //   - Shaders: will be heavily shared, will land in Shared. Same.
+    //   - Materials shared by many props: land in that set's SharedSet bundle
+    //     (or SharedSet-Small). Adding a root that shares an asset moves only
+    //     that asset, from set S to S+{root}: two bundles change.
+    //   - Shaders: SDK/URP shaders are promoted to Shared-Foundation (step 1b).
     //   - Lua-referenced audio: not picked up by GetDependencies (Lua isn't
     //     a Unity dep). Will land in Runtime. That's correct semantically; Runtime
     //     becomes a single bundle that updates whenever any of its members
@@ -67,7 +87,44 @@ namespace DreamPark
         private const string RuntimeSuffix = "Runtime";
         private const string PreviewsSuffix = "Previews";
         private const string CodeSuffix = "Code";
+        private const string BootstrapSuffix = "Bootstrap";
         private const string SharedFoundationSuffix = "Shared-Foundation";
+        internal const string SharedSetSuffix = "SharedSet";
+
+        // The grouping SEMANTICS this SDK builds. Stamped into every delivery
+        // index (bundleLayoutVersion) and BuildManifest. A patch must never sit
+        // on a parent built with an older layout — bundles would move under
+        // names the parent already uses — so the uploader forces a full upload
+        // when the parent's version is lower or unknown (BundleLayoutGate).
+        //   1 = first-claim Smart grouping (and every upload before Oct 2026)
+        //   2 = set-keyed shared deps + sticky .dreampark-bundle-layout.json,
+        //       Beta reads the source folder, Game Container is a root (Oct 9 2026)
+        // Bump it whenever grouping semantics change.
+        public const int BundleLayoutVersion = 2;
+
+        // A shared set (the deps used by exactly the same roots) whose total
+        // input bytes are below this goes to the one SharedSet-Small bucket
+        // instead of its own bundle. Trade-off measured on CrashCourse and
+        // WizardsWay (core_patches/reports/sdk-delivery-bloat.md): lower =
+        // more bundles and smaller closures, higher = fewer bundles and every
+        // root that touches a small set pulls more of the bucket.
+        internal const long SmallSharedSetBytes = 1L * 1024 * 1024;
+
+        // SharedSet-Small is chunked at this size (other groups: 40 MB), so a
+        // root that touches a small set over-fetches at most one 4 MB chunk.
+        internal const long SmallBucketChunkBytes = 4L * 1024 * 1024;
+
+        // An already-placed dep that GAINS a user stays in its bundle as long
+        // as the new user would download at most this many bytes it does not
+        // use from that bundle; past it the dep moves. Moving rewrites the
+        // bundle, and (ContiguousBundles) every bundle that references it.
+        internal const long GainCapBytes = 4L * 1024 * 1024;
+
+        // A root whose exclusive deps are at most this size keeps them all in
+        // one "-Content" bundle (logic + presentation); above it, script-bearing
+        // deps get their own "-Logic" bundle so a script edit doesn't rewrite
+        // the heavy content.
+        internal const long TinyRootBytes = 10L * 1024 * 1024;
 
         // Path prefixes whose referenced contents get promoted into the
         // shared foundation bundle. Without this promotion, Unity's
@@ -121,8 +178,292 @@ namespace DreamPark
         // from filename alone — Addressables' AppendHash naming embeds the
         // lowercased group name in the resulting bundle filename.
         public static string CodeGroupName(string gameId) => $"{gameId}-{CodeSuffix}";
+        public static string BootstrapGroupName(string gameId) => $"{gameId}-{BootstrapSuffix}";
         public static string PreviewsGroupName(string gameId) => $"{gameId}-{PreviewsSuffix}";
         public static string SharedFoundationGroupName(string gameId) => $"{gameId}-{SharedFoundationSuffix}";
+        public static string SharedSmallGroupName(string gameId) => $"{gameId}-{SharedSetSuffix}-Small";
+
+        /// The deterministic group for the deps used by exactly this set of
+        /// roots. Keys are stable per root (asset GUIDs); order and case do
+        /// not matter, so every build and every machine gets the same name.
+        public static string SharedSetGroupName(string gameId, IEnumerable<string> rootKeys)
+        {
+            var sorted = (rootKeys ?? Array.Empty<string>())
+                .Where(k => !string.IsNullOrEmpty(k))
+                .Select(k => k.ToLowerInvariant())
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(k => k, StringComparer.Ordinal);
+            using (var md5 = System.Security.Cryptography.MD5.Create())
+            {
+                byte[] bytes = md5.ComputeHash(System.Text.Encoding.UTF8.GetBytes(
+                    "DreamParkSharedSet:" + string.Join("\n", sorted)));
+                return $"{gameId}-{SharedSetSuffix}-" + BitConverter.ToString(bytes, 0, 4).Replace("-", "").ToLowerInvariant();
+            }
+        }
+
+        /// Where every non-root dep goes (pure; EditMode-tested).
+        ///
+        /// THE RULE (Oct 10 2026, measured on CrashCourse and WizardsWay; see
+        /// core_patches/reports/sdk-delivery-bloat.md). Let U(d) be the roots
+        /// whose exclusive deps contain d. A root prefab is always ALONE in its
+        /// own bundle (so deleting it never rewrites anything else).
+        ///
+        /// Natural placement (new deps, and no layout file):
+        ///   |U| = 1 → the root's "-Content" group, or its "-Logic" group for a
+        ///             script-bearing dep of a root whose exclusive deps exceed
+        ///             TinyRootBytes;
+        ///   |U| > 1 → SharedSetGroupName(U); a set whose total input bytes are
+        ///             under smallSetBytes goes to SharedSet-Small instead.
+        ///
+        /// Sticky placement (previousGroups/previousGroupUsers, from
+        /// .dreampark-bundle-layout.json). A dep placed last build in group g
+        /// whose users then were P(g):
+        ///   - in SharedSet-Small → stays;
+        ///   - U(d) ⊆ P(g) (it only lost users, or none changed) → stays;
+        ///   - it gained users → stays if, for every gained root, the bytes of
+        ///     g's other members that root does not use are ≤ gainCapBytes;
+        ///     otherwise it takes its natural placement;
+        ///   - no users left but the asset still exists (an orphan) → stays.
+        /// Why: with ContiguousBundles every bundle that references a changed
+        /// bundle is rewritten too, so on a patch an asset must not move unless
+        /// staying would make some root download more than the cap.
+        /// A natural SharedSet name that an existing group already holds gets
+        /// "-b", "-c", … so a moved asset never rewrites a bundle it joins.
+        internal static Dictionary<string, string> PlanDependencyOwnership(
+            string gameId,
+            IReadOnlyList<string> rootPaths,
+            IReadOnlyDictionary<string, HashSet<string>> depGraph,
+            IReadOnlyDictionary<string, string> rootGroupNames,
+            IReadOnlyDictionary<string, string> rootKeys,
+            Func<string, bool> isLogic,
+            Func<string, long> inputBytes,
+            long smallSetBytes,
+            IReadOnlyDictionary<string, string> previousGroups = null,
+            IReadOnlyDictionary<string, HashSet<string>> previousGroupUsers = null,
+            long gainCapBytes = GainCapBytes,
+            Func<string, bool> stillExists = null)
+        {
+            var rootSet = new HashSet<string>(rootPaths, StringComparer.OrdinalIgnoreCase);
+            var users = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (string root in rootPaths)
+            {
+                if (!depGraph.TryGetValue(root, out HashSet<string> deps) || deps == null) continue;
+                foreach (string dep in deps)
+                {
+                    if (rootSet.Contains(dep)) continue;
+                    if (!users.TryGetValue(dep, out List<string> list)) users[dep] = list = new List<string>();
+                    if (!list.Contains(root, StringComparer.OrdinalIgnoreCase)) list.Add(root);
+                }
+            }
+
+            string KeyOf(string root) => (rootKeys != null && rootKeys.TryGetValue(root, out string key)
+                && !string.IsNullOrEmpty(key) ? key : root).ToLowerInvariant();
+            string SetKey(List<string> u) => string.Join("\n", u.Select(KeyOf)
+                .Distinct(StringComparer.Ordinal).OrderBy(k => k, StringComparer.Ordinal));
+            long Bytes(string path) => Math.Max(0, inputBytes(path));
+
+            // Natural placement.
+            var exclusiveBytes = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+            foreach (var pair in users.Where(p => p.Value.Count == 1))
+                exclusiveBytes[pair.Value[0]] = (exclusiveBytes.TryGetValue(pair.Value[0], out long e) ? e : 0) + Bytes(pair.Key);
+            var setBytes = new Dictionary<string, long>(StringComparer.Ordinal);
+            foreach (var pair in users.Where(p => p.Value.Count > 1))
+            {
+                string key = SetKey(pair.Value);
+                setBytes[key] = (setBytes.TryGetValue(key, out long b) ? b : 0) + Bytes(pair.Key);
+            }
+            string small = SharedSmallGroupName(gameId);
+            string Natural(string dep)
+            {
+                List<string> u = users[dep];
+                if (u.Count == 1)
+                {
+                    string own = rootGroupNames[u[0]];
+                    bool split = exclusiveBytes[u[0]] > TinyRootBytes && isLogic(dep);
+                    return own + (split ? "-Logic" : "-Content");
+                }
+                return setBytes[SetKey(u)] < smallSetBytes ? small
+                    : SharedSetGroupName(gameId, u.Select(KeyOf));
+            }
+
+            var plan = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var previousMembers = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            if (previousGroups != null)
+                foreach (var pair in previousGroups)
+                {
+                    if (!previousMembers.TryGetValue(pair.Value, out List<string> list))
+                        previousMembers[pair.Value] = list = new List<string>();
+                    list.Add(pair.Key);
+                }
+            bool Managed(string group) => group != null
+                && (group.StartsWith($"{gameId}-{GroupPrefix}-", StringComparison.Ordinal)
+                    || group.StartsWith($"{gameId}-{SharedSetSuffix}-", StringComparison.Ordinal));
+
+            // Sticky: deps placed last build.
+            foreach (var pair in users.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                string dep = pair.Key;
+                if (previousGroups == null || !previousGroups.TryGetValue(dep, out string g) || !Managed(g)) continue;
+                if (g == small) { plan[dep] = g; continue; }
+                if (previousGroupUsers == null || !previousGroupUsers.TryGetValue(g, out HashSet<string> before)) continue;
+                var gained = pair.Value.Where(r => !before.Contains(KeyOf(r))).ToList();
+                bool stay = gained.Count == 0 || gained.All(r =>
+                    previousMembers[g].Where(m => !string.Equals(m, dep, StringComparison.OrdinalIgnoreCase)
+                            && !(users.TryGetValue(m, out List<string> mu) && mu.Contains(r, StringComparer.OrdinalIgnoreCase)))
+                        .Sum(Bytes) <= gainCapBytes);
+                if (stay) plan[dep] = g;
+            }
+            // Orphans: placed last build, no user now, still in the project → stay.
+            if (previousGroups != null)
+                foreach (var pair in previousGroups.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
+                    if (!users.ContainsKey(pair.Key) && !rootSet.Contains(pair.Key) && Managed(pair.Value)
+                        && (stillExists == null || stillExists(pair.Key)))
+                        plan[pair.Key] = pair.Value;
+
+            // New and moving deps: natural placement; a SharedSet name an
+            // existing group already holds gets a suffix (never join it).
+            var held = new HashSet<string>(previousMembers.Keys, StringComparer.Ordinal);
+            var renamed = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (string dep in users.Keys.OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
+            {
+                if (plan.ContainsKey(dep)) continue;
+                string natural = Natural(dep);
+                if (natural.StartsWith($"{gameId}-{SharedSetSuffix}-", StringComparison.Ordinal) && natural != small)
+                {
+                    if (!renamed.TryGetValue(natural, out string name))
+                    {
+                        name = natural;
+                        for (int i = 1; held.Contains(name); i++) name = natural + "-" + (char)('a' + i);
+                        renamed[natural] = name;
+                    }
+                    natural = name;
+                }
+                plan[dep] = natural;
+            }
+            return plan;
+        }
+
+        /// The root keys that load each group, for the layout file:
+        /// the users of its planned members, plus each root for its own group.
+        internal static Dictionary<string, HashSet<string>> GroupUsersOf(
+            IReadOnlyDictionary<string, string> plan,
+            IReadOnlyList<string> rootPaths,
+            IReadOnlyDictionary<string, HashSet<string>> depGraph,
+            IReadOnlyDictionary<string, string> rootGroupNames,
+            IReadOnlyDictionary<string, string> rootKeys)
+        {
+            string KeyOf(string root) => (rootKeys != null && rootKeys.TryGetValue(root, out string key)
+                && !string.IsNullOrEmpty(key) ? key : root).ToLowerInvariant();
+            var result = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            HashSet<string> For(string group)
+            {
+                if (!result.TryGetValue(group, out var set)) result[group] = set = new HashSet<string>(StringComparer.Ordinal);
+                return set;
+            }
+            foreach (var group in plan.Values) For(group);
+            foreach (string root in rootPaths)
+            {
+                For(rootGroupNames[root]).Add(KeyOf(root));
+                if (!depGraph.TryGetValue(root, out var deps) || deps == null) continue;
+                foreach (string dep in deps)
+                    if (plan.TryGetValue(dep, out string group)) For(group).Add(KeyOf(root));
+            }
+            return result;
+        }
+
+        // ── .dreampark-bundle-layout.json ──────────────────────────────────
+        // Per-title, committed next to the other .dreampark-*.json (a dot file,
+        // so Unity never imports it). It remembers the last build's shared-dep
+        // placement and root group names so the next build keeps bundles
+        // where they were (see PlanDependencyOwnership). Names are stored
+        // WITHOUT the upload id, so release and Beta builds share one layout.
+        // Missing or unreadable → empty → deterministic set-keyed placement.
+        internal sealed class BundleLayout
+        {
+            // 2 (Oct 10 2026): every planned dep (not only shared ones) and the
+            // root keys that loaded each group. Any other schema reads as empty.
+            public const int SchemaVersion = 2;
+            public readonly Dictionary<string, string> assets = new Dictionary<string, string>(StringComparer.Ordinal);
+            public readonly Dictionary<string, string> roots = new Dictionary<string, string>(StringComparer.Ordinal);
+            public readonly Dictionary<string, List<string>> groups = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        }
+
+        internal static string BundleLayoutPath(string sourceContentId)
+            => $"Assets/Content/{sourceContentId}/.dreampark-bundle-layout.json";
+
+        internal static BundleLayout ReadBundleLayout(string path)
+        {
+            var layout = new BundleLayout();
+            try
+            {
+                if (string.IsNullOrEmpty(path) || !File.Exists(path)) return layout;
+                var json = new Defective.JSON.JSONObject(File.ReadAllText(path));
+                if (json == null || json.type != Defective.JSON.JSONObject.Type.Object
+                    || json.GetField("schemaVersion") == null || json.GetField("schemaVersion").intValue != BundleLayout.SchemaVersion)
+                    throw new FormatException("unknown schema");
+                foreach (string field in new[] { "assets", "roots" })
+                {
+                    var node = json.GetField(field);
+                    if (node == null || node.type != Defective.JSON.JSONObject.Type.Object) throw new FormatException(field);
+                    var target = field == "assets" ? layout.assets : layout.roots;
+                    for (int i = 0; i < node.count; i++)
+                        if (node.list[i].type == Defective.JSON.JSONObject.Type.String
+                            && !string.IsNullOrEmpty(node.keys[i]) && !string.IsNullOrEmpty(node.list[i].stringValue))
+                            target[node.keys[i]] = node.list[i].stringValue;
+                }
+                var groups = json.GetField("groups");
+                if (groups == null || groups.type != Defective.JSON.JSONObject.Type.Object) throw new FormatException("groups");
+                for (int i = 0; i < groups.count; i++)
+                {
+                    if (string.IsNullOrEmpty(groups.keys[i]) || groups.list[i].type != Defective.JSON.JSONObject.Type.Array) continue;
+                    layout.groups[groups.keys[i]] = groups.list[i].list
+                        .Where(v => v.type == Defective.JSON.JSONObject.Type.String && !string.IsNullOrEmpty(v.stringValue))
+                        .Select(v => v.stringValue).ToList();
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[SmartBundleGrouper] {path} is unreadable ({e.Message}); using set-keyed placement for this build.");
+                return new BundleLayout();
+            }
+            return layout;
+        }
+
+        /// Writes only when the content changed (keeps the file out of diffs
+        /// on a no-change rebuild). Keys sorted, so the file is deterministic.
+        internal static bool WriteBundleLayout(string path, BundleLayout layout)
+        {
+            var json = new Defective.JSON.JSONObject(Defective.JSON.JSONObject.Type.Object);
+            json.AddField("schemaVersion", BundleLayout.SchemaVersion);
+            foreach (string field in new[] { "roots", "assets" })
+            {
+                var node = new Defective.JSON.JSONObject(Defective.JSON.JSONObject.Type.Object);
+                var source = field == "assets" ? layout.assets : layout.roots;
+                foreach (var pair in source.OrderBy(p => p.Key, StringComparer.Ordinal))
+                    node.AddField(pair.Key, pair.Value);
+                json.AddField(field, node);
+            }
+            var groupsNode = new Defective.JSON.JSONObject(Defective.JSON.JSONObject.Type.Object);
+            foreach (var pair in layout.groups.OrderBy(p => p.Key, StringComparer.Ordinal))
+            {
+                var arr = new Defective.JSON.JSONObject(Defective.JSON.JSONObject.Type.Array);
+                foreach (string key in pair.Value.Distinct(StringComparer.Ordinal).OrderBy(k => k, StringComparer.Ordinal)) arr.Add(key);
+                groupsNode.AddField(pair.Key, arr);
+            }
+            json.AddField("groups", groupsNode);
+            string text = json.Print(pretty: true) + "\n";
+            try
+            {
+                if (File.Exists(path) && File.ReadAllText(path) == text) return false;
+                File.WriteAllText(path, text);
+                return true;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[SmartBundleGrouper] could not write {path}: {e.Message}");
+                return false;
+            }
+        }
 
         public struct Result
         {
@@ -183,40 +524,27 @@ namespace DreamPark
                 .Where(p => !string.IsNullOrEmpty(p))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            // The full root set is just the top-level roots — prefabs with
-            // LevelTemplate, PropTemplate, or PlayerRig. We previously also
-            // promoted "shared sub-prefabs" (non-template prefabs referenced
-            // by 2+ TLRs) to secondary roots so they got their own bundles.
-            // In practice that produced lots of thin "wrapper" bundles
-            // (e.g. SkeletonPBRDefault.prefab with one material inside) that
-            // bloat the bundle count without giving meaningful update
-            // granularity. Dropped that promotion — those wrapper prefabs
-            // now pack as deps with the first-alphabetical TLR that
-            // references them, consolidating the skeleton/coin/etc. content
-            // into a single themed hub bundle. If a shared sub-prefab ever
-            // genuinely deserves its own bundle (large independent unit),
-            // we can re-add a smarter promotion rule (e.g. "promote only if
-            // the prefab carries N+ unique non-prefab deps").
-            // Root ordering matters for shared-dep ownership. Earlier-iterated
-            // roots get first claim on a shared dep, and "claimed" sticks for
-            // the rest of the pass. So we sort by *root type priority* first,
-            // alphabetical as a tiebreak.
+            // The full root set is the top-level roots — prefabs with
+            // LevelTemplate, PropTemplate or PlayerRig, plus the Game Container.
+            // Non-template "shared sub-prefabs" are deliberately NOT roots
+            // (that produced lots of thin wrapper bundles); they are ordinary
+            // deps, owned by their one user or by their users' SharedSet.
             //
-            // Priority order: Prop (smallest, most reusable) → Level/Attraction
-            // → PlayerRig (largest, most universal). When a texture is used by
-            // both an attraction and a prop that lives inside it, the prop wins
-            // ownership. The attraction loads the prop's bundle (and the
-            // texture along with it) via the runtime dep chain.
-            //
-            // Why this matters: claiming-by-smaller-unit minimizes the blast
-            // radius of asset changes. Edit a wood texture → only the small
-            // prop bundle re-uploads. Edit an attraction-unique mesh → only
-            // the attraction bundle re-uploads. Add a new attraction that
-            // shares props with existing ones → no existing bundles reshuffle,
-            // because the props already own those shared deps.
+            // Root ORDER no longer decides ownership (Oct 9 2026: shared deps
+            // go to the bundle of their set of users, PlanDependencyOwnership).
+            // It still orders the passes below, so it stays deterministic:
+            // type priority (Prop → Level → PlayerRig/Game Container), then path.
+            // gameId is the upload id; every PATH below is the source folder's.
+            string sourceId = Editor.DreamParkPackageCompiler.SourceContentIdFor(gameId);
+            // The package's Game Manager is loaded by address before any
+            // attraction (DreamParkPackageRuntime.CreateOwner), so it is a root
+            // like Player: its deps are claimed instead of falling into Runtime.
+            // (The Phone Player slot prefab carries PlayerRig, so it already is.)
+            string gameContainerPath = Editor.DreamSequenceGenerator.ContainerPrefabPath(sourceId);
             var rootPaths = contentEntries
                 .Select(e => AssetDatabase.GUIDToAssetPath(e.guid))
-                .Where(IsUserFacingRoot)
+                .Where(p => IsUserFacingRoot(p)
+                    || string.Equals(p, gameContainerPath, StringComparison.OrdinalIgnoreCase))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(p => RootPriority(p))                              // smaller types claim first
                 .ThenBy(p => p, StringComparer.OrdinalIgnoreCase)           // alphabetical tiebreak
@@ -237,7 +565,18 @@ namespace DreamPark
             // short, deterministic hash of the asset path so it stays
             // stable across builds — important for the BuildCache to keep
             // unchanged bundles cached.
-            var rootGroupNames = BuildRootGroupNames(gameId, rootPaths);
+            // Last build's placement (sticky; see PlanDependencyOwnership).
+            string layoutPath = BundleLayoutPath(sourceId);
+            BundleLayout previousLayout = ReadBundleLayout(layoutPath);
+            string idPrefix = gameId + "-";
+            var previousRootNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var rootPath in rootPaths)
+            {
+                string guid = AssetDatabase.AssetPathToGUID(rootPath);
+                if (!string.IsNullOrEmpty(guid) && previousLayout.roots.TryGetValue(guid, out string stored))
+                    previousRootNames[rootPath] = idPrefix + stored;
+            }
+            var rootGroupNames = BuildRootGroupNames(gameId, rootPaths, previousRootNames);
 
             // 3. Build dep closures + reverse-ref counts using *exclusive*
             //    deps — we BFS each root's direct deps but don't traverse
@@ -270,7 +609,7 @@ namespace DreamPark
             // promoting SDK-shared assets (Assets/DreamPark/...), Unity
             // built-ins, or package assets into per-content bundles — those
             // stay as implicit deps Unity handles separately.
-            string contentFolderPrefix = $"Assets/Content/{gameId}/";
+            string contentFolderPrefix = $"Assets/Content/{sourceId}/";
 
             foreach (var rootPath in rootPaths)
             {
@@ -278,6 +617,9 @@ namespace DreamPark
                     .Where(d => !ShouldSkipAsDep(d))
                     .Where(d => d.StartsWith(contentFolderPrefix, StringComparison.OrdinalIgnoreCase))
                     .Where(d => !string.Equals(d, rootPath, StringComparison.OrdinalIgnoreCase))
+                    // Content Lua always goes to the Code group (step 7b); it
+                    // must not make two roots look like they share content.
+                    .Where(d => !d.EndsWith(LuaScriptSuffix, StringComparison.OrdinalIgnoreCase))
                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
                 depGraph[rootPath] = deps;
@@ -308,6 +650,20 @@ namespace DreamPark
             var runtimeGroup = GetOrCreateGroup(settings, $"{gameId}-{RuntimeSuffix}", out bool runtimeCreated);
             ConfigureBundleSchema(settings, runtimeGroup);
             if (runtimeCreated) result.groupsCreated++;
+
+            // The package recipe is the first runtime asset every planner needs.
+            // Keep it in a tiny, dedicated bundle whose serialized graph contains
+            // metadata and address strings only; putting it in Runtime would make a
+            // title switch wait for unrelated Lua-addressed audio/textures.
+            var bootstrapGroup = GetOrCreateGroup(settings, BootstrapGroupName(gameId), out bool bootstrapCreated);
+            ConfigureBundleSchema(settings, bootstrapGroup);
+            if (bootstrapCreated) result.groupsCreated++;
+            // gameId is the UPLOAD id: "{id}Beta" for a Beta build, whose manifest
+            // lives in the source folder "{id}" (Oct 9 2026 — with ManifestPath(gameId)
+            // no Beta build ever had a bootstrap bundle).
+            string packageManifestPath = Editor.DreamParkPackageCompiler.ManifestPathForUpload(gameId);
+            if (AssetDatabase.LoadAssetAtPath<DreamParkPackageManifest>(packageManifestPath) != null)
+                MoveEntryToGroup(settings, packageManifestPath, bootstrapGroup);
 
             // 5. Pre-create every root's Logic group AND a parallel "-Content"
             //    group. The Logic group holds the root prefab itself and any
@@ -352,80 +708,86 @@ namespace DreamPark
                 rootAssetsGroups[rootPath] = contentGroup;
             }
 
-            // 6. Determine ownership of every non-root dep and route it into
-            //    either the root's Logic bundle (prefabs with user
-            //    MonoBehaviours, or .asset ScriptableObjects — anything whose
-            //    bytes shift when scripts change shape) or the root's
-            //    -Content bundle (everything else: materials, meshes,
-            //    textures, audio, animations, plus pure-visual sub-prefabs).
-            //
-            //    Ownership rule: the first-iterated root whose exclusiveDeps
-            //    contain the dep wins. rootPaths is sorted by priority (props
-            //    before attractions before players), so a texture used by both
-            //    a prop and the attraction containing it ends up in the prop's
-            //    bundle. The attraction loads it via the runtime dep chain.
-            //    This is the "smaller unit claims it" rule from the design.
+            // 6. Determine ownership of every non-root dep (PlanDependencyOwnership):
+            //    - used by ONE root → that root's Logic bundle (prefabs with user
+            //      MonoBehaviours, or .asset ScriptableObjects — anything whose
+            //      bytes shift when scripts change shape) or its -Content
+            //      bundle (materials, meshes, textures, audio, animations,
+            //      pure-visual sub-prefabs);
+            //    - used by SEVERAL roots → the bundle of exactly that set of
+            //      roots ({gameId}-SharedSet-{hash of their GUIDs}), or the one
+            //      {gameId}-SharedSet-Small bucket for sets under
+            //      SmallSharedSetBytes.
+            //    Until Oct 9 2026 the first root in priority order claimed a
+            //    shared dep into its own -Content group, and every other user
+            //    then downloaded that root's whole (chunked) Content bundle —
+            //    one CrashCourse attraction needed most of the title.
+            var rootKeys = rootPaths.ToDictionary(p => p,
+                p => AssetDatabase.AssetPathToGUID(p) is string g && g.Length > 0 ? g : p,
+                StringComparer.OrdinalIgnoreCase);
+            // Last build's placement of every dep (and orphan), with the root
+            // keys that loaded each group (PlanDependencyOwnership's sticky rule).
+            var previousGroups = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var stored in previousLayout.assets)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(stored.Key);
+                if (string.IsNullOrEmpty(path) || rootSet.Contains(path)) continue;
+                if (!path.StartsWith(contentFolderPrefix, StringComparison.OrdinalIgnoreCase)) continue;
+                if (path.EndsWith(LuaScriptSuffix, StringComparison.OrdinalIgnoreCase) || ShouldSkipAsDep(path)) continue;
+                previousGroups[path] = idPrefix + stored.Value;
+            }
+            var previousGroupUsers = previousLayout.groups.ToDictionary(
+                pair => idPrefix + pair.Key,
+                pair => new HashSet<string>(pair.Value.Select(k => k.ToLowerInvariant()), StringComparer.Ordinal),
+                StringComparer.Ordinal);
+            var ownership = PlanDependencyOwnership(gameId, rootPaths, depGraph, rootGroupNames, rootKeys,
+                IsLogicAsset, InputBytes, SmallSharedSetBytes, previousGroups, previousGroupUsers,
+                GainCapBytes, path => File.Exists(path));
+
+            // Remember this placement for the next build (names without the
+            // upload id, so release and Beta builds share it).
+            var nextLayout = new BundleLayout();
             foreach (var rootPath in rootPaths)
             {
-                if (!depGraph.TryGetValue(rootPath, out var deps)) continue;
-                var rootGroup = rootGroups[rootPath];
-                var assetsGroup = rootAssetsGroups[rootPath];
-
-                foreach (var dep in deps)
-                {
-                    if (rootSet.Contains(dep)) continue;     // other roots own their own subtree
-                    // First-encountered root wins. MoveEntryToGroup is a no-op
-                    // when the entry is already in the target group, but we
-                    // also want to skip if it's already in *some* Bundle-*
-                    // group (assigned by an earlier-priority root's pass —
-                    // either its Logic or its Assets bundle).
-                    var existing = settings.FindAssetEntry(AssetDatabase.AssetPathToGUID(dep));
-                    if (existing != null && existing.parentGroup != null
-                        && existing.parentGroup.Name.StartsWith($"{gameId}-{GroupPrefix}-", StringComparison.Ordinal))
-                    {
-                        continue; // already claimed by an earlier root (logic or assets)
-                    }
-                    // Route via IsLogicAsset: script-bearing prefabs and .asset
-                    // ScriptableObjects → Logic bundle. Everything else →
-                    // -Content bundle. The small-Logic / heavy-Content split is
-                    // what makes script-only edits ship tiny patches.
-                    var target = IsLogicAsset(dep) ? rootGroup : assetsGroup;
-                    MoveEntryToGroup(settings, dep, target);
-                }
-
+                string guid = AssetDatabase.AssetPathToGUID(rootPath);
+                if (!string.IsNullOrEmpty(guid)) nextLayout.roots[guid] = rootGroupNames[rootPath].Substring(idPrefix.Length);
             }
-
-            // 6.5. Merge tiny Logic/Content pairs back into a single bundle.
-            //
-            // The Logic/Content split is only useful when the Content side is
-            // heavy enough that isolating it from script-edit churn meaningfully
-            // shrinks patches. For a small prop whose total content is under
-            // ~10 MB (e.g., a basic decorative prefab with one mesh + one
-            // material), splitting produces two near-empty bundles and bloats
-            // the bundle count for zero patch-size benefit. Merge them.
-            //
-            // The merge target is the Logic group (the un-suffixed name), so
-            // the consolidated bundle keeps the natural Bundle-{root} name.
-            // The Content group is emptied out and gets swept by the empty-
-            // group prune in step 9.
-            const long kTinyRootMergeBytes = 10L * 1024 * 1024;
+            foreach (var pair in ownership)
+            {
+                string guid = AssetDatabase.AssetPathToGUID(pair.Key);
+                if (!string.IsNullOrEmpty(guid) && pair.Value.StartsWith(idPrefix, StringComparison.Ordinal))
+                    nextLayout.assets[guid] = pair.Value.Substring(idPrefix.Length);
+            }
+            foreach (var pair in GroupUsersOf(ownership, rootPaths, depGraph, rootGroupNames, rootKeys))
+                if (pair.Key.StartsWith(idPrefix, StringComparison.Ordinal))
+                    nextLayout.groups[pair.Key.Substring(idPrefix.Length)] = pair.Value.ToList();
+            if (WriteBundleLayout(layoutPath, nextLayout))
+                Debug.Log($"[SmartBundleGrouper] {layoutPath}: {nextLayout.roots.Count} roots, {nextLayout.assets.Count} deps placed.");
+            var groupsByName = new Dictionary<string, AddressableAssetGroup>(StringComparer.Ordinal);
             foreach (var rootPath in rootPaths)
             {
-                var logicGroup = rootGroups[rootPath];
-                var contentGroup = rootAssetsGroups[rootPath];
-                long totalBytes = SumGroupEntryBytes(logicGroup) + SumGroupEntryBytes(contentGroup);
-                if (totalBytes > kTinyRootMergeBytes) continue;
-
-                // Move every Content entry into the Logic group. The content
-                // group will be empty after this loop; step 9's empty-group
-                // prune removes it.
-                foreach (var entry in contentGroup.entries.ToList())
-                {
-                    string p = AssetDatabase.GUIDToAssetPath(entry.guid);
-                    if (string.IsNullOrEmpty(p)) continue;
-                    MoveEntryToGroup(settings, p, logicGroup);
-                }
+                groupsByName[rootGroups[rootPath].Name] = rootGroups[rootPath];
+                groupsByName[rootAssetsGroups[rootPath].Name] = rootAssetsGroups[rootPath];
             }
+            var sharedSetGroups = new List<AddressableAssetGroup>();   // every planned group not pre-created above (SharedSet-*, -Logic, an orphaned root's groups)
+            foreach (var pair in ownership.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                if (!groupsByName.TryGetValue(pair.Value, out var target))
+                {
+                    target = GetOrCreateGroup(settings, pair.Value, out bool sharedCreated);
+                    ConfigureBundleSchema(settings, target);
+                    if (sharedCreated) result.groupsCreated++;
+                    groupsByName[pair.Value] = target;
+                    sharedSetGroups.Add(target);
+                }
+                MoveEntryToGroup(settings, pair.Key, target);
+            }
+
+            // 6.5. (Removed Oct 10 2026.) Tiny roots used to merge their Content
+            //      into the root's own bundle. A root prefab now stays ALONE in
+            //      its bundle and a tiny root keeps every exclusive dep in one
+            //      "-Content" bundle (PlanDependencyOwnership), so deleting or
+            //      renaming a root never rewrites the bundle its assets live in.
 
             // 7. Move all preview images into the dedicated preview bundle.
             //    Convention:
@@ -434,7 +796,7 @@ namespace DreamPark
             //    from the build (July 2026), so this keeps the PNGs corralled
             //    in one place rather than letting them scatter into gameplay
             //    bundles as folder-group stragglers.
-            string previewFolderPrefix = $"Assets/Content/{gameId}/Previews/";
+            string previewFolderPrefix = $"Assets/Content/{sourceId}/Previews/";
             foreach (string previewPath in allEntryPaths
                 .Where(path => path.StartsWith(previewFolderPrefix, StringComparison.OrdinalIgnoreCase)
                     && PreviewExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
@@ -458,7 +820,12 @@ namespace DreamPark
             //     so SDK-shipped Lua under ThirdParty/XLua/Resources/ (engine
             //     scripts, tutorial samples) doesn't get yanked into game
             //     content.
-            string contentRoot = $"Assets/Content/{gameId}";
+            //
+            //     gameId is the UPLOAD id; a Beta upload reads the source
+            //     folder (Oct 9 2026 — before this no Beta build had a Code
+            //     group, so every bundle using a script carried its own copy
+            //     of the .lua.txt and one Lua edit rewrote all of them).
+            string contentRoot = $"Assets/Content/{sourceId}";
             string[] luaGuids = AssetDatabase.IsValidFolder(contentRoot)
                 ? AssetDatabase.FindAssets("t:TextAsset", new[] { contentRoot })
                 : Array.Empty<string>();
@@ -491,12 +858,14 @@ namespace DreamPark
                 if (group.Name == $"{gameId}-{RuntimeSuffix}") continue;
                 if (group.Name == $"{gameId}-{PreviewsSuffix}") continue;
                 if (group.Name == $"{gameId}-{CodeSuffix}") continue;
+                if (group.Name == BootstrapGroupName(gameId)) continue;
                 if (group.Name == $"{gameId}-{SharedFoundationSuffix}") continue;
                 if (group.Name.StartsWith($"{gameId}-{GroupPrefix}-")) continue;
                 if (group.Name.StartsWith($"{gameId}-{RuntimeSuffix}-", StringComparison.Ordinal)) continue;
                 if (group.Name.StartsWith($"{gameId}-{PreviewsSuffix}-", StringComparison.Ordinal)) continue;
                 if (group.Name.StartsWith($"{gameId}-{CodeSuffix}-", StringComparison.Ordinal)) continue;
                 if (group.Name.StartsWith($"{gameId}-{SharedFoundationSuffix}-", StringComparison.Ordinal)) continue;
+                if (group.Name.StartsWith($"{gameId}-{SharedSetSuffix}-", StringComparison.Ordinal)) continue;
                 if (group.Name.EndsWith("-Logos")) continue;
 
                 foreach (var entry in group.entries.ToList())
@@ -574,9 +943,11 @@ namespace DreamPark
                 if (rootAssetsGroups.TryGetValue(rootPath, out var cg) && cg != null)
                     allManagedEntries.AddRange(cg.entries);
             }
+            foreach (var sharedGroup in sharedSetGroups) allManagedEntries.AddRange(sharedGroup.entries);
             if (runtimeGroup != null) allManagedEntries.AddRange(runtimeGroup.entries);
             if (previewGroup != null) allManagedEntries.AddRange(previewGroup.entries);
             if (codeGroup != null) allManagedEntries.AddRange(codeGroup.entries);
+            if (bootstrapGroup != null) allManagedEntries.AddRange(bootstrapGroup.entries);
             var foundationGroupForIndexing = settings.groups
                 .FirstOrDefault(g => g != null && g.Name == $"{gameId}-{SharedFoundationSuffix}");
             if (foundationGroupForIndexing != null)
@@ -600,6 +971,10 @@ namespace DreamPark
                 ChunkOversizedGroupIfNeeded(settings, rootGroups[rootPath], kChunkInputBytesLimit, GetOrAssignPackingIndex, ref result);
                 ChunkOversizedGroupIfNeeded(settings, rootAssetsGroups[rootPath], kChunkInputBytesLimit, GetOrAssignPackingIndex, ref result);
             }
+            foreach (var sharedGroup in sharedSetGroups.OrderBy(g => g.Name, StringComparer.Ordinal))
+                ChunkOversizedGroupIfNeeded(settings, sharedGroup,
+                    sharedGroup.Name == SharedSmallGroupName(gameId) ? SmallBucketChunkBytes : kChunkInputBytesLimit,
+                    GetOrAssignPackingIndex, ref result);
             ChunkOversizedGroupIfNeeded(settings, runtimeGroup, kChunkInputBytesLimit, GetOrAssignPackingIndex, ref result);
             ChunkOversizedGroupIfNeeded(settings, previewGroup, kChunkInputBytesLimit, GetOrAssignPackingIndex, ref result);
             ChunkOversizedGroupIfNeeded(settings, codeGroup, kChunkInputBytesLimit, GetOrAssignPackingIndex, ref result);
@@ -628,9 +1003,11 @@ namespace DreamPark
                 if (group.Name == $"{gameId}-{RuntimeSuffix}") continue;
                 if (group.Name == $"{gameId}-{PreviewsSuffix}") continue;
                 if (group.Name == $"{gameId}-{CodeSuffix}") continue;
+                if (group.Name == BootstrapGroupName(gameId)) continue;
                 if (group.Name == $"{gameId}-{SharedFoundationSuffix}") continue;
                 if (group.Name.StartsWith($"{gameId}-{GroupPrefix}-")) continue;
                 if (group.Name.StartsWith($"{gameId}-{SharedFoundationSuffix}-", StringComparison.Ordinal)) continue;
+                if (group.Name.StartsWith($"{gameId}-{SharedSetSuffix}-", StringComparison.Ordinal)) continue;
                 if (group.Name.EndsWith("-Logos")) continue;
                 if (group.entries.Count == 0)
                     toRemove.Add(group);
@@ -647,18 +1024,23 @@ namespace DreamPark
             string runtimePrefix = $"{gameId}-{RuntimeSuffix}-";
             string previewsPrefix = $"{gameId}-{PreviewsSuffix}-";
             string codePrefix = $"{gameId}-{CodeSuffix}-";
+            string bootstrapPrefix = $"{gameId}-{BootstrapSuffix}-";
             string foundationPrefix = $"{gameId}-{SharedFoundationSuffix}-";
+            string sharedSetPrefix = $"{gameId}-{SharedSetSuffix}-";
             var emptyManaged = settings.groups
                 .Where(g => g != null && g.Name.StartsWith(gameId + "-")
                             && (g.Name.StartsWith($"{gameId}-{GroupPrefix}-")          // Bundle-* (and Bundle-*-N chunks)
                                 || g.Name == $"{gameId}-{RuntimeSuffix}"
                                 || g.Name == $"{gameId}-{PreviewsSuffix}"
                                 || g.Name == $"{gameId}-{CodeSuffix}"
+                                || g.Name == BootstrapGroupName(gameId)
                                 || g.Name == $"{gameId}-{SharedFoundationSuffix}"
                                 || g.Name.StartsWith(runtimePrefix)                        // Runtime-2, Runtime-3, ...
                                 || g.Name.StartsWith(previewsPrefix)
                                 || g.Name.StartsWith(codePrefix)
-                                || g.Name.StartsWith(foundationPrefix))                    // Shared-Foundation-2, ...
+                                || g.Name.StartsWith(bootstrapPrefix)
+                                || g.Name.StartsWith(foundationPrefix)                     // Shared-Foundation-2, ...
+                                || g.Name.StartsWith(sharedSetPrefix))                     // SharedSet-{h}, -Small, and their -N chunks
                             && g.entries.Count == 0)
                 .ToList();
             foreach (var g in emptyManaged)
@@ -818,11 +1200,25 @@ namespace DreamPark
         // the names round-trip identically build over build. We disambiguate
         // *all* members of a colliding name (not just the second-onwards) so
         // group identity doesn't shift when adding/removing siblings.
-        private static Dictionary<string, string> BuildRootGroupNames(string gameId, List<string> rootPaths)
+        // Sticky (Oct 9 2026): a root keeps the group name it had last build
+        // (previousNames, from .dreampark-bundle-layout.json) even after the
+        // prefab is renamed, so its Content bundle does not re-ship; a new
+        // root whose natural name is already held gets the path-hash suffix.
+        internal static Dictionary<string, string> BuildRootGroupNames(string gameId, List<string> rootPaths,
+            IReadOnlyDictionary<string, string> previousNames = null)
         {
+            var sticky = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var held = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (previousNames != null)
+                foreach (var p in rootPaths.OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
+                    if (previousNames.TryGetValue(p, out string name)
+                        && name.StartsWith($"{gameId}-{GroupPrefix}-", StringComparison.Ordinal) && held.Add(name))
+                        sticky[p] = name;
+
             var nameToPaths = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             foreach (var p in rootPaths)
             {
+                if (sticky.ContainsKey(p)) continue;
                 string sanitized = Sanitize(Path.GetFileNameWithoutExtension(p));
                 if (!nameToPaths.TryGetValue(sanitized, out var list))
                 {
@@ -832,11 +1228,11 @@ namespace DreamPark
                 list.Add(p);
             }
 
-            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var result = new Dictionary<string, string>(sticky, StringComparer.OrdinalIgnoreCase);
             foreach (var kv in nameToPaths)
             {
                 string baseName = kv.Key;
-                if (kv.Value.Count == 1)
+                if (kv.Value.Count == 1 && !held.Contains($"{gameId}-{GroupPrefix}-{baseName}"))
                 {
                     result[kv.Value[0]] = $"{gameId}-{GroupPrefix}-{baseName}";
                 }
@@ -865,6 +1261,15 @@ namespace DreamPark
                 }
                 return hash.ToString("x8").Substring(0, 6);
             }
+        }
+
+        // Input-file bytes of one asset (0 when unreadable). The SharedSet-Small
+        // rule and the 40 MB chunking both measure source bytes, not built bytes.
+        private static long InputBytes(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return 0;
+            try { var info = new FileInfo(path); return info.Exists ? info.Length : 0; }
+            catch { return 0; }
         }
 
         // Sums the input-file bytes of every entry in a group. Used by the
@@ -1110,6 +1515,7 @@ namespace DreamPark
             if (prefab.GetComponent<PropTemplate>() != null)  return 0;
             if (prefab.GetComponent<LevelTemplate>() != null) return 1;
             if (prefab.GetComponent<PlayerRig>() != null)     return 2;
+            if (assetPath.EndsWith("/Prefabs/Game Container.prefab", StringComparison.OrdinalIgnoreCase)) return 2;
             return 99;
         }
 
@@ -1275,7 +1681,12 @@ namespace DreamPark
         private static void PromoteFoundationDepsToSharedGroup(
             AddressableAssetSettings settings, string gameId, ref Result result)
         {
-            string contentRoot = $"Assets/Content/{gameId}";
+            // gameId is the UPLOAD id ("{id}Beta" for a Beta build); the prefabs
+            // live in the source folder. Before Oct 9 2026 a Beta build had no
+            // Shared-Foundation group, so the SDK shaders were copied into every
+            // material-bearing bundle (CrashCourseBeta: DreamPark-UniversalShader
+            // in 99 bundles, 1.37 GB rewritten by one shader edit).
+            string contentRoot = $"Assets/Content/{Editor.DreamParkPackageCompiler.SourceContentIdFor(gameId)}";
             if (!AssetDatabase.IsValidFolder(contentRoot)) return;
 
             // 1. Discover what foundation paths are reachable from content.
@@ -1289,6 +1700,8 @@ namespace DreamPark
             {
                 string prefabPath = AssetDatabase.GUIDToAssetPath(guid);
                 if (string.IsNullOrEmpty(prefabPath)) continue;
+                if (prefabPath.EndsWith("/DreamSequence/Dream Sequence.prefab",
+                    StringComparison.OrdinalIgnoreCase)) continue;
                 foreach (var dep in AssetDatabase.GetDependencies(prefabPath, recursive: true))
                 {
                     if (IsFoundationCandidate(dep))
@@ -1329,12 +1742,44 @@ namespace DreamPark
             var existing = settings.groups.FirstOrDefault(g => g != null && g.Name == groupName);
             if (existing != null) { created = false; return existing; }
             created = true;
-            return settings.CreateGroup(groupName, false, false, true,
+            var group = settings.CreateGroup(groupName, false, false, true,
                 new List<AddressableAssetGroupSchema>
                 {
                     ScriptableObject.CreateInstance<BundledAssetGroupSchema>(),
                     ScriptableObject.CreateInstance<ContentUpdateGroupSchema>(),
                 });
+            UseStableGuid(group);
+            return group;
+        }
+
+        // Addressables derives every bundle's internal id from its group's GUID
+        // (BundleInternalIdMode.GroupGuidProjectIdHash), and each bundle embeds
+        // its own id and its dependencies' ids. CreateGroup assigns a random
+        // GUID, so a group that is deleted and recreated (every {id}Beta-* group:
+        // created for the beta build, emptied and swept afterwards) changed every
+        // bundle's bytes on every build and Patch re-uploaded everything. Derive
+        // the GUID from the group name instead: same name, same bundle ids.
+        // Only applied to groups we just created; existing groups keep theirs.
+        internal static void UseStableGuid(AddressableAssetGroup group)
+        {
+            if (group == null || string.IsNullOrEmpty(group.Name)) return;
+            string guid;
+            using (var md5 = System.Security.Cryptography.MD5.Create())
+            {
+                var bytes = md5.ComputeHash(System.Text.Encoding.UTF8.GetBytes("DreamParkGroup:" + group.Name));
+                guid = BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant();
+            }
+            if (group.Guid == guid) return;
+            var so = new SerializedObject(group);
+            var prop = so.FindProperty("m_GUID");
+            if (prop == null)
+            {
+                Debug.LogWarning($"[SmartBundleGrouper] Could not pin a stable GUID on '{group.Name}' (m_GUID not found); patches will re-upload its bundles.");
+                return;
+            }
+            prop.stringValue = guid;
+            so.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(group);
         }
 
         private static void ConfigureBundleSchema(

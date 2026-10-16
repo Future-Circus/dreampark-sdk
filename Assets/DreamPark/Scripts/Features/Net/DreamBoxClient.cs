@@ -179,15 +179,18 @@ public class DreamBoxClient : MonoBehaviour
     /// will ever enforce, and changing it is a breaking change for every park
     /// that budgeted against it.
     ///
-    /// The invariant is enforced at AUTHOR time, by
-    /// PreUploadChecks/Checks/NetBudgetInvariantCheck — it guards a source edit,
-    /// so it should fail a build rather than log on a headset in a park where
-    /// nobody is reading the console.
+    /// The invariant is enforced by the SDK release preflight in
+    /// DreamParkReleaseCommands. It guards an SDK source edit, so publishing the
+    /// SDK fails before the mismatch can reach a headset in a park where nobody is
+    /// reading the console. It is deliberately not a creator-content finding.
     /// </summary>
     public const int DesignBudget = 60;
 
     int _sendWindow;
     float _sendWindowAt;
+
+    /// <summary>Messages sent so far in the current one-second window (dp.budget().this_second).</summary>
+    public int SentThisSecond => _sendWindow;
     float _lastRateWarnAt = -99f;
 
     // Outbound queue. See Enqueue().
@@ -202,6 +205,21 @@ public class DreamBoxClient : MonoBehaviour
     //   expired — sat 5 s undelivered. The DRAIN never got a slot. Ours.
     int _queueEvicted;
     int _queueExpired;
+
+    // Test seam: the outbox clock (null = Time.unscaledTime). EditMode tests
+    // drive a never-connecting client through minutes of queue expiry with it.
+    Func<float> _timeOverride;
+    float OutboxNow => _timeOverride != null ? _timeOverride() : Time.unscaledTime;
+
+    // Expiry reporting. A client that never connects (no relay, no Wi-Fi)
+    // expires its outbox continuously, and one warning per expiry was 128-667
+    // lines a session (SOLO_OFFLINE.md, case B). Report the first at once, then
+    // one summary per window with the count since the last line; a change of
+    // cause (connected <-> not) is reported at once.
+    const float ExpiryLogWindowSeconds = 30f;
+    float _expiryLoggedAt = float.NegativeInfinity;
+    int _expiredSinceLog;
+    bool _expiryLoggedConnected;
     int _drainedThisWindow;
 
     /// <summary>Messages waiting for the link to come up. Surfaced as
@@ -794,13 +812,13 @@ public class DreamBoxClient : MonoBehaviour
                                  "dp.on_connected() to re-send deliberately.");
         }
 
-        _outbox.Add(new Queued { json = json, at = Time.unscaledTime });
+        _outbox.Add(new Queued { json = json, at = OutboxNow });
         global::DreamPark.NetLog.V($"[DreamBox] Queued '{eventType}' until the link is up ({_outbox.Count} waiting).");
     }
 
     void PruneOutbox()
     {
-        float now = Time.unscaledTime;
+        float now = OutboxNow;
         int expired = 0;
         for (int i = _outbox.Count - 1; i >= 0; i--)
             if (now - _outbox[i].at > QueuedTtlSeconds)
@@ -811,15 +829,24 @@ public class DreamBoxClient : MonoBehaviour
         if (expired == 0) return;
 
         _queueExpired += expired;
+        _expiredSinceLog += expired;
+        bool connected = _server != null;
+        bool first = float.IsNegativeInfinity(_expiryLoggedAt);
+        if (!first && now - _expiryLoggedAt < ExpiryLogWindowSeconds && connected == _expiryLoggedConnected) return;
         // This one is the SDK's fault, not content's, and it says so. A message
         // that ages out while CONNECTED means the drain never got a slot — live
         // traffic ate the whole budget — and the messages lost are the oldest,
         // which is to say the join handshake.
-        Debug.LogWarning($"[DreamBox] {expired} queued message(s) expired undelivered after " +
-                         $"{QueuedTtlSeconds:0}s ({_queueExpired} total). " +
-                         (_server != null
+        Debug.LogWarning($"[DreamBox] {_expiredSinceLog} queued message(s) expired undelivered after " +
+                         $"{QueuedTtlSeconds:0}s" + (first ? "" : $" in the last {now - _expiryLoggedAt:0}s") +
+                         $" ({_queueExpired} total). " +
+                         (connected
                             ? "The outbox is not draining — live traffic is consuming the send budget."
-                            : "Still disconnected; nothing could be sent."));
+                            : "Still disconnected; nothing could be sent.") +
+                         $" Further expiries are summarised every {ExpiryLogWindowSeconds:0}s.");
+        _expiryLoggedAt = now;
+        _expiredSinceLog = 0;
+        _expiryLoggedConnected = connected;
     }
 
     /// <summary>
@@ -955,6 +982,11 @@ public class DreamBoxClient : MonoBehaviour
         if (json.Contains("\"type\":\"score_update\""))
         {
             Debug.Log("[DreamBox] Score update received");
+        }
+        else if (json.StartsWith("{\"type\":\"__", StringComparison.Ordinal))
+        {
+            // SDK system traffic (DreamParkSession beats "__dps", SharedState
+            // "__ss") — consumed through OnGlobalEvent above; never logged.
         }
         else if (json.Contains("\"type\":\"pp\"") || json.Contains("\"type\":\"pp_bye\""))
         {

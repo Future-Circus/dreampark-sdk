@@ -1,5 +1,7 @@
 namespace DreamPark {
+    using System;
     using System.Collections.Generic;
+    using System.Globalization;
     using UnityEngine;
     using UnityEngine.XR.ARFoundation;
     using UnityEngine.Rendering;
@@ -60,11 +62,23 @@ namespace DreamPark {
         private MeshFilter meshFilter;
         private float lastUpdateTime = -Mathf.Infinity;
         public bool calibrated = false;
+
+        /// The mesh's vertex heights were WRITTEN by a measurement this
+        /// session — a conform that hit ground, a saved bake applied, or the
+        /// architectural floor (Oct 4 2026). An all-flat mesh is then a real
+        /// answer ("the floor here is flat"), saved as an explicit flat bake
+        /// instead of falling back to the stale floorData (see
+        /// CompileCalibrationData). False = the mesh is just the authored grid.
+        private bool _meshMeasured;
         [HideInInspector] public bool EditorOverride = false;
         [Header("Integration")]
         public LevelTemplate levelTemplate;
         [HideInInspector] public JSONObject floorData;
         [HideInInspector] public bool hasPendingCalibration { get; private set; }
+
+        private const string CalibrationMetadataKey = "_meta";
+        private const string TopologyHashKey = "topologyHash";
+        private const int CalibrationFormatVersion = 2;
 
         // Store original mesh data and hole definitions for re-cutting
         private Vector3[] originalVertices;
@@ -155,8 +169,7 @@ namespace DreamPark {
         {
             if (!hasPendingCalibration || floorData == null) return;
             Debug.Log($"[CalibrateLevel] Applying pending calibration for {gameObject.name}");
-            ApplyCalibrationData(floorData);
-            floorData = null;
+            if (TryApplyCalibrationData(floorData)) floorData = null;
             hasPendingCalibration = false;
         }
 
@@ -175,13 +188,26 @@ namespace DreamPark {
             Debug.Log($"[CalibrateLevel] Setup for calibration: {vertices.Length} vertices, {holes?.Count ?? 0} holes");
         }
 
+        // Oct 4 2026 (device: a hitch about every second while scanning once
+        // packed attractions stood during the scan). The continuous Scan-mode
+        // conform ran on EVERY AR mesh update and ground change as well as the
+        // poll — a per-vertex raycast pass + mesh rebuild per level, several
+        // times a second. Events now only mark the floor dirty; Update runs at
+        // most one conform per updateInterval while dirty, plus a slow poll for
+        // geometry that changed without an event. Jitter keeps several levels
+        // from conforming on the same frame.
+        private bool _conformDirty = true;
+        private const float ConformPollMultiplier = 3f;
+
         void Update()
         {
-            if (isCalibrating && Time.time - lastUpdateTime > updateInterval)
-            {
-                lastUpdateTime = Time.time;
-                ConformGridToSurface();
-            }
+            if (!isCalibrating) return;
+            float since = Time.time - lastUpdateTime;
+            if (since <= updateInterval) return;
+            if (!_conformDirty && since <= updateInterval * ConformPollMultiplier) return;
+            _conformDirty = false;
+            lastUpdateTime = Time.time + UnityEngine.Random.Range(0f, 0.25f) * updateInterval;
+            ConformGridToSurface();
         }
 
         /// <summary>
@@ -200,6 +226,87 @@ namespace DreamPark {
         {
             if (dynamicMesh == null) return false;
             return ConformGridToSurface(minCoverage);
+        }
+
+        /// <summary>
+        /// Carry a live floor's grade into a rebuilt package floor. A Sequence may
+        /// change cutouts or physical footprint while playing; replacing its mesh
+        /// with a flat one would make floor anchors and physics jump. Sample the
+        /// old calibrated surface in world X/Z so this works across grid sizes.
+        /// Fresh AR calibration may subsequently refine the transferred grade.
+        /// </summary>
+        public Vector3[] CaptureGradeWorldSamples()
+        {
+            if (!calibrated) return null;
+            Mesh sourceMesh = dynamicMesh != null ? dynamicMesh
+                : GetComponent<MeshFilter>()?.sharedMesh;
+            if (sourceMesh == null) return null;
+            Vector3[] vertices = sourceMesh.vertices;
+            Vector3[] samples = new Vector3[vertices.Length];
+            for (int i = 0; i < vertices.Length; i++)
+                samples[i] = transform.TransformPoint(vertices[i]);
+            return samples;
+        }
+
+        public bool TransferGradeFrom(CalibrateLevel previous)
+            => TransferGradeFrom(previous != null ? previous.CaptureGradeWorldSamples() : null);
+
+        public bool TransferGradeFrom(Vector3[] oldWorld)
+        {
+            meshFilter = meshFilter != null ? meshFilter : GetComponent<MeshFilter>();
+            meshCollider = meshCollider != null ? meshCollider : GetComponent<MeshCollider>();
+            dynamicMesh = dynamicMesh != null ? dynamicMesh : meshFilter?.sharedMesh;
+            if (oldWorld == null || oldWorld.Length == 0 || dynamicMesh == null || meshCollider == null) return false;
+            Vector3[] vertices = dynamicMesh.vertices;
+            if (vertices.Length == 0) return false;
+            for (int i = 0; i < vertices.Length; i++)
+            {
+                Vector3 point = transform.TransformPoint(vertices[i]);
+                float[] nearestDistances = {
+                    float.PositiveInfinity, float.PositiveInfinity,
+                    float.PositiveInfinity, float.PositiveInfinity
+                };
+                float[] nearestHeights = new float[4];
+                for (int j = 0; j < oldWorld.Length; j++)
+                {
+                    float dx = oldWorld[j].x - point.x;
+                    float dz = oldWorld[j].z - point.z;
+                    float distanceSquared = dx * dx + dz * dz;
+                    if (distanceSquared >= nearestDistances[3]) continue;
+                    int insert = 3;
+                    while (insert > 0 && distanceSquared < nearestDistances[insert - 1])
+                    {
+                        nearestDistances[insert] = nearestDistances[insert - 1];
+                        nearestHeights[insert] = nearestHeights[insert - 1];
+                        insert--;
+                    }
+                    nearestDistances[insert] = distanceSquared;
+                    nearestHeights[insert] = oldWorld[j].y;
+                }
+                float worldY = nearestHeights[0];
+                if (nearestDistances[0] >= 0.000001f)
+                {
+                    float sum = 0f, weightSum = 0f;
+                    for (int j = 0; j < nearestDistances.Length; j++)
+                    {
+                        if (float.IsInfinity(nearestDistances[j])) continue;
+                        float weight = 1f / nearestDistances[j];
+                        sum += nearestHeights[j] * weight;
+                        weightSum += weight;
+                    }
+                    if (weightSum > 0f) worldY = sum / weightSum;
+                }
+                vertices[i].y = transform.InverseTransformPoint(
+                    new Vector3(point.x, worldY, point.z)).y;
+            }
+            dynamicMesh.vertices = vertices;
+            dynamicMesh.RecalculateNormals();
+            dynamicMesh.RecalculateBounds();
+            meshCollider.sharedMesh = dynamicMesh;
+            calibrated = true;
+            RequestNavMeshRebake();
+            LevelTemplate.NotifyLevelTemplateChanged();
+            return true;
         }
 
         /// <summary>
@@ -334,6 +441,7 @@ namespace DreamPark {
                 // The floor just moved. The navmesh baked over its old shape
                 // is now wrong — see RequestNavMeshRebake.
                 RequestNavMeshRebake();
+                _meshMeasured = true;
             }
             else
             {
@@ -807,6 +915,17 @@ namespace DreamPark {
 
         private float Cross(Vector2 a, Vector2 b) => a.x * b.y - a.y * b.x;
         public JSONObject CompileCalibrationData() {
+            // Capture can race content startup during a location checkpoint. Keep
+            // the received payload instead of dereferencing an uninitialized mesh
+            // or replacing good phone data with an empty object.
+            if (dynamicMesh == null) {
+                if (floorData != null && floorData.count > 0)
+                    return new JSONObject(floorData.Print());
+                if (levelTemplate != null && levelTemplate.floorData != null && levelTemplate.floorData.count > 0)
+                    return new JSONObject(levelTemplate.floorData.Print());
+                return new JSONObject();
+            }
+
             JSONObject gridData = new JSONObject();
             for (int i = 0; i < dynamicMesh.vertices.Length; i++) {
                 float rounded = dynamicMesh.vertices[i].y.RoundFloat();
@@ -815,25 +934,119 @@ namespace DreamPark {
                 if (Mathf.Abs(rounded) < 0.001f) {
                     continue;
                 }
-                gridData.AddField(i.ToString(), rounded.ToString("F3"));
+                gridData.AddField(i.ToString(CultureInfo.InvariantCulture),
+                    rounded.ToString("F3", CultureInfo.InvariantCulture));
             }
             // Safety net: if mesh vertices are all flat (calibration wasn't applied to mesh),
             // preserve the original loaded floor data rather than saving empty/zero data
             // that would overwrite good calibration on the backend.
-            if (gridData.count == 0 && levelTemplate != null && levelTemplate.floorData != null && levelTemplate.floorData.count > 0) {
+            // ...UNLESS the flat mesh IS the measurement (Oct 4 2026): a conform
+            // or the architectural floor wrote it, so a stale lumpy bake (an
+            // indoor room once conformed onto the sofa) must not come back.
+            // An explicit flat bake = the _meta block alone (no vertex rows);
+            // it applies as "every vertex at 0".
+            bool measuredFlat = gridData.count == 0 && _meshMeasured;
+            if (measuredFlat && levelTemplate != null && levelTemplate.floorData != null && levelTemplate.floorData.count > 0)
+                Debug.Log("[CalibrateLevel] Measured floor is flat — saving an explicit flat bake over the stored floorData for " + gameObject.name);
+            if (!measuredFlat && gridData.count == 0 && levelTemplate != null && levelTemplate.floorData != null && levelTemplate.floorData.count > 0) {
                 Debug.LogWarning("[CalibrateLevel] Mesh has no calibration applied — preserving stored floorData for " + gameObject.name);
                 return levelTemplate.floorData;
+            }
+            if (gridData.count > 0 || measuredFlat) {
+                var metadata = new JSONObject();
+                metadata.AddField("version", CalibrationFormatVersion);
+                metadata.AddField("gridX", gridX);
+                metadata.AddField("gridY", gridY);
+                metadata.AddField("widthM", levelTemplate != null ? levelTemplate.gridWidth : 0f);
+                metadata.AddField("heightM", levelTemplate != null ? levelTemplate.gridHeight : 0f);
+                metadata.AddField("vertexCount", dynamicMesh.vertexCount);
+                metadata.AddField(TopologyHashKey, ComputeTopologyHash(dynamicMesh));
+                gridData.AddField(CalibrationMetadataKey, metadata);
             }
             return gridData;
         }
 
         public void ApplyCalibrationData(JSONObject gridData) {
+            TryApplyCalibrationData(gridData);
+        }
+
+        /// <summary>
+        /// INDOORS THE FLOOR IS FLAT, WHATEVER WAS SAVED (Oct 4 2026). A bake
+        /// replayed on load was measured when it was made: an indoor room the
+        /// project then called "terrain" baked the sofa and table tops into
+        /// it, and no load re-runs the conform. So every vertex the project
+        /// now calls an ARCHITECTURAL floor (GroundProbe.ArchitecturalFloorAt —
+        /// the same answer a fresh conform gets first) takes that floor; the
+        /// rest keep the bake. Asked at the vertex's AUTHORED position (the
+        /// level's own seat height picks the storey / rect level). No policy
+        /// installed (SDK, simulator) or outdoors: nothing changes.
+        /// Returns how many vertices were overridden.
+        /// </summary>
+        private int OverrideWithArchitecturalFloor(Vector3[] flat, Vector3[] verts)
+        {
+            if (GroundProbe.ArchitecturalFloorAt == null || flat == null || verts == null) return 0;
+            int n = 0;
+            for (int i = 0; i < verts.Length && i < flat.Length; i++) {
+                Vector3 world = transform.TransformPoint(flat[i]);
+                if (!GroundProbe.TryArchitecturalFloorY(world, out float floorY)) continue;
+                verts[i].y = transform.InverseTransformPoint(new Vector3(world.x, floorY, world.z)).y;
+                n++;
+            }
+            return n;
+        }
+
+        /// <summary>
+        /// Re-apply the architectural floor to an already-applied floor (the
+        /// SpaceMap that classifies the room can arrive after the content).
+        /// Returns true when the mesh changed. Never touches a floor in an
+        /// unanchored or pending state.
+        /// </summary>
+        public bool ReapplyArchitecturalFloor()
+        {
+            if (dynamicMesh == null || !calibrated || hasPendingCalibration) return false;
             Vector3[] verts = dynamicMesh.vertices;
+            Vector3[] flat = originalVertices != null && originalVertices.Length == verts.Length
+                ? originalVertices : null;
+            if (flat == null) return false;
+            var before = (Vector3[])verts.Clone();
+            if (OverrideWithArchitecturalFloor(flat, verts) == 0) return false;
+            bool moved = false;
+            for (int i = 0; i < verts.Length && !moved; i++) moved = Mathf.Abs(verts[i].y - before[i].y) > 0.01f;
+            if (!moved) return false;
+            if (holeDefinitions != null && holeDefinitions.Count > 0) RecutHolesAndUpdateMesh(verts);
+            else {
+                dynamicMesh.vertices = verts;
+                dynamicMesh.RecalculateNormals();
+                dynamicMesh.RecalculateBounds();
+                meshCollider.sharedMesh = dynamicMesh;
+            }
+            _meshMeasured = true;
+            RequestNavMeshRebake();
+            LevelTemplate.NotifyLevelTemplateChanged();
+            Debug.Log("[CalibrateLevel] Architectural floor re-applied to " + gameObject.name);
+            return true;
+        }
+
+        private bool TryApplyCalibrationData(JSONObject gridData) {
+            if (dynamicMesh == null || gridData == null) return false;
+            if (!CalibrationTopologyMatches(gridData)) return false;
+
+            Vector3[] verts = dynamicMesh.vertices;
+            // The authored (flat) grid, before the bake moves it: where each
+            // vertex asks for the architectural floor.
+            Vector3[] flat = originalVertices != null && originalVertices.Length == verts.Length
+                ? originalVertices : (Vector3[])verts.Clone();
             for (int i = 0; i < verts.Length; i++) {
                 if (gridData.HasField(i.ToString())) {
-                    verts[i].y = float.Parse(gridData.GetField(i.ToString()).stringValue);
+                    string value = gridData.GetField(i.ToString()).stringValue;
+                    if (float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out float height))
+                        verts[i].y = height;
                 }
             }
+            int indoor = OverrideWithArchitecturalFloor(flat, verts);
+            if (indoor > 0)
+                Debug.Log($"[CalibrateLevel] {indoor}/{verts.Length} vertices of {gameObject.name} on an architectural (indoor) floor — saved bake overridden there");
+            _meshMeasured = true;
             dynamicMesh.vertices = verts;
             dynamicMesh.RecalculateNormals();
             // Same reason as the conform path — see there. A replayed floor
@@ -846,6 +1059,144 @@ namespace DreamPark {
             Debug.Log("[CalibrateLevel] Applied calibration data for " + gameObject.name);
             calibrated = true;
             LevelTemplate.NotifyLevelTemplateChanged();
+            return true;
+        }
+
+        /// <summary>True when the payload carries capture metadata (any version).
+        /// Payloads without it are legacy and are applied by vertex index
+        /// with no topology check.</summary>
+        internal static bool HasCalibrationMetadata(JSONObject gridData)
+            => gridData != null && gridData.HasField(CalibrationMetadataKey);
+
+        /// <summary>
+        /// The grid a saved bake was captured on, read from its current-version
+        /// metadata. LevelTemplate rebuilds a restored floor at exactly this grid
+        /// (adaptive conform density can make it differ from gridDensity), so
+        /// CalibrationTopologyMatches below accepts the payload on reload.
+        /// </summary>
+        internal static bool TryReadSavedGrid(JSONObject gridData, out int savedGridX, out int savedGridY,
+            out float savedWidth, out float savedHeight)
+        {
+            savedGridX = savedGridY = 0;
+            savedWidth = savedHeight = 0f;
+            if (!HasCalibrationMetadata(gridData)) return false;
+            JSONObject metadata = gridData.GetField(CalibrationMetadataKey);
+            if ((metadata?.GetField("version")?.intValue ?? 0) != CalibrationFormatVersion) return false;
+            savedGridX = metadata.GetField("gridX")?.intValue ?? 0;
+            savedGridY = metadata.GetField("gridY")?.intValue ?? 0;
+            savedWidth = metadata.GetField("widthM")?.floatValue ?? -1f;
+            savedHeight = metadata.GetField("heightM")?.floatValue ?? -1f;
+            return savedWidth > 0f && savedHeight > 0f
+                && SavedGridIsBounded(metadata, savedGridX, savedGridY);
+        }
+
+        /// Largest saved grid (cells) a reload will build. A runtime conform
+        /// grid is budgeted to ~4096 vertices; this leaves room for authored
+        /// densities while refusing a corrupt or hostile _meta that would
+        /// allocate a giant mesh.
+        internal const int MaxSavedGridCells = 16384;
+
+        /// True for a current-version payload whose _meta grid must not be
+        /// built: non-positive, over <see cref="MaxSavedGridCells"/>, or
+        /// disagreeing with its own vertexCount. LevelTemplate falls back to
+        /// the authored grid, as for a legacy bake.
+        internal static bool HasUnusableSavedGrid(JSONObject gridData)
+        {
+            if (!HasCalibrationMetadata(gridData)) return false;
+            JSONObject metadata = gridData.GetField(CalibrationMetadataKey);
+            if ((metadata?.GetField("version")?.intValue ?? 0) != CalibrationFormatVersion) return false;
+            int savedGridX = metadata.GetField("gridX")?.intValue ?? 0;
+            int savedGridY = metadata.GetField("gridY")?.intValue ?? 0;
+            return !SavedGridIsBounded(metadata, savedGridX, savedGridY);
+        }
+
+        /// GenerateFloorWithHoles never compacts vertices — cutouts only drop
+        /// triangles — so a real bake always has (gridX+1)*(gridY+1) of them,
+        /// with or without cutouts.
+        private static bool SavedGridIsBounded(JSONObject metadata, int savedGridX, int savedGridY)
+        {
+            if (savedGridX <= 0 || savedGridY <= 0) return false;
+            if ((long)savedGridX * savedGridY > MaxSavedGridCells) return false;
+            int savedVertexCount = metadata?.GetField("vertexCount")?.intValue ?? -1;
+            return savedVertexCount == (savedGridX + 1) * (savedGridY + 1);
+        }
+
+        /// <summary>
+        /// Vertex heights are keyed by mesh index. A different packed footprint
+        /// can change both the grid shape and the physical X/Z represented by the
+        /// same index, so applying a mismatched payload would bend the wrong floor.
+        /// Legacy payloads predate metadata and retain their historical behavior.
+        /// </summary>
+        private bool CalibrationTopologyMatches(JSONObject gridData)
+        {
+            if (!gridData.HasField(CalibrationMetadataKey)) return true;
+            JSONObject metadata = gridData.GetField(CalibrationMetadataKey);
+            int version = metadata?.GetField("version")?.intValue ?? 0;
+            int savedGridX = metadata?.GetField("gridX")?.intValue ?? -1;
+            int savedGridY = metadata?.GetField("gridY")?.intValue ?? -1;
+            int savedVertexCount = metadata?.GetField("vertexCount")?.intValue ?? -1;
+            float savedWidth = metadata?.GetField("widthM")?.floatValue ?? -1f;
+            float savedHeight = metadata?.GetField("heightM")?.floatValue ?? -1f;
+            string savedTopologyHash = metadata?.GetField(TopologyHashKey)?.stringValue;
+            float currentWidth = levelTemplate != null ? levelTemplate.gridWidth : -1f;
+            float currentHeight = levelTemplate != null ? levelTemplate.gridHeight : -1f;
+            string currentTopologyHash = ComputeTopologyHash(dynamicMesh);
+            // Early v2 payloads did not carry the hash. Keep their dimension
+            // check compatible, while every newly captured floor also proves
+            // that packed cutouts produced identical X/Z vertices and triangles.
+            bool topologyMatches = string.IsNullOrEmpty(savedTopologyHash)
+                || string.Equals(savedTopologyHash, currentTopologyHash, StringComparison.OrdinalIgnoreCase);
+            bool matches = version == CalibrationFormatVersion
+                && savedGridX == gridX && savedGridY == gridY
+                && savedVertexCount == dynamicMesh.vertexCount
+                && Mathf.Abs(savedWidth - currentWidth) <= 0.001f
+                && Mathf.Abs(savedHeight - currentHeight) <= 0.001f
+                && topologyMatches;
+            if (!matches)
+            {
+                Debug.LogError($"[CalibrateLevel] Refusing incompatible floor calibration on {gameObject.name}: " +
+                    $"saved v{version} {savedWidth:F3}x{savedHeight:F3}m grid {savedGridX}x{savedGridY} " +
+                    $"({savedVertexCount} verts), runtime {currentWidth:F3}x{currentHeight:F3}m " +
+                    $"grid {gridX}x{gridY} ({dynamicMesh.vertexCount} verts). " +
+                    "The persisted packing variant and floor bake do not describe the same layout.");
+            }
+            return matches;
+        }
+
+        /// <summary>
+        /// Stable FNV-1a signature of the horizontal floor topology. Y is
+        /// deliberately excluded because Y is the calibrated payload itself.
+        /// Millimetre quantization avoids harmless platform float noise while
+        /// still catching a different packed footprint or moved floor cutout.
+        /// </summary>
+        private static string ComputeTopologyHash(Mesh mesh)
+        {
+            if (mesh == null) return string.Empty;
+            unchecked
+            {
+                ulong hash = 14695981039346656037UL;
+                void AddInt(int value)
+                {
+                    uint bits = (uint)value;
+                    for (int byteIndex = 0; byteIndex < 4; byteIndex++)
+                    {
+                        hash ^= (byte)(bits >> (byteIndex * 8));
+                        hash *= 1099511628211UL;
+                    }
+                }
+
+                Vector3[] vertices = mesh.vertices;
+                AddInt(vertices.Length);
+                for (int i = 0; i < vertices.Length; i++)
+                {
+                    AddInt(Mathf.RoundToInt(vertices[i].x * 1000f));
+                    AddInt(Mathf.RoundToInt(vertices[i].z * 1000f));
+                }
+                int[] triangles = mesh.triangles;
+                AddInt(triangles.Length);
+                for (int i = 0; i < triangles.Length; i++) AddInt(triangles[i]);
+                return hash.ToString("X16", CultureInfo.InvariantCulture);
+            }
         }
         public bool hasFloorData {
             get {
@@ -865,6 +1216,7 @@ namespace DreamPark {
             floorData = null;
             hasPendingCalibration = false;
             calibrated = false;
+            _meshMeasured = false;
 
             // Rebuild the floor from scratch so holes are re-cut on a flat grid
             if (levelTemplate != null) {
@@ -924,7 +1276,7 @@ namespace DreamPark {
             // re-conforming there would silently move every placed floor.
             // Floors change only at sanctioned moments.
             if (!isCalibrating) return;
-            ConformGridToSurface();
+            _conformDirty = true;
         }
 
         private void OnMeshesChanged(ARMeshesChangedEventArgs args)
@@ -936,7 +1288,7 @@ namespace DreamPark {
             // at sanctioned moments: Scan mode, spawn commit, move commit.
             if (!isCalibrating) return;
             if (args.added.Count > 0 || args.updated.Count > 0)
-                ConformGridToSurface();
+                _conformDirty = true;
         }
 
         public bool isCalibrating {

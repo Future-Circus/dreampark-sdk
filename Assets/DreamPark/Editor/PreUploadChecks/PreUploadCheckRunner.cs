@@ -27,6 +27,8 @@ namespace DreamPark.PreUploadChecks
             {
                 return new IPreUploadCheck[]
                 {
+                    new Checks.PackageReferencesCheck(),
+                    new Checks.DreamSequenceRequiredCheck(),
                     new Checks.DuplicateNamesCheck(),
                     new Checks.SunLightCheck(),
                     new Checks.MetaOcclusionCheck(),
@@ -47,7 +49,6 @@ namespace DreamPark.PreUploadChecks
                     new Checks.RootComponentsCheck(),
                     new Checks.SceneOverridesCheck(),
                     new Checks.OutsideContentFolderCheck(),
-                    new Checks.NetBudgetInvariantCheck(),
 
                     // Warning, so it sorts after the blocking checks above. It
                     // catches a PropTemplate/GameArea whose resourceName has
@@ -62,6 +63,29 @@ namespace DreamPark.PreUploadChecks
                     // wired up, or wired to Lua that isn't attached to any
                     // Attraction/Prop/Player root.
                     new Checks.BadgeAwardCheck(),
+
+                    // Warning. A badge's earnAt names an attraction prefab
+                    // this package doesn't have (typo, rename, a Prop) — that
+                    // name would be dropped from the uploaded awardedBy.
+                    new Checks.BadgeEarnAtCheck(),
+
+                    // Warning. The Items twin: an item card nothing awards, a
+                    // unique (metadata) item whose catalog entry doesn't stack
+                    // (the server would drop its per-instance data), or an
+                    // untitled item (Info).
+                    new Checks.ItemAwardCheck(),
+
+                    // Warning. Hand-held props that sit wrong in the hand on the
+                    // headset (HANDHELD.md): grips off the device wrist frame,
+                    // active-hand props that never re-mount, negative scales,
+                    // remote copies that differ from local ones.
+                    new Checks.HandheldConventionCheck(),
+
+                    // Warning. The title's own id written as a Lua string literal
+                    // ("<id>", "<id>/…"): a Beta upload stamps every other id to
+                    // "<id>Beta", so the literal points at the release title on a
+                    // Beta headset (LaserTag roster, CrashCourse races, Oct 2026).
+                    new Checks.LiteralTitleIdCheck(),
                 };
             }
         }
@@ -141,7 +165,8 @@ namespace DreamPark.PreUploadChecks
             if (report == null) return map;
 
             foreach (var group in report.ActiveFindings
-                         .Where(f => f.checkId == Checks.BadgeAwardCheck.CheckId
+                         .Where(f => (f.checkId == Checks.BadgeAwardCheck.CheckId
+                                      || f.checkId == Checks.BadgeEarnAtCheck.CheckId)
                                   && !string.IsNullOrEmpty(f.subKey)
                                   && f.severity >= CheckSeverity.Warning)
                          .GroupBy(f => BadgeIdFromSubKey(f.subKey), StringComparer.Ordinal))
@@ -164,7 +189,11 @@ namespace DreamPark.PreUploadChecks
         private static string BadgeIdFromSubKey(string subKey)
         {
             int i = subKey.IndexOf(':');
-            return i < 0 ? "" : subKey.Substring(i + 1);
+            if (i < 0) return "";
+            string id = subKey.Substring(i + 1);
+            // BadgeEarnAtCheck appends "|<earnAt name>"; badge ids never hold '|'.
+            int bar = id.IndexOf('|');
+            return bar < 0 ? id : id.Substring(0, bar);
         }
 
         private static string Truncate(string s, int max)
@@ -196,6 +225,21 @@ namespace DreamPark.PreUploadChecks
             bool publishToCache)
         {
             var report = new PreUploadReport { contentId = contentId };
+
+            // The blocking/manual scan must judge Dream Sequences against the
+            // latest authored prefab state, not a packing bake from an earlier
+            // save. Advisory scans stay read-only and cheap.
+            if (!advisoryOnly)
+            {
+                try
+                {
+                    global::AttractionPackingBaker.BakeAllInContent(contentId);
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning($"[DreamPark] Could not refresh attraction packing before checks: {e.Message}");
+                }
+            }
 
             List<ContentRootInfo> roots;
             try
@@ -321,17 +365,24 @@ namespace DreamPark.PreUploadChecks
             return e.checkId + "|" + (e.assetGuid ?? "") + "|" + (e.subKey ?? "");
         }
 
-        // The full suite.
-        //
-        // scenesAreSaved must ONLY be true when the caller has genuinely just flushed
-        // open scenes to disk — the upload gate does, the "Review…" button and the
-        // popup's Re-run button do not. The scene-override check uses it to decide
-        // whether it is safe to open and restore scenes at all, and getting it wrong
-        // there costs somebody their unsaved work.
+        // The full suite, including the scene-opening check, is for explicit Review.
+        // Set scenesAreSaved to true only if the caller just saved open scenes.
         public static PreUploadReport RunAll(string contentId, Action<float, string> onProgress,
                                              bool scenesAreSaved = false)
         {
             return Run(contentId, AllChecks, onProgress, scenesAreSaved, advisoryOnly: false);
+        }
+
+        // Scenes are editor-only authoring aids and never enter the uploaded bundles.
+        // Opening every scene at the upload gate can emit Unity errors for old missing
+        // prefab instances and can disturb the creator's scene setup. Keep that check
+        // available in explicit Review, but do not run it when starting an upload.
+        public static PreUploadReport RunForUpload(string contentId, Action<float, string> onProgress,
+                                                   bool scenesAreSaved = false)
+        {
+            return Run(contentId,
+                AllChecks.Where(check => check.Id != Checks.SceneOverridesCheck.CheckId),
+                onProgress, scenesAreSaved, advisoryOnly: false);
         }
 
         // Convenience: the cheap checks only, when the panel is opened.
@@ -356,7 +407,7 @@ namespace DreamPark.PreUploadChecks
 
             // publishToCache: false — otherwise the single-check report would briefly
             // replace the cached full report and the badge map would be rebuilt from
-            // it, blanking every badge that belongs to the other four checks.
+            // it, blanking every badge that belongs to the other checks.
             var fresh = Run(report.contentId, new[] { check }, null, scenesAreSaved,
                             advisoryOnly: false, publishToCache: false);
 

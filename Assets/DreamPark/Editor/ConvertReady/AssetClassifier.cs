@@ -553,7 +553,22 @@ namespace DreamPark.ConvertReady
         public static bool ExtractEmbeddedMaterials(string modelPath, string destFolder,
                                                     ConversionResult r, out int extracted)
         {
+            List<string> ignoredPaths;
+            return ExtractEmbeddedMaterials(modelPath, destFolder, r, out extracted, out ignoredPaths);
+        }
+
+        /// <summary>
+        /// Same extraction operation as the four-argument overload, additionally
+        /// returning the material asset paths created by this invocation. Callers
+        /// that need to perform a follow-up repair should use these paths rather than
+        /// guessing from material names (which are sanitized and uniquified here).
+        /// </summary>
+        public static bool ExtractEmbeddedMaterials(string modelPath, string destFolder,
+                                                    ConversionResult r, out int extracted,
+                                                    out List<string> extractedMaterialPaths)
+        {
             extracted = 0;
+            extractedMaterialPaths = new List<string>();
             if (r == null) r = new ConversionResult();
 
             if (!IsModelPath(modelPath))
@@ -583,8 +598,6 @@ namespace DreamPark.ConvertReady
             }
 
             var failures = new List<string>();
-            var extractedPaths = new List<string>();
-
             // Names we have already handed to ExtractAsset in THIS batch.
             // GenerateUniqueAssetPath cannot see them: inside
             // StartAssetEditing/StopAssetEditing the database does not register
@@ -626,7 +639,7 @@ namespace DreamPark.ConvertReady
                     if (string.IsNullOrEmpty(err))
                     {
                         extracted++;
-                        extractedPaths.Add(newPath);
+                        extractedMaterialPaths.Add(newPath);
                     }
                     else failures.Add(mat.name + ": " + err);
                 }
@@ -641,9 +654,9 @@ namespace DreamPark.ConvertReady
             // the next reimport re-embeds everything.
             AssetDatabase.WriteImportSettingsIfDirty(modelPath);
             CommitFolder(destFolder);
-            for (int i = 0; i < extractedPaths.Count; i++)
+            for (int i = 0; i < extractedMaterialPaths.Count; i++)
             {
-                AssetDatabase.ImportAsset(extractedPaths[i], ImportAssetOptions.ForceSynchronousImport);
+                AssetDatabase.ImportAsset(extractedMaterialPaths[i], ImportAssetOptions.ForceSynchronousImport);
             }
             AssetDatabase.ImportAsset(modelPath,
                 ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);

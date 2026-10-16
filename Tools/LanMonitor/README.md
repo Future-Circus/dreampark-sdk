@@ -141,7 +141,7 @@ nothing does:
 - Many corporate and guest networks isolate clients from each other, and phone
   hotspots drop UDP broadcast unpredictably. Use **Attach by hand** with the
   host, port and key from the hosting headset's log.
-- SDK builds beacon on channel `sdk` and core builds on `prod`, but the monitor
+- SDK builds beacon on channel `sdk` and the DreamPark app on `prod`, but the monitor
   does not filter by channel unless you pass `--channel` — every session shows
   in the sidebar regardless, with its channel labelled.
 
@@ -163,8 +163,7 @@ Another monitor instance is probably holding :7781. `--check` will say so.
 
 ## Why a separate tool
 
-`Tools/DreamBoxServer` is the reference relay and is kept byte-identical to
-`dream-pub` on the Pi, minus its web panel. Adding a client/observe mode there
+`Tools/DreamBoxServer` is the reference relay and matches the DreamBox kiosk relay, minus its web panel. Adding a client/observe mode there
 would drift that source and, worse, would put hosting code in the same process
 as the observer.
 
@@ -199,5 +198,4 @@ Tools/LanMonitor/
 ```
 
 Related: `Tools/DreamBoxServer` (the relay you host with),
-dreampark-core `Docs/LAN-PeerHost-Spec.md` (the protocol),
-dreampark-sdk `CLAUDE.md` § Multiplayer (authoring and NetId rules).
+`CLAUDE.md` § Multiplayer (authoring and NetId rules).

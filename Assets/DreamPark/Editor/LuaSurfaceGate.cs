@@ -135,7 +135,8 @@ public static class LuaSurfaceGate
                         "XLua codegen is out of date — " +
                         (codegen.genFolderMissing
                             ? "Gen/ does not exist."
-                            : codegen.missing.Count + " configured type(s) have no generated wrapper.") +
+                            : codegen.missing.Count + " configured type(s) have no generated wrapper, " +
+                              codegen.staleMembers.Count + " member(s) are missing from existing wrappers.") +
                         " Run DreamPark ▸ Troubleshooting ▸ Generate XLua Code. See the Console.");
                 }
             }

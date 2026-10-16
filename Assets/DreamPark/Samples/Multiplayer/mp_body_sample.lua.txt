@@ -1,0 +1,20 @@
+-- ============================================================
+-- mp_body_sample.lua.txt — a physics prop every player can push (MULTIPLAYER.md §3).
+-- Setup: a GameObject with a Rigidbody and a collider, plus a LuaBehaviour with this
+-- script. No NetId to add: dp.net_body attaches what it needs at runtime.
+-- Whoever touches it owns it while it moves; loose motion belongs to the leader;
+-- everyone else glides along. Speed, spin and push-out are capped.
+-- ============================================================
+
+local body
+
+function start()
+    body = dp.net_body(self.gameObject, { max_speed = 2.6, max_spin = 9, max_push = 1.2 })
+    body.on_owner_changed(function(old, new)
+        print('[mp_body] owner ' .. tostring(old) .. ' -> ' .. tostring(new))
+    end)
+end
+
+-- Test hooks (simulated-peer scenario params).
+function claim() return body ~= nil and body.claim() end
+function owner() return body ~= nil and body.owner() or nil end

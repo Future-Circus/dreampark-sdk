@@ -136,7 +136,28 @@ namespace DreamPark.EditorTools.AudioOptimization
                     : 1.0f,
 
                 kind = AudioUsageKind.Orphan, // upgraded by Classify
+                currentOverrides = ReadOverrides(importer),
             };
+        }
+
+        internal static readonly string[] OverridePlatforms = { "Android", "iOS", "Standalone" };
+
+        private static List<AudioPlatformOverride> ReadOverrides(AudioImporter importer)
+        {
+            var list = new List<AudioPlatformOverride>();
+            foreach (string platform in OverridePlatforms)
+            {
+                if (!importer.ContainsSampleSettingsOverride(platform)) continue;
+                var s = importer.GetOverrideSampleSettings(platform);
+                list.Add(new AudioPlatformOverride
+                {
+                    platform = platform,
+                    compression = MapFromUnity(s.compressionFormat),
+                    vorbisQuality = s.compressionFormat == AudioCompressionFormat.Vorbis ? s.quality : 1.0f,
+                    sampleRateOverride = s.sampleRateSetting == AudioSampleRateSetting.OverrideSampleRate ? (int)s.sampleRateOverride : 0,
+                });
+            }
+            return list;
         }
 
         private static long TryFileLength(string assetPath)

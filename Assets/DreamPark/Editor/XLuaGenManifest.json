@@ -1,0 +1,469 @@
+{
+    "schema": 1,
+    "files": [
+        {
+            "name": "DelegatesGensBridge.cs",
+            "sha256": "ce88799b42966fe4d32c1185a71cc6c61e29743574652f55a6935188b652f756"
+        },
+        {
+            "name": "DreamBoxClientWrap.cs",
+            "sha256": "b5b68b4f73c5d9af1f53619095f9b1d0544838812b87eb10a7d5c7d57fdb4208"
+        },
+        {
+            "name": "DreamPark_API_GameStorageAPIWrap.cs",
+            "sha256": "45aebcee32a4fc1312314918faf049d1c153f9b90ae491852cf8ba2bcc8b8dae"
+        },
+        {
+            "name": "DreamPark_API_ProfileAPIWrap.cs",
+            "sha256": "ff78c8862cfb2ee435f707f9b49f887c9e3fc3481ad6662784f443b0fe8f3933"
+        },
+        {
+            "name": "DreamPark_API_ScoreAPIWrap.cs",
+            "sha256": "16a34272ee0f4c4c128971c3febac0c14ee66aa2a368b4724b5003db6a2b1669"
+        },
+        {
+            "name": "DreamPark_AttractionPortalGeometryWrap.cs",
+            "sha256": "0642c16a6ec17ae4080e576dad16e5ef28f63ae491ff3d5aa40180252fcd4328"
+        },
+        {
+            "name": "DreamPark_AttractionPortalWrap.cs",
+            "sha256": "6670853e10fbe891d8eb922a6543a11e563836533e337fe850449b96e475aa7a"
+        },
+        {
+            "name": "DreamPark_AttractionTemplateWrap.cs",
+            "sha256": "8a4474db6070594b773300222b78617d72fda4e38a4a1897e3083736543ba2a6"
+        },
+        {
+            "name": "DreamPark_DreamParkGestureWrap.cs",
+            "sha256": "34d0f61911a2859c90aa217544078d2397bc1bf0cd6741830bf84f52daf72fb1"
+        },
+        {
+            "name": "DreamPark_DreamParkGesturesWrap.cs",
+            "sha256": "306f461876add19d6e9486c33893c42c95674e404a1302c2288b078ed447e716"
+        },
+        {
+            "name": "DreamPark_DreamParkLuaAPIWrap.cs",
+            "sha256": "e6ab0d3df85ca4a1f4f2e8f029743c22d17a97b44366c8338ea553d52c5b4d71"
+        },
+        {
+            "name": "DreamPark_DreamParkPackageHostWrap.cs",
+            "sha256": "1ca2f8ceb587d2f508f816b805c9fe379e941f8cef7bf63dc27e1b907898480f"
+        },
+        {
+            "name": "DreamPark_DreamParkRoutedGestureWrap.cs",
+            "sha256": "4f8e0a298704e563cf78a72b1f33f05c5eea1603e937e343e824685fa9da3e17"
+        },
+        {
+            "name": "DreamPark_FloorAnchorWrap.cs",
+            "sha256": "9335920ba7b3bf5c7afc619ff3f67e2ef5c84b1fcb5daa8ab1ab42f4c7a590fa"
+        },
+        {
+            "name": "DreamPark_GameAreaWrap.cs",
+            "sha256": "76a6765ee7e4f6e050d0d86b813447711c0b23ae1efe22e88c55a8e3d301b9c4"
+        },
+        {
+            "name": "DreamPark_LevelTemplateWrap.cs",
+            "sha256": "b4b920f859d11db02eb5e3accdf28d4e79bccba9ee7f68d6a4a710276626da30"
+        },
+        {
+            "name": "DreamPark_MusicAreaWrap.cs",
+            "sha256": "531c8851cc57cdb703983eddae97c607c30b806032387a4b99169fa2676dca08"
+        },
+        {
+            "name": "DreamPark_NetSessionArbiterWrap.cs",
+            "sha256": "0e8b56c63c75cd988f4a97c014b84042ccf1c6d50498de02f121f8fc1de9d673"
+        },
+        {
+            "name": "DreamPark_PlayerRigWrap.cs",
+            "sha256": "0360dad506eb4f8395c6509b9f2eb04cabe9362a414cc00d433489bc932d6e16"
+        },
+        {
+            "name": "DreamPark_PropTemplateWrap.cs",
+            "sha256": "c22cc84d57c8d1e21ab1f6ca9792fc6c8872ed0a5f2cc7517bd2ccc497f94aee"
+        },
+        {
+            "name": "EasyLuaWrap.cs",
+            "sha256": "e36e33f017967a5900dfa55a43b800099c6b37ee6b6ce77e90324848ace823df"
+        },
+        {
+            "name": "EnumWrap.cs",
+            "sha256": "3983d818f2b6700cf214057ed29348bb9e5600003efabae518f7f99ade751e2e"
+        },
+        {
+            "name": "HandTrackerWrap.cs",
+            "sha256": "44e5cefc0655bdaa80c406765162184a03dcbf0bd8964b66c47089488b29ba78"
+        },
+        {
+            "name": "LuaBehaviourWrap.cs",
+            "sha256": "2f643f8412d8e038ae922eda1d061b0d56d197ac152010c39628d9f3841c75c0"
+        },
+        {
+            "name": "PackUnpack.cs",
+            "sha256": "8c1e8537a7d2125dd710d5b2b0ea3efbda82a4f1780a934fde6b7e59afef23e0"
+        },
+        {
+            "name": "TMPro_TMP_TextWrap.cs",
+            "sha256": "042870a5d8ba4f1ad2462c3142d89481847c7bd396e3f482081834087a0d2f80"
+        },
+        {
+            "name": "TMPro_TextMeshProUGUIWrap.cs",
+            "sha256": "5c747eb8d282ca222d50126bf0d02dee2d914a52a4068e0c702f31e4bf04781a"
+        },
+        {
+            "name": "TMPro_TextMeshProWrap.cs",
+            "sha256": "97d36d2e48812949214bd104811a74524d8fb9f560f64fda812c2366804b9202"
+        },
+        {
+            "name": "UnityEngine_AI_NavMeshAgentWrap.cs",
+            "sha256": "973df2aef39dce5643f7f619a8be1becef120c620ef29fc93ad3dfab3c848e67"
+        },
+        {
+            "name": "UnityEngine_AI_NavMeshHitWrap.cs",
+            "sha256": "f88ae3d38350464bffd8610b9a17f792e721ffb075f50caa05c1a18b34f9345a"
+        },
+        {
+            "name": "UnityEngine_AI_NavMeshObstacleWrap.cs",
+            "sha256": "d63c21304b84b5beaa0168eaab2269737beb34133c8936638de51d8bcee503a1"
+        },
+        {
+            "name": "UnityEngine_AI_NavMeshPathWrap.cs",
+            "sha256": "1e182cbb61aab260a6b5822f282f5e5c64b9b3125b2c131593fe34ce00687bd4"
+        },
+        {
+            "name": "UnityEngine_AI_NavMeshWrap.cs",
+            "sha256": "720f19e044b62890413f0fc1bd38038daf78594a04038cd0ba65c7e4b993fbd6"
+        },
+        {
+            "name": "UnityEngine_AnimationCurveWrap.cs",
+            "sha256": "1703a098ffe3a0ea081269dad2aabca13b1563397e7b34557b6867b2332fd627"
+        },
+        {
+            "name": "UnityEngine_AnimatorStateInfoWrap.cs",
+            "sha256": "39d78ed2cefccfa9ad2128f05869d4bfdccf549a1c7a7ca48e8af3c5b4924086"
+        },
+        {
+            "name": "UnityEngine_AnimatorWrap.cs",
+            "sha256": "2d633a9888ab51e06c6bc56ac96546c1848477ed643ed762cfc9d79cdbda694c"
+        },
+        {
+            "name": "UnityEngine_ApplicationWrap.cs",
+            "sha256": "36e97ef5b50fcc0f4671da60ffef4d5e94ccf021722e3888e93127415d8232b0"
+        },
+        {
+            "name": "UnityEngine_AudioClipWrap.cs",
+            "sha256": "df2daf43adbc6d9906c0083fa74a0c0beb9ac65a03be22999cd2629cff12191f"
+        },
+        {
+            "name": "UnityEngine_AudioListenerWrap.cs",
+            "sha256": "53f8f14bbe124c0c62eac0b19c95c9c77edeb9a9ff2c59e33967c749be82795c"
+        },
+        {
+            "name": "UnityEngine_AudioSourceWrap.cs",
+            "sha256": "8ede917b33b1db6ff1c833422e5942bce320a48c57a7d53c012bd6e06fa1289c"
+        },
+        {
+            "name": "UnityEngine_BehaviourWrap.cs",
+            "sha256": "4dcf182cace55928337826cc924c99c5a1884fd3b00c69941501c5f09804256c"
+        },
+        {
+            "name": "UnityEngine_BoundsWrap.cs",
+            "sha256": "d5f2abd28ec5cad329ac7ceba4e074b215fa3918341ab4be177ad47f57888a49"
+        },
+        {
+            "name": "UnityEngine_BoxColliderWrap.cs",
+            "sha256": "b65f790a62504cef08ebdaf0b4c2df54a650bfb9417b4dc47c020dd7373b5286"
+        },
+        {
+            "name": "UnityEngine_CameraWrap.cs",
+            "sha256": "589a64a72edcb08812aa1bc3abf4ad3afeb6d5aa7e94c892f004eeecac2e8086"
+        },
+        {
+            "name": "UnityEngine_CanvasGroupWrap.cs",
+            "sha256": "512ae6eb6936f2e2b726e74737bcd3d2c42bcfb55a521b05f422c670d8ebda89"
+        },
+        {
+            "name": "UnityEngine_CanvasWrap.cs",
+            "sha256": "67b0e9a1ecb8e3424880423c66f8cbee8c2e2b8eeefb9e4b4d5dbed315ca0a07"
+        },
+        {
+            "name": "UnityEngine_CapsuleColliderWrap.cs",
+            "sha256": "817aa4502a18f5df7ef81b65dc0cf2ce459493e80ec6e0473dfdd88c6f281a5a"
+        },
+        {
+            "name": "UnityEngine_CharacterControllerWrap.cs",
+            "sha256": "6a9189624812561f51e33ca97ac21dd45d472c6cac41f8db444c105c261b2acc"
+        },
+        {
+            "name": "UnityEngine_CharacterJointWrap.cs",
+            "sha256": "41a408e8c528db95de284aa04450a06bd80f26bbd800d94cc87356be8008fdc5"
+        },
+        {
+            "name": "UnityEngine_ColliderWrap.cs",
+            "sha256": "02190cc57fad59c20e014e7c0f9b0bf5a72df3df15d6d51f99dc7699dd410bc7"
+        },
+        {
+            "name": "UnityEngine_CollisionWrap.cs",
+            "sha256": "8107b518917c05f8689719be999bb11249289a5b651cee2e7dc050f2b1cfe935"
+        },
+        {
+            "name": "UnityEngine_Color32Wrap.cs",
+            "sha256": "99c68a0e958d1fe6ee95d77d1087e95437e4ca5e3b555b3721537f5bf4935dcc"
+        },
+        {
+            "name": "UnityEngine_ColorWrap.cs",
+            "sha256": "29c6036a6834977606af4e07ee2d8d73eb83cb1ecea30f9b3b42f5a445243776"
+        },
+        {
+            "name": "UnityEngine_ComponentWrap.cs",
+            "sha256": "0194b218b198d6fd1b3f6f2398184476d57d442dca6a85b9c7a825a5da100dc1"
+        },
+        {
+            "name": "UnityEngine_ContactPointWrap.cs",
+            "sha256": "20afe9f3822dae2543a5b6f7f0af4082335b4d2f12adf478e85b460bdfb349f4"
+        },
+        {
+            "name": "UnityEngine_CoroutineWrap.cs",
+            "sha256": "c6737f5dbbe3d4315b86b0947f31df9b1c6f543ebd9ffc05f560a6bfea2884af"
+        },
+        {
+            "name": "UnityEngine_DebugWrap.cs",
+            "sha256": "62c5166eef8dfc79a8ff7351f42b5697480038a1797dee94f712c9a4a2e5bb1e"
+        },
+        {
+            "name": "UnityEngine_FixedJointWrap.cs",
+            "sha256": "054500ed572ed2ea579f743f2f486aa5940664f349bb9138917695326fd08ad0"
+        },
+        {
+            "name": "UnityEngine_GameObjectWrap.cs",
+            "sha256": "129e64cccb4ee4ca2b07669b31ac778079505ebf15930e086e4667be283d617e"
+        },
+        {
+            "name": "UnityEngine_HingeJointWrap.cs",
+            "sha256": "11ff55c38976f37a4702b99d953895764ed9a3148977e7abc7565153c7c535c5"
+        },
+        {
+            "name": "UnityEngine_JointWrap.cs",
+            "sha256": "52ca584a03bcf871451c887d1988ddeec2a2e3df827a88169fe3b6f54b2d0809"
+        },
+        {
+            "name": "UnityEngine_KeyframeWrap.cs",
+            "sha256": "5e4eded2300c919df4ed33ecbb6e6afcb0013d4009ef679326e65f81692c12d6"
+        },
+        {
+            "name": "UnityEngine_LayerMaskWrap.cs",
+            "sha256": "324022efdfe4336e82475fe87006a0f270b418e4c03eaad8da7c879a37ca6414"
+        },
+        {
+            "name": "UnityEngine_LightWrap.cs",
+            "sha256": "d58bad6976cd56ad3c329098534f460cf972fb218f812535b3ac77b3a09fefad"
+        },
+        {
+            "name": "UnityEngine_LineRendererWrap.cs",
+            "sha256": "7c0dfcb2373bb80df5d52067bb80fe9688891c8341b43d7d815e1285febd497d"
+        },
+        {
+            "name": "UnityEngine_MaterialPropertyBlockWrap.cs",
+            "sha256": "0afcf58a08f9a1fba7fd07dcb5b37f04ad6104a1975590d49c32f3f1480b3d4b"
+        },
+        {
+            "name": "UnityEngine_MaterialWrap.cs",
+            "sha256": "99f1d24f5e8e2e84367a983a5c99585c1530e165fc274690d78f598bbeb3aae0"
+        },
+        {
+            "name": "UnityEngine_MathfWrap.cs",
+            "sha256": "a205b86b7c9b1c3d7c730d48368e8293198b226472280e3443027c318845add0"
+        },
+        {
+            "name": "UnityEngine_Matrix4x4Wrap.cs",
+            "sha256": "f1c685a584dfd9b815df738bc34ca7ee15373a90060944a4460643fa167fd7fc"
+        },
+        {
+            "name": "UnityEngine_MeshColliderWrap.cs",
+            "sha256": "2671944c7bae561d7b67104f452377dd5cde67e619b2142ab0188ae58fa1eb4c"
+        },
+        {
+            "name": "UnityEngine_MeshFilterWrap.cs",
+            "sha256": "8c6d8d786bd04af2f943222850dc66f8068118f32d769cf2d1f841b466b10493"
+        },
+        {
+            "name": "UnityEngine_MeshRendererWrap.cs",
+            "sha256": "f4ad9a346256925c20c38fd97cab15e8f7444d006d5f6ac64d13bc1a68f808ab"
+        },
+        {
+            "name": "UnityEngine_MeshWrap.cs",
+            "sha256": "ddab7cce30762a49e321889e952c2358b41d4a13a96677d9fd65d57c69e6d939"
+        },
+        {
+            "name": "UnityEngine_MonoBehaviourWrap.cs",
+            "sha256": "f2d29294ab16005fba319f04a988adac1c67d48610d4b8c80165436683a8f49b"
+        },
+        {
+            "name": "UnityEngine_ObjectWrap.cs",
+            "sha256": "b715d37562eaa8a7331b26e1b0a9b41ea9d254655d4ae83d05408eba53632242"
+        },
+        {
+            "name": "UnityEngine_ParticleSystemRendererWrap.cs",
+            "sha256": "4381a8f964746ce8ed9f94b62788cf79871ae9fdab1698e2a8d8883bfbff84d9"
+        },
+        {
+            "name": "UnityEngine_ParticleSystemWrap.cs",
+            "sha256": "b8a302f9e110f37d24c475a641cdc805b3cd2cbc1a81e4475a3f44e98200e3c5"
+        },
+        {
+            "name": "UnityEngine_PhysicsWrap.cs",
+            "sha256": "0e1e3f2403f110c344dc4b4d19191fe0b1df736840c3f829e27063a2cb2164be"
+        },
+        {
+            "name": "UnityEngine_PlaneWrap.cs",
+            "sha256": "c24c55c9bb8e4851da3f3e35abb9f08ef1519a47af6b5c7199c4e44828259fd8"
+        },
+        {
+            "name": "UnityEngine_QuaternionWrap.cs",
+            "sha256": "cd7001dab7d3e94a7dfa763003c9f000ba4d053d98b1c71d0bd36227041166e4"
+        },
+        {
+            "name": "UnityEngine_RandomWrap.cs",
+            "sha256": "8b37d4210db35b33e0b99d3a13cc499ef8177516d2ffd885ca9599e67108071f"
+        },
+        {
+            "name": "UnityEngine_RayWrap.cs",
+            "sha256": "1f109e7422bf5bc5cd2de9f0413592978317ef1c5d1f7dbac12a7c8a8fd87fad"
+        },
+        {
+            "name": "UnityEngine_RaycastHitWrap.cs",
+            "sha256": "ba81657481df27e9cf774367be9d9e30be11e4aefbf25b15ef4277ca0cf5f1fe"
+        },
+        {
+            "name": "UnityEngine_RectTransformWrap.cs",
+            "sha256": "ecf74474164905acb52c4712a13faac60dec77fc49d279222371737a1ef9c289"
+        },
+        {
+            "name": "UnityEngine_RectWrap.cs",
+            "sha256": "d05880178e135534c0e4c5dce70494c4557e5ffc6c5a4b73ec7f89df6167da75"
+        },
+        {
+            "name": "UnityEngine_RendererWrap.cs",
+            "sha256": "4f48ccf61b08a938690894d0003125e44abfd9a62fc07e02ce6e6f9b0f5ea48c"
+        },
+        {
+            "name": "UnityEngine_RigidbodyWrap.cs",
+            "sha256": "9e0313033e43bc48458c6660b12bf923f1596fa60de1543ff8a788c0a9e81296"
+        },
+        {
+            "name": "UnityEngine_RuntimeAnimatorControllerWrap.cs",
+            "sha256": "30331a03c98588b1790ba5e9c8e1a66c0b364ce0d4a8894868a97952f8b9ac4c"
+        },
+        {
+            "name": "UnityEngine_ScreenWrap.cs",
+            "sha256": "fb2568d2350985738de3799c58383b99677bc81d64dac356b49c0c3e51a6c995"
+        },
+        {
+            "name": "UnityEngine_ShaderWrap.cs",
+            "sha256": "b500c3ab75a49d419810c079f2ab84211a2dc99a349fa725e1e4f26d21601593"
+        },
+        {
+            "name": "UnityEngine_SkinnedMeshRendererWrap.cs",
+            "sha256": "d8b138e49dd8c02871f414e4bf4030b897db458ba9099b10cf2066ac6a101ee9"
+        },
+        {
+            "name": "UnityEngine_SphereColliderWrap.cs",
+            "sha256": "f158479a9179f93aa9bafef952d2c4dd57d6a20b64070583d0a1615a308ca0e1"
+        },
+        {
+            "name": "UnityEngine_SpringJointWrap.cs",
+            "sha256": "b63a86c30e4dc9aa43f027c990d48adb30ae97ea2cbee6a03d67aeb7df9289d7"
+        },
+        {
+            "name": "UnityEngine_SpriteRendererWrap.cs",
+            "sha256": "adca1648df205fd98b42db23223c12e4ea983a01e2ba1c52c949bf1305be8a4f"
+        },
+        {
+            "name": "UnityEngine_SpriteWrap.cs",
+            "sha256": "356e559fb51e979e4532f6492d7a3a44f829aa7a4cabf97a8f033942b7017a03"
+        },
+        {
+            "name": "UnityEngine_SystemInfoWrap.cs",
+            "sha256": "f4d62f51a483b53001cfb64f3a63a4247d61f0d4a702d3f293a80cbcf4c3f338"
+        },
+        {
+            "name": "UnityEngine_TextMeshWrap.cs",
+            "sha256": "0eadf172bbd32373637267bb52aac3f819a32a5fffb7d211871eead1cb5019e0"
+        },
+        {
+            "name": "UnityEngine_Texture2DWrap.cs",
+            "sha256": "d95558b33e61788fafab99dfda77212e112def0c27d1f6e7caa8a70177c55008"
+        },
+        {
+            "name": "UnityEngine_TextureWrap.cs",
+            "sha256": "f48034420344b40f4ff190db5aad19d3816446028571e3ddbe4998a91eb92d7a"
+        },
+        {
+            "name": "UnityEngine_TimeWrap.cs",
+            "sha256": "5886fecc0cf8d0d5e6a83733a5a271920feb7656c5637a474b95146aadd8e85f"
+        },
+        {
+            "name": "UnityEngine_TrailRendererWrap.cs",
+            "sha256": "821a65d9caba2575e49cc71bc82bf8741fe9949e047e49ea9c10158aa11723fd"
+        },
+        {
+            "name": "UnityEngine_TransformWrap.cs",
+            "sha256": "ab3ea22e767edef8952dc3688be48e4115bcf2b2be047af5418ddb70410d8538"
+        },
+        {
+            "name": "UnityEngine_UI_ButtonWrap.cs",
+            "sha256": "d51106d7721d9b47dca27a6c013ae43328c1629b80982851cdda9c10bf21785c"
+        },
+        {
+            "name": "UnityEngine_UI_ImageWrap.cs",
+            "sha256": "f4a422f549cb71edfba95d6cf7df9c7273c0048334f28f24df478fa55fcc2c30"
+        },
+        {
+            "name": "UnityEngine_UI_RawImageWrap.cs",
+            "sha256": "0661dffb0afd3fde5eef70578cc6496dcd9ccfc7afaa535e4cbfa45d65137151"
+        },
+        {
+            "name": "UnityEngine_UI_SliderWrap.cs",
+            "sha256": "608c2bace5aa5a1a304c821c25e2818855b2baea096432bdd986983cc77c9bba"
+        },
+        {
+            "name": "UnityEngine_Vector2Wrap.cs",
+            "sha256": "dea7fa65b3a13e5d2ee77bcc63d160e1dbbce49ebed24d00fdc9b911227380b5"
+        },
+        {
+            "name": "UnityEngine_Vector3Wrap.cs",
+            "sha256": "564be1b6e8c7166ab8477c7d24dcb06a1701484c5deb58a04ef23dee2dfc9e53"
+        },
+        {
+            "name": "UnityEngine_Vector4Wrap.cs",
+            "sha256": "8f095b39befe85c4779839c16560bce71f09d97f7c03dd5423768ea80a655c72"
+        },
+        {
+            "name": "UnityEngine_WaitForEndOfFrameWrap.cs",
+            "sha256": "b3e2e3cfd153fda6e8fba07b73738ed0d698b7c5261b93724c52e3a90630ce15"
+        },
+        {
+            "name": "UnityEngine_WaitForFixedUpdateWrap.cs",
+            "sha256": "550f632a1506fa6e173ad21bf5140b00f59191dcfe0e09e55cfeb929c3fea24f"
+        },
+        {
+            "name": "UnityEngine_WaitForSecondsWrap.cs",
+            "sha256": "98a8a1777544d1896f0215a6aa65a7d77bae7d442b59e98ce90dac8ca9078fe9"
+        },
+        {
+            "name": "UnityEngine_YieldInstructionWrap.cs",
+            "sha256": "b3b603b5d4c1503459207ff5646ca732b1c6034cae5f7abd33f6eaea73bc5c8a"
+        },
+        {
+            "name": "WrapPusher.cs",
+            "sha256": "c6a7f3b0f109734252a03c5ce4154ff6d498732367db97d813a1c1a557aaa0bd"
+        },
+        {
+            "name": "XLuaGenAutoRegister.cs",
+            "sha256": "e35e60d59d51fa21b889de10eb1f761f4c7e1d39b21c4a4ea601396864df3c66"
+        },
+        {
+            "name": "link.xml",
+            "sha256": "201650ecdffd3d4619ee2785e85160a28ff8f006cb0ec3bd8443c1f3c3fc1ac7"
+        }
+    ]
+}

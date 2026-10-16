@@ -21,8 +21,9 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(DreamPark.FloorAnchor);
-			Utils.BeginObjectRegister(type, L, translator, 0, 8, 16, 15);
+			Utils.BeginObjectRegister(type, L, translator, 0, 9, 17, 15);
 			
+			Utils.RegisterFunc(L, Utils.METHOD_IDX, "BindToFloor", _m_BindToFloor);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "RecacheCorners", _m_RecacheCorners);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "PrecalculateBounds", _m_PrecalculateBounds);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "HasPrecalculatedBounds", _m_HasPrecalculatedBounds);
@@ -33,7 +34,8 @@ namespace XLua.CSObjectWrap
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "Update", _m_Update);
 			
 			
-			Utils.RegisterFunc(L, Utils.GETTER_IDX, "isBuildMode", _g_get_isBuildMode);
+			Utils.RegisterFunc(L, Utils.GETTER_IDX, "OwnFloorGaveUp", _g_get_OwnFloorGaveUp);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "isBuildMode", _g_get_isBuildMode);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "floorMeshFilter", _g_get_floorMeshFilter);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "floorTransform", _g_get_floorTransform);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "calibrator", _g_get_calibrator);
@@ -70,9 +72,10 @@ namespace XLua.CSObjectWrap
 			Utils.EndObjectRegister(type, L, translator, null, null,
 			    null, null, null);
 
-		    Utils.BeginClassRegister(type, L, __CreateInstance, 1, 0, 0);
+		    Utils.BeginClassRegister(type, L, __CreateInstance, 2, 0, 0);
 			
 			
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "OwnFloorWaitSeconds", DreamPark.FloorAnchor.OwnFloorWaitSeconds);
             
 			
 			
@@ -109,6 +112,35 @@ namespace XLua.CSObjectWrap
         
         
         
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_BindToFloor(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+                DreamPark.FloorAnchor gen_to_be_invoked = (DreamPark.FloorAnchor)translator.FastGetCSObj(L, 1);
+            
+            
+                
+                {
+                    UnityEngine.MeshFilter _floor = (UnityEngine.MeshFilter)translator.GetObject(L, 2, typeof(UnityEngine.MeshFilter));
+                    DreamPark.CalibrateLevel _calibration = (DreamPark.CalibrateLevel)translator.GetObject(L, 3, typeof(DreamPark.CalibrateLevel));
+                    
+                    gen_to_be_invoked.BindToFloor( _floor, _calibration );
+                    
+                    
+                    
+                    return 0;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
         static int _m_RecacheCorners(RealStatePtr L)
@@ -333,6 +365,20 @@ namespace XLua.CSObjectWrap
         
         
         
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_OwnFloorGaveUp(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                DreamPark.FloorAnchor gen_to_be_invoked = (DreamPark.FloorAnchor)translator.FastGetCSObj(L, 1);
+                LuaAPI.lua_pushboolean(L, gen_to_be_invoked.OwnFloorGaveUp);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
         static int _g_get_isBuildMode(RealStatePtr L)

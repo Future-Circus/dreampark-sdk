@@ -30,6 +30,10 @@ public class NetId : MonoBehaviour
 
     public uint Id { get; private set; }
 
+    /// <summary>True once Id is final and this object is addressable (Start ran).
+    /// Services that send on this NetId (SharedState) wait for it.</summary>
+    public bool IsRegistered => _registered;
+
     private Action<string> _onNetEvent;
 
     /// <summary>
@@ -71,7 +75,7 @@ public class NetId : MonoBehaviour
     void EnsureRegistered()
     {
         if (_registered) return;
-        Id = explicitId != 0 ? ScopeExplicit(explicitId) : ComputeId();
+        Id = PreviewId();
         NetRegistry.Register(this);
         _registered = true;
     }
@@ -110,7 +114,56 @@ public class NetId : MonoBehaviour
 
     void OnDestroy()
     {
-        if (_registered) NetRegistry.Unregister(Id);
+        // Owner-checked: a duplicate that collided with a live object (the
+        // PlayerRig dedup destroys one) must not take the live one's id with it.
+        if (_registered) NetRegistry.Unregister(Id, this);
+    }
+
+    /// <summary>
+    /// The id this object WILL register with, computed now without registering.
+    /// Same rules as Start (explicitId scoped, else the hierarchy hash). For
+    /// tests and diagnostics; only meaningful once the spawner has parented
+    /// and stamped the object.
+    /// </summary>
+    public uint PreviewId() => MixContent(transform, explicitId != 0 ? ScopeExplicit(explicitId) : ComputeId());
+
+    /// <summary>
+    /// The hierarchy hash a NetId on <paramref name="t"/> would compute
+    /// (NetScope-aware, scene roots by name). Lets SDK services address an
+    /// object that carries no NetId with exactly the id one would get.
+    /// </summary>
+    public static uint HashPath(Transform t) => t == null ? 0u : MixContent(t, ComputeIdFor(t));
+
+    /// <summary>
+    /// Mix the owning title's content id into an id, hashed or explicit.
+    ///
+    /// The id space is shared by every title in a park and the wire carries no
+    /// game id, so two titles that picked the same number (SuperAdventureLand
+    /// and WizardsWay both put their rig bus on 8300001; Zombiez and ArcadeLand
+    /// share 7310101 and 7310201) routed each other's traffic into the wrong
+    /// scripts in a mixed park, and the registry gave one bus to the other.
+    /// The content id comes from the nearest stamped content component — the
+    /// same on every device. Objects outside any title (scene props) keep
+    /// their id unchanged. Changing this changes every id on the wire, which is
+    /// why BeaconBroadcaster.ProtocolVersion moved to 2 with it.
+    /// </summary>
+    static uint MixContent(Transform t, uint id)
+    {
+        string content = ContentIdOf(t);
+        return string.IsNullOrEmpty(content) ? id : MixString(MixString(id, "|g|"), content);
+    }
+
+    /// <summary>The content id (gameId) the object belongs to, or null.</summary>
+    public static string ContentIdOf(Transform t)
+    {
+        for (; t != null; t = t.parent)
+        {
+            if (t.TryGetComponent<global::DreamPark.GameArea>(out var area) && !string.IsNullOrEmpty(area.gameId)) return area.gameId;
+            if (t.TryGetComponent<global::DreamPark.LevelTemplate>(out var level) && !string.IsNullOrEmpty(level.gameId)) return level.gameId;
+            if (t.TryGetComponent<global::DreamPark.PropTemplate>(out var prop) && !string.IsNullOrEmpty(prop.gameId)) return prop.gameId;
+            if (t.TryGetComponent<global::DreamPark.PlayerRig>(out var rig) && !string.IsNullOrEmpty(rig.gameId)) return rig.gameId;
+        }
+        return null;
     }
 
     /// <summary>
@@ -157,10 +210,11 @@ public class NetId : MonoBehaviour
     ///
     /// "(Clone)" suffixes are stripped so rename timing can't shift the hash.
     /// </summary>
-    uint ComputeId()
+    uint ComputeId() => ComputeIdFor(transform);
+
+    static uint ComputeIdFor(Transform t)
     {
         uint hash = 2166136261; // FNV-1a offset basis
-        Transform t = transform;
 
         while (t != null)
         {
@@ -179,7 +233,7 @@ public class NetId : MonoBehaviour
         return hash;
     }
 
-    static uint MixString(uint hash, string s)
+    internal static uint MixString(uint hash, string s)
     {
         for (int i = 0; i < s.Length; i++)
         {

@@ -1,0 +1,45 @@
+-- ============================================================
+-- phone-player.lua.txt — the template Phone Player's controls.
+--
+-- Lives on Prefabs/Phone Player.prefab (child "Phone Controls"). That rig
+-- is spawned INSTEAD of Player.prefab on phones, and only when the title
+-- fills the Phone Player slot (Content Uploader → Packages). With the slot
+-- empty, phones are spectators and this script never runs.
+--
+-- Shows the phone API:
+--   dp.is_phone()   guard (also true in the Editor under
+--                   DreamPark → Simulate Phone Player)
+--   dp.on_tap(fn)   every tap on the screen, with what the tap hit
+--   ripple          the AUTHORED "Tap Ripple" ParticleSystem child (stopped
+--                   by default): moved to the hit point and played. Nothing
+--                   is spawned at runtime.
+--
+-- Title-wide rules belong on the Game Manager, not here: a phone without a
+-- Phone Player has no rig at all (dp.player() is nil).
+-- ============================================================
+
+-- @var ripple component
+
+local UE = CS.UnityEngine
+
+local tap = nil   -- handle from dp.on_tap; tap.off() unsubscribes
+
+local function show_ripple(t)
+    if ripple == nil or t.position == nil then return end
+    -- A hair off the surface so the ripple never z-fights what was tapped.
+    ripple.transform.position = t.position + t.normal * 0.01
+    ripple:Stop(true, UE.ParticleSystemStopBehavior.StopEmittingAndClear)
+    ripple:Play(true)
+end
+
+function start()
+    if not dp.is_phone() then return end
+    tap = dp.on_tap(show_ripple)
+end
+
+function ondestroy()
+    if tap ~= nil then
+        tap.off()
+        tap = nil
+    end
+end

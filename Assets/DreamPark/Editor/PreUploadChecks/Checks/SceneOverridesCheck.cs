@@ -60,115 +60,75 @@ namespace DreamPark.PreUploadChecks.Checks
             public string scenePath;
             public string sceneGuid;
             public string hierarchyPath;
+            public string globalObjectId;
             public List<string> changes = new List<string>();
         }
 
         public CheckResult Run(PreUploadCheckContext ctx)
         {
-            // UNCONDITIONAL. RestoreSceneManagerSetup closes every open scene and
-            // reopens it from disk with no save prompt, so running this with unsaved
-            // work in the editor destroys that work silently and un-undoably. The
-            // upload path calls SaveModifiedScenesBeforeCompile first and so passes
-            // this trivially; the "Review…" and "Re-run" buttons do not, and used to
-            // be gated only on ctx.scenesAreSaved — which the runner hardcoded to true.
-            if (AnyOpenSceneDirty())
-            {
-                return CheckResult.Skipped(CheckId,
-                    "Skipped — you have unsaved scene changes. Save your open scenes (or start an "
-                  + "upload, which saves them) so this reads what is actually on disk.");
-            }
-
+            // NEVER PROMPTS (owner decision 2026-10-09). This check runs inside the strict
+            // preflight of dreampark_content_publish, where a modal blocks the Editor's main
+            // thread with nobody there to answer it. So:
+            //   - a content scene that is already open is read in place, unsaved edits and all,
+            //     and left exactly as it is (a dirty one is reported, never saved);
+            //   - any other content scene is opened ADDITIVELY (no prompt, the active scene and
+            //     the user's own scenes are untouched) and closed with CloseScene(removeScene)
+            //     without saving, which discards anything it changed about itself on load;
+            //   - no RestoreSceneManagerSetup: it reloaded the user's scenes from disk, which
+            //     re-ran their load-time churn and is why this check used to skip itself whenever
+            //     any scene was dirty.
+            // A scene that dirties itself on load (ArcadeLand's Modular 3D Text) is compared with
+            // its YAML on disk, so overrides that exist only because a script ran at load are not
+            // reported as unapplied overrides.
             var scenePaths = FindScenes(ctx);
             if (scenePaths.Count == 0) return CheckResult.Clean(CheckId);
 
             var hits = new List<InstanceHit>();
+            var unsavedOpenScenes = new List<string>();
 
-            // Only restore if we actually disturbed the setup. Restoring unconditionally
-            // means every clean run still closes and reopens the user's scenes from
-            // disk for no reason.
-            bool openedAnything = false;
-
-            // Capture BEFORE touching anything.
-            SceneSetup[] setup = null;
-            try { setup = EditorSceneManager.GetSceneManagerSetup(); }
-            catch (Exception e)
+            for (int i = 0; i < scenePaths.Count; i++)
             {
-                Debug.LogWarning($"[DreamPark] Could not capture the scene setup; skipping the scene "
-                               + $"override check rather than risk your open scenes: {e.Message}");
-                return CheckResult.Skipped(CheckId, "Skipped — could not snapshot the current scene setup.");
-            }
+                string scenePath = scenePaths[i];
+                ctx.Progress((float)i / scenePaths.Count, $"Scanning {Path.GetFileName(scenePath)}…");
 
-            try
-            {
-                for (int i = 0; i < scenePaths.Count; i++)
+                var lease = new DreamParkAutomation.SceneLease();
+                try
                 {
-                    string scenePath = scenePaths[i];
-                    ctx.Progress((float)i / scenePaths.Count, $"Scanning {Path.GetFileName(scenePath)}…");
+                    lease = DreamParkAutomation.OpenSceneForReading(scenePath);
+                    if (!lease.openedHere && lease.scene.isDirty) unsavedOpenScenes.Add(scenePath);
 
-                    Scene scene = SceneManager.GetSceneByPath(scenePath);
-                    bool wasOpen = scene.IsValid() && scene.isLoaded;
-
-                    try
-                    {
-                        if (!wasOpen)
-                        {
-                            scene = EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Additive);
-                            openedAnything = true;
-                        }
-
-                        ScanScene(scene, ctx, hits);
-                    }
-                    catch (Exception e)
-                    {
-                        Debug.LogWarning($"[DreamPark] Could not scan {scenePath}: {e.Message}");
-                    }
-                    finally
-                    {
-                        if (!wasOpen && scene.IsValid() && scene.isLoaded)
-                        {
-                            if (!EditorSceneManager.CloseScene(scene, true))
-                                Debug.LogWarning($"[DreamPark] Could not close {scenePath} after scanning.");
-                        }
-                    }
+                    Dictionary<long, SceneYamlModifications.InstanceModifications> onDisk =
+                        lease.dirtiedOnLoad ? SceneYamlModifications.Read(scenePath) : null;
+                    ScanScene(lease.scene, ctx, hits, onDisk);
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning($"[DreamPark] Could not scan {scenePath}: {e.Message}");
+                }
+                finally
+                {
+                    DreamParkAutomation.CloseSceneWithoutSaving(lease);
                 }
             }
-            finally
+
+            var findings = BuildFindings(hits);
+            foreach (string scenePath in unsavedOpenScenes)
             {
-                if (openedAnything) RestoreSetupSafely(setup);
+                findings.Add(new Finding
+                {
+                    checkId = CheckId,
+                    severity = CheckSeverity.Warning,
+                    assetGuid = AssetDatabase.AssetPathToGUID(scenePath),
+                    assetPath = scenePath,
+                    subKey = "unsaved|" + AssetDatabase.AssetPathToGUID(scenePath),
+                    title = $"{Path.GetFileNameWithoutExtension(scenePath)} is open with unsaved changes",
+                    detail = $"Scene: {scenePath}\n"
+                           + "Its overrides were read from the open, unsaved copy. This check never saves or "
+                           + "prompts; save the scene (or close it without saving) and re-run the check to "
+                           + "read what is on disk.",
+                });
             }
-
-            return CheckResult.From(CheckId, BuildFindings(hits));
-        }
-
-        private static bool AnyOpenSceneDirty()
-        {
-            for (int i = 0; i < SceneManager.sceneCount; i++)
-                if (SceneManager.GetSceneAt(i).isDirty) return true;
-            return false;
-        }
-
-        // Unity's parameter doc for RestoreSceneManagerSetup is a PRECONDITION, not a
-        // description: "at least one Scene should be loaded, and there must be one
-        // active Scene." Restoring a setup that violates it throws — and a throw from
-        // inside a finally masks whatever exception was already in flight, which
-        // directly contradicts the "a broken check must never block shipping"
-        // contract. So: guard, then catch.
-        private static void RestoreSetupSafely(SceneSetup[] setup)
-        {
-            if (setup == null || setup.Length == 0) return;
-            if (!setup.Any(s => s != null && s.isLoaded)) return;
-            if (!setup.Any(s => s != null && s.isActive)) return;
-            if (setup.Any(s => s == null || string.IsNullOrEmpty(s.path))) return;   // untitled scene
-
-            try
-            {
-                EditorSceneManager.RestoreSceneManagerSetup(setup);
-            }
-            catch (Exception e)
-            {
-                Debug.LogWarning($"[DreamPark] Could not restore your scene setup after the pre-upload "
-                               + $"scan: {e.Message}");
-            }
+            return CheckResult.From(CheckId, findings);
         }
 
         private static List<string> FindScenes(PreUploadCheckContext ctx)
@@ -183,6 +143,9 @@ namespace DreamPark.PreUploadChecks.Checks
                 string path = AssetDatabase.GUIDToAssetPath(guid);
                 if (string.IsNullOrEmpty(path)) continue;
                 if (ContentRootScanner.IsThirdPartyLocal(path)) continue;
+                // Only this package's own scenes: inside Assets/Content/{id}, never a vendor demo
+                // scene under ThirdParty/ (Oct 2026).
+                if (!PreUploadScopes.IsSceneOverridesScope(path, ctx.contentRoot)) continue;
                 result.Add(path);
             }
 
@@ -190,7 +153,8 @@ namespace DreamPark.PreUploadChecks.Checks
             return result;
         }
 
-        private static void ScanScene(Scene scene, PreUploadCheckContext ctx, List<InstanceHit> hits)
+        private static void ScanScene(Scene scene, PreUploadCheckContext ctx, List<InstanceHit> hits,
+            Dictionary<long, SceneYamlModifications.InstanceModifications> onDisk)
         {
             if (!scene.IsValid() || !scene.isLoaded) return;
 
@@ -226,7 +190,7 @@ namespace DreamPark.PreUploadChecks.Checks
                     if (!ContentRootScanner.IsUnderContentRoot(sourcePath, ctx.contentRoot)) continue;
                     if (ContentRootScanner.IsThirdPartyLocal(sourcePath)) continue;
 
-                    var changes = DescribeChanges(go, ignoreRootScale);
+                    var changes = DescribeChanges(go, sourcePath, ignoreRootScale, onDisk);
                     if (changes.Count == 0) continue;
 
                     hits.Add(new InstanceHit
@@ -236,6 +200,7 @@ namespace DreamPark.PreUploadChecks.Checks
                         scenePath = scene.path,
                         sceneGuid = sceneGuid,
                         hierarchyPath = HierarchyPath(go.transform),
+                        globalObjectId = GlobalObjectId.GetGlobalObjectIdSlow(go).ToString(),
                         changes = changes,
                     });
                 }
@@ -251,7 +216,9 @@ namespace DreamPark.PreUploadChecks.Checks
         // localScale (not one) produces exactly ONE ObjectOverride either way, and you
         // cannot tell from it which properties changed. It is the right API for
         // driving Apply/Revert on a whole object and the wrong one for reporting.
-        private static List<string> DescribeChanges(GameObject instanceRoot, bool ignoreRootScale)
+        private static List<string> DescribeChanges(
+            GameObject instanceRoot, string sourcePrefabPath, bool ignoreRootScale,
+            Dictionary<long, SceneYamlModifications.InstanceModifications> onDisk)
         {
             var changes = new List<string>();
 
@@ -277,6 +244,12 @@ namespace DreamPark.PreUploadChecks.Checks
                     if (addedGo == null || addedGo.instanceGameObject == null) continue;
                     changes.Add($"added GameObject '{addedGo.instanceGameObject.name}'");
                 }
+
+                foreach (var removedGo in PrefabUtility.GetRemovedGameObjects(instanceRoot))
+                {
+                    if (removedGo == null || removedGo.assetGameObject == null) continue;
+                    changes.Add($"removed GameObject '{removedGo.assetGameObject.name}'");
+                }
             }
             catch (Exception e)
             {
@@ -289,7 +262,12 @@ namespace DreamPark.PreUploadChecks.Checks
             // overrides for the whole subtree; it returns overrides that are no longer
             // valid; and IT CAN RETURN NULL.
             PropertyModification[] mods = null;
-            try { mods = PrefabUtility.GetPropertyModifications(instanceRoot); }
+            try
+            {
+                mods = PrefabUtility.GetPropertyModifications(instanceRoot);
+                // The scene dirtied itself while opening: keep only what is in the file.
+                if (onDisk != null) mods = SceneYamlModifications.WithoutLoadChurn(instanceRoot, mods, onDisk);
+            }
             catch (Exception e)
             {
                 Debug.LogWarning($"[DreamPark] Could not read property overrides on "
@@ -298,7 +276,8 @@ namespace DreamPark.PreUploadChecks.Checks
 
             if (mods != null)
             {
-                var rootTransform = instanceRoot.transform;
+                var rootAssetTransform = PrefabUtility.GetCorrespondingObjectFromSourceAtPath(
+                    instanceRoot.transform, sourcePrefabPath);
 
                 foreach (var mod in mods)
                 {
@@ -313,7 +292,7 @@ namespace DreamPark.PreUploadChecks.Checks
                     catch { isDefault = false; }
                     if (isDefault) continue;
 
-                    bool onRootTransform = ReferenceEquals(mod.target, rootTransform);
+                    bool onRootTransform = mod.target == rootAssetTransform;
 
                     // localScale is NOT a default override, so IsDefaultOverride will
                     // not drop it — but scaling an instance to eyeball it in a test
@@ -361,10 +340,12 @@ namespace DreamPark.PreUploadChecks.Checks
         {
             var findings = new List<Finding>();
 
-            // One finding per (source prefab, scene) pair, so a dev can ignore
-            // "Player.prefab in Template.unity" without also ignoring the same prefab
-            // in a different scene.
-            foreach (var group in hits.GroupBy(h => h.sourcePrefabPath + "|" + h.scenePath))
+            // One finding per concrete scene instance. A scene can contain several
+            // instances of the same prefab with different overrides; aggregating
+            // them into one row made the resolver open only the first while the title
+            // claimed to cover all of them.
+            foreach (var group in hits.GroupBy(h => h.sourcePrefabPath + "|" + h.scenePath
+                                                  + "|" + h.globalObjectId))
             {
                 var list = group.ToList();
                 var first = list[0];
@@ -385,7 +366,7 @@ namespace DreamPark.PreUploadChecks.Checks
                     severity = CheckSeverity.Warning,
                     assetGuid = first.sourcePrefabGuid,
                     assetPath = first.sourcePrefabPath,
-                    subKey = first.sceneGuid,
+                    subKey = first.sceneGuid + "|" + first.globalObjectId,
                     title = $"{prefabName} has {allChanges.Count} unapplied override"
                           + (allChanges.Count == 1 ? "" : "s") + $" in {sceneName}",
                     detail = $"{changeText}\n\n"
@@ -396,16 +377,20 @@ namespace DreamPark.PreUploadChecks.Checks
 
                 string scenePath = first.scenePath;
                 string hierarchy = first.hierarchyPath;
+                string globalObjectId = first.globalObjectId;
 
-                // "Open Scene & Select" is offered as the primary action rather than an
-                // automatic apply. Applying selectively means re-resolving the instance
-                // after a scene reopen and calling Apply* per override — and getting
-                // that subtly wrong writes the test-scene pose into shipped content.
-                // Unity's own Overrides dropdown already does this correctly, with a
-                // diff view; this puts the dev in front of it.
+                string prefabPath = first.sourcePrefabPath;
+                finding.fixes.Add(FixAction.Interactive("Review Apply / Revert…", completed =>
+                {
+                    SceneOverrideResolverWindow.Show(
+                        scenePath, hierarchy, globalObjectId, prefabPath, completed);
+                }));
+
+                // Keep direct navigation as a secondary escape hatch for creators who
+                // prefer Unity's native Overrides inspector.
                 finding.fixes.Add(new FixAction("Open scene & select", () =>
                 {
-                    return OpenAndSelect(scenePath, hierarchy);
+                    return OpenAndSelect(scenePath, hierarchy, globalObjectId);
                 })
                 {
                     resolvesFinding = false,   // opening resolves nothing on its own
@@ -422,7 +407,8 @@ namespace DreamPark.PreUploadChecks.Checks
             return findings;
         }
 
-        private static bool OpenAndSelect(string scenePath, string hierarchyPath)
+        private static bool OpenAndSelect(
+            string scenePath, string hierarchyPath, string globalObjectId)
         {
             try
             {
@@ -431,7 +417,7 @@ namespace DreamPark.PreUploadChecks.Checks
                 var scene = EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Single);
                 if (!scene.IsValid()) return false;
 
-                var target = FindByHierarchyPath(scene, hierarchyPath);
+                var target = FindSceneObject(scene, hierarchyPath, globalObjectId);
                 if (target != null)
                 {
                     Selection.activeGameObject = target;
@@ -448,8 +434,20 @@ namespace DreamPark.PreUploadChecks.Checks
             }
         }
 
-        private static GameObject FindByHierarchyPath(Scene scene, string hierarchyPath)
+        private static GameObject FindSceneObject(
+            Scene scene, string hierarchyPath, string globalObjectId)
         {
+            GlobalObjectId parsed;
+            if (!string.IsNullOrEmpty(globalObjectId)
+                && GlobalObjectId.TryParse(globalObjectId, out parsed))
+            {
+                var exact = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(parsed) as GameObject;
+                if (exact != null && exact.scene == scene) return exact;
+                return null;
+            }
+
+            // Legacy/fallback path for findings produced before GlobalObjectId was
+            // captured. New findings never take this potentially stale route.
             if (string.IsNullOrEmpty(hierarchyPath)) return null;
 
             foreach (var rootGo in scene.GetRootGameObjects())
@@ -468,7 +466,9 @@ namespace DreamPark.PreUploadChecks.Checks
             var cur = t;
             while (cur != null)
             {
-                parts.Add(cur.name);
+                // Name alone is ambiguous when siblings share a name. The sibling
+                // index also works for scene roots and makes resolution deterministic.
+                parts.Add(cur.name + "[" + cur.GetSiblingIndex() + "]");
                 cur = cur.parent;
             }
             parts.Reverse();

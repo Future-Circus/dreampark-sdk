@@ -559,16 +559,20 @@ public class StandardEntity<TState> : Entity<TState> where TState : Enum
     }
     [HideInInspector] public bool playerInRange {
         get {
-            var p1 = new Vector3(Camera.main.transform.position.x,0,Camera.main.transform.position.z);
+            var cam = global::DreamPark.PlayerHead.ContentCamera(); // Oct 11 2026: limbo stand-in while the local player is not in the park
+            if (cam == null) return false;
+            var p1 = new Vector3(cam.transform.position.x,0,cam.transform.position.z);
             var p2 = new Vector3(transform.position.x,0,transform.position.z);
-            return Camera.main != null && p1.Distance(p2) < detectionRange;
+            return p1.Distance(p2) < detectionRange;
         }
     }
     [HideInInspector] public bool playerInTargetingRange {
         get {
-            var p1 = new Vector3(Camera.main.transform.position.x,0,Camera.main.transform.position.z);
+            var cam = global::DreamPark.PlayerHead.ContentCamera(); // Oct 11 2026: limbo stand-in while the local player is not in the park
+            if (cam == null) return false;
+            var p1 = new Vector3(cam.transform.position.x,0,cam.transform.position.z);
             var p2 = new Vector3(transform.position.x,0,transform.position.z);
-            return Camera.main != null && targetPlayer && p1.Distance(p2) < targetRange;
+            return targetPlayer && p1.Distance(p2) < targetRange;
         }
     }
     public virtual void SetupInteractionFilters() {

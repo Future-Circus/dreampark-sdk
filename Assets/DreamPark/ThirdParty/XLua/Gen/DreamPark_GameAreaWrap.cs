@@ -55,7 +55,7 @@ namespace XLua.CSObjectWrap
 			Utils.EndObjectRegister(type, L, translator, null, null,
 			    null, null, null);
 
-		    Utils.BeginClassRegister(type, L, __CreateInstance, 4, 2, 2);
+		    Utils.BeginClassRegister(type, L, __CreateInstance, 4, 3, 3);
 			Utils.RegisterFunc(L, Utils.CLS_IDX, "FindNearest", _m_FindNearest_xlua_st_);
             
 			Utils.RegisterFunc(L, Utils.CLS_IDX, "OnContentZoneChanged", _e_OnContentZoneChanged);
@@ -64,9 +64,11 @@ namespace XLua.CSObjectWrap
             
 			Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "currentGameArea", _g_get_currentGameArea);
             Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "VerboseLogging", _g_get_VerboseLogging);
+            Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "TrackingOverride", _g_get_TrackingOverride);
             
 			Utils.RegisterFunc(L, Utils.CLS_SETTER_IDX, "currentGameArea", _s_set_currentGameArea);
             Utils.RegisterFunc(L, Utils.CLS_SETTER_IDX, "VerboseLogging", _s_set_VerboseLogging);
+            Utils.RegisterFunc(L, Utils.CLS_SETTER_IDX, "TrackingOverride", _s_set_TrackingOverride);
             
 			
 			Utils.EndClassRegister(type, L, translator);
@@ -449,6 +451,18 @@ namespace XLua.CSObjectWrap
             return 1;
         }
         
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_TrackingOverride(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			    translator.Push(L, DreamPark.GameArea.TrackingOverride);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
         
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
@@ -608,6 +622,19 @@ namespace XLua.CSObjectWrap
                 DreamPark.GameArea gen_to_be_invoked = (DreamPark.GameArea)translator.FastGetCSObj(L, 1);
                 UnityEngine.Color gen_value;translator.Get(L, 2, out gen_value);
 				gen_to_be_invoked.zoneColor = gen_value;
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_TrackingOverride(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			    DreamPark.GameArea.TrackingOverride = translator.GetDelegate<System.Func<DreamPark.GameArea.ZoneTracking>>(L, 1);
             
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);

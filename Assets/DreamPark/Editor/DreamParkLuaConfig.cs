@@ -70,6 +70,23 @@ using XLua;
 ///  • If generation or the IL2CPP build fails on a specific type (obsolete
 ///    members, editor-only surface), remove that ONE entry and note why —
 ///    do not trim the list wholesale.
+///  • TITLE-SPECIFIC types (a title's own C#, e.g. WizardsWay.BattleArea) never
+///    go in this SDK-synced file: a typeof() for a type only one title has
+///    breaks every other project that compiles it. Instead the title declares
+///    its own list next to its scripts, in a RUNTIME (non-Editor) folder so it
+///    ships in the title's scripts package and the core app compiles it:
+///
+///        // Assets/Content/WizardsWay/Scripts/WizardsWayLuaConfig.cs
+///        public static class WizardsWayLuaConfig {
+///            [XLua.LuaCallCSharp]
+///            public static System.Collections.Generic.List<System.Type> LuaCallCSharp =
+///                new System.Collections.Generic.List<System.Type> { typeof(WizardsWay.BattleArea) };
+///        }
+///
+///    XLua's generator merges [LuaCallCSharp] static members of EVERY static
+///    class (Generator.GetGenConfig), so core's regen picks it up; putting
+///    [XLua.LuaCallCSharp] on the title's class itself works the same way.
+///    LuaSurfaceScanner reads both forms, so the title's preflight is clean.
 ///  • Deliberately absent: Resources and PlayerPrefs. Content loading goes
 ///    through Addressables, and persistent per-user state goes through
 ///    GameStorageAPI — shared venue headsets must not accumulate local state.
@@ -77,6 +94,46 @@ using XLua;
 ///    just declines to bless them as a fast path.
 /// </summary>
 public static class DreamParkLuaConfig {
+
+    // ── Core-only: third-party types shipped content reaches through CS.* ──
+    // They exist in the APP (core compiles the titles' ThirdParty code) but not
+    // in the SDK, so they are added by NAME here, never by typeof, and never in
+    // the SDK's own Gen/ (a wrapper for a type the SDK lacks would not compile
+    // in a game project). ArcadeLand, Oct 2026: Modular3DText was reflection-only
+    // on device. Set IncludeAppOnlyTypes = false to generate the SDK's Gen/ from
+    // core (XLua regen for the SDK mirror).
+    //
+    // The NAMES compile everywhere (plain strings, no attribute) so a game
+    // project's LuaSurfaceScanner knows the app registers them: it used to report
+    // them as reflection-only in ArcadeLand (Oct 13 2026). Only the [LuaCallCSharp]
+    // list below is core-only — that is what codegen reads.
+    public static readonly string[] AppOnlyTypeNames = {
+        "TinyGiantStudio.Text.Modular3DText",
+        "TinyGiantStudio.Layout.LinearLayoutGroup",
+    };
+
+#if DREAMPARKCORE
+    public static bool IncludeAppOnlyTypes = true;
+
+    [LuaCallCSharp]
+    public static IEnumerable<Type> AppOnlyLuaCallCSharp
+    {
+        get
+        {
+            if (!IncludeAppOnlyTypes) yield break;
+            foreach (var name in AppOnlyTypeNames)
+            {
+                Type found = null;
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    try { found = asm.GetType(name, false); } catch { found = null; }
+                    if (found != null) break;
+                }
+                if (found != null) yield return found;
+            }
+        }
+    }
+#endif
 
     [LuaCallCSharp]
     public static List<Type> LuaCallCSharp = new List<Type>() {
@@ -254,6 +311,32 @@ public static class DreamParkLuaConfig {
         typeof(global::DreamPark.FloorAnchor),
         typeof(HandTracker),               // global namespace
 
+        // Oct 2026 (wave 2). Content reaches these through CS.* today and fell back
+        // to reflection on device: the package host (dp.package() returns its
+        // GameObject; scripts read CurrentLevelIndex / events), phone gestures, and
+        // the space data AttractionTemplate hands back (portals, wall sides). Gen/
+        // changes need an APP rebuild — content cannot ship them.
+        typeof(global::DreamPark.DreamParkPackageHost),
+        typeof(global::DreamPark.DreamParkGestures),
+        typeof(global::DreamPark.DreamParkGesture),
+        typeof(global::DreamPark.DreamParkGestureKind),
+        typeof(global::DreamPark.DreamParkRoutedGesture),
+        typeof(global::DreamPark.AttractionPortal),
+        typeof(global::DreamPark.AttractionPortalKind),
+        typeof(global::DreamPark.AttractionPortalGeometry),
+        typeof(global::DreamPark.AttractionWallSide),
+        typeof(global::DreamPark.AttractionWallMask),
+        // Portals (Oct 2026, golf-portal): content reads/sets them from Lua (DreamSports golf checks CS.DreamPark.PortalScene to tell an
+        // app with the portal camera from an older one). Without a wrapper the call is reflection-only on device.
+        typeof(global::DreamPark.PortalScene),
+        typeof(global::DreamPark.PortalSurface),
+        typeof(global::DreamPark.PortalSceneCamera),
+        typeof(global::DreamPark.PortalRenderer),
+        // Legacy 3D text, used by shipped content (ArcadeLand lua_score_manager).
+        typeof(TextMesh),
+        typeof(TextAnchor),
+        typeof(TextAlignment),
+
         // mp_kit.lua.txt's relay_ping/relay_state/relay_messages/session_state
         // diagnostics read these singletons directly (Samples/Multiplayer/
         // mp_kit.lua.txt). Every call site wraps them in pcall, so an
@@ -264,6 +347,57 @@ public static class DreamParkLuaConfig {
         // the first project that reaches for them would hit this blind.
         typeof(DreamBoxClient),                    // global namespace
         typeof(global::DreamPark.NetSessionArbiter),
+
+        // Oct 13 2026 (beta upload preflights: CrashCourse, SuperAdventureLand,
+        // WizardsWay). SDK and engine types shipped Lua reaches through CS.* that
+        // were reflection-only on device. SDK ones all live in Assets/DreamPark, so
+        // every project compiling this file has them. Title C# (WizardsWay.*) goes in
+        // that title's own config (see MAINTENANCE above).
+        //
+        // CoreExtensions is deliberately NOT here although ArcadeLand calls it:
+        // ArcadeLand calls CS.CoreExtensions.PlaySFX(clip, ...) — an extension method
+        // called statically — and XLua's wrapper for a static class leaves out the
+        // class's OWN extension methods (Generator.cs getClassInfo), with no reflection
+        // fallback once a wrapper exists. Registering it would turn that working
+        // reflection call into nil on device.
+        typeof(global::DreamPark.NetScope),        // cc_race, sal-net (course/room identity)
+        typeof(global::DreamPark.RemoteNameTag),
+        typeof(global::DreamPark.FloorCutout),
+        typeof(DepthMask),                         // global namespace
+        typeof(LuaLateUpdateRelay),                // global namespace
+        // Easy* event components content drives from Lua (EasyEvent is their base).
+        typeof(EasyEvent),
+        typeof(EasyAnimation),
+        typeof(EasyAudio),
+        typeof(EasyBroadcast),
+        typeof(EasyCollision),
+        typeof(EasyCounter),
+        typeof(EasyDelay),
+        typeof(EasyForce),
+        typeof(EasyInteraction),
+        typeof(EasyLayer),
+        typeof(EasyReceiver),
+        typeof(EasyRouter),
+        typeof(EasyScale),
+        typeof(EasyUnparent),
+        typeof(EasyVars),
+        typeof(EasyVoice),
+        typeof(global::DreamPark.Easy.EasyDetect),
+        typeof(global::DreamPark.Easy.EasyEnemy),
+        typeof(global::DreamPark.Easy.EasyLookAt),
+        typeof(global::DreamPark.Easy.EasyMove),
+        typeof(global::DreamPark.Easy.EasyShatter),
+        typeof(global::DreamPark.Easy.EasySpin),
+        typeof(global::DreamPark.Easy.EasyThrow),
+        // Engine types.
+        typeof(UnityEngine.Input),         // legacy input (player-damage.lua.txt)
+        typeof(UnityEngine.AI.NavMeshQueryFilter), // NavMesh.CalculatePath / SamplePosition filter overloads
+        typeof(CombineInstance),
+        typeof(AnimatorUpdateMode),
+        typeof(LineAlignment),
+        typeof(LineTextureMode),
+        typeof(ParticleSystemScalingMode),
+        typeof(ParticleSystemSimulationSpace),
     };
 
     /// <summary>
@@ -277,12 +411,23 @@ public static class DreamParkLuaConfig {
         typeof(Action<bool>),
         typeof(Action<int>),
         typeof(Action<float>),
+        typeof(Action<float, float>),
         typeof(Action<string>),
         typeof(Action<GameObject>),
         typeof(Action<Transform>),
         typeof(Action<Collider>),
         typeof(Action<Collision>),
         typeof(Action<Vector3>),
+        // ScoreAPI's async reads (FetchLeaderboard/FetchMyScore) and
+        // SubmitScore hand a result back into the SAME Lua callback the
+        // script passed in — there is no local cache to poll afterward the
+        // way GameStorageAPI's onReady pattern allows, so the result MUST
+        // travel as callback arguments. This is the exact shape this file's
+        // header warns about: without this entry, dp.score.* callbacks work
+        // in the SDK Editor (Mono reflection) and silently never fire on
+        // Quest/iOS (IL2CPP/AOT) — the Zombiez failure mode, just for a
+        // different delegate shape.
+        typeof(Action<bool, LuaTable>),
         typeof(Func<bool>),
         typeof(UnityEngine.Events.UnityAction),
         typeof(UnityEngine.Events.UnityAction<bool>),
@@ -390,6 +535,7 @@ public static class DreamParkLuaConfig {
         // Lightmap authoring — editor-only.
         { "UnityEngine.MeshRenderer", new HashSet<string>(StringComparer.Ordinal) {
             "scaleInLightmap", "receiveGI", "stitchLightmapSeams",
+            "globalIlluminationMeshLod",
         }},
 
         // Shadow/light authoring — editor-only.
@@ -412,6 +558,31 @@ public static class DreamParkLuaConfig {
         { "UnityEngine.ParticleSystemRenderer", new HashSet<string>(StringComparer.Ordinal) {
             "supportsMeshInstancing",
         }},
+
+        // Linux-standalone-only joystick query: never useful on Quest/iOS, and a
+        // platform-specific member is the shape that breaks a player build out of Gen/.
+        { "UnityEngine.Input", new HashSet<string>(StringComparer.Ordinal) {
+            "IsJoystickPreconfigured",
+        }},
+
+        // Declared inside #if UNITY_EDITOR (EasyEvent.cs, inspector chain linking).
+        { "EasyEvent", new HashSet<string>(StringComparer.Ordinal) {
+            "RemoveSelfLink",
+        }},
+
+#if DREAMPARKCORE
+        // Tiny Giant Studio Modular 3D Text (ArcadeLand's 3D text; app-only
+        // type, see AppOnlyTypeNames — core only, never in the SDK's Gen/). These members sit behind UNITY_EDITOR
+        // in the plugin, so the Oct 8 2026 regen broke iOS/Android players
+        // with 19 CS1061s in TinyGiantStudio_Text_Modular3DTextWrap.cs.
+        { "TinyGiantStudio.Text.Modular3DText", new HashSet<string>(StringComparer.Ordinal) {
+            "updatedAfterStyleUpdateOnPrefabInstances", "hideOverwrittenVariablesFromInspector",
+            "secondaryUV_hardAngle", "secondaryUV_angleError", "secondaryUV_areaError",
+            "secondaryUV_packMargin", "_allCharacterObjectList",
+            "PrefabBreakable", "ReconnectPrefabs", "SaveMeshAsAsset",
+            "GetListOfAllLayoutGroups", "FindDerivedTypes",
+        }},
+#endif
     };
 
     [BlackList]

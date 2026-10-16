@@ -590,6 +590,14 @@ namespace DreamPark.EditorTools.TextureOptimization
                     EditorUtility.DisplayProgressBar("Texture Optimizer", msg, p));
 
                 EditorUtility.ClearProgressBar();
+                if (!string.IsNullOrEmpty(result.error))
+                {
+                    // The window is interactive, so it may show the dialog the
+                    // executor deliberately doesn't (Oct 2026).
+                    if (!DreamParkAutomation.IsActive)
+                        EditorUtility.DisplayDialog("Texture Optimizer not ready", result.error, "OK");
+                    return;
+                }
 
                 // Roll up the first few failures into the dialog text so
                 // the user doesn't have to dig through Console to see

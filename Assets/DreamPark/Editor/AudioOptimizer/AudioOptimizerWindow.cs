@@ -628,6 +628,12 @@ namespace DreamPark.EditorTools.AudioOptimization
                     EditorUtility.DisplayProgressBar("Audio Optimizer", msg, p));
 
                 EditorUtility.ClearProgressBar();
+                if (!string.IsNullOrEmpty(result.error))
+                {
+                    if (!DreamParkAutomation.IsActive)
+                        EditorUtility.DisplayDialog("Audio Optimizer not ready", result.error, "OK");
+                    return;
+                }
 
                 // Roll up first 5 failures into the dialog so users don't
                 // have to dig through Console — same UX as the Texture

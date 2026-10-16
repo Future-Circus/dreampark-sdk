@@ -22,7 +22,7 @@ public static class CoreExtensions
     /// </summary>
     public struct AssetLoadFailure
     {
-        public string assetKey;        // e.g. "SuperAdventureLand/Levels/Custom/A_DreamSequence"
+        public string assetKey;        // e.g. "SuperAdventureLand/Levels/Custom/A_Example"
         public string message;         // human-readable reason
         public bool isCorruption;      // true for corrupt/truncated AssetBundle faults
     }
@@ -179,7 +179,11 @@ public static class CoreExtensions
             if (handle.Status == AsyncOperationStatus.Succeeded)
             {
                 #if DREAMPARKCORE
-                ContentManager.TrackLoadedAssetHandle(handle);
+                // Package manifests/definitions/manager prefabs are loaded by
+                // explicit content-prefixed keys. Attribute their handles to
+                // that pack so a per-content unload releases them too.
+                ContentManager.TrackLoadedAssetHandle(
+                    ContentManager.ContentIdFromAddress(resourceName), handle);
                 #endif
                 Debug.Log($"[GetAsset] Successfully loaded '{resourceName}'");
                 return handle.Result;

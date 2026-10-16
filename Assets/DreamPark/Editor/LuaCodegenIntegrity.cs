@@ -62,9 +62,13 @@ public static class LuaCodegenIntegrity
         public int configuredCount;
         public int wrapperFileCount;
         public List<string> missing = new List<string>();
+        /// "Type.Member" (or "Type.Method: N overloads, wrapper dispatches M") present in
+        /// the C# type, registered for codegen, but absent from its wrapper: Gen/ is older
+        /// than the API. Same severity as a missing wrapper — codegen is stale.
+        public List<string> staleMembers = new List<string>();
         public string report = "";
 
-        public bool IsClean => !genFolderMissing && missing.Count == 0;
+        public bool IsClean => !genFolderMissing && missing.Count == 0 && staleMembers.Count == 0;
 
         public string Summary
         {
@@ -146,7 +150,12 @@ public static class LuaCodegenIntegrity
             }
             else
             {
-                if (wrapperNames.Contains(NonmalizeName(t.ToString()) + "Wrap.cs")) continue;
+                string wrapFile = NonmalizeName(t.ToString()) + "Wrap.cs";
+                if (wrapperNames.Contains(wrapFile))
+                {
+                    CheckMembers(t, ReadIfPresent(Path.Combine(genPath, wrapFile)), result.staleMembers);
+                    continue;
+                }
             }
 
             if (allGenSrc == null)
@@ -161,16 +170,33 @@ public static class LuaCodegenIntegrity
         }
 
         result.missing.Sort(StringComparer.Ordinal);
+        result.staleMembers.Sort(StringComparer.Ordinal);
 
         var report = new StringBuilder();
         report.AppendLine("═══ XLua codegen integrity ═══");
         report.AppendLine($"{result.configuredCount} configured type(s), {result.wrapperFileCount} wrapper file(s) in Gen/.");
         if (result.IsClean)
         {
-            report.AppendLine("✓ Every configured type has generated code.");
+            report.AppendLine("✓ Every configured type has generated code, and every wrapper has the type's current members.");
+        }
+        else if (result.missing.Count == 0)
+        {
+            report.AppendLine();
+            report.AppendLine($"⛔ STALE WRAPPERS — public members with no generated code ({result.staleMembers.Count}):");
+            foreach (var m in result.staleMembers) report.AppendLine("    " + m);
+            report.AppendLine();
+            report.AppendLine("   Gen/ predates these members, so on a device Lua cannot reach them (or reaches");
+            report.AppendLine("   only the older overloads). Run DreamPark ▸ Troubleshooting ▸ Generate XLua Code");
+            report.AppendLine("   and rebuild the app — wrappers are AOT code compiled INTO the app.");
         }
         else
         {
+            if (result.staleMembers.Count > 0)
+            {
+                report.AppendLine();
+                report.AppendLine($"⛔ STALE WRAPPERS ({result.staleMembers.Count}):");
+                foreach (var m in result.staleMembers) report.AppendLine("    " + m);
+            }
             report.AppendLine();
             report.AppendLine($"⛔ NO GENERATED WRAPPER ({result.missing.Count}):");
             foreach (var m in result.missing) report.AppendLine("    " + m);
@@ -187,6 +213,52 @@ public static class LuaCodegenIntegrity
         }
         result.report = report.ToString();
         return result;
+    }
+
+    /// <summary>
+    /// Member-level drift: every member XLua would register for <paramref name="t"/>
+    /// (Generator.DreamParkExpectedMembers, the generator's own filters) must appear in
+    /// its wrapper as a registered name, and a method with N public overloads must
+    /// dispatch at least N ways. Errs toward silence like the type check: a wrapper
+    /// with MORE branches (default parameters) is fine.
+    /// </summary>
+    public static void CheckMembers(Type t, string wrapperSource, List<string> stale)
+    {
+        if (t == null || string.IsNullOrEmpty(wrapperSource) || stale == null) return;
+        Dictionary<string, int> expected;
+        try { expected = CSObjectWrapEditor.Generator.DreamParkExpectedMembers(t); }
+        catch (Exception e) { Debug.LogWarning("[LuaCodegen] member check skipped for " + t.FullName + ": " + e.Message); return; }
+        const string St = "_xlua_st_";
+        foreach (var kv in expected.OrderBy(k => k.Key, StringComparer.Ordinal))
+        {
+            bool isStatic = kv.Key.EndsWith(St, StringComparison.Ordinal);
+            string name = isStatic ? kv.Key.Substring(0, kv.Key.Length - St.Length) : kv.Key;
+            if (wrapperSource.IndexOf("\"" + name + "\"", StringComparison.Ordinal) < 0)
+            {
+                stale.Add(t.FullName + "." + name);
+                continue;
+            }
+            if (kv.Value <= 1) continue;
+            int branches = CountBranches(wrapperSource, "_m_" + kv.Key + "(");
+            if (branches < kv.Value)
+                stale.Add($"{t.FullName}.{name}{(isStatic ? " (static)" : "")}: {kv.Value} overloads, wrapper dispatches {Math.Max(1, branches)}");
+        }
+    }
+
+    static int CountBranches(string src, string header)
+    {
+        int at = src.IndexOf("static int " + header, StringComparison.Ordinal);
+        if (at < 0) return 0;
+        int end = src.IndexOf("static int ", at + 11, StringComparison.Ordinal);
+        string body = end < 0 ? src.Substring(at) : src.Substring(at, end - at);
+        int n = 0, i = 0;
+        // One branch per overload: "gen_param_count == N" (fixed arity) or ">= N" (params).
+        while ((i = body.IndexOf("gen_param_count ", i, StringComparison.Ordinal)) >= 0)
+        {
+            i += 16;
+            if (i + 1 < body.Length && (body[i] == '=' || body[i] == '>') && body[i + 1] == '=') n++;
+        }
+        return n;
     }
 
     private static string ReadIfPresent(string path)
@@ -215,6 +287,13 @@ public static class LuaCodegenIntegrity
                 foreach (var t in DreamParkLuaConfig.LuaCallCSharp) if (t != null) set.Add(t);
         }
         catch (Exception e) { Debug.LogWarning("[LuaCodegen] Couldn't read DreamParkLuaConfig: " + e.Message); }
+#if DREAMPARKCORE
+        try
+        {
+            foreach (var t in DreamParkLuaConfig.AppOnlyLuaCallCSharp) if (t != null) set.Add(t);
+        }
+        catch (Exception e) { Debug.LogWarning("[LuaCodegen] Couldn't read DreamParkLuaConfig.AppOnlyLuaCallCSharp: " + e.Message); }
+#endif
 
         foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
         {
@@ -235,7 +314,8 @@ public static class LuaCodegenIntegrity
                            && (t.IsPublic || t.IsNestedPublic)
                            && !t.IsGenericTypeDefinition
                            && !typeof(Delegate).IsAssignableFrom(t)
-                           && !t.Name.Contains("<"))
+                           && !t.Name.Contains("<")
+                           && !CSObjectWrapEditor.Generator.IsExcludedFromCodegen(t))
                   .ToList();
     }
 }

@@ -28,6 +28,12 @@ namespace DreamPark {
                 // this on device, a duplicate slipped through and the dedup backstop
                 // caught it — worth investigating the load site.
                 Debug.Log($"[PlayerRig] DUPLICATE rig for gameId '{gameId}' — destroying (instances stays {instances.Count})");
+                // Destroy is deferred to the end of the frame; until then the
+                // duplicate's NetIds would Start and register against the live
+                // rig's ids (its rig bus included). Keep them from ever
+                // registering. (A SetActive(false) here can throw while the
+                // parent is mid-activation, so only the NetIds are switched off.)
+                foreach (var netId in GetComponentsInChildren<NetId>(true)) netId.enabled = false;
                 Destroy(gameObject);
                 return;
             }

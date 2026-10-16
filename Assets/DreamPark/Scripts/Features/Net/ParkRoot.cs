@@ -15,29 +15,52 @@ namespace DreamPark
     /// same — and everything in the SDK that touches the wire (typed
     /// net_send, PlayerPresence, dp.to_park/from_park) converts through THIS.
     ///
-    /// Core stamps this on the ParkAnchor when it creates one. Where it is
-    /// absent (an SDK test scene, an older core) <see cref="Resolve"/> falls
-    /// back to the topmost ancestor of the active PlayerRig, which is the
-    /// same object on device, and to null in a scene with no park at all —
-    /// in which case every conversion is the identity and the same numbers
-    /// still work at a desk.
+    /// Core stamps this on the active Saved Location's root
+    /// (ParkLocationRoot) — the transform VPS, QR and the Quest device anchor
+    /// actually place, and the parent of every attraction. NOT the
+    /// ParkAnchor: under saved locations localization moves the location
+    /// root, and the park only follows it through a per-device checkpoint
+    /// relation (iOS only), so two headsets' parks sit in different places
+    /// while their content agrees. Poses sent park-relative then landed
+    /// metres from the player they belonged to (Oct 7 2026).
+    ///
+    /// Where it is absent (an SDK test scene, a legacy park that moves the
+    /// ParkAnchor itself, an older core) <see cref="Resolve"/> falls back to
+    /// the topmost ancestor of the active PlayerRig, and to null in a scene
+    /// with no park at all — in which case every conversion is the identity
+    /// and the same numbers still work at a desk.
     /// </summary>
     [DisallowMultipleComponent]
     public class ParkRoot : MonoBehaviour
     {
-        public static ParkRoot Current { get; private set; }
+        // Newest enabled root wins. A location switch stands the new root up
+        // before the old one's deferred Destroy lands, so this is a list, not
+        // a slot: the old root leaving must not clear the new one.
+        static readonly System.Collections.Generic.List<ParkRoot> s_live = new System.Collections.Generic.List<ParkRoot>();
 
-        void Awake()
+        public static ParkRoot Current
         {
-            if (Current != null && Current != this)
-                Debug.LogWarning($"[ParkRoot] A second ParkRoot appeared on '{name}' while '{Current.name}' is live — using the newest.");
-            Current = this;
+            get
+            {
+                for (int i = s_live.Count - 1; i >= 0; i--)
+                {
+                    if (s_live[i] != null) return s_live[i];
+                    s_live.RemoveAt(i);
+                }
+                return null;
+            }
+        }
+
+        void OnEnable()
+        {
+            s_live.Remove(this);
+            s_live.Add(this);
             _cached = null;
         }
 
-        void OnDestroy()
+        void OnDisable()
         {
-            if (Current == this) Current = null;
+            s_live.Remove(this);
             _cached = null;
         }
 
@@ -69,6 +92,76 @@ namespace DreamPark
             _cached = t;
             return _cached;
         }
+
+        // ── Shared-frame state (Oct 8 2026, NetPose) ────────────────
+        //
+        // A park-local number is only meaningful when THIS device's frame is
+        // actually placed in the room. Each headset localizes on its own (QR,
+        // VPS, its own spatial anchor, a phone placement); before it has, the
+        // location root sits wherever it booted and a pose sent relative to it
+        // lands metres from the person (demo, Oct 8 2026: "the multiplayer
+        // player positions were not tracking to the person"). Core installs
+        // StateProvider (ParkLocationRoot.cs → ParkLocationNetFrame); without
+        // one (SDK test scene, Park Simulator, a desk) the frame is trusted, as
+        // it always was.
+
+        public struct FrameState
+        {
+            /// <summary>Which shared frame this is (core: the Saved Location id). "" = unknown, matches any.</summary>
+            public string id;
+            /// <summary>This device's frame is placed in the room, so park-local numbers from it are real.</summary>
+            public bool localized;
+            /// <summary>Bumps when the frame jumps (a relocalization, a QR/VPS correction): receivers snap instead of gliding.</summary>
+            public int epoch;
+            /// <summary>The park is only shown as a miniature (relocalize diorama): remote players are drawn by the diorama camera alone.</summary>
+            public bool miniature;
+            /// <summary>What localized it (trace only).</summary>
+            public string source;
+        }
+
+        /// <summary>Installed by the host app (core). Null = trust the frame (SDK, simulator, desk).</summary>
+        public static System.Func<FrameState> StateProvider;
+
+        static bool s_providerFailed;
+
+        public static FrameState State
+        {
+            get
+            {
+                var provider = StateProvider;
+                if (provider != null)
+                {
+                    try { return provider(); }
+                    catch (System.Exception e)
+                    {
+                        if (!s_providerFailed) Debug.LogWarning("[ParkRoot] frame state provider threw: " + e.Message);
+                        s_providerFailed = true;
+                        // Fail closed: an unknown frame must not broadcast poses that look real.
+                        return new FrameState { id = "", localized = false, source = "provider-error" };
+                    }
+                }
+                return new FrameState { id = "", localized = true, source = Current != null ? "park-root" : "no-provider" };
+            }
+        }
+
+        // ── Pure conversions (rigid, unit-scale frame; testable without a scene) ──
+        // The same maths as ToPark / FromPark on a Transform with unit scale. The
+        // inverse of a unit rotation is its conjugate — written out so these stay
+        // managed code (Quaternion.Inverse is an engine call) and run anywhere.
+
+        static Quaternion Conjugate(Quaternion q) => new Quaternion(-q.x, -q.y, -q.z, q.w);
+
+        public static Vector3 PointToFrame(Vector3 framePos, Quaternion frameRot, Vector3 world)
+            => Conjugate(frameRot) * (world - framePos);
+
+        public static Vector3 PointFromFrame(Vector3 framePos, Quaternion frameRot, Vector3 local)
+            => framePos + frameRot * local;
+
+        public static Quaternion RotToFrame(Quaternion frameRot, Quaternion world)
+            => Conjugate(frameRot) * world;
+
+        public static Quaternion RotFromFrame(Quaternion frameRot, Quaternion local)
+            => frameRot * local;
 
         // ── Conversions (identity when there is no park) ─────────────
 

@@ -67,7 +67,12 @@ namespace DreamPark
             musicEmitter.transform.localPosition = Vector3.zero;
             musicEmitter.transform.localRotation = Quaternion.identity;
             musicEmitter.transform.localScale = Vector3.one;
-            musicEmitter.AddComponent<RealisticRolloff>();
+            // No RealisticRolloff here (removed Oct 2026). It used to be added BEFORE the
+            // AudioSource, so its Awake found none, logged "RealisticRolloff script requires
+            // at least one AudioSource component" for every music area (every simulated-peer
+            // run) and changed nothing, then destroyed itself in Start. Every title's music
+            // has therefore always played on Unity's default rolloff; adding it after the
+            // source instead would have changed how all shipped music sounds.
             audioSource = musicEmitter.AddComponent<AudioSource>();
             audioSource.playOnAwake = false;
             audioSource.loop = true;
@@ -80,14 +85,16 @@ namespace DreamPark
             BodyTracker bodyTracker = musicEmitter.AddComponent<BodyTracker>();
             bodyTracker.yOffset = 2f;
 
+            ComputeBounds();
+        }
+
+        /// <summary>Refresh after an attraction selects a packed runtime footprint.</summary>
+        public void ComputeBounds()
+        {
             levelTemplate = GetComponent<LevelTemplate>();
             if (levelTemplate)
             {
-                var bounds2D = GameLevelDimensions.GetDimensionsInMeters(levelTemplate.size);
-                if (levelTemplate.size == GameLevelSize.Custom)
-                {
-                    bounds2D = GameLevelDimensions.GetDimensionsInMeters(new Vector2(levelTemplate.customSize.x, levelTemplate.customSize.y));
-                }
+                Vector2 bounds2D = levelTemplate.RuntimeFootprintMeters;
                 halfExtents = new Vector3(bounds2D.x / 2f, 50f, bounds2D.y / 2f);
             }
             else

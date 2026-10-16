@@ -183,6 +183,14 @@ namespace DreamPark.EditorTools.MaterialConversion
         public const string Unlit     = "Shader Graphs/DreamPark-Unlit";
         public const string Particles = "DreamPark/Particles";
 
+        // TextMesh Pro SDF with Meta occlusion (Oct 2026): TMP's own SDF shaders plus the
+        // occlusion macros, for TMP font materials only — never a conversion TARGET for
+        // ordinary materials. Listed so IsDreamParkShader treats them as already converted
+        // (the planner leaves them alone; MetaOcclusionCheck passes them at Tier 1). The
+        // runtime mapping from the stock TMP names lives in DreamParkTmpOcclusion.
+        public const string TmpSdf       = DreamParkTmpOcclusion.OccludedSdf;
+        public const string TmpSdfMobile = DreamParkTmpOcclusion.OccludedSdfMobile;
+
         // Substring fragments (case-insensitive) that flag a source shader as
         // a candidate for DreamPark-Unlit. If the source name matches any of
         // these AND isn't already a DreamPark shader, the planner suggests
@@ -207,7 +215,9 @@ namespace DreamPark.EditorTools.MaterialConversion
             if (string.IsNullOrEmpty(shaderName)) return false;
             return shaderName == Universal
                 || shaderName == Unlit
-                || shaderName == Particles;
+                || shaderName == Particles
+                || shaderName == TmpSdf
+                || shaderName == TmpSdfMobile;
         }
     }
 }

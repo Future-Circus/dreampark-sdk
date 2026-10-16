@@ -106,6 +106,22 @@ namespace XLua.CSObjectWrap
                     
 					return 1;
 				}
+				if(LuaAPI.lua_gettop(L) == 3 && translator.Assignable<UnityEngine.Vector2>(L, 2) && translator.Assignable<UnityEngine.Vector2>(L, 3))
+				{
+					UnityEngine.Vector2 _position;translator.Get(L, 2, out _position);
+					UnityEngine.Vector2 _size;translator.Get(L, 3, out _size);
+					
+					var gen_ret = new UnityEngine.Rect(_position, _size);
+					translator.PushUnityEngineRect(L, gen_ret);
+                    translator.PushUnityEngineVector2(L, _position);
+                        translator.UpdateUnityEngineVector2(L, 2, _position);
+                        
+                    translator.PushUnityEngineVector2(L, _size);
+                        translator.UpdateUnityEngineVector2(L, 3, _size);
+                        
+                    
+					return 3;
+				}
 				if(LuaAPI.lua_gettop(L) == 2 && translator.Assignable<UnityEngine.Rect>(L, 2))
 				{
 					UnityEngine.Rect _source;translator.Get(L, 2, out _source);
@@ -114,6 +130,18 @@ namespace XLua.CSObjectWrap
 					translator.PushUnityEngineRect(L, gen_ret);
                     
 					return 1;
+				}
+				if(LuaAPI.lua_gettop(L) == 2 && translator.Assignable<UnityEngine.Rect>(L, 2))
+				{
+					UnityEngine.Rect _source;translator.Get(L, 2, out _source);
+					
+					var gen_ret = new UnityEngine.Rect(_source);
+					translator.PushUnityEngineRect(L, gen_ret);
+                    translator.PushUnityEngineRect(L, _source);
+                        translator.UpdateUnityEngineRect(L, 2, _source);
+                        
+                    
+					return 2;
 				}
 				
 				if (LuaAPI.lua_gettop(L) == 1)
@@ -252,11 +280,57 @@ namespace XLua.CSObjectWrap
                     
                     return 1;
                 }
+                if(gen_param_count == 2&& translator.Assignable<UnityEngine.Vector2>(L, 2)) 
+                {
+                    UnityEngine.Vector2 _point;translator.Get(L, 2, out _point);
+                    
+                        var gen_ret = gen_to_be_invoked.Contains( _point );
+                        LuaAPI.lua_pushboolean(L, gen_ret);
+                    translator.PushUnityEngineVector2(L, _point);
+                        translator.UpdateUnityEngineVector2(L, 2, _point);
+                        
+                    
+                    
+                        translator.UpdateUnityEngineRect(L, 1, gen_to_be_invoked);
+                    
+                    
+                    return 2;
+                }
                 if(gen_param_count == 2&& translator.Assignable<UnityEngine.Vector3>(L, 2)) 
                 {
                     UnityEngine.Vector3 _point;translator.Get(L, 2, out _point);
                     
                         var gen_ret = gen_to_be_invoked.Contains( _point );
+                        LuaAPI.lua_pushboolean(L, gen_ret);
+                    
+                    
+                        translator.UpdateUnityEngineRect(L, 1, gen_to_be_invoked);
+                    
+                    
+                    return 1;
+                }
+                if(gen_param_count == 2&& translator.Assignable<UnityEngine.Vector3>(L, 2)) 
+                {
+                    UnityEngine.Vector3 _point;translator.Get(L, 2, out _point);
+                    
+                        var gen_ret = gen_to_be_invoked.Contains( _point );
+                        LuaAPI.lua_pushboolean(L, gen_ret);
+                    translator.PushUnityEngineVector3(L, _point);
+                        translator.UpdateUnityEngineVector3(L, 2, _point);
+                        
+                    
+                    
+                        translator.UpdateUnityEngineRect(L, 1, gen_to_be_invoked);
+                    
+                    
+                    return 2;
+                }
+                if(gen_param_count == 3&& translator.Assignable<UnityEngine.Vector3>(L, 2)&& LuaTypes.LUA_TBOOLEAN == LuaAPI.lua_type(L, 3)) 
+                {
+                    UnityEngine.Vector3 _point;translator.Get(L, 2, out _point);
+                    bool _allowInverse = LuaAPI.lua_toboolean(L, 3);
+                    
+                        var gen_ret = gen_to_be_invoked.Contains( _point, _allowInverse );
                         LuaAPI.lua_pushboolean(L, gen_ret);
                     
                     
@@ -272,12 +346,15 @@ namespace XLua.CSObjectWrap
                     
                         var gen_ret = gen_to_be_invoked.Contains( _point, _allowInverse );
                         LuaAPI.lua_pushboolean(L, gen_ret);
+                    translator.PushUnityEngineVector3(L, _point);
+                        translator.UpdateUnityEngineVector3(L, 2, _point);
+                        
                     
                     
                         translator.UpdateUnityEngineRect(L, 1, gen_to_be_invoked);
                     
                     
-                    return 1;
+                    return 2;
                 }
                 
             } catch(System.Exception gen_e) {
@@ -314,6 +391,22 @@ namespace XLua.CSObjectWrap
                     
                     return 1;
                 }
+                if(gen_param_count == 2&& translator.Assignable<UnityEngine.Rect>(L, 2)) 
+                {
+                    UnityEngine.Rect _other;translator.Get(L, 2, out _other);
+                    
+                        var gen_ret = gen_to_be_invoked.Overlaps( _other );
+                        LuaAPI.lua_pushboolean(L, gen_ret);
+                    translator.PushUnityEngineRect(L, _other);
+                        translator.UpdateUnityEngineRect(L, 2, _other);
+                        
+                    
+                    
+                        translator.UpdateUnityEngineRect(L, 1, gen_to_be_invoked);
+                    
+                    
+                    return 2;
+                }
                 if(gen_param_count == 3&& translator.Assignable<UnityEngine.Rect>(L, 2)&& LuaTypes.LUA_TBOOLEAN == LuaAPI.lua_type(L, 3)) 
                 {
                     UnityEngine.Rect _other;translator.Get(L, 2, out _other);
@@ -327,6 +420,23 @@ namespace XLua.CSObjectWrap
                     
                     
                     return 1;
+                }
+                if(gen_param_count == 3&& translator.Assignable<UnityEngine.Rect>(L, 2)&& LuaTypes.LUA_TBOOLEAN == LuaAPI.lua_type(L, 3)) 
+                {
+                    UnityEngine.Rect _other;translator.Get(L, 2, out _other);
+                    bool _allowInverse = LuaAPI.lua_toboolean(L, 3);
+                    
+                        var gen_ret = gen_to_be_invoked.Overlaps( _other, _allowInverse );
+                        LuaAPI.lua_pushboolean(L, gen_ret);
+                    translator.PushUnityEngineRect(L, _other);
+                        translator.UpdateUnityEngineRect(L, 2, _other);
+                        
+                    
+                    
+                        translator.UpdateUnityEngineRect(L, 1, gen_to_be_invoked);
+                    
+                    
+                    return 2;
                 }
                 
             } catch(System.Exception gen_e) {
@@ -346,7 +456,9 @@ namespace XLua.CSObjectWrap
             
             
             
-                
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 2&& translator.Assignable<UnityEngine.Rect>(L, 1)&& translator.Assignable<UnityEngine.Vector2>(L, 2)) 
                 {
                     UnityEngine.Rect _rectangle;translator.Get(L, 1, out _rectangle);
                     UnityEngine.Vector2 _normalizedRectCoordinates;translator.Get(L, 2, out _normalizedRectCoordinates);
@@ -358,10 +470,30 @@ namespace XLua.CSObjectWrap
                     
                     return 1;
                 }
+                if(gen_param_count == 2&& translator.Assignable<UnityEngine.Rect>(L, 1)&& translator.Assignable<UnityEngine.Vector2>(L, 2)) 
+                {
+                    UnityEngine.Rect _rectangle;translator.Get(L, 1, out _rectangle);
+                    UnityEngine.Vector2 _normalizedRectCoordinates;translator.Get(L, 2, out _normalizedRectCoordinates);
+                    
+                        var gen_ret = UnityEngine.Rect.NormalizedToPoint( _rectangle, _normalizedRectCoordinates );
+                        translator.PushUnityEngineVector2(L, gen_ret);
+                    translator.PushUnityEngineRect(L, _rectangle);
+                        translator.UpdateUnityEngineRect(L, 1, _rectangle);
+                        
+                    translator.PushUnityEngineVector2(L, _normalizedRectCoordinates);
+                        translator.UpdateUnityEngineVector2(L, 2, _normalizedRectCoordinates);
+                        
+                    
+                    
+                    
+                    return 3;
+                }
                 
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to UnityEngine.Rect.NormalizedToPoint!");
             
         }
         
@@ -374,7 +506,9 @@ namespace XLua.CSObjectWrap
             
             
             
-                
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 2&& translator.Assignable<UnityEngine.Rect>(L, 1)&& translator.Assignable<UnityEngine.Vector2>(L, 2)) 
                 {
                     UnityEngine.Rect _rectangle;translator.Get(L, 1, out _rectangle);
                     UnityEngine.Vector2 _point;translator.Get(L, 2, out _point);
@@ -386,10 +520,30 @@ namespace XLua.CSObjectWrap
                     
                     return 1;
                 }
+                if(gen_param_count == 2&& translator.Assignable<UnityEngine.Rect>(L, 1)&& translator.Assignable<UnityEngine.Vector2>(L, 2)) 
+                {
+                    UnityEngine.Rect _rectangle;translator.Get(L, 1, out _rectangle);
+                    UnityEngine.Vector2 _point;translator.Get(L, 2, out _point);
+                    
+                        var gen_ret = UnityEngine.Rect.PointToNormalized( _rectangle, _point );
+                        translator.PushUnityEngineVector2(L, gen_ret);
+                    translator.PushUnityEngineRect(L, _rectangle);
+                        translator.UpdateUnityEngineRect(L, 1, _rectangle);
+                        
+                    translator.PushUnityEngineVector2(L, _point);
+                        translator.UpdateUnityEngineVector2(L, 2, _point);
+                        
+                    
+                    
+                    
+                    return 3;
+                }
                 
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to UnityEngine.Rect.PointToNormalized!");
             
         }
         
@@ -461,6 +615,22 @@ namespace XLua.CSObjectWrap
                     
                     
                     return 1;
+                }
+                if(gen_param_count == 2&& translator.Assignable<UnityEngine.Rect>(L, 2)) 
+                {
+                    UnityEngine.Rect _other;translator.Get(L, 2, out _other);
+                    
+                        var gen_ret = gen_to_be_invoked.Equals( _other );
+                        LuaAPI.lua_pushboolean(L, gen_ret);
+                    translator.PushUnityEngineRect(L, _other);
+                        translator.UpdateUnityEngineRect(L, 2, _other);
+                        
+                    
+                    
+                        translator.UpdateUnityEngineRect(L, 1, gen_to_be_invoked);
+                    
+                    
+                    return 2;
                 }
                 
             } catch(System.Exception gen_e) {

@@ -159,11 +159,31 @@
 		<type fullname="DreamPark.MusicArea" preserve="all"/>
 		<type fullname="DreamPark.FloorAnchor" preserve="all"/>
 		<type fullname="HandTracker" preserve="all"/>
+		<type fullname="DreamPark.DreamParkPackageHost" preserve="all"/>
+		<type fullname="DreamPark.DreamParkGestures" preserve="all"/>
+		<type fullname="DreamPark.DreamParkGesture" preserve="all"/>
+		<type fullname="DreamPark.DreamParkGestureKind" preserve="all"/>
+		<type fullname="DreamPark.DreamParkRoutedGesture" preserve="all"/>
+		<type fullname="DreamPark.AttractionPortal" preserve="all"/>
+		<type fullname="DreamPark.AttractionPortalKind" preserve="all"/>
+		<type fullname="DreamPark.AttractionPortalGeometry" preserve="all"/>
+		<type fullname="DreamPark.AttractionWallSide" preserve="all"/>
+		<type fullname="DreamPark.AttractionWallMask" preserve="all"/>
+		<type fullname="DreamBoxClient" preserve="all"/>
+		<type fullname="DreamPark.NetSessionArbiter" preserve="all"/>
 		<type fullname="EasyLua" preserve="all"/>
 		<type fullname="LuaBehaviour" preserve="all"/>
 		<type fullname="DreamPark.DreamParkLuaAPI" preserve="all"/>
 		<type fullname="DreamPark.API.GameStorageAPI" preserve="all"/>
 		<type fullname="DreamPark.API.ProfileAPI" preserve="all"/>
+		<type fullname="DreamPark.API.ScoreAPI" preserve="all"/>
+		
+	</assembly>
+
+	<assembly fullname="UnityEngine.TextRenderingModule">
+	    <type fullname="UnityEngine.TextMesh" preserve="all"/>
+		<type fullname="UnityEngine.TextAnchor" preserve="all"/>
+		<type fullname="UnityEngine.TextAlignment" preserve="all"/>
 		
 	</assembly>
 

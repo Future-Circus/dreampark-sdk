@@ -228,6 +228,14 @@ namespace DreamPark.Diagnostics
                 // Same pre-build setup the production upload flow does.
                 settings.MonoScriptBundleNaming = MonoScriptBundleNaming.Custom;
                 settings.MonoScriptBundleCustomNaming = contentId + "_";
+                // Oct 9 2026: the built-in assets bundle (Unity's default shaders,
+                // materials, fonts) is named per TITLE too. Left on ProjectName every
+                // title built in one project shipped "<projecthash>_unitybuiltinassets",
+                // and Unity refuses a second bundle with the same files already loaded:
+                // the second title's Phone Player failed ("Arena Player or Game Manager
+                // could not load", Layout Lab after Birthday Bash on device).
+                settings.BuiltInBundleNaming = BuiltInBundleNaming.Custom;
+                settings.BuiltInBundleCustomNaming = contentId + "_";
                 settings.OverridePlayerVersion = contentId;
 
                 // Spike-only NonRecursiveBuilding override — when set to false,

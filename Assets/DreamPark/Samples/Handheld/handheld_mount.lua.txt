@@ -1,0 +1,98 @@
+-- FALLBACK for apps older than the October 2026 release. On current apps call dp.hold(prop, side) instead (HANDHELD.md §5).
+-- handheld_mount.lua.txt — re-mounts a hand-held prop for whichever hand is in use (HANDHELD.md §4).
+--
+-- Put a LuaBehaviour with this script ON THE PROP ROOT (the object that has the Grip and Muzzle children) when the
+-- prop hangs under an ACTIVE-HAND node:
+--   * Player/BothHands (HandTracker handPreference = Both): local player, follows tracker.isUsingLeftHand
+--   * RemoteRig/Hand: what other players see; follows dp.peer(peer_id).active_hand ('l' / 'r')
+-- Props under Player/LeftHand, Player/RightHand, RemoteRig/LeftHand or RemoteRig/RightHand do NOT need it: they
+-- never change sides, so author them mounted for their own hand (HandheldKit.Place / the builder recipe).
+--
+-- Author the prop in the prefab mounted for the RIGHT hand. This script only changes the prop root's transform.
+-- Handles HandTracker.flipVisual (any flipVisualRotation / flipVisualPosition) on the local tracker.
+-- Convention (device, raw OVR hand anchor = OpenXR wrist): +Z fingers, +Y back of hand, thumb -X right / +X left.
+
+local UE = CS.UnityEngine
+
+local tf, node, tracker = nil, nil, nil
+local grips = {}          -- side -> { lp, lr, palm }
+local side_now = nil
+local FIST = { x = 0.007, y = -0.033, z = 0.081 }   -- fist centre, LEFT hand (x is negated for the right hand)
+local PALM = { x = 0.0, y = -0.022, z = 0.064 }     -- palm surface, both hands (for PalmGrip / PalmGripLeft)
+
+local function find_node()
+    local p = tf.parent
+    while p ~= nil do
+        local t = nil
+        -- GetComponents (an array) instead of GetComponent: a missing component is a Unity "fake null", not nil
+        pcall(function()
+            local arr = p:GetComponents(typeof(CS.HandTracker))
+            if arr.Length > 0 then t = arr[0] end
+        end)
+        if t ~= nil then return p, t end
+        local n = string.lower(string.gsub(p.name, '[%s_%-]', ''))
+        if n == 'hand' or n == 'lefthand' or n == 'righthand' then return p, nil end
+        p = p.parent
+    end
+    return nil, nil
+end
+
+local function current_side()
+    if tracker ~= nil then
+        local left = false
+        pcall(function() left = tracker.isUsingLeftHand end)
+        return left and 'left' or 'right'
+    end
+    local pid = peer_id
+    if pid ~= nil and pid ~= '' then
+        local pr = nil
+        pcall(function() pr = dp.peer(pid) end)
+        if pr ~= nil and (pr.active_hand == 'l' or pr.active_hand == 'left') then return 'left' end
+    end
+    return 'right'
+end
+
+-- the marker a hand uses: LEFT prefers GripLeft / PalmGripLeft, then Grip / PalmGrip (HANDHELD.md §4)
+local function grip_for(left)
+    local names = left and { 'GripLeft', 'PalmGripLeft', 'Grip', 'PalmGrip' } or { 'Grip', 'PalmGrip' }
+    for _, n in ipairs(names) do
+        local g = tf:Find(n)
+        if g ~= nil then return { lp = g.localPosition, lr = g.localRotation, palm = string.sub(n, 1, 4) == 'Palm' } end
+    end
+    return { lp = UE.Vector3.zero, lr = UE.Quaternion.identity, palm = false }
+end
+
+local function mount(side)
+    local left = side == 'left'
+    local g = grips[side]
+    -- grip pose in the RAW anchor frame
+    local grot = UE.Quaternion.Euler(0, 0, left and -90 or 90)
+    local gpos = g.palm and UE.Vector3(PALM.x, PALM.y, PALM.z) or UE.Vector3(left and FIST.x or -FIST.x, FIST.y, FIST.z)
+    -- the local tracker frame is raw * TRS(flipVisualPosition, flipVisualRotation) while the LEFT anchor drives it
+    if left and tracker ~= nil and tracker.flipVisual then
+        local fi = UE.Quaternion.Inverse(UE.Quaternion.Euler(tracker.flipVisualRotation))
+        gpos = fi * (gpos - tracker.flipVisualPosition)
+        grot = fi * grot
+    end
+    local rot = grot * UE.Quaternion.Inverse(g.lr)
+    local pos = gpos - rot * g.lp
+    tf.position = node:TransformPoint(pos)
+    tf.rotation = node.rotation * rot
+end
+
+function start()
+    tf = self.transform
+    node, tracker = find_node()
+    grips.right = grip_for(false)
+    grips.left = grip_for(true)
+    if node == nil then print('[handheld_mount] no hand node above ' .. tf.name) end
+end
+
+function update()
+    if node == nil then return end
+    local s = current_side()
+    if s ~= side_now then
+        side_now = s
+        mount(s)
+    end
+end

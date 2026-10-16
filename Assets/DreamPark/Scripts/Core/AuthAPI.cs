@@ -170,6 +170,9 @@ namespace DreamPark.API
         public static void HydrateProfile(Action<bool> callback = null)
         {
             if (!isLoggedIn) { callback?.Invoke(false); return; }
+            // An agent key is scoped to content routes — /api/user would 403 with
+            // AGENT_KEY_SCOPE, and the cached profile is the human's anyway.
+            if (IsAgentKeyActive) { callback?.Invoke(false); return; }
             DreamParkAPI.GET("/api/user/", GetUserAuth(), (success, response) => {
                 if (success && response != null && response.json != null && response.json.HasField("user"))
                 {
@@ -245,18 +248,82 @@ namespace DreamPark.API
             }
         }
 
-        public static string GetUserAuth() {
+        // ── AGENT KEYS — Editor-only, between the release token and the human session ──
+        // An agent key (`agk_...`) is what a coding agent gets when a HUMAN (the content's
+        // owner) reads it the 6-digit code from a POST /auth/agent/request email. It belongs
+        // to the agent's OWN account (which joins that content's team), is scoped to content
+        // routes + /developer and revocable at /developer → Agent keys — never the human's
+        // personal session.
+        // Stored project-locally in Library/DreamParkAgent/agent-key.json — see
+        // AgentKeyStore at the bottom of this file for why not EditorPrefs. A project keeps
+        // one key PER TITLE approval (Oct 2026); AgentKeyStore says which one a request uses.
+        //
+        // Precedence, everywhere below: release token > agent key > human session.
+        // The release token stays first because it is pushed for one command's
+        // duration on purpose; the agent key beats the human session because an agent
+        // that signed in deliberately must never silently act as the human instead.
+        public static bool IsAgentKeyActive {
+            get {
+#if UNITY_EDITOR
+                return AgentKeyStore.IsActive;
+#else
+                return false;
+#endif
+            }
+        }
+
+        // The human's own session bearer, ignoring every override. Used where an
+        // agent key or release token must NEVER be sent: /auth/logout (which revokes
+        // ALL of the human's sessions) and the /auth/refresh probe.
+        private static string HumanSessionToken {
+            get {
+#if UNITY_EDITOR
+                return GetAuthPref(PrefSessionToken, LegacySessionToken);
+#else
+                return _sessionToken;
+#endif
+            }
+        }
+
+        // Whether a HUMAN session is stored, regardless of any agent key / release token
+        // taking precedence over it. For status reporting only; never exposes the value.
+        public static bool HasHumanSession => !string.IsNullOrEmpty(HumanSessionToken);
+
+#if DREAMPARKCORE
+        // CORE-ONLY, internal (never reachable from creator Lua). The raw human session
+        // for DreamParkAPI.AttachUserSession — the signed-in account riding BESIDE the
+        // device key on /app/park reads, so the server can let the park's owner read
+        // their own park from their own phone. Null when nobody is signed in.
+        internal static string HumanSessionForDeviceReads =>
+            string.IsNullOrEmpty(HumanSessionToken) ? null : HumanSessionToken;
+#endif
+
+        public static string GetUserAuth() => GetUserAuthFor(null);
+
+        // GetUserAuth for a request about ONE content ID (its "<id>Beta" twin included): with
+        // several agent keys stored (one per title approval), the key approved for that title
+        // is sent; without one, the key in effect (the open content scope, else the newest).
+        // Release token and human session behave exactly as in GetUserAuth.
+        public static string GetUserAuthFor(string contentId) {
             // A release token in scope wins outright — it's a deliberate, narrow
             // override for the one command that pushed it, never a silent fallback
             // a human's interactive session could accidentally pick up.
             if (HasReleaseToken) return $"Bearer {_releaseTokenOverride}";
 #if UNITY_EDITOR
-            var sessionToken = GetAuthPref(PrefSessionToken, LegacySessionToken);
-#else
-            var sessionToken = _sessionToken;
+            var agent = string.IsNullOrWhiteSpace(contentId)
+                ? AgentKeyStore.ActiveRecord
+                : (AgentKeyStore.FindFor(contentId) ?? AgentKeyStore.ActiveRecord);
+            if (agent != null) return $"Bearer {agent.agentKey}";
 #endif
-            return $"Bearer {sessionToken}";
+            return $"Bearer {HumanSessionToken}";
         }
+
+#if UNITY_EDITOR
+        // Selects which stored agent key content-scoped work uses: every request made while
+        // the scope is open picks the key approved for `contentId` (see AgentKeyStore). A
+        // null/blank ID is a no-op, so callers can wrap unconditionally.
+        public static IDisposable WithAgentContent(string contentId) => AgentKeyStore.WithContent(contentId);
+#endif
 
         // "ApiKey <key>" header used by core's runtime to call /app/* endpoints.
         //
@@ -267,17 +334,21 @@ namespace DreamPark.API
         // Boot.cs runs DeviceKeyManager.EnsureEnrolledAsync() before the first
         // authenticated call.
         //
-        // EDITOR: still uses the legacy shared key (Assets/Scripts/Internal/
-        // CoreSecrets.cs) for core-team tooling convenience. Editor code is never
-        // compiled into players, so the secret stays out of shipped binaries; the
-        // backend keeps accepting it for editor + existing operator builds.
+        // EDITOR (core only): core's Editor tooling registers EditorApiKeyProvider
+        // at load. The credential comes from the developer's machine, never from
+        // source, and nothing here is compiled into a player.
         //
         // SDK callers use GetUserAuth() (session bearer) instead — anything in the
         // public SDK that legitimately needs to hit the backend goes through user auth.
+#if DREAMPARKCORE && UNITY_EDITOR
+        // Registered by core-only Editor code; null in the SDK and absent from players.
+        public static Func<string> EditorApiKeyProvider;
+#endif
         public static string GetAPIKey() {
 #if DREAMPARKCORE
 #if UNITY_EDITOR
-            return $"ApiKey {CoreSecrets.ApiKey}";
+            string editorKey = EditorApiKeyProvider?.Invoke();
+            return string.IsNullOrEmpty(editorKey) ? "" : $"ApiKey {editorKey}";
 #else
             return DeviceKeyManager.GetAuthHeader();
 #endif
@@ -290,17 +361,15 @@ namespace DreamPark.API
         public static bool isLoggedIn {
             get {
                 if (HasReleaseToken) return true;
-#if UNITY_EDITOR
-                var sessionToken = GetAuthPref(PrefSessionToken, LegacySessionToken);
-#else
-                var sessionToken = _sessionToken;
-#endif
-                return !string.IsNullOrEmpty(sessionToken);
+                if (IsAgentKeyActive) return true;
+                return !string.IsNullOrEmpty(HumanSessionToken);
             }
         }
         public static string userId {
             get {
 #if UNITY_EDITOR
+                var agent = AgentKeyStore.ActiveRecord;
+                if (agent != null) return agent.uid ?? "";
                 return GetAuthPref(PrefUserId, LegacyUserId);
 #else
                 return _userId;
@@ -311,10 +380,10 @@ namespace DreamPark.API
             get {
                 if (HasReleaseToken) return _releaseTokenOverride;
 #if UNITY_EDITOR
-                return GetAuthPref(PrefSessionToken, LegacySessionToken);
-#else
-                return _sessionToken;
+                var agent = AgentKeyStore.ActiveRecord;
+                if (agent != null) return agent.agentKey;
 #endif
+                return HumanSessionToken;
             }
         }
         // Cached email from the most recent login response. Used purely for display.
@@ -322,6 +391,8 @@ namespace DreamPark.API
             get {
                 if (HasReleaseToken) return "Release agent";
 #if UNITY_EDITOR
+                var agent = AgentKeyStore.ActiveRecord;
+                if (agent != null) return agent.DisplayName;
                 return GetAuthPref(PrefUserEmail, LegacyUserEmail);
 #else
                 return _userEmail;
@@ -330,9 +401,12 @@ namespace DreamPark.API
         }
         // Cached display name (falls back to "" when unset — callers should use email
         // as the visible label when this is empty). Hydrated via HydrateProfile().
+        // Blank while an agent key is active: the cached profile belongs to whichever
+        // HUMAN last signed in here, which need not be the account the key acts for.
         public static string displayName {
             get {
 #if UNITY_EDITOR
+                if (IsAgentKeyActive) return "";
                 return GetAuthPref(PrefDisplayName, LegacyDisplayName);
 #else
                 return _displayName;
@@ -344,6 +418,7 @@ namespace DreamPark.API
         public static string avatarUrl {
             get {
 #if UNITY_EDITOR
+                if (IsAgentKeyActive) return "";
                 return GetAuthPref(PrefAvatarUrl, LegacyAvatarUrl);
 #else
                 return _avatarUrl;
@@ -364,6 +439,8 @@ namespace DreamPark.API
             get {
                 if (HasReleaseToken) return 0;
 #if UNITY_EDITOR
+                var agent = AgentKeyStore.ActiveRecord;
+                if (agent != null) return agent.expiresAt > 0 ? agent.expiresAt : 0;
                 var raw = UnityEditor.EditorPrefs.GetString(PrefExpiresAt, "");
 #else
                 var raw = _expiresAt;
@@ -575,9 +652,23 @@ namespace DreamPark.API
         }
 
         public static void Logout(Action<bool, APIResponse> callback) {
+#if UNITY_EDITOR
+            // NEVER send an agent key to /auth/logout: that route revokes ALL of the
+            // human's sessions. "Sign out" while an agent key is active means signing
+            // the AGENT out — revoke every stored agent key (each on its own revoke
+            // route) and delete them locally; the human's own session (if any) is left
+            // exactly as it was.
+            if (IsAgentKeyActive) {
+                RevokeAgentKey((revoked, revokeResponse) => callback?.Invoke(revoked, revokeResponse));
+                return;
+            }
+#endif
+            // The human's own bearer, explicitly — never GetUserAuth(), which may be
+            // carrying a release token for the duration of a command.
+            string humanToken = HumanSessionToken;
             JSONObject body = new JSONObject();
-            body.AddField("session", sessionToken);
-            DreamParkAPI.POST("/auth/logout", AuthAPI.GetUserAuth(), body, (success, response) => {
+            body.AddField("session", humanToken);
+            DreamParkAPI.POST("/auth/logout", $"Bearer {humanToken}", body, (success, response) => {
                 if (success) {
                     callback?.Invoke(success, response);
                 } else {
@@ -604,7 +695,36 @@ namespace DreamPark.API
         // fires LoginStateChanged so panels re-render the logged-out state.
         public static void Refresh(Action<bool> callback)
         {
-            var token = sessionToken;
+#if UNITY_EDITOR
+            // An active agent key is probed on its own endpoint and NEVER through
+            // /auth/refresh, whose 401 path below wipes the HUMAN session. A 401 here
+            // means the key itself was revoked (or expired server-side): drop only the
+            // local key file, which hands the editor back to the human session, if any.
+            var agent = AgentKeyStore.ActiveRecord;
+            if (agent != null)
+            {
+                DreamParkAPI.GET("/auth/agent/me", $"Bearer {agent.agentKey}", (ok, response) => {
+                    if (ok) { callback?.Invoke(true); return; }
+                    if (response != null && response.statusCode == 401)
+                    {
+                        // Only THAT key: the project's keys for other titles are unaffected.
+                        Debug.LogWarning($"[AuthAPI] The DreamPark agent key {AgentKeyStore.Mask(agent.agentKey)} was rejected (revoked or expired). Removed it from this project.");
+                        try { AgentKeyStore.RemoveKey(agent.agentKey); }
+                        catch (Exception e) { Debug.LogWarning("[AuthAPI] Could not update " + AgentKeyStore.RelativePath + ": " + e.Message); }
+                        RaiseLoginStateChanged();
+                        callback?.Invoke(false);
+                        return;
+                    }
+                    // Network blip, 5xx, or a backend without the route yet: leave
+                    // the key alone, same leniency as the session probe below.
+                    callback?.Invoke(true);
+                });
+                return;
+            }
+#endif
+            // The human's own bearer, explicitly: a release token in scope must never be
+            // what decides whether the human session gets wiped.
+            var token = HumanSessionToken;
             if (string.IsNullOrEmpty(token))
             {
                 callback?.Invoke(false);
@@ -628,5 +748,1003 @@ namespace DreamPark.API
                 callback?.Invoke(false);
             });
         }
+
+#if UNITY_EDITOR
+        // ── AGENT KEY FLOW (Editor-only) ────────────────────────────────────────────
+        // Backend contract (DreamPark-Web routes/auth.routes.js):
+        //   POST /auth/agent/request {contentId, label, machine, email?} → 200 {status:"pending",
+        //        requestId, expiresAt, sentTo(masked)}. Existing content: emails its OWNER. New
+        //        content: `email` (the human who will own it) is required, else
+        //        400 APPROVER_EMAIL_REQUIRED. Also 400 INVALID_REQUEST/INVALID_CONTENT_ID,
+        //        409 OWNER_UNREACHABLE/CONTENT_RESERVED, 429 RATE_LIMITED.
+        //   POST /auth/agent/verify  {requestId, code} → 200 {agentKey, keyId, uid (the AGENT's
+        //        own account), email (may be null), label, expiresAt(ms), scopes, contentId,
+        //        approvedBy:{uid, email(masked)}} | 400/401 {error, code: INVALID_REQUEST|
+        //        INVALID_CODE|EXPIRED|TOO_MANY_ATTEMPTS}. The agent joins that content's team.
+        //   The pending response also carries pollToken ("akp_...", secret) and
+        //        approval:"email_link"; the owner approves by clicking a link (request TTL 30 min)
+        //        and the agent collects its key with POST /auth/agent/poll (PollAgentRequest).
+        //   GET  /auth/agent/me      (Bearer agk_) → {keyId, uid, email, label, expiresAt, scopes}
+        //   POST /auth/agent/revoke  (Bearer agk_) → revokes ONLY this key
+        //   POST /auth/handoff {next}(Bearer agk_) → {token, url, next, expiresAt}
+        // Never route an agent key to /auth/logout — see Logout().
+
+        // Asks a HUMAN to approve this agent for ONE content ID. Always answers
+        // {status:"pending", requestId, expiresAt, sentTo(masked)} on success: for an existing
+        // content ID the server emails its owner (email is ignored); for a NEW content ID
+        // `email` names the human who will own it and is required (400 APPROVER_EMAIL_REQUIRED
+        // otherwise). There is no auto-approval: the key only comes from VerifyAgentKey.
+        public static void RequestAgentKey(string contentId, string label, string machine, string email,
+            Action<bool, APIResponse> callback) {
+            byte[] body = AgentJsonBody(
+                "contentId", string.IsNullOrWhiteSpace(contentId) ? null : contentId.Trim(),
+                "label", label,
+                "machine", machine,
+                "email", string.IsNullOrWhiteSpace(email) ? null : email.Trim());
+            DreamParkAPI.POST("/auth/agent/request", "", body, (success, response) => callback?.Invoke(success, response));
+        }
+
+        // On success the key is added to Library/DreamParkAgent/agent-key.json as the entry
+        // for the request's content ID (replacing only an earlier entry for that title) and
+        // LoginStateChanged fires. The third callback argument is the stored record, or null
+        // on failure. The raw key is never logged.
+        public static void VerifyAgentKey(string requestId, string code,
+            Action<bool, APIResponse, AgentKeyRecord> callback) {
+            byte[] body = AgentJsonBody("requestId", requestId, "code", code);
+            var pending = AgentKeyStore.FindPendingByRequestId(requestId);
+            string requestedContentId = pending != null ? pending.contentId : null;
+            DreamParkAPI.POST("/auth/agent/verify", "", body, (success, response) => {
+                if (!success) { callback?.Invoke(false, response, null); return; }
+                AgentKeyRecord record;
+                string error;
+                if (!TryStoreAgentKey(response != null ? response.json : null, requestedContentId, out record, out error)) {
+                    if (response != null) response.error = error;
+                    callback?.Invoke(false, response, null);
+                    return;
+                }
+                callback?.Invoke(true, response, record);
+            });
+        }
+
+        // Parse, validate, persist and announce a verify/poll response. The entry covers the
+        // content ID the request was made for plus whatever the server says (contentId,
+        // contentIds[]). Unknown fields are ignored.
+        private static bool TryStoreAgentKey(JSONObject json, string requestedContentId, out AgentKeyRecord record, out string error) {
+            record = new AgentKeyRecord {
+                agentKey     = AgentJsonString(json, "agentKey"),
+                keyId        = AgentJsonString(json, "keyId"),
+                uid          = AgentJsonString(json, "uid"),
+                email        = AgentJsonString(json, "email"),
+                label        = AgentJsonString(json, "label"),
+                expiresAt    = AgentJsonMillis(json, "expiresAt"),
+                scopes       = AgentJsonStrings(json, "scopes"),
+                contentId    = AgentJsonString(json, "contentId"),
+            };
+            var covered = new System.Collections.Generic.List<string>();
+            foreach (string id in new[] { requestedContentId, record.contentId })
+                if (!string.IsNullOrWhiteSpace(id) && !covered.Contains(id.Trim())) covered.Add(id.Trim());
+            foreach (string id in AgentJsonStrings(json, "contentIds"))
+                if (!string.IsNullOrWhiteSpace(id) && !covered.Contains(id.Trim())) covered.Add(id.Trim());
+            record.contentIds = covered.ToArray();
+            if (string.IsNullOrWhiteSpace(record.contentId) && covered.Count > 0) record.contentId = covered[0];
+            var approvedBy = json != null && json.HasField("approvedBy") ? json.GetField("approvedBy") : null;
+            if (approvedBy != null && approvedBy.type == JSONObject.Type.Object) {
+                record.approvedByUid   = AgentJsonString(approvedBy, "uid");
+                record.approvedByEmail = AgentJsonString(approvedBy, "email");
+            }
+            if (string.IsNullOrEmpty(record.agentKey) || !record.agentKey.StartsWith(AgentKeyStore.KeyPrefix, StringComparison.Ordinal)) {
+                error = "The server's response did not contain an agk_ agent key.";
+                record = null;
+                return false;
+            }
+            try {
+                AgentKeyStore.Save(record);
+            } catch (Exception e) {
+                error = "Got an agent key, but it could not be saved to " + AgentKeyStore.RelativePath + ": " + e.Message;
+                record = null;
+                return false;
+            }
+            error = null;
+            RaiseLoginStateChanged();
+            return true;
+        }
+
+        // One poll of an approve-by-link request: POST /auth/agent/poll {requestId, pollToken}.
+        //   202 {status:"pending"} → (true, response, null)
+        //   200 {status:"approved", agentKey, ...same fields as verify} → the key is stored
+        //       exactly as VerifyAgentKey stores it → (true, response, record). Minted ONCE.
+        //   410 consumed|expired, 403 DENIED, 404 INVALID_REQUEST, 429 {retryAfterMs}, network
+        //       → (false, response, null); the caller reads statusCode / code.
+        public static void PollAgentRequest(string requestId, string pollToken,
+            Action<bool, APIResponse, AgentKeyRecord> callback) {
+            var pending = AgentKeyStore.FindPendingByRequestId(requestId);
+            PollAgentRequest(requestId, pollToken, pending != null ? pending.contentId : null, callback);
+        }
+
+        // Same, for a request made for `contentId`: the stored entry covers that title.
+        public static void PollAgentRequest(string requestId, string pollToken, string contentId,
+            Action<bool, APIResponse, AgentKeyRecord> callback) {
+            byte[] body = AgentJsonBody("requestId", requestId, "pollToken", pollToken);
+            DreamParkAPI.POST("/auth/agent/poll", "", body, (success, response) => {
+                if (!success) { callback?.Invoke(false, response, null); return; }
+                var json = response != null ? response.json : null;
+                if (!string.Equals(AgentJsonString(json, "status"), "approved", StringComparison.Ordinal)) {
+                    callback?.Invoke(true, response, null);
+                    return;
+                }
+                AgentKeyRecord record;
+                string error;
+                if (!TryStoreAgentKey(json, contentId, out record, out error)) {
+                    if (response != null) response.error = error;
+                    callback?.Invoke(false, response, null);
+                    return;
+                }
+                callback?.Invoke(true, response, record);
+            });
+        }
+
+        // Server-side view of the key in effect. Calls back (false, null) with no request when
+        // there is no active (present + unexpired) key.
+        public static void GetAgentIdentity(Action<bool, APIResponse> callback) {
+            GetAgentIdentity(AgentKeyStore.ActiveRecord, callback);
+        }
+
+        // Server-side view of one stored key (dreampark_agent_status checks each entry).
+        public static void GetAgentIdentity(AgentKeyRecord agent, Action<bool, APIResponse> callback) {
+            if (agent == null || !agent.IsUsable) { callback?.Invoke(false, null); return; }
+            DreamParkAPI.GET("/auth/agent/me", $"Bearer {agent.agentKey}", (success, response) => callback?.Invoke(success, response));
+        }
+
+        // Revokes EVERY stored agent key on the server (each with its own revoke call, never
+        // /auth/logout), then deletes the local file — ALWAYS, even when a request fails (a
+        // key the caller asked to forget must not stay usable from this machine). success is
+        // true only when the server confirmed every revocation; response is the last answer.
+        // A call with no stored key reports (true, null).
+        public static void RevokeAgentKey(Action<bool, APIResponse> callback) {
+            var all = AgentKeyStore.LoadAll(); // expired ones too: revoking is harmless
+            RevokeEach(all, 0, true, null, (ok, response) => {
+                try { AgentKeyStore.Delete(); }
+                catch (Exception e) { Debug.LogWarning("[AuthAPI] Could not delete " + AgentKeyStore.RelativePath + ": " + e.Message); }
+                RaiseLoginStateChanged();
+                callback?.Invoke(ok, response);
+            });
+        }
+
+        // Revokes and removes ONLY the entries approved for `contentId` (its beta twin
+        // included); other titles' keys stay. The third argument lists what was removed.
+        public static void RevokeAgentKeyFor(string contentId,
+            Action<bool, APIResponse, System.Collections.Generic.List<AgentKeyRecord>> callback) {
+            var targets = AgentKeyStore.FindAllFor(contentId);
+            RevokeEach(targets, 0, true, null, (ok, response) => {
+                RaiseLoginStateChanged();
+                callback?.Invoke(ok, response, targets);
+            });
+        }
+
+        // Sequential: revoke records[index], drop it locally whatever the answer, recurse.
+        private static void RevokeEach(System.Collections.Generic.List<AgentKeyRecord> records, int index,
+            bool allOk, APIResponse last, Action<bool, APIResponse> done) {
+            if (records == null || index >= records.Count) { done(allOk, last); return; }
+            var record = records[index];
+            if (record == null || string.IsNullOrEmpty(record.agentKey)) {
+                RevokeEach(records, index + 1, allOk, last, done);
+                return;
+            }
+            DreamParkAPI.POST("/auth/agent/revoke", $"Bearer {record.agentKey}", AgentJsonBody(), (success, response) => {
+                try { AgentKeyStore.RemoveKey(record.agentKey); }
+                catch (Exception e) { Debug.LogWarning("[AuthAPI] Could not update " + AgentKeyStore.RelativePath + ": " + e.Message); }
+                RevokeEach(records, index + 1, allOk && success && response != null, response, done);
+            });
+        }
+
+        // Mints a single-use website sign-in link for the ACTIVE AGENT KEY's account. Agent
+        // keys only — a human session is deliberately not used, so an agent can never turn
+        // the owner's personal session into a browser login.
+        public static void RequestAgentWebHandoff(string next, Action<bool, APIResponse> callback) {
+            RequestAgentWebHandoff(AgentKeyStore.ActiveRecord, next, callback);
+        }
+
+        // Same, as one stored key's account (the key approved for the title being opened).
+        public static void RequestAgentWebHandoff(AgentKeyRecord agent, string next, Action<bool, APIResponse> callback) {
+            if (agent == null || !agent.IsUsable) { callback?.Invoke(false, null); return; }
+            DreamParkAPI.POST("/auth/handoff", $"Bearer {agent.agentKey}", AgentJsonBody("next", next), (success, response) => callback?.Invoke(success, response));
+        }
+
+        // Key/value pairs → UTF-8 JSON object; null values are omitted. Hand-rolled
+        // because Defective.JSON does not escape backslashes or control characters, and a
+        // machine name or label is free text.
+        private static byte[] AgentJsonBody(params string[] keyValues) {
+            var sb = new System.Text.StringBuilder("{");
+            bool first = true;
+            for (int i = 0; i + 1 < keyValues.Length; i += 2) {
+                if (keyValues[i + 1] == null) continue;
+                if (!first) sb.Append(',');
+                first = false;
+                AppendJsonString(sb, keyValues[i]);
+                sb.Append(':');
+                AppendJsonString(sb, keyValues[i + 1]);
+            }
+            sb.Append('}');
+            return System.Text.Encoding.UTF8.GetBytes(sb.ToString());
+        }
+
+        private static void AppendJsonString(System.Text.StringBuilder sb, string value) {
+            sb.Append('"');
+            foreach (char c in value) {
+                switch (c) {
+                    case '"':  sb.Append("\\\""); break;
+                    case '\\': sb.Append("\\\\"); break;
+                    case '\n': sb.Append("\\n"); break;
+                    case '\r': sb.Append("\\r"); break;
+                    case '\t': sb.Append("\\t"); break;
+                    default:
+                        if (c < 0x20) sb.Append("\\u").Append(((int)c).ToString("x4"));
+                        else sb.Append(c);
+                        break;
+                }
+            }
+            sb.Append('"');
+        }
+
+        public static string AgentJsonString(JSONObject json, string field) {
+            if (json == null || !json.HasField(field)) return null;
+            var node = json.GetField(field);
+            if (node == null || node.type != JSONObject.Type.String) return null;
+            return node.stringValue;
+        }
+
+        // Unix-ms from a Number (the contract) or, defensively, a numeric/ISO-8601 string.
+        public static long AgentJsonMillis(JSONObject json, string field) {
+            if (json == null || !json.HasField(field)) return 0;
+            var node = json.GetField(field);
+            if (node == null) return 0;
+            if (node.type == JSONObject.Type.Number)
+                return node.isInteger ? node.longValue : (long)node.doubleValue;
+            if (node.type == JSONObject.Type.String && !string.IsNullOrEmpty(node.stringValue)) {
+                long parsed;
+                if (long.TryParse(node.stringValue, out parsed)) return parsed;
+                DateTimeOffset when;
+                if (DateTimeOffset.TryParse(node.stringValue, System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.AssumeUniversal, out when))
+                    return when.ToUnixTimeMilliseconds();
+            }
+            return 0;
+        }
+
+        public static string[] AgentJsonStrings(JSONObject json, string field) {
+            if (json == null || !json.HasField(field)) return new string[0];
+            var node = json.GetField(field);
+            if (node == null || node.type != JSONObject.Type.Array || node.list == null) return new string[0];
+            var result = new System.Collections.Generic.List<string>();
+            foreach (var item in node.list)
+                if (item != null && item.type == JSONObject.Type.String) result.Add(item.stringValue);
+            return result.ToArray();
+        }
+#endif
     }
+
+#if UNITY_EDITOR
+    // One approved agent key. Library/DreamParkAgent/agent-key.json holds a SET of these
+    // (AgentKeyFile), one per title approval: a project with several content folders
+    // remembers every approval instead of each new one overwriting the last (owner,
+    // 2026-10-09). JsonUtility-serialized (handles escaping and 64-bit expiresAt correctly,
+    // and is safe off the main thread).
+    [Serializable]
+    public sealed class AgentKeyRecord
+    {
+        public string agentKey;
+        public string keyId;
+        public string uid;
+        public string email;
+        public string label;
+        public long expiresAt; // Unix ms; 0 = unknown (the server still enforces expiry)
+        public string[] scopes;
+        public string contentId;       // the content the owner approved this agent for
+        public string[] contentIds;    // every content ID this key covers: the approval's own
+                                       // contentId plus any the server listed. "<id>Beta" twins
+                                       // are implied (Covers), never stored.
+        public string approvedByUid;   // the human who approved it
+        public string approvedByEmail; // masked by the server (a***@…)
+        public long storedAt;          // Unix ms this entry was stored here; the newest entry
+                                       // is the fallback key
+
+        // Masked keys of the entries this one replaced when it was stored. Not persisted.
+        [NonSerialized] public string[] replacedKeys;
+
+        // What to show where an email would go: agent identities have no email of their own.
+        public string DisplayName => !string.IsNullOrEmpty(email) ? email
+            : "agent (approved by " + (string.IsNullOrEmpty(approvedByEmail) ? "the owner" : approvedByEmail) + ")";
+
+        public bool IsExpired => expiresAt > 0 && expiresAt <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        // Present, agk_-prefixed and not yet expired.
+        public bool IsUsable => !string.IsNullOrEmpty(agentKey)
+            && agentKey.StartsWith(AgentKeyStore.KeyPrefix, StringComparison.Ordinal)
+            && !IsExpired;
+
+        // contentId ∪ contentIds: non-empty, trimmed, distinct, approval's own ID first.
+        public string[] CoveredContentIds
+        {
+            get
+            {
+                var result = new System.Collections.Generic.List<string>();
+                if (!string.IsNullOrWhiteSpace(contentId)) result.Add(contentId.Trim());
+                if (contentIds != null)
+                    foreach (string id in contentIds)
+                        if (!string.IsNullOrWhiteSpace(id) && !result.Contains(id.Trim())) result.Add(id.Trim());
+                return result.ToArray();
+            }
+        }
+
+        // True when this key was approved for `id`, or for the title whose beta twin `id` is
+        // ("LaserTagBeta" is covered by a LaserTag approval: the beta hangs off the title).
+        // This only picks which stored key to SEND; the server decides what it may do.
+        public bool Covers(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return false;
+            id = id.Trim();
+            foreach (string covered in CoveredContentIds)
+            {
+                if (string.Equals(covered, id, StringComparison.Ordinal)) return true;
+                if (string.Equals(covered + AgentKeyStore.BetaSuffix, id, StringComparison.Ordinal)) return true;
+            }
+            return false;
+        }
+    }
+
+    // Library/DreamParkAgent/agent-key.json since schema 2 (Oct 2026). Schema 1 (the file IS
+    // one AgentKeyRecord) is still read, as a one-entry set, and rewritten as schema 2 on the
+    // next change.
+    [Serializable]
+    public sealed class AgentKeyFile
+    {
+        public int schemaVersion; // set on write; 0 = a legacy single-record file
+        public System.Collections.Generic.List<AgentKeyRecord> keys = new System.Collections.Generic.List<AgentKeyRecord>();
+    }
+
+    // One approval request between dreampark_agent_request and dreampark_agent_wait.
+    // Library/DreamParkAgent/pending-request.json holds one per content ID (PendingAgentRequestFile).
+    [Serializable]
+    public sealed class PendingAgentRequest
+    {
+        public string requestId;
+        public string pollToken; // akp_..., secret
+        public string contentId;
+        public string sentTo;    // masked by the server
+        public long expiresAt;   // Unix ms; 0 = unknown
+        public string approval;  // "email_link" when the owner approves by clicking a link
+        public long requestedAt; // Unix ms this request was stored here
+
+        public bool IsExpired => expiresAt > 0 && expiresAt <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    }
+
+    // Library/DreamParkAgent/pending-request.json since schema 2: one pending request PER
+    // content ID, so several titles can be approved in parallel. A legacy single-request file
+    // is read as a one-entry set.
+    [Serializable]
+    public sealed class PendingAgentRequestFile
+    {
+        public int schemaVersion; // set on write; 0 = a legacy single-request file
+        public System.Collections.Generic.List<PendingAgentRequest> requests = new System.Collections.Generic.List<PendingAgentRequest>();
+    }
+
+    // Project-local storage for agent keys. Deliberately NOT EditorPrefs: EditorPrefs is
+    // machine-global (shared by every Unity project on the computer — see PrefSessionToken),
+    // while an agent key is issued to ONE project's agent. Library/ is per-project and
+    // gitignored, so a key can never be committed. Files are chmod 0600 (dir 0700) on
+    // macOS/Linux and written atomically (temp file + rename); on Windows they inherit the
+    // project folder's ACL.
+    //
+    // ONE KEY PER TITLE (Oct 2026). Each owner approval is for one content ID and yields a key
+    // whose account is on that title's team only, so a project with several content folders
+    // keeps one entry per approval. Which entry a request uses:
+    //   1. an explicit content ID (AuthAPI.GetUserAuthFor(id): ContentAPI routes, badges), else
+    //   2. the innermost open content scope (WithContent: every content-scoped CLI command), else
+    //   3. nothing: the newest usable entry (the fallback; also what non-content calls use).
+    // With an ID, the newest usable entry that Covers it wins (its "<id>Beta" twin included);
+    // when none does, the newest usable entry is used.
+    //
+    // Never log a key: use Mask() for anything a human or a command result will see.
+    public static class AgentKeyStore
+    {
+        public const string KeyPrefix = "agk_";
+        public const string BetaSuffix = "Beta"; // BetaContentId.Suffix (Editor assembly)
+        public const int SchemaVersion = 2;
+        public const string RelativePath = "Library/DreamParkAgent/agent-key.json";
+
+        private static readonly object Gate = new object();
+        private static string _projectRoot;
+        private static System.Collections.Generic.List<AgentKeyRecord> _cached;
+        private static long _cachedStampTicks;
+        private static long _cachedLength = -1;
+        private static bool _cacheValid;
+
+        // Application.dataPath is main-thread-only; resolve it once at load so a call from
+        // a worker thread (e.g. GetUserAuth inside a background upload step) still works.
+        [UnityEditor.InitializeOnLoadMethod]
+        private static void ResolveProjectRootOnLoad()
+        {
+            var unused = ProjectRoot;
+        }
+
+        public static string ProjectRoot
+        {
+            get
+            {
+                if (_projectRoot == null)
+                {
+                    try { _projectRoot = System.IO.Path.GetFullPath(System.IO.Path.Combine(Application.dataPath, "..")); }
+                    catch (Exception) { _projectRoot = System.IO.Directory.GetCurrentDirectory(); }
+                }
+                return _projectRoot;
+            }
+        }
+
+        // Tests only: point the store at another folder (a temp dir) until disposed. The
+        // project's real Library/DreamParkAgent is never touched while it is in effect.
+        public static IDisposable UseProjectRootForTests(string root)
+        {
+            if (string.IsNullOrEmpty(root)) throw new ArgumentNullException(nameof(root));
+            lock (Gate)
+            {
+                var restore = new RootOverride(ProjectRoot);
+                _projectRoot = System.IO.Path.GetFullPath(root);
+                InvalidateUnlocked();
+                return restore;
+            }
+        }
+
+        private sealed class RootOverride : IDisposable
+        {
+            private readonly string _previous;
+            private bool _disposed;
+            public RootOverride(string previous) { _previous = previous; }
+            public void Dispose()
+            {
+                if (_disposed) return;
+                _disposed = true;
+                lock (Gate)
+                {
+                    _projectRoot = _previous;
+                    InvalidateUnlocked();
+                }
+            }
+        }
+
+        public static string FilePath => System.IO.Path.Combine(ProjectRoot, "Library", "DreamParkAgent", "agent-key.json");
+
+        // ── Reading ──
+
+        // Every stored entry, expired or not, NEWEST FIRST (storedAt). Empty when the file is
+        // absent or unreadable. Cached against the file's mtime + length, so per-repaint
+        // callers (isLoggedIn) cost one stat().
+        public static System.Collections.Generic.List<AgentKeyRecord> LoadAll()
+        {
+            lock (Gate)
+            {
+                return new System.Collections.Generic.List<AgentKeyRecord>(ReadUnlocked());
+            }
+        }
+
+        // The newest stored entry, expired or not, or null when there is none.
+        public static AgentKeyRecord Load()
+        {
+            lock (Gate)
+            {
+                var all = ReadUnlocked();
+                return all.Count > 0 ? all[0] : null;
+            }
+        }
+
+        // The newest USABLE entry approved for `contentId` (or the title whose beta twin it
+        // is), or null. No fallback.
+        public static AgentKeyRecord FindFor(string contentId)
+        {
+            if (string.IsNullOrWhiteSpace(contentId)) return null;
+            lock (Gate)
+            {
+                foreach (var record in ReadUnlocked())
+                    if (record.IsUsable && record.Covers(contentId)) return record;
+                return null;
+            }
+        }
+
+        // Every stored entry covering `contentId`, expired or not, newest first.
+        public static System.Collections.Generic.List<AgentKeyRecord> FindAllFor(string contentId)
+        {
+            var result = new System.Collections.Generic.List<AgentKeyRecord>();
+            if (string.IsNullOrWhiteSpace(contentId)) return result;
+            lock (Gate)
+            {
+                foreach (var record in ReadUnlocked())
+                    if (record.Covers(contentId)) result.Add(record);
+            }
+            return result;
+        }
+
+        // The newest usable entry of all, or null.
+        public static AgentKeyRecord Newest
+        {
+            get
+            {
+                lock (Gate)
+                {
+                    foreach (var record in ReadUnlocked())
+                        if (record.IsUsable) return record;
+                    return null;
+                }
+            }
+        }
+
+        // The key a request about `contentId` sends: the entry approved for it, else (none
+        // matches, or no ID) the newest usable entry. Null only when no usable key is stored.
+        public static AgentKeyRecord SelectFor(string contentId)
+        {
+            return FindFor(contentId) ?? Newest;
+        }
+
+        // The key in effect right now: SelectFor(the innermost open content scope).
+        public static AgentKeyRecord ActiveRecord => SelectFor(CurrentContentScope);
+
+        public static bool IsActive => ActiveRecord != null;
+
+        // The content IDs some stored entry covers, for messages ("this project has keys for …").
+        public static string[] CoveredContentIds()
+        {
+            var result = new System.Collections.Generic.List<string>();
+            foreach (var record in LoadAll())
+                foreach (string id in record.CoveredContentIds)
+                    if (!result.Contains(id)) result.Add(id);
+            return result.ToArray();
+        }
+
+        // ── Content scope ──
+        // Content-scoped commands (preflight, publish, inspect, web login for a title) open a
+        // scope for their whole run so every request inside them, including ones started from
+        // EditorCoroutines and worker threads, picks that title's key. Not a stack: disposing
+        // a scope removes exactly that scope, so overlapping async commands (a publish running
+        // in the background while an inspect comes and goes) cannot restore the wrong title.
+        private static readonly System.Collections.Generic.List<ContentScope> Scopes = new System.Collections.Generic.List<ContentScope>();
+
+        public static string CurrentContentScope
+        {
+            get
+            {
+                lock (Gate) return Scopes.Count == 0 ? null : Scopes[Scopes.Count - 1].ContentId;
+            }
+        }
+
+        // A null/blank content ID is a no-op scope, so callers can always wrap unconditionally.
+        public static IDisposable WithContent(string contentId)
+        {
+            var scope = new ContentScope(string.IsNullOrWhiteSpace(contentId) ? null : contentId.Trim());
+            if (scope.ContentId != null)
+                lock (Gate) Scopes.Add(scope);
+            return scope;
+        }
+
+        private sealed class ContentScope : IDisposable
+        {
+            public readonly string ContentId;
+            private bool _disposed;
+            public ContentScope(string contentId) { ContentId = contentId; }
+            public void Dispose()
+            {
+                if (_disposed) return;
+                _disposed = true;
+                if (ContentId != null)
+                    lock (Gate) Scopes.Remove(this);
+            }
+        }
+
+        // ── Writing ──
+
+        // Stores `record` as its own entry and returns the entries it REPLACED: an earlier
+        // approval for any of the same content IDs, or the same key stored again. Entries for
+        // other titles are kept. An older entry that also covers other titles keeps those and
+        // loses only the overlap. The replaced keys are NOT revoked here (no network); their
+        // masks are left on record.replacedKeys for the caller to report.
+        public static System.Collections.Generic.List<AgentKeyRecord> Save(AgentKeyRecord record)
+        {
+            if (record == null) throw new ArgumentNullException(nameof(record));
+            lock (Gate)
+            {
+                var existing = ReadUnlocked();
+                Normalize(record);
+                long newest = 0;
+                foreach (var e in existing) newest = Math.Max(newest, e.storedAt);
+                // Strictly newer than every stored entry, so "newest" is never a tie.
+                record.storedAt = Math.Max(Math.Max(record.storedAt, NowMs()), newest + 1);
+
+                string[] newIds = record.CoveredContentIds;
+                var replaced = new System.Collections.Generic.List<AgentKeyRecord>();
+                var kept = new System.Collections.Generic.List<AgentKeyRecord>();
+                foreach (var e in existing)
+                {
+                    bool sameKey = string.Equals(e.agentKey, record.agentKey, StringComparison.Ordinal)
+                        || (!string.IsNullOrEmpty(e.keyId) && string.Equals(e.keyId, record.keyId, StringComparison.Ordinal));
+                    if (sameKey) { replaced.Add(e); continue; }
+                    string[] ids = e.CoveredContentIds;
+                    if (ids.Length > 0 && newIds.Length > 0)
+                    {
+                        var remaining = new System.Collections.Generic.List<string>();
+                        foreach (string id in ids)
+                            if (Array.IndexOf(newIds, id) < 0) remaining.Add(id);
+                        if (remaining.Count == 0) { replaced.Add(e); continue; }
+                        if (remaining.Count < ids.Length)
+                        {
+                            e.contentId = remaining.Contains(e.contentId) ? e.contentId : remaining[0];
+                            e.contentIds = remaining.ToArray();
+                        }
+                    }
+                    kept.Add(e);
+                }
+                kept.Add(record);
+                WriteAllUnlocked(kept);
+
+                var masks = new System.Collections.Generic.List<string>();
+                foreach (var r in replaced)
+                    if (!string.Equals(r.agentKey, record.agentKey, StringComparison.Ordinal)) masks.Add(Mask(r.agentKey));
+                record.replacedKeys = masks.ToArray();
+                return replaced;
+            }
+        }
+
+        // Removes every entry covering `contentId` (its beta twin included), expired or not.
+        // Returns the removed entries. Other titles' entries are kept.
+        public static System.Collections.Generic.List<AgentKeyRecord> RemoveFor(string contentId)
+        {
+            var removed = new System.Collections.Generic.List<AgentKeyRecord>();
+            if (string.IsNullOrWhiteSpace(contentId)) return removed;
+            lock (Gate)
+            {
+                var kept = new System.Collections.Generic.List<AgentKeyRecord>();
+                foreach (var e in ReadUnlocked())
+                    (e.Covers(contentId) ? removed : kept).Add(e);
+                if (removed.Count > 0) WriteAllUnlocked(kept);
+            }
+            return removed;
+        }
+
+        // Removes the entry holding exactly this key (e.g. after the server rejected it).
+        public static bool RemoveKey(string agentKey)
+        {
+            if (string.IsNullOrEmpty(agentKey)) return false;
+            lock (Gate)
+            {
+                var kept = new System.Collections.Generic.List<AgentKeyRecord>();
+                bool found = false;
+                foreach (var e in ReadUnlocked())
+                {
+                    if (string.Equals(e.agentKey, agentKey, StringComparison.Ordinal)) { found = true; continue; }
+                    kept.Add(e);
+                }
+                if (found) WriteAllUnlocked(kept);
+                return found;
+            }
+        }
+
+        // Removes the whole file (every entry). True when a file was removed.
+        public static bool Delete()
+        {
+            lock (Gate)
+            {
+                InvalidateUnlocked();
+                string path = FilePath;
+                if (!System.IO.File.Exists(path)) return false;
+                System.IO.File.Delete(path);
+                return true;
+            }
+        }
+
+        // ── Pending approval requests (approve-by-link) ──
+        // dreampark_agent_request adds one per content ID; dreampark_agent_wait polls them and
+        // removes each as it resolves. All wait state lives in this file, so an Editor domain
+        // reload mid-wait loses nothing: run dreampark_agent_wait again. A pollToken is a
+        // secret (it can collect the key once approved): owner-only file, never printed.
+        public const string PendingRelativePath = "Library/DreamParkAgent/pending-request.json";
+
+        public static string PendingFilePath => System.IO.Path.Combine(ProjectRoot, "Library", "DreamParkAgent", "pending-request.json");
+
+        // Adds `pending`, replacing an earlier pending request for the SAME content ID only.
+        public static void SavePending(PendingAgentRequest pending)
+        {
+            if (pending == null) throw new ArgumentNullException(nameof(pending));
+            lock (Gate)
+            {
+                var all = ReadPendingUnlocked();
+                long newest = 0;
+                foreach (var p in all) newest = Math.Max(newest, p.requestedAt);
+                pending.requestedAt = Math.Max(Math.Max(pending.requestedAt, NowMs()), newest + 1);
+                all.RemoveAll(p => SameContent(p.contentId, pending.contentId)
+                    || string.Equals(p.requestId, pending.requestId, StringComparison.Ordinal));
+                all.Add(pending);
+                WritePendingUnlocked(all);
+            }
+        }
+
+        // Every pending request, expired or not, newest first. Empty when there are none.
+        public static System.Collections.Generic.List<PendingAgentRequest> LoadAllPending()
+        {
+            lock (Gate) return ReadPendingUnlocked();
+        }
+
+        // The newest pending request, or null.
+        public static PendingAgentRequest LoadPending()
+        {
+            var all = LoadAllPending();
+            return all.Count > 0 ? all[0] : null;
+        }
+
+        // The pending request for `contentId`, or null.
+        public static PendingAgentRequest LoadPending(string contentId)
+        {
+            foreach (var p in LoadAllPending())
+                if (SameContent(p.contentId, contentId)) return p;
+            return null;
+        }
+
+        public static PendingAgentRequest FindPendingByRequestId(string requestId)
+        {
+            if (string.IsNullOrEmpty(requestId)) return null;
+            foreach (var p in LoadAllPending())
+                if (string.Equals(p.requestId, requestId, StringComparison.Ordinal)) return p;
+            return null;
+        }
+
+        // Removes the pending request for `contentId`. True when one was removed.
+        public static bool DeletePending(string contentId)
+        {
+            lock (Gate)
+            {
+                var all = ReadPendingUnlocked();
+                int removed = all.RemoveAll(p => SameContent(p.contentId, contentId));
+                if (removed > 0) WritePendingUnlocked(all);
+                return removed > 0;
+            }
+        }
+
+        // Removes the pending request with this requestId. True when one was removed.
+        public static bool DeletePendingRequest(string requestId)
+        {
+            if (string.IsNullOrEmpty(requestId)) return false;
+            lock (Gate)
+            {
+                var all = ReadPendingUnlocked();
+                int removed = all.RemoveAll(p => string.Equals(p.requestId, requestId, StringComparison.Ordinal));
+                if (removed > 0) WritePendingUnlocked(all);
+                return removed > 0;
+            }
+        }
+
+        // Removes every pending request. True when a file was removed.
+        public static bool DeletePending()
+        {
+            lock (Gate)
+            {
+                string path = PendingFilePath;
+                if (!System.IO.File.Exists(path)) return false;
+                System.IO.File.Delete(path);
+                return true;
+            }
+        }
+
+        // "agk_…wxyz" — enough to tell keys apart, never enough to use one.
+        public static string Mask(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return null;
+            string last4 = key.Length > KeyPrefix.Length + 4 ? key.Substring(key.Length - 4) : "";
+            return KeyPrefix + "…" + last4;
+        }
+
+        // ── internals (callers hold Gate) ──
+
+        private static long NowMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        private static bool SameContent(string a, string b) =>
+            string.Equals((a ?? "").Trim(), (b ?? "").Trim(), StringComparison.Ordinal);
+
+        private static void InvalidateUnlocked()
+        {
+            _cacheValid = false;
+            _cached = null;
+            _cachedLength = -1;
+        }
+
+        private static void Normalize(AgentKeyRecord record)
+        {
+            string[] ids = record.CoveredContentIds;
+            record.contentIds = ids;
+            if (string.IsNullOrWhiteSpace(record.contentId) && ids.Length > 0) record.contentId = ids[0];
+            else if (record.contentId != null) record.contentId = record.contentId.Trim();
+        }
+
+        private static System.Collections.Generic.List<AgentKeyRecord> ReadUnlocked()
+        {
+            string path = FilePath;
+            var info = new System.IO.FileInfo(path);
+            if (!info.Exists)
+            {
+                _cached = new System.Collections.Generic.List<AgentKeyRecord>();
+                _cacheValid = false;
+                return _cached;
+            }
+            long stamp = info.LastWriteTimeUtc.Ticks;
+            if (_cacheValid && _cached != null && stamp == _cachedStampTicks && info.Length == _cachedLength)
+                return _cached;
+
+            System.Collections.Generic.List<AgentKeyRecord> records;
+            try
+            {
+                long stampMs = new DateTimeOffset(info.LastWriteTimeUtc).ToUnixTimeMilliseconds();
+                records = ParseKeyFile(System.IO.File.ReadAllText(path), stampMs);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[AuthAPI] Ignoring unreadable " + RelativePath + ": " + e.Message);
+                records = new System.Collections.Generic.List<AgentKeyRecord>();
+            }
+            _cached = records;
+            _cachedStampTicks = stamp;
+            _cachedLength = info.Length;
+            _cacheValid = true;
+            return records;
+        }
+
+        // Schema 2 ({schemaVersion, keys[]}) or the legacy single record; newest first.
+        // Public for tests: never logs or returns anything but the parsed records.
+        public static System.Collections.Generic.List<AgentKeyRecord> ParseKeyFile(string json, long legacyStoredAt)
+        {
+            var records = new System.Collections.Generic.List<AgentKeyRecord>();
+            if (string.IsNullOrWhiteSpace(json)) return records;
+            var file = JsonUtility.FromJson<AgentKeyFile>(json);
+            if (file != null && file.schemaVersion >= 2)
+            {
+                if (file.keys != null)
+                    foreach (var record in file.keys)
+                        if (record != null && !string.IsNullOrEmpty(record.agentKey))
+                        {
+                            Normalize(record);
+                            records.Add(record);
+                        }
+            }
+            else
+            {
+                // Legacy (before Oct 9 2026): the file IS one record. Migrated in memory;
+                // written back as schema 2 by the next change.
+                var legacy = JsonUtility.FromJson<AgentKeyRecord>(json);
+                if (legacy != null && !string.IsNullOrEmpty(legacy.agentKey))
+                {
+                    if (legacy.storedAt <= 0) legacy.storedAt = legacyStoredAt;
+                    Normalize(legacy);
+                    records.Add(legacy);
+                }
+            }
+            // Newest first; a stable sort keeps file order among equal stamps.
+            var ordered = new System.Collections.Generic.List<AgentKeyRecord>();
+            foreach (var record in records)
+            {
+                int at = 0;
+                while (at < ordered.Count && ordered[at].storedAt >= record.storedAt) at++;
+                ordered.Insert(at, record);
+            }
+            return ordered;
+        }
+
+        private static void WriteAllUnlocked(System.Collections.Generic.List<AgentKeyRecord> records)
+        {
+            InvalidateUnlocked();
+            string path = FilePath;
+            if (records.Count == 0)
+            {
+                if (System.IO.File.Exists(path)) System.IO.File.Delete(path);
+                return;
+            }
+            // Oldest first on disk (append order); readers sort.
+            var ordered = new System.Collections.Generic.List<AgentKeyRecord>(records);
+            ordered.Sort((a, b) => a.storedAt.CompareTo(b.storedAt));
+            var file = new AgentKeyFile { schemaVersion = SchemaVersion, keys = ordered };
+            WriteOwnerOnlyAtomic(path, JsonUtility.ToJson(file, true));
+            InvalidateUnlocked();
+        }
+
+        private static System.Collections.Generic.List<PendingAgentRequest> ReadPendingUnlocked()
+        {
+            var result = new System.Collections.Generic.List<PendingAgentRequest>();
+            string path = PendingFilePath;
+            if (!System.IO.File.Exists(path)) return result;
+            try
+            {
+                string json = System.IO.File.ReadAllText(path);
+                if (string.IsNullOrWhiteSpace(json)) return result;
+                var file = JsonUtility.FromJson<PendingAgentRequestFile>(json);
+                if (file != null && file.schemaVersion >= 2)
+                {
+                    if (file.requests != null)
+                        foreach (var p in file.requests)
+                            if (p != null && !string.IsNullOrEmpty(p.requestId)) result.Add(p);
+                }
+                else
+                {
+                    // Legacy single-request file.
+                    var legacy = JsonUtility.FromJson<PendingAgentRequest>(json);
+                    if (legacy != null && !string.IsNullOrEmpty(legacy.requestId)) result.Add(legacy);
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[AuthAPI] Ignoring unreadable " + PendingRelativePath + ": " + e.Message);
+                return new System.Collections.Generic.List<PendingAgentRequest>();
+            }
+            result.Sort((a, b) => b.requestedAt.CompareTo(a.requestedAt));
+            return result;
+        }
+
+        private static void WritePendingUnlocked(System.Collections.Generic.List<PendingAgentRequest> all)
+        {
+            string path = PendingFilePath;
+            if (all.Count == 0)
+            {
+                if (System.IO.File.Exists(path)) System.IO.File.Delete(path);
+                return;
+            }
+            var ordered = new System.Collections.Generic.List<PendingAgentRequest>(all);
+            ordered.Sort((a, b) => a.requestedAt.CompareTo(b.requestedAt));
+            var file = new PendingAgentRequestFile { schemaVersion = SchemaVersion, requests = ordered };
+            WriteOwnerOnlyAtomic(path, JsonUtility.ToJson(file, true));
+        }
+
+        // Atomic and owner-only: the secret goes into a temp file in the same folder that is
+        // created empty and restricted BEFORE anything is written, then renamed over the
+        // target, so a reader sees the old file or the new one and never a torn write.
+        private static void WriteOwnerOnlyAtomic(string path, string contents)
+        {
+            string dir = System.IO.Path.GetDirectoryName(path);
+            System.IO.Directory.CreateDirectory(dir);
+            RestrictToOwner(dir, 0x1C0); // 0700
+            string temp = path + ".tmp-" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            try
+            {
+                using (System.IO.File.Create(temp)) { }
+                RestrictToOwner(temp, 0x180); // 0600
+                System.IO.File.WriteAllText(temp, contents, new System.Text.UTF8Encoding(false));
+                if (System.IO.File.Exists(path))
+                {
+                    try { System.IO.File.Replace(temp, path, null); }
+                    catch (Exception e) when (e is PlatformNotSupportedException || e is NotSupportedException)
+                    {
+                        // No atomic replace on this platform: copy over (still owner-only).
+                        System.IO.File.Copy(temp, path, true);
+                    }
+                }
+                else
+                {
+                    System.IO.File.Move(temp, path);
+                }
+            }
+            finally
+            {
+                try { if (System.IO.File.Exists(temp)) System.IO.File.Delete(temp); }
+                catch (Exception) { }
+            }
+        }
+
+        [System.Runtime.InteropServices.DllImport("libc", SetLastError = true, EntryPoint = "chmod")]
+        private static extern int chmod(string pathname, uint mode);
+
+        private static void RestrictToOwner(string path, uint mode)
+        {
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT) return;
+            try
+            {
+                if (chmod(path, mode) != 0)
+                    Debug.LogWarning("[AuthAPI] chmod failed on " + path + " (errno " + System.Runtime.InteropServices.Marshal.GetLastWin32Error() + ").");
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[AuthAPI] Could not restrict permissions on " + path + ": " + e.Message);
+            }
+        }
+    }
+#endif
 }

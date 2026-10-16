@@ -1,0 +1,7 @@
+# SHA-256 (hex) of every known backend admin/Editor API key, live or rotated.
+# HASHES ONLY — never put a key value in this file or anywhere in git.
+# Used by scripts/git-hooks/pre-commit. Keep in sync with
+# Assets/DreamPark/Editor/DreamParkSecretScan.cs (KnownKeySha256) in dreampark-core and dreampark-sdk.
+# Add a key:  printf %s "$KEY" | shasum -a 256
+5cc48a94ffc0900b92e3d6e27fcb2745247725fd7278673dc9ec923224e75c5e  admin key 2026-05..10 (44-char base64), leaked
+7d36381756bcff910967c60086c97a9742f3304929f7889b0357caf03c9d6b9a  admin key rotated 2026-10-16 (64-char hex)

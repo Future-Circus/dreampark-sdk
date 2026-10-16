@@ -32,10 +32,17 @@ namespace DreamPark
         private static void SignOut()
         {
             string who = string.IsNullOrEmpty(AuthAPI.email) ? "this account" : AuthAPI.email;
+            // While agent keys are stored, Sign Out revokes the project's agent keys (one per
+            // approved title; AuthAPI.Logout never sends an agent key to /auth/logout); the
+            // human session is untouched.
+            bool agent = AuthAPI.IsAgentKeyActive;
+            string titles = string.Join(", ", AgentKeyStore.CoveredContentIds());
             bool confirm = EditorUtility.DisplayDialog(
-                "Sign out of DreamPark?",
-                $"You are signed in as {who}. Sign out?",
-                "Sign Out",
+                agent ? "Sign out the DreamPark agent?" : "Sign out of DreamPark?",
+                agent
+                    ? $"This project is signed in with agent keys{(titles.Length > 0 ? " for " + titles : "")}. Revoke every agent key and remove them from this project? Your own sign-in, if any, is not affected. (To sign out of one title only: dreampark_agent_signout --content_id <id>.)"
+                    : $"You are signed in as {who}. Sign out?",
+                agent ? "Revoke Agent Keys" : "Sign Out",
                 "Cancel");
             if (!confirm) return;
 

@@ -22,10 +22,8 @@ namespace DreamPark.PreUploadChecks
     // gets clicked through too.
     public static class PreUploadChecksGate
     {
-        // scenesAreSaved: pass true ONLY if the caller has just run
-        // SaveModifiedScenesBeforeCompile. The scene-override check reads it to decide
-        // whether opening and restoring scenes is safe; a false positive there costs
-        // somebody their unsaved work.
+        // Keep the parameter for callers that already pass their scene-save state.
+        // RunForUpload does not open scenes; the explicit Review flow still can.
         public static bool Passes(EditorWindow owner, string contentId, Action onCleared,
                                   bool scenesAreSaved)
         {
@@ -34,7 +32,7 @@ namespace DreamPark.PreUploadChecks
             PreUploadReport report;
             try
             {
-                report = PreUploadCheckRunner.RunAll(contentId, ReportProgress, scenesAreSaved);
+                report = PreUploadCheckRunner.RunForUpload(contentId, ReportProgress, scenesAreSaved);
             }
             catch (Exception e)
             {

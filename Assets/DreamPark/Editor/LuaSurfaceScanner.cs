@@ -174,6 +174,7 @@ public static class LuaSurfaceScanner
         if (files.Length == 0) return null;
 
         HashSet<Type> registered = BuildRegisteredSet();
+        HashSet<string> registeredByName = AppOnlyRegisteredNames();
         Dictionary<string, Type> index = BuildTypeIndex();
 
         var blocked = new SortedDictionary<string, Finding>(StringComparer.Ordinal);
@@ -226,7 +227,7 @@ public static class LuaSurfaceScanner
 
                 if (!index.TryGetValue(fqn, out Type t)) continue;   // not a type — a member, or nothing
 
-                if (!registered.Contains(t))
+                if (!registered.Contains(t) && !registeredByName.Contains(t.FullName ?? fqn))
                     Record(unregistered, t.FullName ?? fqn, shortName);
 
 #if !DREAMPARKCORE
@@ -371,6 +372,11 @@ public static class LuaSurfaceScanner
     /// carrying [LuaCallCSharp] itself (LuaBehaviour, EasyLua, GameStorageAPI,
     /// ProfileAPI, DreamParkLuaAPI, …). The attribute half was described in a
     /// comment but never collected, so every self-registering type read as missing.
+    ///
+    /// Also, like XLua's Generator.GetGenConfig, every [LuaCallCSharp] static field or
+    /// property of a STATIC class (Oct 13 2026): a title's own config list
+    /// (Assets/Content/{title}/…/{Title}LuaConfig.cs, see DreamParkLuaConfig's
+    /// MAINTENANCE notes) and, in core, DreamParkLuaConfig.AppOnlyLuaCallCSharp.
     private static HashSet<Type> BuildRegisteredSet()
     {
         var set = new HashSet<Type>();
@@ -391,11 +397,62 @@ public static class LuaSurfaceScanner
             foreach (var t in types)
             {
                 if (t == null) continue;
+                // Same skip as codegen: XLua's bundled examples/tutorials are never generated.
+                try { if (CSObjectWrapEditor.Generator.IsExcludedFromCodegen(t)) continue; }
+                catch { continue; }
                 try { if (t.IsDefined(typeof(LuaCallCSharpAttribute), false)) set.Add(t); }
+                catch { /* type failed to load */ }
+                try { if (t.IsAbstract && t.IsSealed) AddStaticConfigLists(t, set); }
                 catch { /* type failed to load */ }
             }
         }
         return set;
+    }
+
+    private const BindingFlags ConfigMemberFlags =
+        BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+
+    private static void AddStaticConfigLists(Type staticClass, HashSet<Type> set)
+    {
+        foreach (var field in staticClass.GetFields(ConfigMemberFlags))
+        {
+            if (!field.IsDefined(typeof(LuaCallCSharpAttribute), false)) continue;
+            if (!typeof(IEnumerable<Type>).IsAssignableFrom(field.FieldType)) continue;
+            try { AddAll(field.GetValue(null) as IEnumerable<Type>, set); }
+            catch (Exception e) { Debug.LogWarning($"[LuaScan] Couldn't read {staticClass.FullName}.{field.Name}: {e.Message}"); }
+        }
+        foreach (var prop in staticClass.GetProperties(ConfigMemberFlags))
+        {
+            if (!prop.IsDefined(typeof(LuaCallCSharpAttribute), false)) continue;
+            if (!typeof(IEnumerable<Type>).IsAssignableFrom(prop.PropertyType) || prop.GetGetMethod(true) == null) continue;
+            try { AddAll(prop.GetValue(null, null) as IEnumerable<Type>, set); }
+            catch (Exception e) { Debug.LogWarning($"[LuaScan] Couldn't read {staticClass.FullName}.{prop.Name}: {e.Message}"); }
+        }
+    }
+
+    private static void AddAll(IEnumerable<Type> types, HashSet<Type> set)
+    {
+        if (types == null) return;
+        foreach (var t in types) if (t != null) set.Add(t);
+    }
+
+    /// Full names the CORE APP registers that a game project cannot compile against
+    /// (DreamParkLuaConfig.AppOnlyTypeNames: third-party types only core has, e.g.
+    /// Modular 3D Text). Without this a game project reported them as reflection-only
+    /// on every scan (ArcadeLand, Oct 13 2026) although the app generates wrappers.
+    /// Read by reflection so this file also compiles against an older config that
+    /// still declares the names inside #if DREAMPARKCORE.
+    private static HashSet<string> AppOnlyRegisteredNames()
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            var field = typeof(DreamParkLuaConfig).GetField("AppOnlyTypeNames", BindingFlags.Public | BindingFlags.Static);
+            if (field?.GetValue(null) is IEnumerable<string> listed)
+                foreach (var name in listed) if (!string.IsNullOrEmpty(name)) names.Add(name);
+        }
+        catch (Exception e) { Debug.LogWarning("[LuaScan] Couldn't read DreamParkLuaConfig.AppOnlyTypeNames: " + e.Message); }
+        return names;
     }
 
     /// FULL-name → Type, over the Unity assemblies and this project's own.

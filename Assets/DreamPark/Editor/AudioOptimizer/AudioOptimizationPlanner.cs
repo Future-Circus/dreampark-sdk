@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using UnityEngine;
 
 namespace DreamPark.EditorTools.AudioOptimization
@@ -69,6 +70,7 @@ namespace DreamPark.EditorTools.AudioOptimization
             row.targetSampleRate = ClampSampleRateToSource(policy.sampleRate, u.sourceSampleRate);
             row.targetForceToMono = policy.forceToMono;
             row.targetVorbisQuality = policy.vorbisQuality;
+            NeverRaise(u, row);
 
             // ── Source replacement decision ────────────────────────────
             // .wav → .ogg: yes (the big win). Encoded sources stay as-is —
@@ -142,6 +144,38 @@ namespace DreamPark.EditorTools.AudioOptimization
             }
 
             return row;
+        }
+
+        /// Oct 2026: the plan never raises what a clip ships at (CrashCourse:
+        /// q0.45 → 0.70). Across the default settings and every platform
+        /// override: a bigger compression format is not chosen over a smaller
+        /// one (Vorbis < ADPCM < PCM), Vorbis quality is not raised, and a
+        /// sample-rate override is not raised or removed.
+        internal static void NeverRaise(AudioUsage u, AudioPlanRow row)
+        {
+            var current = new List<(AudioTargetCompression c, float q, int rate)>
+            {
+                (u.currentCompression, u.currentVorbisQuality, u.currentSampleRateOverride),
+            };
+            foreach (var o in u.currentOverrides ?? new List<AudioPlatformOverride>())
+                current.Add((o.compression, o.vorbisQuality, o.sampleRateOverride));
+
+            int Rank(AudioTargetCompression c) => c == AudioTargetCompression.Vorbis ? 0
+                : c == AudioTargetCompression.ADPCM ? 1 : c == AudioTargetCompression.PCM ? 2 : -1;
+            int smallest = current.Where(x => Rank(x.c) >= 0).Select(x => Rank(x.c)).DefaultIfEmpty(-1).Min();
+            if (smallest >= 0 && Rank(row.targetCompression) > smallest)
+                row.targetCompression = current.First(x => Rank(x.c) == smallest).c;
+
+            if (row.targetCompression == AudioTargetCompression.Vorbis)
+            {
+                float lowest = current.Where(x => x.c == AudioTargetCompression.Vorbis).Select(x => x.q)
+                    .DefaultIfEmpty(1f).Min();
+                row.targetVorbisQuality = Mathf.Min(row.targetVorbisQuality, lowest);
+            }
+
+            int lowestRate = current.Where(x => x.rate > 0).Select(x => x.rate).DefaultIfEmpty(0).Min();
+            if (lowestRate > 0 && (row.targetSampleRate <= 0 || row.targetSampleRate > lowestRate))
+                row.targetSampleRate = lowestRate;
         }
 
         /// <summary>

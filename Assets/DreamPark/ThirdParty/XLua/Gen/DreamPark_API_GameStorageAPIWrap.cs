@@ -31,7 +31,7 @@ namespace XLua.CSObjectWrap
 			Utils.EndObjectRegister(type, L, translator, null, null,
 			    null, null, null);
 
-		    Utils.BeginClassRegister(type, L, __CreateInstance, 20, 0, 0);
+		    Utils.BeginClassRegister(type, L, __CreateInstance, 23, 0, 0);
 			Utils.RegisterFunc(L, Utils.CLS_IDX, "Slugify", _m_Slugify_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "Get", _m_Get_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "IsReady", _m_IsReady_xlua_st_);
@@ -40,6 +40,8 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.CLS_IDX, "Increment", _m_Increment_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "Max", _m_Max_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "Min", _m_Min_xlua_st_);
+            Utils.RegisterFunc(L, Utils.CLS_IDX, "SetProgress", _m_SetProgress_xlua_st_);
+            Utils.RegisterFunc(L, Utils.CLS_IDX, "GetProgress", _m_GetProgress_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "Delete", _m_Delete_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "FlushAll", _m_FlushAll_xlua_st_);
             
@@ -53,6 +55,7 @@ namespace XLua.CSObjectWrap
             Utils.RegisterObject(L, translator, Utils.CLS_IDX, "MaxAttractionScopes", DreamPark.API.GameStorageAPI.MaxAttractionScopes);
             Utils.RegisterObject(L, translator, Utils.CLS_IDX, "MaxScopeBytes", DreamPark.API.GameStorageAPI.MaxScopeBytes);
             Utils.RegisterObject(L, translator, Utils.CLS_IDX, "MaxOpsPerRequest", DreamPark.API.GameStorageAPI.MaxOpsPerRequest);
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "ProgressKey", DreamPark.API.GameStorageAPI.ProgressKey);
             
 			
 			
@@ -298,6 +301,59 @@ namespace XLua.CSObjectWrap
                     
                         var gen_ret = DreamPark.API.GameStorageAPI.Min( _contentId, _attraction, _key, _value );
                         LuaAPI.lua_pushnumber(L, gen_ret);
+                    
+                    
+                    
+                    return 1;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_SetProgress_xlua_st_(RealStatePtr L)
+        {
+		    try {
+            
+            
+            
+                
+                {
+                    string _contentId = LuaAPI.lua_tostring(L, 1);
+                    double _value = LuaAPI.lua_tonumber(L, 2);
+                    
+                        var gen_ret = DreamPark.API.GameStorageAPI.SetProgress( _contentId, _value );
+                        LuaAPI.lua_pushboolean(L, gen_ret);
+                    
+                    
+                    
+                    return 1;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_GetProgress_xlua_st_(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+            
+                
+                {
+                    string _contentId = LuaAPI.lua_tostring(L, 1);
+                    
+                        var gen_ret = DreamPark.API.GameStorageAPI.GetProgress( _contentId );
+                        translator.PushAny(L, gen_ret);
                     
                     
                     

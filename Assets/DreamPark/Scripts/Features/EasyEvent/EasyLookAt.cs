@@ -20,7 +20,7 @@
                 return;
             }
             if (target == null) {
-                target = Camera.main.transform;
+                target = PlayerHead.ContentCamera().transform; // Oct 11 2026: the content camera (limbo stand-in while the local player is not in the park)
             }
             Vector3 targetPosition = target.position;
             if (target != null) {

@@ -76,13 +76,23 @@ namespace DreamPark
             return RenderPreview(prefab, PreviewSettings.Default, resolution);
         }
 
+        // Test seam: runs on the hidden instance after the layout frame and any
+        // animation poses are applied, immediately before bounds are measured.
+        internal static System.Action<GameObject> BeforeBoundsHookForTests;
+
         // Settings-aware render. Camera azimuth/elevation, the final zoom
         // (framing fill) and any frozen animation poses are taken from
         // `settings`; everything else — the two-pass silhouette centering,
         // lighting, supersampling — is unchanged. With PreviewSettings.Default
         // this is byte-identical to the original renderer, so untouched
         // prefabs never churn their PNG.
-        public static Texture2D RenderPreview(GameObject prefab, PreviewSettings settings, int resolution = 512)
+        //
+        // frameId: an AttractionTemplate layout frame ("minimum" or a custom
+        // id) to photograph instead of the authored Base layout. The frame is
+        // applied to the hidden instance at frame scale (1,1) BEFORE bounds are
+        // measured. Null / empty / "base" renders exactly as before.
+        public static Texture2D RenderPreview(GameObject prefab, PreviewSettings settings, int resolution = 512,
+            string frameId = null)
         {
             if (prefab == null) return null;
 
@@ -91,6 +101,7 @@ namespace DreamPark
             // Instantiate at isolated position so it doesn't interfere with scene
             GameObject instance = Object.Instantiate(prefab, kIsolatedPosition, Quaternion.identity);
             instance.hideFlags = HideFlags.HideAndDontSave;
+            bool framed = false;
 
             GameObject camObj = null;
             GameObject lightObj = null;
@@ -102,6 +113,11 @@ namespace DreamPark
 
             try
             {
+                // Put the instance in the requested layout frame first, so
+                // animation sampling, bounds and both passes all see the
+                // frame's arrangement (objects it hides, moves or adds).
+                framed = ApplyLayoutFrame(instance, frameId, prefab.name);
+
                 // Freeze any animated entities on their chosen clip + frame
                 // BEFORE bounds are measured, so the scout pass sees the pose
                 // the creator picked rather than the authored bind pose. The
@@ -112,7 +128,14 @@ namespace DreamPark
                 // predates the animation controls.
                 poseScope = PreviewAnimationSampler.ApplyPoses(instance, settings);
 
-                Bounds bounds = CalculateBounds(instance);
+                BeforeBoundsHookForTests?.Invoke(instance);
+
+                // A frame render measures only what the frame shows: the Base
+                // pass keeps its historical all-renderers scout (byte-identical
+                // PNGs), but a Minimum frame that hides most of the attraction
+                // would otherwise scout at the full attraction's extent and
+                // leave the silhouette a few pixels wide.
+                Bounds bounds = CalculateBounds(instance, activeOnly: framed);
                 if (bounds.size == Vector3.zero)
                 {
                     Debug.LogWarning($"PrefabPreviewRenderer: No renderers found on {prefab.name}");
@@ -220,6 +243,50 @@ namespace DreamPark
                 if (finalRt != null) { finalRt.Release(); Object.DestroyImmediate(finalRt); }
                 Object.DestroyImmediate(instance);
             }
+        }
+
+        // Applies a layout frame to the hidden instance. Returns true when the
+        // instance now shows that frame; false for Base / no frame (the
+        // instance is untouched). A frame with a valid bake goes through
+        // AttractionTemplate.ApplyLayout at frame scale (1,1) — exactly what the
+        // runtime does. A frame whose bake is missing or stale (just created,
+        // or edited since the last bake) still gets a truthful picture: its
+        // overrides are applied directly, which at scale (1,1) is the same
+        // arrangement minus the bake's authored-pose restore.
+        internal static bool ApplyLayoutFrame(GameObject instance, string frameId, string label)
+        {
+            if (instance == null || string.IsNullOrEmpty(frameId) || frameId == AttractionTemplate.BaseFrameId)
+                return false;
+
+            AttractionTemplate attraction = instance.GetComponent<AttractionTemplate>();
+            AttractionLayoutFrame frame = attraction != null ? attraction.FindFrame(frameId) : null;
+            if (frame == null)
+            {
+                Debug.LogWarning($"PrefabPreviewRenderer: {label} has no layout frame '{frameId}' — rendering Base.");
+                return false;
+            }
+
+            if (attraction.FrameHasValidBake(frame))
+            {
+                attraction.ApplyLayout(frameId, Vector2.one);
+                return true;
+            }
+
+            Transform root = attraction.transform;
+            if (frame.overrides != null)
+            {
+                foreach (AttractionLayoutOverride change in frame.overrides)
+                {
+                    Transform target = change?.Resolve(root);
+                    if (target == null) continue;
+                    if (change.setPosition) target.localPosition = change.localPosition;
+                    if (change.setRotation) target.localRotation = change.localRotation;
+                    if (change.setScale) target.localScale = change.localScale;
+                    if (change.setActive && target.gameObject.activeSelf != change.active)
+                        target.gameObject.SetActive(change.active);
+                }
+            }
+            return true;
         }
 
         private static RenderTexture NewRenderTexture(int size)
@@ -333,9 +400,18 @@ namespace DreamPark
         }
 
         // ── Bounds math (scout-only — pass 2 uses the alpha rect) ───────
-        private static Bounds CalculateBounds(GameObject root)
+        // activeOnly: measure only renderers that will actually draw (frame
+        // renders). Falls back to every renderer when none qualifies, so the
+        // result is never worse than the historical all-renderers bounds.
+        private static Bounds CalculateBounds(GameObject root, bool activeOnly = false)
         {
             Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
+            if (activeOnly)
+            {
+                Renderer[] visible = System.Array.FindAll(renderers,
+                    r => r != null && r.enabled && r.gameObject.activeInHierarchy);
+                if (visible.Length > 0) renderers = visible;
+            }
             if (renderers.Length == 0)
                 return new Bounds(root.transform.position, Vector3.zero);
 

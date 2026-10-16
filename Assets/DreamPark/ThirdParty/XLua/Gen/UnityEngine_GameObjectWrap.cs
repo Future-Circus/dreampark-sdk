@@ -21,7 +21,7 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(UnityEngine.GameObject);
-			Utils.BeginObjectRegister(type, L, translator, 0, 16, 9, 3);
+			Utils.BeginObjectRegister(type, L, translator, 0, 16, 10, 3);
 			
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "GetComponent", _m_GetComponent);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "GetComponentInChildren", _m_GetComponentInChildren);
@@ -42,6 +42,7 @@ namespace XLua.CSObjectWrap
 			
 			
 			Utils.RegisterFunc(L, Utils.GETTER_IDX, "transform", _g_get_transform);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "transformHandle", _g_get_transformHandle);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "layer", _g_get_layer);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "activeSelf", _g_get_activeSelf);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "activeInHierarchy", _g_get_activeInHierarchy);
@@ -972,10 +973,10 @@ namespace XLua.CSObjectWrap
             
                 
                 {
-                    Unity.Collections.NativeArray<int> _instanceIDs;translator.Get(L, 1, out _instanceIDs);
+                    Unity.Collections.NativeArray<UnityEngine.EntityId> _entityIds;translator.Get(L, 1, out _entityIds);
                     bool _active = LuaAPI.lua_toboolean(L, 2);
                     
-                    UnityEngine.GameObject.SetGameObjectsActive( _instanceIDs, _active );
+                    UnityEngine.GameObject.SetGameObjectsActive( _entityIds, _active );
                     
                     
                     
@@ -999,28 +1000,28 @@ namespace XLua.CSObjectWrap
             
 			    int gen_param_count = LuaAPI.lua_gettop(L);
             
-                if(gen_param_count == 5&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 1)&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 2)&& translator.Assignable<Unity.Collections.NativeArray<int>>(L, 3)&& translator.Assignable<Unity.Collections.NativeArray<int>>(L, 4)&& translator.Assignable<UnityEngine.SceneManagement.Scene>(L, 5)) 
+                if(gen_param_count == 5&& translator.Assignable<UnityEngine.EntityId>(L, 1)&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 2)&& translator.Assignable<Unity.Collections.NativeArray<UnityEngine.EntityId>>(L, 3)&& translator.Assignable<Unity.Collections.NativeArray<UnityEngine.EntityId>>(L, 4)&& translator.Assignable<UnityEngine.SceneManagement.Scene>(L, 5)) 
                 {
-                    int _sourceInstanceID = LuaAPI.xlua_tointeger(L, 1);
+                    UnityEngine.EntityId _sourceEntityId;translator.Get(L, 1, out _sourceEntityId);
                     int _count = LuaAPI.xlua_tointeger(L, 2);
-                    Unity.Collections.NativeArray<int> _newInstanceIDs;translator.Get(L, 3, out _newInstanceIDs);
-                    Unity.Collections.NativeArray<int> _newTransformInstanceIDs;translator.Get(L, 4, out _newTransformInstanceIDs);
+                    Unity.Collections.NativeArray<UnityEngine.EntityId> _newEntityIds;translator.Get(L, 3, out _newEntityIds);
+                    Unity.Collections.NativeArray<UnityEngine.EntityId> _newTransformEntityIds;translator.Get(L, 4, out _newTransformEntityIds);
                     UnityEngine.SceneManagement.Scene _destinationScene;translator.Get(L, 5, out _destinationScene);
                     
-                    UnityEngine.GameObject.InstantiateGameObjects( _sourceInstanceID, _count, _newInstanceIDs, _newTransformInstanceIDs, _destinationScene );
+                    UnityEngine.GameObject.InstantiateGameObjects( _sourceEntityId, _count, _newEntityIds, _newTransformEntityIds, _destinationScene );
                     
                     
                     
                     return 0;
                 }
-                if(gen_param_count == 4&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 1)&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 2)&& translator.Assignable<Unity.Collections.NativeArray<int>>(L, 3)&& translator.Assignable<Unity.Collections.NativeArray<int>>(L, 4)) 
+                if(gen_param_count == 4&& translator.Assignable<UnityEngine.EntityId>(L, 1)&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 2)&& translator.Assignable<Unity.Collections.NativeArray<UnityEngine.EntityId>>(L, 3)&& translator.Assignable<Unity.Collections.NativeArray<UnityEngine.EntityId>>(L, 4)) 
                 {
-                    int _sourceInstanceID = LuaAPI.xlua_tointeger(L, 1);
+                    UnityEngine.EntityId _sourceEntityId;translator.Get(L, 1, out _sourceEntityId);
                     int _count = LuaAPI.xlua_tointeger(L, 2);
-                    Unity.Collections.NativeArray<int> _newInstanceIDs;translator.Get(L, 3, out _newInstanceIDs);
-                    Unity.Collections.NativeArray<int> _newTransformInstanceIDs;translator.Get(L, 4, out _newTransformInstanceIDs);
+                    Unity.Collections.NativeArray<UnityEngine.EntityId> _newEntityIds;translator.Get(L, 3, out _newEntityIds);
+                    Unity.Collections.NativeArray<UnityEngine.EntityId> _newTransformEntityIds;translator.Get(L, 4, out _newTransformEntityIds);
                     
-                    UnityEngine.GameObject.InstantiateGameObjects( _sourceInstanceID, _count, _newInstanceIDs, _newTransformInstanceIDs );
+                    UnityEngine.GameObject.InstantiateGameObjects( _sourceEntityId, _count, _newEntityIds, _newTransformEntityIds );
                     
                     
                     
@@ -1046,9 +1047,9 @@ namespace XLua.CSObjectWrap
             
                 
                 {
-                    int _instanceID = LuaAPI.xlua_tointeger(L, 1);
+                    UnityEngine.EntityId _entityId;translator.Get(L, 1, out _entityId);
                     
-                        var gen_ret = UnityEngine.GameObject.GetScene( _instanceID );
+                        var gen_ret = UnityEngine.GameObject.GetScene( _entityId );
                         translator.Push(L, gen_ret);
                     
                     
@@ -1073,6 +1074,20 @@ namespace XLua.CSObjectWrap
 			
                 UnityEngine.GameObject gen_to_be_invoked = (UnityEngine.GameObject)translator.FastGetCSObj(L, 1);
                 translator.Push(L, gen_to_be_invoked.transform);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_transformHandle(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                UnityEngine.GameObject gen_to_be_invoked = (UnityEngine.GameObject)translator.FastGetCSObj(L, 1);
+                translator.Push(L, gen_to_be_invoked.transformHandle);
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }

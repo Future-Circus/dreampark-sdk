@@ -57,6 +57,17 @@ namespace DreamPark.Badges
             // Human-readable "found in Assets/Content/X/Scripts/y.lua.txt" —
             // rendered as the tooltip on a locked id field. Never identity.
             public string discoveredIn = "";
+            // Where a player can EARN this badge: the attraction prefab names
+            // (file stem, e.g. "A_Cannonsnout") that award it — every size /
+            // variant prefab that does. Optional; absent or [] = title-wide.
+            // Authored by hand because content awards badges from Player-side
+            // Lua, so a static scan can only ever say "player". BadgeUploader
+            // turns each name into an awardedBy {kind:'attraction'} row (the
+            // full "{gameId}/Levels/{size}/{name}" address, the same one the
+            // upload stamps), and BadgeEarnAtCheck warns on a name with no
+            // attraction prefab behind it. Old files without the field load
+            // as an empty list (JsonUtility keeps the initialiser).
+            public List<string> earnAt = new List<string>();
 
             public IdSource Source
             {
@@ -107,7 +118,9 @@ namespace DreamPark.Badges
                         .Where(e => e != null && !(string.IsNullOrEmpty(e.badgeId)
                                                    && string.IsNullOrEmpty(e.name)
                                                    && string.IsNullOrEmpty(e.description)
-                                                   && string.IsNullOrEmpty(e.iconAssetPath)))
+                                                   && string.IsNullOrEmpty(e.iconAssetPath)
+                                                   && (e.earnAt == null || e.earnAt.Count == 0)))
+                        .Select(e => { e.earnAt = BadgeAwardedBy.NormalizeEarnAt(e.earnAt); return e; })
                         .OrderBy(e => e.badgeId ?? "", StringComparer.Ordinal)
                         .ToList(),
                 };
@@ -132,6 +145,8 @@ namespace DreamPark.Badges
                 var model = JsonUtility.FromJson<FileModel>(File.ReadAllText(path));
                 if (model == null) return new FileModel();
                 if (model.entries == null) model.entries = new List<Entry>();
+                foreach (var e in model.entries)
+                    if (e != null) e.earnAt = BadgeAwardedBy.NormalizeEarnAt(e.earnAt);
 
                 if (model.version > kCurrentVersion)
                 {

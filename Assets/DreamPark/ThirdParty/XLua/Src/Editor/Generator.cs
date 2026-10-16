@@ -910,7 +910,7 @@ namespace CSObjectWrapEditor
 
             var bindingAttrOfMethod = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly | BindingFlags.NonPublic;
             var bindingAttrOfConstructor = BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly | BindingFlags.NonPublic;
-            foreach (var type in (from type in hotfix_check_types where isDefined(type, typeof(HotfixAttribute)) select type))
+            foreach (var type in (from type in hotfix_check_types where isDefined(type, typeof(HotfixAttribute)) && !IsExcludedFromCodegen(type) select type))
             {
                 var ca = GetCustomAttribute(type, typeof(HotfixAttribute));
 #if XLUA_GENERAL
@@ -1456,6 +1456,66 @@ namespace CSObjectWrapEditor
             return false;
         }
 
+        // DreamPark SDK: XLua's demo code (namespaces XLuaTest and Tutorial, plus the
+        // global ExampleGenConfig) was removed from the SDK in May 2026, but a
+        // .unitypackage import never deletes files, so projects created before then
+        // still carry it. Generating wrappers for it put demo-only helpers into
+        // WrapPusher.cs; the next SDK import replaced WrapPusher.cs and left the demo
+        // wrappers calling helpers that no longer existed (CS1061, Sept 2026). The demo
+        // types are never generated for, whatever else is in the project.
+        public static bool IsExcludedFromCodegen(Type type)
+        {
+            if (type == null) return true;
+            while (type.DeclaringType != null) type = type.DeclaringType;
+            string ns = type.Namespace;
+            if (ns == null) return type.Name == "ExampleGenConfig";
+            return ns == "XLuaTest" || ns.StartsWith("XLuaTest.", StringComparison.Ordinal)
+                || ns == "Tutorial" || ns.StartsWith("Tutorial.", StringComparison.Ordinal);
+        }
+
+        // DreamPark SDK (Oct 2026): what GenCodeForClass registers for a type, so the
+        // codegen-drift check (LuaCodegenIntegrity) can compare MEMBERS, not just
+        // types. The AttractionTemplate wrapper went stale for weeks (portals, walls,
+        // wall layers, the 3-arg ApplyLayout) because "a wrapper file exists" was the
+        // whole check. Mirrors getClassInfo's filters (methods/getters/setters/events);
+        // a member name maps to its overload count (static methods keyed Name_xlua_st_). Loads the gen config once if no
+        // codegen ran in this domain. Read-only: generates nothing.
+        public static Dictionary<string, int> DreamParkExpectedMembers(Type type)
+        {
+            if (BlackList == null || memberFilters == null || DoNotGen == null)
+                GetGenConfig(XLua.Utils.GetAllTypes());
+            var result = new Dictionary<string, int>(StringComparer.Ordinal);
+            if (type == null) return result;
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.IgnoreCase | BindingFlags.DeclaredOnly;
+            foreach (var method in type.GetMethods(flags))
+            {
+                if (method.IsSpecialName) continue;                       // accessors, operators, indexers
+                if (isDefined(method, typeof(ExtensionAttribute))) continue;
+                if (IsDoNotGen(type, method.Name)) continue;
+                if (isMethodInBlackList(method) || isObsolete(method)) continue;
+                if (method.IsGenericMethod && !isSupportedGenericMethod(method)) continue;
+                // Static and instance overloads dispatch separately (getClassInfo's GroupBy).
+                string key = method.Name + (method.IsStatic ? "_xlua_st_" : "");
+                int n;
+                result.TryGetValue(key, out n);
+                result[key] = n + 1;
+            }
+            foreach (var prop in type.GetProperties(flags))
+            {
+                if (prop.GetIndexParameters().Length != 0 || prop.Name == "Item" || isObsolete(prop) || isMemberInBlackList(prop)) continue;
+                var get = prop.GetGetMethod();
+                var set = prop.GetSetMethod();
+                bool g = prop.CanRead && get != null && !isObsolete(get) && !isMemberInBlackList(get);
+                bool st = prop.CanWrite && set != null && !isObsolete(set) && !isMemberInBlackList(set);
+                if (g || st) result[prop.Name] = 1;
+            }
+            foreach (var field in type.GetFields(flags))
+                if (!isObsolete(field) && !isMemberInBlackList(field)) result[field.Name] = 1;
+            foreach (var ev in type.GetEvents(flags))
+                if (!isObsolete(ev) && !isMemberInBlackList(ev)) result[ev.Name] = 1;
+            return result;
+        }
+
         public static void GetGenConfig(IEnumerable<Type> check_types)
         {
             LuaCallCSharp = new List<Type>();
@@ -1487,6 +1547,7 @@ namespace CSObjectWrapEditor
 
             foreach (var t in check_types)
             {
+                if (IsExcludedFromCodegen(t)) continue;   // DreamPark SDK: see IsExcludedFromCodegen
                 MergeCfg(t, null, () => t);
 
                 if (!t.IsAbstract || !t.IsSealed) continue;

@@ -61,6 +61,14 @@ namespace DreamPark.ParkSim
         private Button _regenerate;
         private Button _patrol;
         private Button _stop;
+#if !DREAMPARKCORE
+        private VisualElement _arenaControls;
+        private Button _arenaSmaller;
+        private Label _arenaSize;
+        private Button _arenaLarger;
+        private Button _arenaAuto;
+        private Label _arenaCandidate;
+#endif
         private ScrollView _list;
         private VisualElement _notes;
         private ParkSimReport _shown;
@@ -94,6 +102,11 @@ namespace DreamPark.ParkSim
             _framed.style.color = Muted;
             _framed.style.whiteSpace = WhiteSpace.Normal;
             root.Add(_framed);
+
+#if !DREAMPARKCORE
+            _arenaControls = BuildArenaControls();
+            root.Add(_arenaControls);
+#endif
 
             var buttons = new VisualElement();
             buttons.style.flexDirection = FlexDirection.Row;
@@ -134,6 +147,59 @@ namespace DreamPark.ParkSim
 
             return root;
         }
+
+#if !DREAMPARKCORE
+        private VisualElement BuildArenaControls()
+        {
+            var controls = new VisualElement();
+            controls.style.marginBottom = 6;
+            controls.style.display = DisplayStyle.None;
+
+            var sizeRow = new VisualElement();
+            sizeRow.style.flexDirection = FlexDirection.Row;
+            sizeRow.style.alignItems = Align.Center;
+            sizeRow.style.marginBottom = 3;
+
+            _arenaSmaller = new Button(() => StepArena(-1)) { text = "−" };
+            _arenaSmaller.tooltip = "Preview the next smaller occupied Arena size.";
+            _arenaSmaller.style.width = 30;
+            sizeRow.Add(_arenaSmaller);
+
+            _arenaSize = new Label();
+            _arenaSize.style.flexGrow = 1;
+            _arenaSize.style.unityTextAlign = TextAnchor.MiddleCenter;
+            _arenaSize.style.unityFontStyleAndWeight = FontStyle.Bold;
+            _arenaSize.style.color = Brand;
+            sizeRow.Add(_arenaSize);
+
+            _arenaLarger = new Button(() => StepArena(1)) { text = "+" };
+            _arenaLarger.tooltip = "Preview the next larger occupied Arena size.";
+            _arenaLarger.style.width = 30;
+            sizeRow.Add(_arenaLarger);
+
+            _arenaAuto = new Button(ParkSimPackageTest.ToggleArenaAuto) { text = "Auto" };
+            _arenaAuto.tooltip = "Automatically preview Arena sizes from largest to smallest and back.";
+            _arenaAuto.style.width = 58;
+            _arenaAuto.style.marginLeft = 4;
+            sizeRow.Add(_arenaAuto);
+            controls.Add(sizeRow);
+
+            _arenaCandidate = new Label();
+            _arenaCandidate.style.fontSize = 10;
+            _arenaCandidate.style.color = Muted;
+            _arenaCandidate.style.whiteSpace = WhiteSpace.Normal;
+            _arenaCandidate.style.unityTextAlign = TextAnchor.MiddleCenter;
+            controls.Add(_arenaCandidate);
+            return controls;
+        }
+
+        private static void StepArena(int direction)
+        {
+            if (ParkSimPackageTest.ArenaAutoPlaying)
+                ParkSimPackageTest.ToggleArenaAuto();
+            ParkSimPackageTest.StepArenaSize(direction);
+        }
+#endif
 
         private VisualElement BuildHeader()
         {
@@ -177,8 +243,20 @@ namespace DreamPark.ParkSim
             bool playing = Application.isPlaying;
             bool stopped = ParkSimulator.Stopped;
 
+#if !DREAMPARKCORE
+            bool arenaPreview = ParkSimPackageTest.IsArenaPreview;
+            RefreshArenaControls(arenaPreview, playing, stopped);
+#else
+            const bool arenaPreview = false;
+#endif
+
             _regenerate.SetEnabled(playing && !stopped && !ParkSimulator.IsGenerating);
             _patrol.SetEnabled(playing && !stopped && ParkSimulator.HasPark);
+            _regenerate.text = arenaPreview ? "Reload Arena" : "Regenerate Park";
+            _regenerate.tooltip = arenaPreview
+                ? "Reload the currently selected Arena size and candidate."
+                : "Reshuffle every spawn point and rebuild the park from scratch (Alt+Shift+R).";
+            _patrol.style.display = arenaPreview ? DisplayStyle.None : DisplayStyle.Flex;
             _stop.SetEnabled(playing && !ParkSimulator.IsGenerating);
 
             _stop.text = stopped ? "Start Park Sim" : "Stop Park Sim";
@@ -249,9 +327,9 @@ namespace DreamPark.ParkSim
             _status.style.color = string.IsNullOrEmpty(report.playerName) ? Caution : Muted;
 
             var framedOn = ParkSimulator.FramedOn;
-            _framed.text = framedOn != null
-                ? "Framed on " + framedOn.name + ", same offset you had before Play."
-                : "";
+            _framed.text = framedOn == null ? ""
+                : arenaPreview ? "Arena centered on " + framedOn.name + "."
+                : "Framed on " + framedOn.name + ", same offset you had before Play.";
 
             _patrol.text = ParkSimCamera.IsPatrolling ? "Stop" : "Patrol";
 
@@ -269,6 +347,31 @@ namespace DreamPark.ParkSim
 
             BuildList(report, dirty);
         }
+
+#if !DREAMPARKCORE
+        private void RefreshArenaControls(bool arenaPreview, bool playing, bool stopped)
+        {
+            _arenaControls.style.display = arenaPreview
+                ? DisplayStyle.Flex : DisplayStyle.None;
+            if (!arenaPreview) return;
+
+            bool ready = playing && !stopped && !ParkSimulator.IsGenerating;
+            _arenaSize.text = ParkSimPackageTest.ArenaSizeLabel ?? "Arena size";
+            _arenaCandidate.text = ParkSimPackageTest.ArenaCandidateLabel ?? "";
+            _arenaSmaller.SetEnabled(ready && ParkSimPackageTest.CanStepArenaSmaller);
+            _arenaLarger.SetEnabled(ready && ParkSimPackageTest.CanStepArenaLarger);
+
+            bool automatic = ParkSimPackageTest.ArenaAutoPlaying;
+            _arenaAuto.text = automatic ? "Pause" : "Auto";
+            _arenaAuto.tooltip = automatic
+                ? "Pause automatic Arena size previewing."
+                : "Automatically preview Arena sizes from largest to smallest and back.";
+            // Pause must remain reachable while a regeneration is in flight.
+            _arenaAuto.SetEnabled(playing && !stopped
+                && (automatic || (!ParkSimulator.IsGenerating
+                    && ParkSimPackageTest.CanAutoArena)));
+        }
+#endif
 
         /// The park's identity line. Blank for the synthetic park, because
         /// "park.fbx" is the only park an SDK project has ever had and naming

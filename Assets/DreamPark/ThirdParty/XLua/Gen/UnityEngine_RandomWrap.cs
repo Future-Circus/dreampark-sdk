@@ -31,7 +31,7 @@ namespace XLua.CSObjectWrap
 			Utils.EndObjectRegister(type, L, translator, null, null,
 			    null, null, null);
 
-		    Utils.BeginClassRegister(type, L, __CreateInstance, 4, 7, 1);
+		    Utils.BeginClassRegister(type, L, __CreateInstance, 4, 8, 1);
 			Utils.RegisterFunc(L, Utils.CLS_IDX, "InitState", _m_InitState_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "Range", _m_Range_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "ColorHSV", _m_ColorHSV_xlua_st_);
@@ -42,6 +42,7 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "value", _g_get_value);
             Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "insideUnitSphere", _g_get_insideUnitSphere);
             Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "insideUnitCircle", _g_get_insideUnitCircle);
+            Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "onUnitCircle", _g_get_onUnitCircle);
             Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "onUnitSphere", _g_get_onUnitSphere);
             Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "rotation", _g_get_rotation);
             Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "rotationUniform", _g_get_rotationUniform);
@@ -266,6 +267,18 @@ namespace XLua.CSObjectWrap
 		    try {
                 ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			    translator.PushUnityEngineVector2(L, UnityEngine.Random.insideUnitCircle);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_onUnitCircle(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			    translator.PushUnityEngineVector2(L, UnityEngine.Random.onUnitCircle);
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }

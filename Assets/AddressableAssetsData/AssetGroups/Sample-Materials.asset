@@ -14,25 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   m_GroupName: Sample-Materials
   m_GUID: d13bb3bd2755f42b2a9f6bc26091887b
-  m_SerializeEntries:
-  - m_GUID: 1abf2c7f3495e42f9aaf8d5de43222d8
-    m_Address: Sample/Materials/DreamCube
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - Sample
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: 1e86f0fd2a223413396852cc3efce6fe
-    m_Address: Sample/Materials/FX_DreamGlow
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - Sample
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: dacb26d58ab7941758faccde2e6d437b
-    m_Address: Sample/Materials/FX_DreamSpark
-    m_ReadOnly: 0
-    m_SerializedLabels:
-    - Sample
-    FlaggedDuringContentUpdateRestriction: 0
+  m_SerializeEntries: []
   m_ReadOnly: 0
   m_Settings: {fileID: 11400000, guid: 5e922c848874c41bc90d6a8d78c6f5a9, type: 2}
   m_SchemaSet:

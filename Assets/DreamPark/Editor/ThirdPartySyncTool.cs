@@ -69,7 +69,18 @@ namespace DreamPark.Editor
         // ThirdParty/ before the Addressables build picks them up. Saves the
         // selection back to EditorPrefs so reopening the ThirdParty Sync
         // window after an upload shows the same content the user just shipped.
-        public static void RunSyncForContent(string contentId, bool analyzeOnly = false)
+        //
+        // deferCompiledCode (Oct 13 2026): the build/publish flows pass true. Moving a
+        // .cs/.asmdef/.asmref/.dll/.rsp recompiles the Editor and schedules a domain
+        // reload, and that happened INSIDE the publish: CrashCourse's beta job died in
+        // a reload after CFXR's Editor scripts moved, and SuperAdventureLand's beta
+        // shipped 0 beta bundles because ForceUpdateContent saw "compiling" and skipped
+        // the stamp. Where a script sits (ThirdPartyLocal vs ThirdParty, both under the
+        // content folder) changes nothing in the build — same assembly, same scripts
+        // package — so those moves are held back and made by
+        // FlushDeferredCompiledCodeMoves() once the job is over. Every other asset still
+        // moves now, before the Addressables build gathers it.
+        public static void RunSyncForContent(string contentId, bool analyzeOnly = false, bool deferCompiledCode = false)
         {
             if (string.IsNullOrEmpty(contentId))
             {
@@ -89,7 +100,92 @@ namespace DreamPark.Editor
             selectedContentId = contentId;
             SaveContentSelection();
 
-            RunSync(analyzeOnly);
+            RunSync(analyzeOnly, deferCompiledCode);
+        }
+
+        // Files whose move makes Unity recompile scripts (and then reload the domain).
+        internal static bool IsCompiledCodePath(string path)
+        {
+            string ext = Path.GetExtension(path ?? "").ToLowerInvariant();
+            return ext == ".cs" || ext == ".asmdef" || ext == ".asmref" || ext == ".dll" || ext == ".rsp";
+        }
+
+        // Script moves a build/publish sync held back (see RunSyncForContent). Static, so a
+        // domain reload drops them; nothing is lost then, the files simply stay in
+        // ThirdPartyLocal until the next sync without deferral moves them.
+        private static readonly List<(string source, string target)> deferredCodeMoves = new List<(string source, string target)>();
+        private static string deferredCodeLocalPath;
+        internal static int DeferredCompiledCodeMoveCount => deferredCodeMoves.Count;
+
+        /// <summary>
+        /// Makes the script moves a build/publish sync deferred. Call only once the job is
+        /// over: the moves recompile the Editor and reload the domain. No-op when nothing
+        /// is pending.
+        /// </summary>
+        public static void FlushDeferredCompiledCodeMoves()
+        {
+            if (deferredCodeMoves.Count == 0) return;
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                // Retry once play mode is over rather than recompiling into it.
+                EditorApplication.delayCall += FlushDeferredCompiledCodeMoves;
+                return;
+            }
+            var moves = deferredCodeMoves.Where(m => File.Exists(m.source) && !File.Exists(m.target)).ToList();
+            string localPath = deferredCodeLocalPath;
+            deferredCodeMoves.Clear();
+            deferredCodeLocalPath = null;
+            if (moves.Count == 0) return;
+
+            Debug.Log($"[ThirdParty Sync] Moving {moves.Count} script file(s) deferred during the build (Unity recompiles now).");
+            int moved = MoveFiles(moves, out int failed);
+            Debug.Log($"[ThirdParty Sync] Deferred script move complete: {moved} moved" + (failed > 0 ? $", {failed} failed" : ""));
+            if (!string.IsNullOrEmpty(localPath)) CleanupEmptyDirectories(localPath);
+            AssetDatabase.Refresh();
+        }
+
+        // AssetDatabase.MoveAsset keeps GUIDs (and every reference) intact.
+        private static int MoveFiles(List<(string source, string target)> moves, out int failedCount)
+        {
+            int movedCount = 0;
+            failedCount = 0;
+            AssetDatabase.StartAssetEditing();
+            try
+            {
+                foreach (var (source, target) in moves)
+                {
+                    try
+                    {
+                        var targetDir = Path.GetDirectoryName(target);
+                        if (!Directory.Exists(targetDir))
+                        {
+                            Directory.CreateDirectory(targetDir);
+                        }
+
+                        string error = AssetDatabase.MoveAsset(source, target);
+                        if (string.IsNullOrEmpty(error))
+                        {
+                            movedCount++;
+                            Debug.Log($"[ThirdParty Sync] Moved: {Path.GetFileName(source)}");
+                        }
+                        else
+                        {
+                            failedCount++;
+                            Debug.LogWarning($"[ThirdParty Sync] Failed to move {source}: {error}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        failedCount++;
+                        Debug.LogWarning($"[ThirdParty Sync] Failed to move {source}: {ex.Message}");
+                    }
+                }
+            }
+            finally
+            {
+                AssetDatabase.StopAssetEditing();
+            }
+            return movedCount;
         }
 
         private void OnEnable()
@@ -219,6 +315,11 @@ namespace DreamPark.Editor
 
         public static void RunSync(bool analyzeOnly)
         {
+            RunSync(analyzeOnly, deferCompiledCode: false);
+        }
+
+        private static void RunSync(bool analyzeOnly, bool deferCompiledCode)
+        {
             try
             {
                 RefreshContentOptions();
@@ -232,64 +333,10 @@ namespace DreamPark.Editor
                     return;
                 }
 
-                EditorUtility.DisplayProgressBar("ThirdParty Sync", "Building GUID index...", 0.1f);
-
-                // Step 1: Build GUID -> path mapping for all assets in ThirdPartyLocal only
-                var guidToPath = new Dictionary<string, string>();
-                var pathToGuid = new Dictionary<string, string>();
-
-                if (Directory.Exists(thirdPartyLocalPath))
-                {
-                    BuildGuidIndex(thirdPartyLocalPath, guidToPath, pathToGuid);
-                }
-
-                EditorUtility.DisplayProgressBar("ThirdParty Sync", "Finding external references...", 0.3f);
-
-                // Step 2: Collect all ThirdPartyLocal paths
-                var allLocalPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                if (Directory.Exists(thirdPartyLocalPath))
-                {
-                    allLocalPaths.Add(thirdPartyLocalPath.Replace("\\", "/"));
-                }
-
-                // Step 3: Find all GUIDs referenced from OUTSIDE ThirdPartyLocal (and ThirdParty)
-                var targetPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                {
-                    thirdPartyTargetPath.Replace("\\", "/")
-                };
-                var externalRefs = FindExternalReferences("Assets", allLocalPaths, targetPaths);
-
-                EditorUtility.DisplayProgressBar("ThirdParty Sync", "Resolving dependencies...", 0.5f);
-
-                // Step 4: Resolve recursive dependencies within ThirdPartyLocal
-                var usedGuids = ResolveRecursiveDependencies(externalRefs, guidToPath, pathToGuid, allLocalPaths);
-
-                EditorUtility.DisplayProgressBar("ThirdParty Sync", "Calculating files to move...", 0.7f);
-
-                // Step 5: Get file paths and their target locations
-                var filesToMove = new List<(string source, string target)>();
-
-                foreach (var guid in usedGuids)
-                {
-                    if (!guidToPath.TryGetValue(guid, out var sourcePath))
-                        continue;
-
-                    var normalizedLocalPath = thirdPartyLocalPath.Replace("\\", "/");
-                    if (sourcePath.StartsWith(normalizedLocalPath, StringComparison.OrdinalIgnoreCase))
-                    {
-                        var relativePath = sourcePath.Substring(normalizedLocalPath.Length).TrimStart('/');
-                        var targetPath = Path.Combine(thirdPartyTargetPath, relativePath).Replace("\\", "/");
-
-                        // Only add if source exists and target doesn't already exist
-                        if (File.Exists(sourcePath) && !File.Exists(targetPath))
-                        {
-                            filesToMove.Add((sourcePath, targetPath));
-                        }
-                    }
-                }
-
-                // Remove duplicates and sort
-                filesToMove = filesToMove.Distinct().OrderBy(x => x.source).ToList();
+                string contentRoot = Path.Combine(ContentRootPath, selectedContentId).Replace("\\", "/");
+                SyncPlan plan = PlanSync(contentRoot, thirdPartyLocalPath, thirdPartyTargetPath, showProgress: true);
+                var filesToMove = plan.moves;
+                ReportScriptReferences(plan.referencedScripts, analyzeOnly);
 
                 if (analyzeOnly)
                 {
@@ -306,52 +353,30 @@ namespace DreamPark.Editor
                 {
                     EditorUtility.DisplayProgressBar("ThirdParty Sync", "Moving files...", 0.8f);
 
-                    int movedCount = 0;
-                    int failedCount = 0;
-
-                    // Use AssetDatabase.MoveAsset to preserve GUIDs
-                    AssetDatabase.StartAssetEditing();
-                    try
+                    var movesNow = filesToMove;
+                    int deferredCount = 0;
+                    if (deferCompiledCode)
                     {
-                        foreach (var (source, target) in filesToMove)
+                        var codeMoves = filesToMove.Where(m => IsCompiledCodePath(m.source)).ToList();
+                        if (codeMoves.Count > 0)
                         {
-                            try
-                            {
-                                // Create target directory if needed
-                                var targetDir = Path.GetDirectoryName(target);
-                                if (!Directory.Exists(targetDir))
-                                {
-                                    Directory.CreateDirectory(targetDir);
-                                }
-
-                                // Use Unity's MoveAsset to preserve GUID
-                                string error = AssetDatabase.MoveAsset(source, target);
-                                if (string.IsNullOrEmpty(error))
-                                {
-                                    movedCount++;
-                                    Debug.Log($"[ThirdParty Sync] Moved: {Path.GetFileName(source)}");
-                                }
-                                else
-                                {
-                                    failedCount++;
-                                    Debug.LogWarning($"[ThirdParty Sync] Failed to move {source}: {error}");
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                failedCount++;
-                                Debug.LogWarning($"[ThirdParty Sync] Failed to move {source}: {ex.Message}");
-                            }
+                            movesNow = filesToMove.Where(m => !IsCompiledCodePath(m.source)).ToList();
+                            foreach (var move in codeMoves)
+                                if (!deferredCodeMoves.Contains(move)) deferredCodeMoves.Add(move);
+                            deferredCodeLocalPath = thirdPartyLocalPath;
+                            deferredCount = codeMoves.Count;
+                            Debug.Log($"[ThirdParty Sync] Deferring {codeMoves.Count} script file(s) until the build is over "
+                                + "(moving them now would recompile and reload the Editor mid-build):\n"
+                                + string.Join("\n", codeMoves.Select(m => m.source)));
                         }
                     }
-                    finally
-                    {
-                        AssetDatabase.StopAssetEditing();
-                    }
 
-                    lastMovedFiles = filesToMove.Select(x => x.target).ToList();
+                    int movedCount = MoveFiles(movesNow, out int failedCount);
+
+                    lastMovedFiles = movesNow.Select(x => x.target).ToList();
                     lastSyncMessage = $"Sync complete: {movedCount} assets moved" +
-                        (failedCount > 0 ? $", {failedCount} failed" : "");
+                        (failedCount > 0 ? $", {failedCount} failed" : "") +
+                        (deferredCount > 0 ? $", {deferredCount} script file(s) deferred until the build is over" : "");
                     Debug.Log($"[ThirdParty Sync] {lastSyncMessage}");
 
                     // Clean up empty directories in ThirdPartyLocal
@@ -370,6 +395,159 @@ namespace DreamPark.Editor
             {
                 EditorUtility.ClearProgressBar();
             }
+        }
+
+        internal sealed class SyncPlan
+        {
+            public List<(string source, string target)> moves = new List<(string source, string target)>();
+            /// <summary>Scripts under ThirdPartyLocal that tracked assets reference.</summary>
+            public List<string> referencedScripts = new List<string>();
+        }
+
+        /// <summary>
+        /// Which ThirdPartyLocal files the content uses (and where each goes in ThirdParty),
+        /// without moving anything. contentRoot is Assets/Content/{id}.
+        /// </summary>
+        internal static SyncPlan PlanSync(string contentRoot, string thirdPartyLocalPath, string thirdPartyTargetPath,
+            bool showProgress = false)
+        {
+            if (showProgress) EditorUtility.DisplayProgressBar("ThirdParty Sync", "Building GUID index...", 0.1f);
+
+            // Step 1: Build GUID -> path mapping for all assets in ThirdPartyLocal only
+            var guidToPath = new Dictionary<string, string>();
+            var pathToGuid = new Dictionary<string, string>();
+
+            if (Directory.Exists(thirdPartyLocalPath))
+            {
+                BuildGuidIndex(thirdPartyLocalPath, guidToPath, pathToGuid);
+            }
+
+            if (showProgress) EditorUtility.DisplayProgressBar("ThirdParty Sync", "Finding external references...", 0.3f);
+
+            // Step 2: Collect all ThirdPartyLocal paths
+            var allLocalPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (Directory.Exists(thirdPartyLocalPath))
+            {
+                allLocalPaths.Add(thirdPartyLocalPath.Replace("\\", "/"));
+            }
+
+            // Step 3: Find all GUIDs referenced from OUTSIDE ThirdPartyLocal (and ThirdParty)
+            var targetPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                thirdPartyTargetPath.Replace("\\", "/")
+            };
+            var externalRefs = FindExternalReferences("Assets", allLocalPaths, targetPaths);
+
+            // Step 3b: the GUID text scan cannot see references inside binary-serialized
+            // assets (Modular 3D Text's .asset fonts → .obj meshes, ArcadeLand Oct 2026),
+            // and it does not follow references out of tracked assets that live in
+            // ThirdParty/. Ask the AssetDatabase instead: everything the content folder's
+            // own assets depend on, recursively, that lives in ThirdPartyLocal is used.
+            if (showProgress) EditorUtility.DisplayProgressBar("ThirdParty Sync", "Collecting asset dependencies...", 0.4f);
+            List<string> dependedLocal = LocalDependenciesOf(contentRoot, thirdPartyLocalPath);
+            foreach (var dependedPath in dependedLocal)
+            {
+                string dependedGuid = AssetDatabase.AssetPathToGUID(dependedPath);
+                if (!string.IsNullOrEmpty(dependedGuid)) externalRefs.Add(dependedGuid);
+            }
+
+            // Scripts in ThirdPartyLocal that tracked assets reference: a clean checkout
+            // without them does not compile, so they are reported as well as moved.
+            var referencedScripts = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var dependedPath in dependedLocal)
+                if (dependedPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)) referencedScripts.Add(dependedPath);
+            foreach (var referencedGuid in externalRefs)
+                if (guidToPath.TryGetValue(referencedGuid, out var referencedPath)
+                    && referencedPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                    referencedScripts.Add(referencedPath);
+
+            if (showProgress) EditorUtility.DisplayProgressBar("ThirdParty Sync", "Resolving dependencies...", 0.5f);
+
+            // Step 4: Resolve recursive dependencies within ThirdPartyLocal
+            var usedGuids = ResolveRecursiveDependencies(externalRefs, guidToPath, pathToGuid, allLocalPaths);
+
+            if (showProgress) EditorUtility.DisplayProgressBar("ThirdParty Sync", "Calculating files to move...", 0.7f);
+
+            // Step 5: Get file paths and their target locations
+            var filesToMove = new List<(string source, string target)>();
+
+            foreach (var guid in usedGuids)
+            {
+                if (!guidToPath.TryGetValue(guid, out var sourcePath))
+                    continue;
+
+                var normalizedLocalPath = thirdPartyLocalPath.Replace("\\", "/");
+                if (sourcePath.StartsWith(normalizedLocalPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    var relativePath = sourcePath.Substring(normalizedLocalPath.Length).TrimStart('/');
+                    var targetPath = Path.Combine(thirdPartyTargetPath, relativePath).Replace("\\", "/");
+
+                    // Only add if source exists and target doesn't already exist
+                    if (File.Exists(sourcePath) && !File.Exists(targetPath))
+                    {
+                        filesToMove.Add((sourcePath, targetPath));
+                    }
+                }
+            }
+
+            // Remove duplicates and sort
+            filesToMove = filesToMove.Distinct().OrderBy(x => x.source).ToList();
+
+            return new SyncPlan { moves = filesToMove, referencedScripts = referencedScripts.ToList() };
+        }
+
+        /// <summary>
+        /// ThirdPartyLocal paths that the content folder's own assets (everything under
+        /// contentRoot outside ThirdPartyLocal, ThirdParty included) depend on, recursively.
+        /// </summary>
+        internal static List<string> LocalDependenciesOf(string contentRoot, string thirdPartyLocalPath)
+        {
+            if (string.IsNullOrEmpty(contentRoot) || !AssetDatabase.IsValidFolder(contentRoot))
+                return new List<string>();
+            var roots = new List<string>();
+            foreach (string guid in AssetDatabase.FindAssets("", new[] { contentRoot }))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                if (string.IsNullOrEmpty(path) || AssetDatabase.IsValidFolder(path)) continue;
+                if (IsUnderFolder(path, thirdPartyLocalPath)) continue;
+                roots.Add(path);
+            }
+            if (roots.Count == 0) return new List<string>();
+            return ClassifyLocal(AssetDatabase.GetDependencies(roots.Distinct().ToArray(), true), thirdPartyLocalPath);
+        }
+
+        /// <summary>The paths under thirdPartyLocalPath, de-duplicated and sorted.</summary>
+        internal static List<string> ClassifyLocal(IEnumerable<string> dependencyPaths, string thirdPartyLocalPath)
+        {
+            var result = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (dependencyPaths == null) return result.ToList();
+            foreach (string path in dependencyPaths)
+            {
+                if (string.IsNullOrEmpty(path)) continue;
+                string normalized = path.Replace("\\", "/");
+                if (IsUnderFolder(normalized, thirdPartyLocalPath)) result.Add(normalized);
+            }
+            return result.ToList();
+        }
+
+        private static bool IsUnderFolder(string path, string folder)
+        {
+            if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(folder)) return false;
+            string prefix = folder.Replace("\\", "/").TrimEnd('/') + "/";
+            return path.Replace("\\", "/").StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static List<string> lastReferencedScripts = new List<string>();
+        internal static IReadOnlyList<string> LastReferencedScripts => lastReferencedScripts;
+
+        private static void ReportScriptReferences(List<string> scripts, bool analyzeOnly)
+        {
+            lastReferencedScripts = scripts ?? new List<string>();
+            if (lastReferencedScripts.Count == 0) return;
+            Debug.LogWarning("[ThirdParty Sync] Tracked assets reference " + lastReferencedScripts.Count
+                + " script(s) under ThirdPartyLocal. A clean checkout without them won't compile, so they "
+                + (analyzeOnly ? "would be moved" : "are moved")
+                + " into ThirdParty/ with the rest; commit them:\n" + string.Join("\n", lastReferencedScripts));
         }
 
         private static void BuildGuidIndex(string rootPath, Dictionary<string, string> guidToPath, Dictionary<string, string> pathToGuid)

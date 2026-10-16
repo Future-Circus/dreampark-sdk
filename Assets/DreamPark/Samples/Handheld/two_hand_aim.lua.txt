@@ -1,0 +1,79 @@
+-- FALLBACK for apps older than the October 2026 release. On current apps call dp.hold(prop, side) instead (HANDHELD.md §5).
+-- two_hand_aim.lua.txt — two-handed props (rifle with a foregrip, bat, bow, steering wheel) (HANDHELD.md §5).
+--
+-- Put a LuaBehaviour with this script ON THE PROP ROOT. The prop is mounted in its MAIN hand as usual (Grip on the fist,
+-- HandheldKit.Place / builder recipe). Add a "Grip2" child where the OFF hand holds it: Grip2 is the off hand's fist point.
+-- Injection: offHand (GameObject) = the OFF hand node (Player/LeftHand for a right-handed rifle; under RemoteRig use
+-- RemoteRig/LeftHand). While the off hand is tracked, the prop pivots about the main fist so Grip -> Grip2 points from
+-- the main fist to the off fist, keeping its roll from the main hand's thumb. When the off hand is lost it returns to
+-- the authored one-hand pose. Tracking is read from HandTracker.isActiveAndTracking (local) or the node being active
+-- (RemoteRig hides untracked hands).
+-- @var offHand gameobject
+
+local UE = CS.UnityEngine
+local tf, node, off_tf, off_tracker, main_left, off_left = nil, nil, nil, nil, false, true
+local grip, grip2 = nil, nil
+local base_lp, base_lr = nil, nil
+local FIST = { x = 0.007, y = -0.033, z = 0.081 }   -- LEFT hand; x negated for the right
+
+local function side_of(t)
+    local n = string.lower(string.gsub(t.name, '[%s_%-]', ''))
+    return string.find(n, 'left', 1, true) ~= nil
+end
+
+local function fist_world(hand, left)
+    return hand:TransformPoint(UE.Vector3(left and FIST.x or -FIST.x, FIST.y, FIST.z))
+end
+
+local function tracked(t, tr)
+    if t == nil or not t.gameObject.activeInHierarchy then return false end
+    if tr ~= nil then
+        local ok, v = pcall(function() return tr.isActiveAndTracking end)
+        if ok then return v end
+    end
+    return true
+end
+
+function start()
+    tf = self.transform
+    grip = tf:Find('Grip'); grip2 = tf:Find('Grip2')
+    base_lp = tf.localPosition; base_lr = tf.localRotation
+    local p = tf.parent
+    while p ~= nil and node == nil do
+        local n = string.lower(string.gsub(p.name, '[%s_%-]', ''))
+        if n == 'lefthand' or n == 'righthand' or n == 'hand' or n == 'bothhands' then node = p end
+        p = p.parent
+    end
+    if node ~= nil then main_left = side_of(node) end
+    if offHand ~= nil then
+        off_tf = offHand.transform
+        off_left = side_of(off_tf)
+        pcall(function()
+            local arr = off_tf:GetComponents(typeof(CS.HandTracker))
+            if arr.Length > 0 then off_tracker = arr[0] end
+        end)
+    end
+    if grip == nil or grip2 == nil or node == nil or off_tf == nil then
+        print('[two_hand_aim] needs Grip, Grip2, a hand node above and the offHand injection on ' .. tf.name)
+    end
+end
+
+function update()
+    if grip == nil or grip2 == nil or node == nil or off_tf == nil then return end
+    if not tracked(off_tf, off_tracker) then
+        tf.localPosition = base_lp; tf.localRotation = base_lr
+        return
+    end
+    local a = fist_world(node, main_left)
+    local b = fist_world(off_tf, off_left)
+    local dir = b - a
+    if dir.magnitude < 0.05 then return end
+    -- prop-space axis Grip -> Grip2 and the roll reference (Grip +Y = thumb side of the main hand)
+    local v = grip2.localPosition - grip.localPosition
+    local thumb = node.rotation * UE.Quaternion.Euler(0, 0, main_left and -90 or 90) * UE.Vector3.up
+    local want = UE.Quaternion.LookRotation(dir.normalized, thumb)
+    local have = UE.Quaternion.LookRotation(v.normalized, grip.localRotation * UE.Vector3.up)
+    local rot = want * UE.Quaternion.Inverse(have)
+    tf.rotation = rot
+    tf.position = a - rot * grip.localPosition
+end

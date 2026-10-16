@@ -27,9 +27,11 @@ namespace DreamPark
     ///
     /// Wire: type "pp", no netId (a session-level event), payload
     ///   {"i":id,"g":gameId,"n":seq,"h":[x,y,z,qx,qy,qz,qw],"l":[...],"r":[...],
-    ///    "a":"l"|"r","nm":"display name","av":"avatar url","s":{state}}   —
-    ///    l / r absent when that hand is not tracked; nm, av and s ride the
-    ///    periodic state resend.
+    ///    "a":"l"|"r","nm":"display name","av":"avatar url","dv":"phone"|"headset",
+    ///    "s":{state}}   —
+    ///    l / r absent when that hand is not tracked; nm, av, dv and s ride the
+    ///    periodic state resend. dv is optional (older clients omit it, and
+    ///    receivers treat its absence as "unknown").
     ///
     /// Self-creating (RuntimeInitializeOnLoadMethod); nothing to put in a scene.
     /// Does nothing until a DreamBoxClient is connected.
@@ -130,7 +132,25 @@ namespace DreamPark
         Quaternion _lastHeadRot, _lastLeftRot, _lastRightRot;
         bool _lastLeftTracked, _lastRightTracked;
         string _lastActive = "";
+        string _lastFrameId;
+        bool _lastPosesValid;
+        int _lastEpoch;
         PlayerRig _trackerRig;
+
+        /// <summary>
+        /// This device's shared-frame state (ParkRoot.State), sampled once per
+        /// frame in Update — before every RemotePlayer runs — so the send and
+        /// every peer's visibility decision read the same answer.
+        /// </summary>
+        public static ParkRoot.FrameState FrameNow { get; private set; } =
+            new ParkRoot.FrameState { id = "", localized = true, source = "unsampled" };
+        static int s_frameSampledAt = -1;
+        internal static void SampleFrame()
+        {
+            if (s_frameSampledAt == Time.frameCount) return;
+            s_frameSampledAt = Time.frameCount;
+            FrameNow = ParkRoot.State;
+        }
         HandTracker _tracker;
 
         void Awake()
@@ -189,6 +209,7 @@ namespace DreamPark
                 if (_client != null) _client.OnGlobalEvent += HandleGlobal;
             }
 
+            SampleFrame();
             float now = Time.time;
             Reap(now);
 
@@ -218,28 +239,50 @@ namespace DreamPark
             Vector3 rp = rt ? ParkRoot.ToPark(right.position) : Vector3.zero;
             Quaternion rq = rt ? ParkRoot.ToParkRot(right.rotation) : Quaternion.identity;
 
+            // Only a LOCALIZED frame makes those numbers mean a place in the
+            // room (ParkRoot.State). Unlocalized — booting, in the relocalize
+            // diorama (where dp.head() is parked in limbo), between locations —
+            // the stream says so ("lc":0) and carries no pose at all, so no
+            // peer ever draws this player, or tests a hit, metres from them.
+            var frame = FrameNow;
+            bool posesValid = NetPoseRules.ShouldBroadcastPose(frame.localized, hp);
+            string frameId = frame.id ?? "";
+            bool frameIdChanged = frameId != _lastFrameId;
+            bool frameChanged = frameIdChanged || posesValid != _lastPosesValid || frame.epoch != _lastEpoch;
+
             bool keepalive = now - _lastSent >= keepaliveSeconds;
             bool stateDue  = _stateDirty || now - _lastStateSent >= stateResendSeconds;
             bool changed =
+                frameChanged ||
                 game != _lastGame || active != _lastActive ||
-                lt != _lastLeftTracked || rt != _lastRightTracked ||
-                Moved(hp, _lastHeadPos, hq, _lastHeadRot) ||
-                (lt && Moved(lp, _lastLeftPos, lq, _lastLeftRot)) ||
-                (rt && Moved(rp, _lastRightPos, rq, _lastRightRot));
+                (posesValid && (
+                    lt != _lastLeftTracked || rt != _lastRightTracked ||
+                    Moved(hp, _lastHeadPos, hq, _lastHeadRot) ||
+                    (lt && Moved(lp, _lastLeftPos, lq, _lastLeftRot)) ||
+                    (rt && Moved(rp, _lastRightPos, rq, _lastRightRot))));
+
+            NetPoseTrace.Sender(frame, posesValid, hp, ParkRoot.Resolve());
 
             if (!changed && !keepalive && !stateDue) return;
 
             _seq++;
-            var sb = new StringBuilder(320);
+            var sb = new StringBuilder(360);
             sb.Append("{\"i\":\"").Append(MyId).Append("\",\"g\":\"").Append(Escape(game)).Append("\",\"n\":").Append(_seq);
-            AppendPose(sb, "h", hp, hq);
-            if (lt) AppendPose(sb, "l", lp, lq);
-            if (rt) AppendPose(sb, "r", rp, rq);
+            sb.Append(",\"lc\":").Append(posesValid ? '1' : '0');
+            sb.Append(",\"fe\":").Append(frame.epoch.ToString(CultureInfo.InvariantCulture));
+            if (frameIdChanged || stateDue) sb.Append(",\"fr\":\"").Append(Escape(frameId)).Append('"');
+            if (posesValid)
+            {
+                AppendPose(sb, "h", hp, hq);
+                if (lt) AppendPose(sb, "l", lp, lq);
+                if (rt) AppendPose(sb, "r", rp, rq);
+            }
             sb.Append(",\"a\":\"").Append(active).Append('"');
             if (stateDue)
             {
                 sb.Append(",\"nm\":\"").Append(Escape(LocalDisplayName())).Append('\"');
                 sb.Append(",\"av\":\"").Append(Escape(LocalAvatarUrl())).Append('\"');
+                sb.Append(",\"dv\":\"").Append(DreamParkDevice.PeerWire).Append('\"');
                 sb.Append(",\"s\":").Append(_stateJson);
                 _stateDirty = false;
                 _lastStateSent = now;
@@ -249,6 +292,7 @@ namespace DreamPark
             _client.PublishRaw(TypePose, sb.ToString());
 
             _lastSent = now;
+            _lastFrameId = frameId; _lastPosesValid = posesValid; _lastEpoch = frame.epoch;
             _lastGame = game; _lastActive = active;
             _lastHeadPos = hp; _lastHeadRot = hq;
             _lastLeftPos = lp; _lastLeftRot = lq; _lastLeftTracked = lt;
@@ -437,10 +481,24 @@ namespace DreamPark
                 string name = p.GetField("nm")?.stringValue;
                 string avatarUrl = p.GetField("av")?.stringValue;
 
+                // Frame fields (Oct 8 2026). Absent = an older client: no claim
+                // either way, so it is drawn as before.
+                bool? localized = null;
+                var lcf = p.GetField("lc");
+                if (lcf != null) localized = lcf.type == JSONObject.Type.Bool ? lcf.boolValue : lcf.floatValue != 0f;
+                string frameId = p.GetField("fr")?.stringValue;   // only on change / state cadence
+                int? epoch = null;
+                var fef = p.GetField("fe");
+                if (fef != null && fef.type == JSONObject.Type.Number) epoch = (int)fef.floatValue;
+                peer.SetFrame(localized, frameId, epoch);
+
                 ReadPose(p.GetField("h"), out var hp, out var hq);
                 ReadPose(p.GetField("l"), out var lp, out var lq);
                 ReadPose(p.GetField("r"), out var rp, out var rq);
                 peer.Receive(seq, game, hp, hq, lp, lq, rp, rq, active, state, name, avatarUrl);
+                NetPoseTrace.Receiver(peer, FrameNow);
+                string device = p.GetField("dv")?.stringValue;
+                if (!string.IsNullOrEmpty(device)) peer.SetDevice(device);
             }
             catch (Exception e)
             {
@@ -471,7 +529,7 @@ namespace DreamPark
             _peers[id] = peer;
             Queue(new PeerEvent { kind = "join", id = id, peer = peer });
             try { OnPeerJoined?.Invoke(peer); } catch (Exception e) { Debug.LogWarning("[PlayerPresence] OnPeerJoined handler threw: " + e.Message); }
-            NetLog.V("[PlayerPresence] peer joined " + id);
+            NetPoseTrace.Write("[NetPose] peer-joined peer=" + id + " under=" + (go.transform.parent != null ? go.transform.parent.name : "scene-root"));
             return peer;
         }
 
@@ -482,7 +540,7 @@ namespace DreamPark
             Queue(new PeerEvent { kind = "leave", id = id, peer = null });
             try { OnPeerLeft?.Invoke(peer); } catch (Exception e) { Debug.LogWarning("[PlayerPresence] OnPeerLeft handler threw: " + e.Message); }
             if (peer != null) Destroy(peer.gameObject);
-            NetLog.V("[PlayerPresence] peer left " + id);
+            NetPoseTrace.Write("[NetPose] peer-left peer=" + id);
         }
 
         List<string> _stale;
@@ -495,5 +553,174 @@ namespace DreamPark
                 if (kv.Value == null || now - kv.Value.lastSeen > peerTimeoutSeconds) _stale.Add(kv.Key);
             for (int i = 0; i < _stale.Count; i++) Remove(_stale[i]);
         }
+    }
+
+    /// <summary>How a remote player's frame relates to this device's (NetPoseRules.Agree).</summary>
+    public enum FrameAgreement
+    {
+        /// <summary>Both frames are localized and the same: their pose is a real place here.</summary>
+        Shared,
+        /// <summary>An older client that sends no frame fields: drawn as before.</summary>
+        Legacy,
+        /// <summary>They have not localized (or are in their diorama): no pose to draw.</summary>
+        SenderUnlocalized,
+        /// <summary>THIS device has not localized and shows no diorama: nothing here is in its real place.</summary>
+        ReceiverUnlocalized,
+        /// <summary>Both localized, but to different Saved Locations: their numbers belong to another frame.</summary>
+        DifferentFrame,
+    }
+
+    /// <summary>
+    /// The not-localized rule, pure (unit-tested in Tools/Builders/NetPoseTestsBuilder.cs).
+    /// A park-local pose crosses the wire only from a localized frame, and is
+    /// drawn (rig, name tag, dp.peers() anchors) only when it lands in the same
+    /// localized frame — or in this device's diorama, whose own camera draws it
+    /// against the miniature (the AR camera never does).
+    /// </summary>
+    public static class NetPoseRules
+    {
+        /// <summary>Past this (park-local metres) a pose is not a person: LocalPlayerGate's limbo head is 10 km down.</summary>
+        public const float MaxPlausibleMeters = 2000f;
+        /// <summary>A peer that became drawable while this device shows a diorama waits this long, so the diorama's 0.5 s remote-avatar scan has it before any camera could draw it full size.</summary>
+        public const float MiniatureRevealSeconds = 0.6f;
+
+        public static bool ShouldBroadcastPose(bool localized, Vector3 headPark) => localized && Plausible(headPark);
+
+        /// <summary>
+        /// A park-local head a person could have. Receivers apply it too: an older
+        /// client (no "lc") in its diorama streams LocalPlayerGate's limbo head
+        /// (0, -10000, 0) — seen live on the LAN, Oct 8 2026 — and its name tag
+        /// was then "missing", 10 km under the floor.
+        /// </summary>
+        public static bool Plausible(Vector3 headPark)
+        {
+            if (float.IsNaN(headPark.x) || float.IsNaN(headPark.y) || float.IsNaN(headPark.z)) return false;
+            if (float.IsInfinity(headPark.x) || float.IsInfinity(headPark.y) || float.IsInfinity(headPark.z)) return false;
+            return headPark.sqrMagnitude < MaxPlausibleMeters * MaxPlausibleMeters;
+        }
+
+        public static FrameAgreement Agree(bool? senderLocalized, string senderFrame, ParkRoot.FrameState mine)
+        {
+            if (senderLocalized == false) return FrameAgreement.SenderUnlocalized;
+            if (!mine.localized && !mine.miniature) return FrameAgreement.ReceiverUnlocalized;
+            if (!string.IsNullOrEmpty(senderFrame) && !string.IsNullOrEmpty(mine.id) &&
+                !string.Equals(senderFrame, mine.id, StringComparison.Ordinal))
+                return FrameAgreement.DifferentFrame;
+            return senderLocalized == null ? FrameAgreement.Legacy : FrameAgreement.Shared;
+        }
+
+        public static bool Drawable(FrameAgreement a) => a == FrameAgreement.Shared || a == FrameAgreement.Legacy;
+    }
+
+    /// <summary>
+    /// Always-on, size-capped trace of the presence frame (Oct 8 2026, after a
+    /// two-headset demo where remote players and their names were "missing or
+    /// way off"). <c>Application.persistentDataPath/netpose-trace.log</c>
+    /// (rolls to netpose-trace.1.log past MaxBytes): on Quest that is
+    /// /sdcard/Android/data/&lt;pkg&gt;/files (pull-headset-data.sh pulls it), on
+    /// iOS the app's Documents. Lines are tagged [NetPose]: what this device
+    /// sends (frame id, localized, epoch, its root's world offset, the head in
+    /// park space) on every change and every HeartbeatSeconds, and per peer on
+    /// join / agreement change / heartbeat (their claim, our verdict, their head
+    /// in park and in this device's world, the distance from us). Main thread.
+    /// </summary>
+    public static class NetPoseTrace
+    {
+        public const long MaxBytes = 256 * 1024;
+        public const float HeartbeatSeconds = 10f;
+        public static bool Enabled = true;
+
+        static string s_path;
+        static bool s_failed;
+
+        public static string PathOnDisk
+        {
+            get
+            {
+                if (s_path == null)
+                {
+                    try { s_path = System.IO.Path.Combine(Application.persistentDataPath, "netpose-trace.log"); }
+                    catch { s_path = string.Empty; }
+                }
+                return s_path;
+            }
+        }
+
+        public static void Write(string line)
+        {
+            NetLog.V(line);
+            if (!Enabled || s_failed || string.IsNullOrEmpty(line)) return;
+            string path = PathOnDisk;
+            if (string.IsNullOrEmpty(path)) return;
+            try
+            {
+                var info = new System.IO.FileInfo(path);
+                if (info.Exists && info.Length > MaxBytes)
+                {
+                    string old = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(path) ?? "", "netpose-trace.1.log");
+                    if (System.IO.File.Exists(old)) System.IO.File.Delete(old);
+                    System.IO.File.Move(path, old);
+                }
+                System.IO.File.AppendAllText(path, DateTime.UtcNow.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture) + " " +
+                    Time.realtimeSinceStartup.ToString("0.00", CultureInfo.InvariantCulture) + " " + line + "\n");
+            }
+            catch (Exception e)
+            {
+                s_failed = true;   // never spam or throw from a trace
+                Debug.LogWarning("[NetPose] trace disabled: " + e.Message);
+            }
+        }
+
+        static string s_sendKey;
+        static float s_nextSendBeat;
+
+        /// <summary>Called on every send tick; writes only when the frame claim changes, or on the heartbeat.</summary>
+        public static void Sender(ParkRoot.FrameState f, bool posesValid, Vector3 headPark, Transform root)
+        {
+            string key = (f.id ?? "") + "|" + f.localized + "|" + f.epoch + "|" + posesValid + "|" + f.miniature + "|" + (root != null ? root.GetInstanceID() : 0);
+            float now = Time.realtimeSinceStartup;
+            bool changed = key != s_sendKey;
+            if (!changed && now < s_nextSendBeat) return;
+            s_sendKey = key;
+            s_nextSendBeat = now + HeartbeatSeconds;
+            Write("[NetPose] " + (changed ? "send-change" : "send") + " me=" + PlayerPresence.MyId +
+                  " frame=" + Q(f.id) + " localized=" + (f.localized ? 1 : 0) + " broadcast=" + (posesValid ? 1 : 0) +
+                  " epoch=" + f.epoch + " src=" + (f.source ?? "") + " miniature=" + (f.miniature ? 1 : 0) +
+                  " root=" + (root != null ? root.name : "none") + " offset=" + Offset(root) +
+                  " head(park)=" + V(headPark));
+        }
+
+        /// <summary>Called on every received pose; writes on join, on an agreement or claim change, or on the heartbeat.</summary>
+        public static void Receiver(RemotePlayer peer, ParkRoot.FrameState mine)
+        {
+            if (peer == null) return;
+            var a = NetPoseRules.Agree(peer.senderLocalized, peer.frameId, mine);
+            string key = a + "|" + peer.senderLocalized + "|" + peer.frameId + "|" + peer.frameEpoch + "|" + (mine.id ?? "") + "|" + mine.localized;
+            float now = Time.realtimeSinceStartup;
+            bool changed = key != peer.traceKey;
+            if (!changed && now < peer.traceNextBeat) return;
+            peer.traceKey = key;
+            peer.traceNextBeat = now + HeartbeatSeconds;
+            var head = DreamParkLuaAPI.Head();
+            string dist = head != null && peer.head != null && NetPoseRules.Drawable(a)
+                ? (peer.HeadTargetWorld - head.position).magnitude.ToString("0.00", CultureInfo.InvariantCulture) + "m" : "-";
+            Write("[NetPose] " + (changed ? "recv-change" : "recv") + " peer=" + peer.id + " name=" + Q(peer.displayName) +
+                  " dv=" + (string.IsNullOrEmpty(peer.device) ? "?" : peer.device) + " game=" + Q(peer.gameId) +
+                  " agree=" + a + " their(frame=" + Q(peer.frameId) + " localized=" + (peer.senderLocalized.HasValue ? (peer.senderLocalized.Value ? "1" : "0") : "legacy") +
+                  " epoch=" + peer.frameEpoch + ") mine(frame=" + Q(mine.id) + " localized=" + (mine.localized ? 1 : 0) + " miniature=" + (mine.miniature ? 1 : 0) + ")" +
+                  " head(park)=" + V(peer.HeadTargetPark) + " head(world)=" + V(peer.HeadTargetWorld) + " fromMe=" + dist);
+        }
+
+        static string Offset(Transform root)
+        {
+            if (root == null) return "identity";
+            return V(root.position) + "/yaw" + root.eulerAngles.y.ToString("0.0", CultureInfo.InvariantCulture);
+        }
+
+        static string Q(string s) => "\"" + (s ?? "") + "\"";
+
+        static string V(Vector3 v) => "(" + v.x.ToString("0.00", CultureInfo.InvariantCulture) + "," +
+                                      v.y.ToString("0.00", CultureInfo.InvariantCulture) + "," +
+                                      v.z.ToString("0.00", CultureInfo.InvariantCulture) + ")";
     }
 }

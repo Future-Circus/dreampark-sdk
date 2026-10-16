@@ -198,6 +198,7 @@ namespace DreamPark.EditorTools
             var capturedColors   = new Dictionary<string, Color>();
             var capturedFloats   = new Dictionary<string, float>();
             CaptureAllProperties(src, capturedTextures, capturedColors, capturedFloats);
+            SourceSurface surface = CaptureSurface(src, capturedFloats);
 
             // Switch shader. Unity preserves any properties whose names match exactly;
             // others are dropped. We re-apply our mapped properties below.
@@ -209,13 +210,17 @@ namespace DreamPark.EditorTools
             {
                 string dpProp = kv.Key;
                 if (!src.HasProperty(dpProp)) continue;
-                Texture tex = ResolveTexture(capturedTextures, kv.Value);
+                Texture tex = kv.Key == BaseTexProp
+                    ? ResolveBaseTexture(capturedTextures)
+                    : ResolveTexture(capturedTextures, kv.Value);
                 if (tex != null)
                 {
                     src.SetTexture(dpProp, tex);
                     texHits++;
                 }
             }
+            ClearPlaceholderBaseTexture(src);
+            ApplySurface(src, surface);
 
             // Special: MaskMap — if the source had one, route to metallic and/or AO
             Texture maskMap = ResolveTexture(capturedTextures, MaskMapAliases);
@@ -310,6 +315,9 @@ namespace DreamPark.EditorTools
             Shaders.DreamParkMaterialRules.SyncSurfaceState(src);
 #endif
 
+            // Shader Graph boolean keywords are [Toggle(KW)] floats too; keep them in step.
+            Shaders.DreamParkKeywordToggles.SyncTogglesToKeywords(src, apply: true);
+
             EditorUtility.SetDirty(src);
             Debug.Log($"[MaterialConverter] ✓ '{src.name}' converted from '{srcShaderName}' → DreamPark-UniversalShader (textures: {texHits})");
             return true;
@@ -356,15 +364,18 @@ namespace DreamPark.EditorTools
             var capturedColors   = new Dictionary<string, Color>();
             var capturedFloats   = new Dictionary<string, float>();
             CaptureAllProperties(src, capturedTextures, capturedColors, capturedFloats);
+            SourceSurface surface = CaptureSurface(src, capturedFloats);
 
             src.shader = dpUnlit;
 
             // Base albedo / color texture — same alias list as the lit path.
-            if (src.HasProperty("_baseTex"))
+            if (src.HasProperty(BaseTexProp))
             {
-                Texture baseTex = ResolveTexture(capturedTextures, TextureMap["_baseTex"]);
-                if (baseTex != null) src.SetTexture("_baseTex", baseTex);
+                Texture baseTex = ResolveBaseTexture(capturedTextures);
+                if (baseTex != null) src.SetTexture(BaseTexProp, baseTex);
             }
+            ClearPlaceholderBaseTexture(src);
+            ApplySurface(src, surface);
 
             // Tint / base color.
             if (src.HasProperty("_baseColor")
@@ -444,6 +455,8 @@ namespace DreamPark.EditorTools
             Shaders.DreamParkMaterialRules.Enforce(src);
             Shaders.DreamParkMaterialRules.SyncSurfaceState(src);
 #endif
+
+            Shaders.DreamParkKeywordToggles.SyncTogglesToKeywords(src, apply: true);
 
             EditorUtility.SetDirty(src);
             Debug.Log($"[MaterialConverter] ✓ '{src.name}' converted from '{srcShaderName}' → DreamPark-Unlit");
@@ -569,6 +582,128 @@ namespace DreamPark.EditorTools
             }
             result = 0f;
             return false;
+        }
+
+        // ─── Surface type, depth write, base texture (Oct 2026) ─────────────
+        //
+        // Two bugs from the Zombiez materials pass, both on the shader swap:
+        //
+        //  1. DEPTH WRITE ON A TRANSPARENT RESULT. Both DreamPark graphs ship with
+        //     Depth Write = "Force Enabled" (_ZWriteControl = 1). A source that does not
+        //     carry _ZWriteControl (every URP Lit/Unlit, Standard and vendor material)
+        //     picks that default up on the swap, and URP's surface sync
+        //     (BaseShaderGUI.SetupMaterialBlendMode — which DreamParkMaterialRules, the
+        //     inspector and the import postprocessor all run) then honours it and turns
+        //     _ZWrite ON for a Transparent surface. A transparent object that writes depth
+        //     hides whatever transparent geometry draws after it. URP's own transparent
+        //     setup is ZWrite off, so the converter now sets Depth Write to Auto
+        //     (Opaque ⇒ on, Transparent ⇒ off) and lets URP sync the rest.
+        //
+        //     The surface type itself is also decided here rather than inherited by
+        //     accident: _Surface is only carried across when the source is URP, so a
+        //     Standard "Fade" material became Opaque on Universal, and EVERY non-URP
+        //     source became Transparent on DreamPark-Unlit (whose graph default is
+        //     Transparent).
+        //
+        //  2. THE GREY CHECKER. Both graphs give _baseTex a default texture,
+        //     Default-Checker-Gray. A source with no base texture got that checker on
+        //     the swap, so a flat-coloured material came out checkered. The converter now
+        //     clears the slot instead: an empty _baseTex samples the graph's "white"
+        //     default, which leaves the colour exactly as _baseColor says.
+
+        const string BaseTexProp = "_baseTex";
+        const string ZWriteControlProp = "_ZWriteControl";   // 0 Auto, 1 ForceEnabled, 2 ForceDisabled
+        const string PlaceholderTextureName = "Default-Checker-Gray";
+
+        internal struct SourceSurface
+        {
+            public bool transparent;
+            public float? blend;          // URP _Blend: 0 Alpha, 1 Premultiply, 2 Additive, 3 Multiply
+        }
+
+        /// <summary>
+        /// Reads the source's surface type BEFORE the shader swap. URP's _Surface wins;
+        /// then Standard's _Mode (2 Fade, 3 Transparent); then the RenderType tag and
+        /// the render queue, which every shader has.
+        /// </summary>
+        internal static SourceSurface CaptureSurface(Material src, IDictionary<string, float> floats)
+        {
+            var s = new SourceSurface();
+            float v;
+            if (floats.TryGetValue("_Surface", out v))
+            {
+                s.transparent = v >= 0.5f;
+                if (floats.TryGetValue("_Blend", out v)) s.blend = v;
+            }
+            else if (floats.TryGetValue("_Mode", out v) && src.shader != null
+                     && src.shader.name.IndexOf("Standard", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                // Standard Fade and Transparent both blend straight alpha into colour for an
+                // unlit/albedo read; URP's Premultiply expects premultiplied texels, so Alpha.
+                s.transparent = v >= 1.5f;
+                if (s.transparent) s.blend = 0f;
+            }
+            else
+            {
+                string tag = src.GetTag("RenderType", true, "");
+                s.transparent = string.Equals(tag, "Transparent", StringComparison.OrdinalIgnoreCase)
+                             || src.renderQueue > (int)UnityEngine.Rendering.RenderQueue.GeometryLast;
+                if (s.transparent) s.blend = 0f;
+            }
+            return s;
+        }
+
+        /// <summary>
+        /// Writes the surface type, sets Depth Write to Auto and runs URP's surface sync
+        /// (keywords, blend factors, _ZWrite, DepthOnly pass, render queue). A queue the
+        /// author owns (_QueueControl = User Override) is put back afterwards, the same
+        /// guard DreamParkMaterialRules.SyncSurfaceState applies.
+        /// </summary>
+        internal static void ApplySurface(Material dst, SourceSurface s)
+        {
+            if (dst == null) return;
+            if (dst.HasProperty("_Surface")) dst.SetFloat("_Surface", s.transparent ? 1f : 0f);
+            if (s.blend.HasValue && dst.HasProperty("_Blend")) dst.SetFloat("_Blend", s.blend.Value);
+            if (dst.HasProperty(ZWriteControlProp)) dst.SetFloat(ZWriteControlProp, 0f);
+
+            bool userOwnsQueue = dst.HasProperty("_QueueControl") && dst.GetFloat("_QueueControl") >= 0.5f;
+            int queueBefore = dst.renderQueue;
+            try
+            {
+                BaseShaderGUI.SetupMaterialBlendMode(dst);
+                if (userOwnsQueue && dst.renderQueue != queueBefore) dst.renderQueue = queueBefore;
+            }
+            catch (Exception e)
+            {
+                // URP moved the API: still never leave a transparent surface writing depth.
+                if (dst.HasProperty("_ZWrite")) dst.SetFloat("_ZWrite", s.transparent ? 0f : 1f);
+                dst.SetShaderPassEnabled("DepthOnly", !s.transparent);
+                Debug.LogWarning($"[MaterialConverter] URP surface sync unavailable for '{dst.name}' "
+                               + $"({e.GetType().Name}: {e.Message}); set _ZWrite directly.");
+            }
+        }
+
+        /// <summary>The graphs' default _baseTex (Unity's built-in grey checker).</summary>
+        internal static bool IsPlaceholderTexture(Texture t)
+        {
+            return t != null && t.name == PlaceholderTextureName
+                && AssetDatabase.GetAssetPath(t) == "Resources/unity_builtin_extra";
+        }
+
+        static Texture ResolveBaseTexture(Dictionary<string, Texture> caps)
+        {
+            // A source already on a DreamPark graph may carry the placeholder checker
+            // itself; that is "no texture", not something to copy.
+            var clean = caps.Where(kv => kv.Value != null && !IsPlaceholderTexture(kv.Value))
+                            .ToDictionary(kv => kv.Key, kv => kv.Value);
+            return ResolveTexture(clean, TextureMap[BaseTexProp]);
+        }
+
+        /// <summary>Empties _baseTex when the swap left the graph's checker in it.</summary>
+        internal static void ClearPlaceholderBaseTexture(Material dst)
+        {
+            if (dst == null || !dst.HasProperty(BaseTexProp)) return;
+            if (IsPlaceholderTexture(dst.GetTexture(BaseTexProp))) dst.SetTexture(BaseTexProp, null);
         }
 
         // ─── Batch entry points (for agents / tooling) ───────────────────────
@@ -1524,6 +1659,11 @@ namespace DreamPark.EditorTools
                 src.SetFloat("_MultiplyBrightnessCoverage", useBrightness ? 1f : 0f);
             }
 
+            // Backstop: every keyword now on the material (including ones dragged in with the
+            // old keyword set, and toggles like _Dissolve that were only ever set to 1) has its
+            // toggle float match it, so validation can't undo the conversion.
+            Shaders.DreamParkKeywordToggles.SyncTogglesToKeywords(src, apply: true);
+
             EditorUtility.SetDirty(src);
             return true;
         }
@@ -1679,11 +1819,11 @@ namespace DreamPark.EditorTools
             else { mat.EnableKeyword("_VC_MULTIPLY"); mat.SetFloat("_VC", 1); }
         }
 
-        static void SetKeyword(Material mat, string keyword, bool on)
-        {
-            if (on) mat.EnableKeyword(keyword);
-            else    mat.DisableKeyword(keyword);
-        }
+        // Sets the keyword AND the [Toggle(...)] float that owns it. A keyword set without
+        // its toggle is re-derived from the float (0) the next time Unity validates the
+        // material, and the converted feature silently disappears (WizardsWay, Oct 2026).
+        static void SetKeyword(Material mat, string keyword, bool on) =>
+            Shaders.DreamParkKeywordToggles.SetKeyword(mat, keyword, on);
 
         static Texture TryGetTextureFromAliases(Material mat, params string[] aliases)
         {

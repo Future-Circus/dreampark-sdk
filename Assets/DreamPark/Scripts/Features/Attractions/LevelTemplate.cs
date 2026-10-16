@@ -19,10 +19,6 @@ public class LevelTemplateEditor : Editor {
             Vector2 feet = template.DimensionsInFeet;
             EditorGUILayout.HelpBox(AttractionSizeReference.Describe(feet.x, feet.y), MessageType.None);
         }
-        if (GUILayout.Button("Test Real World Calibration")) {
-            var levelTemplate = target as LevelTemplate;
-            levelTemplate.TestRealWorldCalibration();
-        }
     }
 }
 
@@ -38,6 +34,7 @@ public class LevelTemplateEditor : Editor {
         MallCorridor,
         Custom
     }
+
     public static class GameLevelDimensions
     {
         public static Vector2 GetDimensions(GameLevelSize size)
@@ -135,6 +132,20 @@ public class LevelTemplateEditor : Editor {
                  "Helps visualize floor mesh subdivision without any runtime cost.")]
         public bool showGridGizmo = true;
         public int gridDensity = 10;
+        // Runtime-only floor geometry for a level presented inside a Sequence.
+        // The attraction's authored size, packing bake and gridDensity stay intact;
+        // only its generated playable floor takes the package room's footprint.
+        [System.NonSerialized] private Vector2 sequenceFloorFootprint;
+        [System.NonSerialized] private int sequenceFloorGridDensity;
+        // Runtime conform grid cell size in metres (dreampark-core
+        // Docs/Adaptive-Conform-Density-Spec.md §4). Set by the host app when an
+        // attraction is FIRST placed on measured ground; 0 = unset, so the editor,
+        // the Park Simulator and every other caller keep the authored gridDensity.
+        // Precedence lives in ResolveFloorGrid.
+        [System.NonSerialized] private float runtimeConformCellM;
+        // True only inside ConfigureConformCell(replaceSavedGrid: true) — a move
+        // commit re-grids a level whose saved bake would otherwise pin its grid.
+        [System.NonSerialized] private bool ignoreSavedGrid;
         [HideInInspector] public float gridWidth;
         [HideInInspector] public float gridHeight;
         [HideInInspector] public int gridX;
@@ -142,44 +153,6 @@ public class LevelTemplateEditor : Editor {
         [HideInInspector] public JSONObject floorData;
         public Material floorMaterial;
 
-        [Tooltip("This attraction needs a real wall behind its FORWARD edge (local +Z) — e.g. a portal window or a wall-mounted sign. Published with the attraction's dimensions so layout/AI tools can place it against a real wall.")]
-        public bool wallFront = false;
-        [Tooltip("...its BACK edge (local -Z).")]
-        public bool wallBack = false;
-        [Tooltip("...its RIGHT edge (local +X).")]
-        public bool wallRight = false;
-        [Tooltip("...its LEFT edge (local -X).")]
-        public bool wallLeft = false;
-        [Tooltip("Draw the required wall(s) as a gizmo plane, 10ft tall by default and taller if this attraction's own content reaches higher.")]
-        public bool showWallGizmos = true;
-
-        /// <summary>
-        /// Wire format for the dimensions upload's "walls" field: comma-joined
-        /// axis tokens in this attraction's own local frame ("+z,-x"), empty
-        /// when no side is toggled. Any combination is valid — two adjacent
-        /// sides describe a corner, two opposite sides describe a through-wall
-        /// (e.g. a portal). Kept here rather than in the uploader so the token
-        /// spelling has exactly one source.
-        ///
-        /// Always read and uploaded — never omitted from the row — because the
-        /// backend treats an ABSENT "walls" field as "don't touch the stored
-        /// value" and "" as the explicit clear. Untoggling every side has to
-        /// still publish "" or the old value would stick forever.
-        /// </summary>
-        public string WallsWireValue
-        {
-            get
-            {
-                var sides = new List<string>(4);
-                if (wallFront) sides.Add("+z");
-                if (wallBack) sides.Add("-z");
-                if (wallRight) sides.Add("+x");
-                if (wallLeft) sides.Add("-x");
-                return string.Join(",", sides);
-            }
-        }
-
-        private bool HasAnyWall => wallFront || wallBack || wallRight || wallLeft;
         #if UNITY_EDITOR
         public void OnValidate()
         {
@@ -232,15 +205,20 @@ public class LevelTemplateEditor : Editor {
         /// DepthMaskCeiling for why a patchwork of small ceilings is the wrong shape for
         /// the flicker this trick exists to kill. Runs only when that plane is absent.
         /// </summary>
-        private void GenerateDepthCeiling() {
+        private void GenerateDepthCeiling(bool destroyImmediately = false) {
             // Feeds a runtime manager, and Destroy() is illegal in edit mode — the public
             // RegenerateCeiling entry point makes that reachable from tooling.
             if (!Application.isPlaying) return;
 
-            if (runtimeCeiling != null) Destroy(runtimeCeiling);
+            if (runtimeCeiling != null)
+            {
+                GameObject previousCeiling = runtimeCeiling;
+                runtimeCeiling = null;
+                DestroyGeneratedObject(previousCeiling, destroyImmediately);
+            }
             runtimeCeiling = null;
 
-            Vector2 dims = _isCustom ? GameLevelDimensions.GetDimensionsInMeters(new Vector2(customSize.x, customSize.y)) : GameLevelDimensions.GetDimensionsInMeters(size);
+            Vector2 dims = RuntimeFootprintMeters;
             float pad = Mathf.Max(0f, CeilingPadding);
             float width = dims.x + pad * 2f;
             float height = dims.y + pad * 2f;
@@ -250,13 +228,279 @@ public class LevelTemplateEditor : Editor {
 
         /// <summary>
         /// Public method to regenerate the floor mesh and notify listeners.
+        ///
+        /// RESPECTS generateFloor, matching RegenerateCeiling above, which has always
+        /// checked generateCeiling. This method did not check, and the asymmetry was
+        /// invisible for as long as every template generated a floor.
+        ///
+        /// Floorless templates still exist (for example the persistent Sequence
+        /// overlay). Its active attraction owns the cutout floor, while the
+        /// package root keeps a non-colliding calibration reference.
+        ///
+        /// The only thing preventing that before was a guard written in Lua in the
+        /// retired in-prefab level controller, which no C# caller inherits. Guarding here means the invariant holds for every
+        /// caller instead of for the one that remembered.
+        ///
+        /// No reachable behaviour changes: the two existing callers were that guarded
+        /// Lua path (since removed), and CalibrateLevel.Clear() (CalibrateLevel.cs:872) — and
+        /// CalibrateLevel only ever exists ON runtimePlane, which a template with
+        /// generateFloor = false never creates, so that path cannot reach a floorless
+        /// template at all.
         /// </summary>
         public void RegenerateFloor()
         {
+            if (!generateFloor) return;
             GenerateFloorWithHoles();
             SetFloorVisibilityForMode(isBuildMode);
             NotifyLevelTemplateChanged();
         }
+
+        /// <summary>
+        /// Use a Sequence-wide floor footprint and grid while retaining this
+        /// level's own FloorCutouts. The package owns the calibrated grade; this
+        /// generated floor is the active, level-specific collision/NavMesh skin.
+        /// </summary>
+        public void ConfigureSequenceFloor(Vector2 footprint, int density)
+        {
+            if (footprint.x <= 0f || footprint.y <= 0f || density < 1) return;
+            bool changed = (sequenceFloorFootprint - footprint).sqrMagnitude > 0.000001f
+                || sequenceFloorGridDensity != density;
+            sequenceFloorFootprint = footprint;
+            sequenceFloorGridDensity = density;
+            if (changed && runtimePlane != null && generateFloor) RegenerateFloor();
+        }
+
+        /// <summary>
+        /// Adaptive conform density: build the floor grid at roughly
+        /// <paramref name="cellM"/> metres per cell instead of the authored
+        /// gridDensity (cells across the short side). 0 clears the override.
+        /// The cell is in park (= world) metres; ResolveFloorGrid converts it to
+        /// this template's local units, and caps it when the level has cutouts.
+        ///
+        /// FIRST PLACEMENT: called BEFORE Start builds the floor — then it
+        /// costs nothing, and a saved bake with grid metadata, a legacy bake,
+        /// or a Sequence floor still wins (ResolveFloorGrid).
+        ///
+        /// MOVE COMMIT (<paramref name="replaceSavedGrid"/> = true): the level
+        /// already stands on a floor, possibly restored from a saved bake whose
+        /// grid would otherwise win. The move is about to re-bake at the new
+        /// pose anyway, so that saved grid is set aside for this rebuild, and
+        /// floorData is replaced by a capture of the new grid (its _meta
+        /// records the new gridX/gridY; the next save writes it and a reload
+        /// rebuilds it). A LEGACY bake (no metadata, applied by vertex index)
+        /// is never re-gridded. A Sequence floor still wins.
+        ///
+        /// A move never loses a saved bake: while the calibrator still holds
+        /// that bake as unapplied data (hasPendingCalibration or its floorData
+        /// not yet consumed — iOS with the portal unsynced and no prior, or
+        /// before ApplyPendingCalibration), nothing is re-gridded and false is
+        /// returned, whatever `calibrated` says; likewise when the template has
+        /// a bake and the live mesh has no grade to carry.
+        ///
+        /// If the floor exists and the resolved grid actually changes, the
+        /// floor is rebuilt and any calibrated grade is carried across (same
+        /// pattern as AttractionTemplate's footprint change). Returns true when
+        /// it rebuilt the floor: the new CalibrateLevel's Start (mesh, layer
+        /// masks) only runs next frame, so a caller that bakes must wait one.
+        /// Internal: host-app wiring, not creator API.
+        /// </summary>
+        internal bool ConfigureConformCell(float cellM, bool replaceSavedGrid = false)
+        {
+            if (float.IsNaN(cellM) || float.IsInfinity(cellM) || cellM < 0f) cellM = 0f;
+            bool cellChanged = Mathf.Abs(runtimeConformCellM - cellM) >= 0.0001f;
+            runtimeConformCellM = cellM;
+            if (runtimePlane == null || !generateFloor) return false;
+            if (!cellChanged && !replaceSavedGrid) return false;
+            bool hadBake = floorData != null && floorData.count > 0;
+            if (replaceSavedGrid && hadBake && !CalibrateLevel.HasCalibrationMetadata(floorData)) return false;
+
+            ignoreSavedGrid = replaceSavedGrid;
+            try
+            {
+                Vector2 dims = sequenceFloorGridDensity > 0
+                    ? sequenceFloorFootprint : RuntimeFootprintMeters;
+                ResolveFloorGrid(dims.x, dims.y, out int nextX, out int nextY);
+                if (nextX == gridX && nextY == gridY) return false;
+
+                CalibrateLevel previous = runtimePlane.GetComponent<CalibrateLevel>();
+                Vector3[] grade = previous != null ? previous.CaptureGradeWorldSamples() : null;
+                // A MOVE NEVER LOSES A SAVED BAKE. The grade is carried from the
+                // LIVE mesh. On iOS with the portal unsynced and no floor prior,
+                // or before LevelAnchor's ApplyPendingCalibration, the saved bake
+                // is still only data the calibrator holds (hasPendingCalibration /
+                // floorData) and the mesh is not that bake: re-gridding now would
+                // drop it with nothing to replace it. That holds even when the
+                // mesh reports `calibrated` — a Scan-mode conform with no hits
+                // sets it on a flat mesh, and carrying that flat grade would
+                // replace the bake just the same. Also skip when the template
+                // has a bake and the mesh has no grade at all. Keep the old grid
+                // and the bake intact.
+                bool unappliedBake = previous != null
+                    && (previous.hasPendingCalibration
+                        || (previous.floorData != null && previous.floorData.count > 0));
+                if (replaceSavedGrid && (unappliedBake || (hadBake && grade == null)))
+                {
+                    Debug.Log($"[LevelTemplate] Move re-grid skipped for {name}: its saved floor bake is not applied yet — keeping grid {gridX}x{gridY}");
+                    return false;
+                }
+                RegenerateFloor();
+                CalibrateLevel current = runtimePlane != null
+                    ? runtimePlane.GetComponent<CalibrateLevel>() : null;
+                if (grade != null && current != null && current != previous && current.TransferGradeFrom(grade))
+                {
+                    floorData = current.CompileCalibrationData();
+                    // The transferred mesh is already live. Do not let the new
+                    // CalibrateLevel's Start queue the old topology for replay.
+                    current.floorData = null;
+                }
+                if (replaceSavedGrid && floorData != null && floorData.count > 0
+                    && (!CalibrateLevel.TryReadSavedGrid(floorData, out int keptX, out int keptY, out _, out _)
+                        || keptX != nextX || keptY != nextY))
+                {
+                    // Still the OLD grid's bake (no grade to carry, or a flat
+                    // transfer made CompileCalibrationData fall back to it). It
+                    // no longer matches this mesh, and keeping it would snap the
+                    // next rebuild back to the old grid; the move's bake writes
+                    // the new one.
+                    floorData = null;
+                    if (current != null) current.floorData = null;
+                }
+                return true;
+            }
+            finally
+            {
+                ignoreSavedGrid = false;
+            }
+        }
+
+        /// <summary>
+        /// Floor grid resolution, in precedence order:
+        ///  1. Sequence floor (ConfigureSequenceFloor) — the package owns it.
+        ///  2. The SAVED bake's own grid: floorData metadata carries gridX/gridY
+        ///     and widthM/heightM; when the footprint matches within 1 mm the
+        ///     floor is rebuilt at exactly that grid, so CalibrateLevel's
+        ///     topology check accepts the bake even if today's recommended
+        ///     density differs (or none was set on this load).
+        ///  3. A legacy bake (no metadata) keeps the authored grid — it is keyed
+        ///     by vertex index with no topology check, so it must never meet a
+        ///     different grid. So does a saved grid that fails the sanity bound
+        ///     (CalibrateLevel.HasUnusableSavedGrid).
+        ///  4. The runtime conform cell (ConfigureConformCell), converted from
+        ///     metres to local units and never coarser than the authored grid
+        ///     when the level has FloorCutouts (see below).
+        ///  5. Authored gridDensity.
+        /// Floor data is always assigned before Start (LevelAnchor.Spawn,
+        /// ParkSimulator), so Start's GenerateFloorWithHoles sees it. Steps 2–3
+        /// are skipped only during a move-commit re-grid (ignoreSavedGrid).
+        /// </summary>
+        private void ResolveFloorGrid(float width, float height, out int resolvedX, out int resolvedY)
+        {
+            if (!ignoreSavedGrid && sequenceFloorGridDensity <= 0 && floorData != null && floorData.count > 0)
+            {
+                if (CalibrateLevel.TryReadSavedGrid(floorData, out int savedX, out int savedY,
+                        out float savedWidth, out float savedHeight))
+                {
+                    if (Mathf.Abs(savedWidth - width) <= 0.001f && Mathf.Abs(savedHeight - height) <= 0.001f)
+                    {
+                        resolvedX = savedX;
+                        resolvedY = savedY;
+                        return;
+                    }
+                }
+                else if (!CalibrateLevel.HasCalibrationMetadata(floorData)
+                    || CalibrateLevel.HasUnusableSavedGrid(floorData))
+                {
+                    // Legacy bake, or a current-version _meta grid that is
+                    // non-positive, over CalibrateLevel.MaxSavedGridCells, or
+                    // disagrees with its own vertexCount: never build a mesh
+                    // from untrusted numbers — the authored grid, as for legacy.
+                    DensityGrid(gridDensity, width, height, out resolvedX, out resolvedY);
+                    return;
+                }
+            }
+            if (sequenceFloorGridDensity <= 0 && runtimeConformCellM > 0f)
+            {
+                // METRES MEET LOCAL UNITS HERE, and only here. The runtime cell
+                // is measured in park metres (SpaceMap is park-local; parks are
+                // unscaled), while width/height are this template's LOCAL units
+                // — the floor mesh is a unit-scale child, so a template scaled x2
+                // spans 2 x width metres. Divide the cell by the template's world
+                // scale per axis; a zero/non-finite axis keeps the metre cell.
+                Vector3 scale = transform.lossyScale;
+                float cellX = LocalCell(runtimeConformCellM, scale.x);
+                float cellZ = LocalCell(runtimeConformCellM, scale.z);
+                // Epsilon: 4.0 m / 1.0 m must stay 4 cells, not become 5 on float noise.
+                resolvedX = Mathf.Max(1, Mathf.CeilToInt(width  / cellX - 0.0001f));
+                resolvedY = Mathf.Max(1, Mathf.CeilToInt(height / cellZ - 0.0001f));
+                // FLOOR CUTOUTS CAP THE CELL. Holes are cut by DROPPING whole
+                // triangles (GenerateFloorWithHoles: any corner inside a hole or
+                // any edge crossing it), and corners inside a hole are pushed out
+                // in quarter-cell steps. With a runtime cell coarser than the one
+                // the author tuned the cutouts against, a small pit can fall
+                // inside one triangle and not be cut at all, and a large one is
+                // over-cut to a coarse staircase. So with any cutout the runtime
+                // grid is never coarser than the authored gridDensity grid —
+                // per axis, cell = min(runtime cell, authored cell).
+                if (HasOwnFloorCutouts())
+                {
+                    DensityGrid(gridDensity, width, height, out int authoredX, out int authoredY);
+                    resolvedX = Mathf.Max(resolvedX, authoredX);
+                    resolvedY = Mathf.Max(resolvedY, authoredY);
+                }
+                return;
+            }
+            int floorDensity = sequenceFloorGridDensity > 0 ? sequenceFloorGridDensity : gridDensity;
+            DensityGrid(floorDensity, width, height, out resolvedX, out resolvedY);
+        }
+
+        private static float LocalCell(float cellM, float axisScale)
+        {
+            float s = Mathf.Abs(axisScale);
+            if (s < 1e-4f || float.IsNaN(s) || float.IsInfinity(s)) return cellM;
+            return cellM / s;
+        }
+
+        /// Same filter GenerateFloorWithHoles uses to gather holes: this
+        /// template's own cutouts with a real polygon (a Sequence's nested
+        /// attractions cut their own floors).
+        private bool HasOwnFloorCutouts()
+        {
+            foreach (var pit in GetComponentsInChildren<FloorCutout>())
+            {
+                if (pit.GetComponentInParent<LevelTemplate>() != this) continue;
+                if (pit.points != null && pit.points.Count >= 3) return true;
+            }
+            return false;
+        }
+
+        private static void DensityGrid(int density, float width, float height, out int resolvedX, out int resolvedY)
+        {
+            resolvedX = Mathf.Max(1, Mathf.RoundToInt(density * (width  / Mathf.Min(width, height))));
+            resolvedY = Mathf.Max(1, Mathf.RoundToInt(density * (height / Mathf.Min(width, height))));
+        }
+
+#if UNITY_EDITOR
+        /// <summary>
+        /// Editor packing sliders can emit several values before Unity reaches the end
+        /// of the frame. Destroy() is deferred until then, so the normal replacement
+        /// path temporarily retains every generated mesh, collider and NavMeshSurface.
+        /// The preview owns these generated objects outright and can replace them
+        /// synchronously instead.
+        /// </summary>
+        internal void RegenerateFloorForEditorPreview()
+        {
+            if (!generateFloor) return;
+            GenerateFloorWithHoles(true);
+            SetFloorVisibilityForMode(isBuildMode);
+            NotifyLevelTemplateChanged();
+        }
+
+        internal void RegenerateCeilingForEditorPreview()
+        {
+            if (generateCeiling && DepthMaskCeiling.AllowTemplateCeilings)
+                GenerateDepthCeiling(true);
+        }
+#endif
 
         /// <summary>
         /// Build mode can create floor occlusion artifacts on iOS.
@@ -266,7 +510,17 @@ public class LevelTemplateEditor : Editor {
         {
             if (runtimePlane == null)
             {
-                Debug.LogWarning($"[LevelTemplate] SetFloorVisibilityForMode: runtimePlane is null on {gameObject.name}, skipping to preserve calibration data");
+                // Warn only when a floor was EXPECTED. This message is about a template
+                // that wants a floor and has not got one — the case where skipping
+                // preserves calibration data. A template with generateFloor = false has
+                // no runtimePlane by design, and Start() calls this unconditionally
+                // (:198), so without this test every deliberately floorless template
+                // logs a warning on spawn that reads exactly like a defect. Under the
+                // Dream Sequence format that is once per streamed level, on device.
+                if (generateFloor)
+                {
+                    Debug.LogWarning($"[LevelTemplate] SetFloorVisibilityForMode: runtimePlane is null on {gameObject.name}, skipping to preserve calibration data");
+                }
                 return;
             }
 
@@ -288,20 +542,48 @@ public class LevelTemplateEditor : Editor {
                 runtimePlane.layer = targetLayer;
             }
 
+            // THE SWAP IS FOR THE CAMERA, NOT FOR PHYSICS (Oct 4 2026). Water
+            // does not collide with Default, Level, Entity, Item, Player,
+            // Projectile or Triggers, so a floor parked on it was no floor at
+            // all for any body that ran while build mode stood — and on the
+            // AR-first phone build mode stands for the whole session while the
+            // park runs live (LiveParkContent). Props on those floors fell to
+            // whatever was underneath: the live LiDAR chunks during a scan,
+            // nothing once they stopped colliding. Wherever the floor is put
+            // for rendering, it collides exactly like a Level floor.
+            ApplyPlayLayerContacts(runtimePlane, targetLayer, playLayer);
+
             if (!runtimePlane.activeSelf)
             {
                 runtimePlane.SetActive(true);
             }
         }
 
-        private void GenerateFloorWithHoles()
+        /// The floor's colliders contact what `playLayer` contacts while the
+        /// floor sits on another layer (includeLayers is per-collider and
+        /// affects contacts only — raycasts still see the floor's own layer).
+        /// Cleared again on the play layer, where the matrix already says so.
+        private static void ApplyPlayLayerContacts(GameObject floor, int floorLayer, int playLayer)
+        {
+            LayerMask include = 0;
+            if (playLayer >= 0 && floorLayer != playLayer)
+            {
+                int mask = 0;
+                for (int i = 0; i < 32; i++)
+                    if (!Physics.GetIgnoreLayerCollision(playLayer, i)) mask |= 1 << i;
+                include = mask;
+            }
+            foreach (var col in floor.GetComponents<Collider>())
+                if (col != null && col.includeLayers != include) col.includeLayers = include;
+        }
+
+        private void GenerateFloorWithHoles(bool destroyImmediately = false)
 {
-    if (runtimePlane != null) Destroy(runtimePlane);
+    if (runtimePlane != null) DestroyRuntimeFloor(destroyImmediately);
 
     // Dimensions
-    Vector2 dims = _isCustom
-        ? GameLevelDimensions.GetDimensionsInMeters(new Vector2(customSize.x, customSize.y))
-        : GameLevelDimensions.GetDimensionsInMeters(size);
+    Vector2 dims = sequenceFloorGridDensity > 0
+        ? sequenceFloorFootprint : RuntimeFootprintMeters;
 
     float width  = dims.x;
     float height = dims.y;
@@ -319,7 +601,12 @@ public class LevelTemplateEditor : Editor {
     MeshFilter   mf = runtimePlane.AddComponent<MeshFilter>();
     MeshCollider mc = runtimePlane.AddComponent<MeshCollider>();
     MeshRenderer mr = runtimePlane.AddComponent<MeshRenderer>();
-    mr.material = floorMaterial ? floorMaterial : Resources.Load<Material>("Materials/Occlusion");
+    // This material is never modified per generated floor, so do not instantiate a
+    // private copy on every preview tick.
+    mr.sharedMaterial = floorMaterial ? floorMaterial : Resources.Load<Material>("Materials/Occlusion");
+    // Oct 8 2026: never z-fight content authored at floor height
+    // (GapFiller.cs FloorOccluderMaterial — a runtime swap, rendering only).
+    mr.sharedMaterial = FloorOccluderMaterial.For(mr.sharedMaterial);
     // && DREAMPARKCORE added porting this from dreampark-core (Grid,
     // feat/grid-portal-yaw @ 2e1e940e): PlaceHasScanForFloorHiding() below
     // calls DreamPark.EnvironmentDust.EnvironmentDustManager, which lives
@@ -338,8 +625,8 @@ public class LevelTemplateEditor : Editor {
     // Grid setup (same logic as before)
     gridWidth  = width;
     gridHeight = height;
-    gridX = Mathf.Max(1, Mathf.RoundToInt(gridDensity * (width  / Mathf.Min(width, height))));
-    gridY = Mathf.Max(1, Mathf.RoundToInt(gridDensity * (height / Mathf.Min(width, height))));
+    // Sequence floor → saved bake grid → runtime conform cell → gridDensity.
+    ResolveFloorGrid(width, height, out gridX, out gridY);
     int vertCountX = gridX + 1;
     int vertCountY = gridY + 1;
 
@@ -363,6 +650,10 @@ public class LevelTemplateEditor : Editor {
     List<List<Vector2>> holes = new List<List<Vector2>>();
     foreach (var pit in GetComponentsInChildren<FloorCutout>())
     {
+        // A Sequence keeps a plain calibration reference on its package root.
+        // Each nested attraction cuts its own floor; its pits must not punch
+        // holes in the reference surface or alter persisted floor topology.
+        if (pit.GetComponentInParent<LevelTemplate>() != this) continue;
         if (pit.points == null || pit.points.Count < 3) continue;
 
         List<Vector2> hole = new List<Vector2>();
@@ -535,6 +826,58 @@ public class LevelTemplateEditor : Editor {
     BuildNavSurfaceAndAnchors(vertices, uv, gridX, gridY, holes);
 }
 
+private void DestroyRuntimeFloor(bool destroyImmediately)
+{
+    GameObject previousFloor = runtimePlane;
+    runtimePlane = null;
+    if (previousFloor == null) return;
+
+    // NavMeshSurface.RemoveData deliberately does not destroy its NavMeshData.
+    // Both it and the procedural mesh are owned by this generated floor, so release
+    // them along with the GameObject instead of leaking one copy per slider value.
+    var surface = previousFloor.GetComponent<Unity.AI.Navigation.NavMeshSurface>();
+    NavMeshData navMeshData = surface != null ? surface.navMeshData : null;
+    if (surface != null)
+    {
+        surface.RemoveData();
+        surface.navMeshData = null;
+    }
+
+    var filter = previousFloor.GetComponent<MeshFilter>();
+    var collider = previousFloor.GetComponent<MeshCollider>();
+    var renderer = previousFloor.GetComponent<MeshRenderer>();
+    // Destroy is deferred in play mode. Never let the outgoing floor keep a
+    // collider under a newly opened cutout for the rest of this frame.
+    if (collider != null) collider.enabled = false;
+    if (renderer != null) renderer.enabled = false;
+    Mesh generatedMesh = filter != null ? filter.sharedMesh : null;
+    if (filter != null) filter.sharedMesh = null;
+    if (collider != null) collider.sharedMesh = null;
+    // Deactivate too, so for the rest of this frame the dying floor's
+    // CalibrateLevel is invisible to GetComponentInChildren<CalibrateLevel>()
+    // (saves, the move-commit bake, the Clear Floor button) and only the new
+    // runtimePlane answers. Its NavMesh data was already removed above and
+    // nothing reads this object again before Destroy.
+    previousFloor.SetActive(false);
+
+    DestroyGeneratedObject(previousFloor, destroyImmediately);
+    DestroyGeneratedObject(generatedMesh, destroyImmediately);
+    DestroyGeneratedObject(navMeshData, destroyImmediately);
+}
+
+private static void DestroyGeneratedObject(Object generatedObject, bool destroyImmediately)
+{
+    if (generatedObject == null) return;
+#if UNITY_EDITOR
+    if (destroyImmediately || !Application.isPlaying)
+    {
+        DestroyImmediate(generatedObject);
+        return;
+    }
+#endif
+    Destroy(generatedObject);
+}
+
 private bool SegmentIntersectsPolygon(Vector2 a, Vector2 b, List<Vector2> poly)
 {
     for (int i = 0; i < poly.Count; i++)
@@ -587,10 +930,16 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
     if (floorData != null)
         calibrator.floorData = floorData;
 
-    foreach (Transform child in transform)
+    // A package's direct children are structural containers (Levels, overlay,
+    // manager, transition). Anchoring those would move entire levels instead of
+    // conforming their authored FloorAnchors to the shared floor.
+    if (GetComponent<DreamParkPackageHost>() == null)
     {
-        if (child.gameObject == runtimePlane || child.gameObject == gameObject) continue;
-        Componentizer.DoComponent<FloorAnchor>(child.gameObject, true).calibrator = calibrator;
+        foreach (Transform child in transform)
+        {
+            if (child.gameObject == runtimePlane || child.gameObject == gameObject) continue;
+            Componentizer.DoComponent<FloorAnchor>(child.gameObject, true).calibrator = calibrator;
+        }
     }
 }
 
@@ -662,7 +1011,7 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
             // get dimensions (in meters) — must be custom-aware: the enum
             // overload returns Vector2.zero for GameLevelSize.Custom, which
             // drew a degenerate (invisible) selection outline on custom levels.
-            Vector2 dimensions = new Vector2(Size.x, Size.z);
+            Vector2 dimensions = RuntimeFootprintMeters;
 
             // rectangle points starting from bottom-left corner (counterclockwise)
             Vector3[] rectangle = new Vector3[5];
@@ -678,6 +1027,18 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
             get {
                 Vector2 dims = (size == GameLevelSize.Custom) ? GameLevelDimensions.GetDimensionsInMeters(customSize) : GameLevelDimensions.GetDimensionsInMeters(size);
                 return new Vector3(dims.x, 0, dims.y);
+            }
+        }
+
+        /// <summary>
+        /// Footprint used by live floor, nav, calibration and activation systems.
+        /// Ordinary levels use their authored Size; AttractionTemplate overrides
+        /// this after a baked packing variant is selected.
+        /// </summary>
+        public virtual Vector2 RuntimeFootprintMeters {
+            get {
+                Vector3 authored = Size;
+                return new Vector2(authored.x, authored.z);
             }
         }
 
@@ -721,7 +1082,7 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
             lr.useWorldSpace = false;
 
             // get dimensions (in meters) — custom-aware, same fix as ShowSelect
-            Vector2 dimensions = new Vector2(Size.x, Size.z);
+            Vector2 dimensions = RuntimeFootprintMeters;
 
             // rectangle points starting from bottom-left corner (counterclockwise)
             Vector3[] rectangle = new Vector3[5];
@@ -823,11 +1184,22 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
     ///
     /// MESH **OR** DUST. Zero of 32 stored environments carry a mesh today
     /// (Web, measured), so a mesh-only test would never fire on any real park.
+    /// `global::` IS LOAD-BEARING, do not "tidy" it away. This file opens with
+    /// `namespace DreamPark {`, and core also has a CLASS named `DreamPark`
+    /// inside that same namespace (core's Assets/Scripts/DreamPark.cs). From
+    /// in here the bare name binds to the sibling CLASS, not the namespace, so
+    /// `DreamPark.EnvironmentDust...` fails core's iOS compile with CS0117
+    /// "'DreamPark' does not contain a definition for 'EnvironmentDust'".
+    /// Harmless in this repo — DREAMPARKCORE is undefined here so the body
+    /// never compiles — which is exactly why it keeps getting lost: it costs
+    /// nothing here and breaks core on the next import. It has already been
+    /// fixed in core once and reverted by a sync; the prefix lives HERE so it
+    /// survives.
     private static bool PlaceHasScanForFloorHiding()
     {
-        var mesh = DreamPark.EnvironmentDust.EnvironmentDustManager.ActiveMeshStore;
+        var mesh = global::DreamPark.EnvironmentDust.EnvironmentDustManager.ActiveMeshStore;
         if (mesh != null && mesh.HasMesh) return true;
-        var dust = DreamPark.EnvironmentDust.EnvironmentDustManager.ActiveGrid;
+        var dust = global::DreamPark.EnvironmentDust.EnvironmentDustManager.ActiveGrid;
         return dust != null && dust.Count > 0;
     }
 #endif
@@ -845,8 +1217,8 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
                     }
                 }
             }
-            Vector2 dimensionsInFeet = _isCustom ? customSize : GameLevelDimensions.GetDimensions(size);
-            Vector2 dimensions = _isCustom ? GameLevelDimensions.GetDimensionsInMeters(new Vector2(customSize.x, customSize.y)) : GameLevelDimensions.GetDimensionsInMeters(size);
+            Vector2 dimensions = RuntimeFootprintMeters;
+            Vector2 dimensionsInFeet = dimensions / 0.3048f;
             Matrix4x4 oldMatrix = Gizmos.matrix;
             Gizmos.matrix = transform.localToWorldMatrix;
             Color levelPurple      = new Color(0.5f, 0, 1f);
@@ -924,56 +1296,9 @@ private void BuildNavSurfaceAndAnchors(Vector3[] originalVertices = null, Vector
             Gizmos.DrawMesh(humanMesh, bodyPosition);
             Graphics.DrawMeshNow(quadMesh, matrix);
 
-            // Gated on HasAnyWall (not just showWallGizmos) so the
-            // GetComponentsInChildren<Collider> walk inside
-            // GetWallHeightMeters only runs for attractions that actually
-            // declare a wall — the common no-wall case costs one bool check,
-            // not the per-frame tax PropTemplate's own footprint gizmo was
-            // moved off OnDrawGizmos for.
-            if (showWallGizmos && HasAnyWall)
-            {
-                DrawWallGizmos(dimensions);
-            }
-
             Gizmos.matrix = oldMatrix;
         }
 
-        private static readonly Color WallGizmoColor = new Color(0.1f, 0.6f, 1f, 1f);
-        private static readonly Color WallGizmoFill = new Color(0.1f, 0.6f, 1f, 0.15f);
-
-        // Called with Gizmos.matrix already set to transform.localToWorldMatrix
-        // by the caller (OnDrawGizmos) — dimensions is local X = width, Y =
-        // length in meters, the same frame the floor rectangle above is drawn
-        // in.
-        private void DrawWallGizmos(Vector2 dimensions)
-        {
-            float height = GetWallHeightMeters();
-
-            DrawWallIfSet(wallFront, new Vector3(0f, height * 0.5f, dimensions.y * 0.5f), new Vector3(dimensions.x, height, 0.05f));
-            DrawWallIfSet(wallBack, new Vector3(0f, height * 0.5f, -dimensions.y * 0.5f), new Vector3(dimensions.x, height, 0.05f));
-            DrawWallIfSet(wallRight, new Vector3(dimensions.x * 0.5f, height * 0.5f, 0f), new Vector3(0.05f, height, dimensions.y));
-            DrawWallIfSet(wallLeft, new Vector3(-dimensions.x * 0.5f, height * 0.5f, 0f), new Vector3(0.05f, height, dimensions.y));
-        }
-
-        private static void DrawWallIfSet(bool set, Vector3 center, Vector3 size)
-        {
-            if (!set) return;
-            Gizmos.color = WallGizmoFill;
-            Gizmos.DrawCube(center, size);
-            Gizmos.color = WallGizmoColor;
-            Gizmos.DrawWireCube(center, size);
-        }
-
-        /// <summary>
-        /// The wall height this attraction needs, in meters: the 10 ft
-        /// default, or taller if the attraction's own content reaches higher
-        /// (e.g. a tall portal frame) — never shorter. See
-        /// WallHeightMeasurement for why this is collider-shape based rather
-        /// than Renderer.bounds, which is also what makes it safe for the
-        /// Content Uploader to call on a disk-loaded prefab asset (it does
-        /// not, today, but could).
-        /// </summary>
-        public float GetWallHeightMeters() => WallHeightMeasurement.GetWallHeightMeters(transform, transform.position.y);
     #endif
     }
 }

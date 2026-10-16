@@ -47,7 +47,23 @@ public class DiscoveryListener : IDisposable
         /// happened. Carry both; let the arbiter fall back.
         /// </summary>
         public string sourceHost;
+
+        /// <summary>
+        /// Oct 11 2026 (net-arbiter): <see cref="Clock"/> seconds when the
+        /// datagram arrived, stamped on the discovery thread. The arbiter drains
+        /// beacons on the main thread, which does not run while the app is
+        /// paused — beacons queued then must age from when they ARRIVED, or a
+        /// host that died during the pause looks alive on resume.
+        /// </summary>
+        public double receivedAt;
     }
+
+    /// <summary>
+    /// Monotonic seconds, readable from any thread (Time.unscaledTime is
+    /// main-thread only). Compare against <see cref="BeaconInfo.receivedAt"/>.
+    /// </summary>
+    public static double Clock => _clock.Elapsed.TotalSeconds;
+    private static readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
 
     /// <summary>Fired on background thread when a valid beacon is received.</summary>
     public event Action<BeaconInfo> OnRelayDiscovered;
@@ -71,11 +87,13 @@ public class DiscoveryListener : IDisposable
 
     public bool IsRunning => _running;
 
+    /// <summary>Why the listener last stopped on its own (bind failure, socket error); null while healthy.</summary>
+    public string LastError { get; private set; }
+
     public void Start()
     {
         if (_running) return;
-
-        _running = true;
+        if (_udp != null) Stop();   // a loop that died on a socket error: close it before rebinding
 
         // Android/Quest drops broadcast packets at the Wi-Fi driver unless a
         // MulticastLock is held (loopback bypasses this, which is why localhost
@@ -83,10 +101,29 @@ public class DiscoveryListener : IDisposable
         // CHANGE_WIFI_MULTICAST_STATE in the manifest.
         global::DreamPark.NetPlatform.AcquireMulticastLock();
 
-        _udp = new UdpClient();
-        _udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-        _udp.Client.Bind(new IPEndPoint(IPAddress.Any, BeaconPort));
+        // Oct 11 2026 (net-arbiter, FINDINGS "E"): running only once the bind
+        // succeeded. It used to be set first, so a bind that threw left
+        // IsRunning true with no socket — and every StartDiscovery() returned
+        // early on it forever. Now a failed bind reports not-running and the
+        // arbiter retries.
+        try
+        {
+            _udp = new UdpClient();
+            _udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            _udp.Client.Bind(new IPEndPoint(IPAddress.Any, BeaconPort));
+        }
+        catch (Exception ex)
+        {
+            LastError = ex.Message;
+            Debug.LogWarning($"[DreamBox] Discovery: could not bind :{BeaconPort} ({ex.Message}) — will retry.");
+            try { _udp?.Close(); } catch { }
+            _udp = null;
+            global::DreamPark.NetPlatform.ReleaseMulticastLock();
+            return;
+        }
 
+        LastError = null;
+        _running = true;
         _listenThread = new Thread(ListenLoop)
         {
             IsBackground = true,
@@ -118,6 +155,7 @@ public class DiscoveryListener : IDisposable
             try
             {
                 byte[] data = _udp.Receive(ref remoteEP);
+                double receivedAt = Clock;
                 // Capture before anything else can reassign remoteEP.
                 string sourceHost = remoteEP.Address?.ToString() ?? "";
                 string json = Encoding.UTF8.GetString(data);
@@ -160,7 +198,8 @@ public class DiscoveryListener : IDisposable
                     v = vField != null ? vField.intValue : 0,
                     channel = channelField != null ? channelField.stringValue : "",
                     msgCap = capField != null ? capField.intValue : 0,
-                    sourceHost = sourceHost
+                    sourceHost = sourceHost,
+                    receivedAt = receivedAt
                 };
 
                 // Unfiltered feed for the arbiter (every valid beacon).
@@ -183,8 +222,22 @@ public class DiscoveryListener : IDisposable
                 // Expected when Stop() closes the socket
                 break;
             }
+            catch (SocketException ex)
+            {
+                // Oct 11 2026 (net-arbiter, NR4): the socket itself failed while we
+                // still wanted it — iOS reclaims a suspended app's sockets (recv
+                // then fails with ENOTCONN on every call). Looping here was a hot
+                // spin of warnings that never heard another beacon while IsRunning
+                // stayed true. Stop instead; the owner sees IsRunning == false and
+                // binds a fresh socket.
+                LastError = ex.Message;
+                Debug.LogWarning($"[DreamBox] Discovery socket failed ({ex.SocketErrorCode}: {ex.Message}) — listener stopped; the owner restarts it.");
+                _running = false;
+                break;
+            }
             catch (ObjectDisposedException)
             {
+                _running = false;   // closed under us: report it, so the owner rebinds
                 break;
             }
             catch (Exception ex)

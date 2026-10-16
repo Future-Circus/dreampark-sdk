@@ -1,0 +1,68 @@
+-- ============================================================
+-- phone_tap_sample.lua.txt — phone touch input, smallest example.
+--
+-- Put a LuaBehaviour running this on any object WITH A COLLIDER in your
+-- attraction. On a phone (or the Editor with DreamPark → Simulate Phone
+-- Player on, clicking in the Game view):
+--   • tapping the object cycles its colour         (ontap hook)
+--   • pressing / releasing on it dims / restores it (ontouch hook)
+--   • any drag anywhere on the screen is logged     (dp.on_drag)
+-- On a headset none of this fires: there is no touch screen. Hands and
+-- colliders stay the headset's input; give phone players a way in, never
+-- the only way in.
+--
+-- The object is authored, enabled and visible in the prefab — the script
+-- only recolours it (see "The attraction prefab IS the attraction").
+-- ============================================================
+
+local UE = CS.UnityEngine
+
+local colors = {
+    UE.Color(0.95, 0.55, 0.18, 1),
+    UE.Color(0.16, 0.66, 0.64, 1),
+    UE.Color(0.88, 0.33, 0.55, 1),
+}
+local index = 0
+local rend = nil
+local base = nil
+
+-- Both DreamPark shaders (UniversalShader and Unlit) name their tint _baseColor.
+local TINT = '_baseColor'
+
+local function paint(c)
+    if rend ~= nil then rend.material:SetColor(TINT, c) end
+end
+
+function start()
+    rend = self.gameObject:GetComponent(typeof(UE.Renderer))
+    if rend ~= nil and rend.material:HasProperty(TINT) then base = rend.material:GetColor(TINT) end
+
+    -- Global handler: every drag on the screen, whatever it is over.
+    -- Inside a LuaBehaviour the handler is dropped with this script; the
+    -- returned handle's off() (or dp.off_drag) removes it sooner.
+    dp.on_drag(function(t)
+        if t.phase == 'begin' or t.phase == 'end' then
+            print('[phone sample] drag ' .. t.phase .. ' at ' .. string.format('%.2f, %.2f', t.x, t.y))
+        end
+    end)
+end
+
+-- Fires when a tap's ray hits this object or one of its children.
+-- t = { kind, phase, x, y, dx, dy, scale, fingerId, position, normal,
+--       object, distance }. Return true to stop parents hearing it.
+function ontap(t)
+    index = index % #colors + 1
+    base = colors[index]
+    paint(base)
+    return true
+end
+
+-- Finger down / up on this object (t.phase is 'down' or 'up').
+function ontouch(t)
+    if base == nil then return end
+    if t.phase == 'down' then
+        paint(base * 0.6)
+    else
+        paint(base)
+    end
+end

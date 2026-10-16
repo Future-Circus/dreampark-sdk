@@ -38,6 +38,30 @@ namespace DreamPark
         CodeOnly = 2,
     }
 
+    // Oct 9 2026: the first upload after a bundle-layout change is a full
+    // upload, automatically, for every creator (GUI and CLI). A patch on a
+    // parent built with an older layout would keep the parent's bundles under
+    // names the new layout reuses for different contents.
+    public static class BundleLayoutGate
+    {
+        public const string Notice = "Bundle layout changed (SDK update) — this upload is a full upload";
+
+        /// requested → the mode that may run. parentLayoutVersion is the patch
+        /// parent's stamped layout (0 = unknown / not stamped, i.e. layout 1).
+        /// Returns All with a reason when the parent is older or unknown.
+        public static UploadMode Effective(UploadMode requested, int parentLayoutVersion, out string reason)
+        {
+            reason = null;
+            if (requested == UploadMode.All) return UploadMode.All;
+            int current = SmartBundleGrouper.BundleLayoutVersion;
+            if (parentLayoutVersion >= current) return requested;
+            string parent = parentLayoutVersion > 0 ? "v" + parentLayoutVersion : "unknown (v1)";
+            reason = $"{Notice}: the previous version was built with bundle layout {parent}, this SDK builds v{current}, "
+                + $"so {requested} was upgraded to All.";
+            return UploadMode.All;
+        }
+    }
+
     public static class UploadModePrefs
     {
         public const string PrefKey = "DreamPark.ContentUploader.UploadMode";

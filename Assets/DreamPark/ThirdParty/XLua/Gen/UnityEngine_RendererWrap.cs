@@ -21,7 +21,7 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(UnityEngine.Renderer);
-			Utils.BeginObjectRegister(type, L, translator, 0, 10, 35, 29);
+			Utils.BeginObjectRegister(type, L, translator, 0, 10, 37, 31);
 			
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "ResetBounds", _m_ResetBounds);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "ResetLocalBounds", _m_ResetLocalBounds);
@@ -56,6 +56,8 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "sortingOrder", _g_get_sortingOrder);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "isLOD0", _g_get_isLOD0);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "allowOcclusionWhenDynamic", _g_get_allowOcclusionWhenDynamic);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "forceMeshLod", _g_get_forceMeshLod);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "meshLodSelectionBias", _g_get_meshLodSelectionBias);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "isPartOfStaticBatch", _g_get_isPartOfStaticBatch);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "worldToLocalMatrix", _g_get_worldToLocalMatrix);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "localToWorldMatrix", _g_get_localToWorldMatrix);
@@ -90,6 +92,8 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "sortingLayerID", _s_set_sortingLayerID);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "sortingOrder", _s_set_sortingOrder);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "allowOcclusionWhenDynamic", _s_set_allowOcclusionWhenDynamic);
+            Utils.RegisterFunc(L, Utils.SETTER_IDX, "forceMeshLod", _s_set_forceMeshLod);
+            Utils.RegisterFunc(L, Utils.SETTER_IDX, "meshLodSelectionBias", _s_set_meshLodSelectionBias);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "lightProbeProxyVolumeOverride", _s_set_lightProbeProxyVolumeOverride);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "probeAnchor", _s_set_probeAnchor);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "lightmapIndex", _s_set_lightmapIndex);
@@ -751,6 +755,34 @@ namespace XLua.CSObjectWrap
         }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_forceMeshLod(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                UnityEngine.Renderer gen_to_be_invoked = (UnityEngine.Renderer)translator.FastGetCSObj(L, 1);
+                LuaAPI.xlua_pushinteger(L, gen_to_be_invoked.forceMeshLod);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_meshLodSelectionBias(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                UnityEngine.Renderer gen_to_be_invoked = (UnityEngine.Renderer)translator.FastGetCSObj(L, 1);
+                LuaAPI.lua_pushnumber(L, gen_to_be_invoked.meshLodSelectionBias);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
         static int _g_get_isPartOfStaticBatch(RealStatePtr L)
         {
 		    try {
@@ -1234,6 +1266,36 @@ namespace XLua.CSObjectWrap
 			
                 UnityEngine.Renderer gen_to_be_invoked = (UnityEngine.Renderer)translator.FastGetCSObj(L, 1);
                 gen_to_be_invoked.allowOcclusionWhenDynamic = LuaAPI.lua_toboolean(L, 2);
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_forceMeshLod(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                UnityEngine.Renderer gen_to_be_invoked = (UnityEngine.Renderer)translator.FastGetCSObj(L, 1);
+                gen_to_be_invoked.forceMeshLod = (short)LuaAPI.xlua_tointeger(L, 2);
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_meshLodSelectionBias(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                UnityEngine.Renderer gen_to_be_invoked = (UnityEngine.Renderer)translator.FastGetCSObj(L, 1);
+                gen_to_be_invoked.meshLodSelectionBias = (float)LuaAPI.lua_tonumber(L, 2);
             
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);

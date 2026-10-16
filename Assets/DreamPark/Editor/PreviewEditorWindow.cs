@@ -27,9 +27,9 @@ namespace DreamPark
     public class PreviewEditorWindow : EditorWindow
     {
         // Fired after a preview PNG has been regenerated on Save, with the
-        // affected contentId. The Content Uploader panel listens so its grid
-        // refreshes without the user hitting "Rebuild Previews".
-        public static event Action<string> PreviewSaved;
+        // affected contentId and prefab asset path. The Content Uploader panel
+        // uses both values to refresh only the card that actually changed.
+        public static event Action<string, string> PreviewSaved;
 
         private const int kRenderResolution = 512;
         private const float kControlsWidth = 320f;
@@ -47,6 +47,15 @@ namespace DreamPark
         private string _assetPath;
         private string _prefabName;
         private string _subLabel;
+        // Layout frame being edited: null = Base (Previews/{name}.png), else a
+        // frame id whose PNG lives at Previews/Frames/{name}@{frameId}.png and
+        // whose settings are stored under "{name}@{frameId}".
+        private string _frameId;
+
+        // Base + the prefab's layout frames in card order, and the popup labels.
+        // Only Base (Count == 1) for anything without frames.
+        [NonSerialized] private List<AttractionLayoutFramePreviews.FrameInfo> _frames;
+        [NonSerialized] private string[] _frameOptions;
 
         private GameObject _prefab;
         private PreviewSettings _settings = PreviewSettings.Default;
@@ -82,15 +91,19 @@ namespace DreamPark
         // pass, which is what makes per-entity edits independent.
         [NonSerialized] private Action _pendingChange;
 
-        public static void Open(string contentId, string assetPath, string prefabName, string subLabel)
+        // frameId: open an AttractionTemplate layout frame's preview instead of
+        // the Base one (null / "base" = Base). An unknown frame opens Base.
+        public static void Open(string contentId, string assetPath, string prefabName, string subLabel,
+            string frameId = null)
         {
             var window = GetWindow<PreviewEditorWindow>(utility: false, title: "Preview Editor", focus: true);
             window.minSize = new Vector2(640f, 420f);
-            window.Load(contentId, assetPath, prefabName, subLabel);
+            window.Load(contentId, assetPath, prefabName, subLabel, frameId);
             window.Show();
         }
 
-        private void Load(string contentId, string assetPath, string prefabName, string subLabel)
+        private void Load(string contentId, string assetPath, string prefabName, string subLabel,
+            string frameId = null)
         {
             StopPlayback();
             _pendingChange = null;   // never let an edit queued for the previous prefab land on this one
@@ -104,14 +117,44 @@ namespace DreamPark
                 ? null
                 : AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
 
-            _hasStoredOverride = PreviewMetadataStore.TryGet(contentId, prefabName, out var stored);
-            _settings = stored;
             _statusMessage = null;
+            DiscoverFrames();
+            _frameId = PreviewMetadataStore.IsBaseFrame(frameId) ? null : frameId;
+            if (_frameId != null && FrameIndexOf(_frameId) < 0)
+            {
+                _statusMessage = $"'{prefabName}' has no layout frame '{_frameId}' — showing Base.";
+                _frameId = null;
+            }
+
+            // A frame without its own override starts from what it renders
+            // with today: the prefab's Base settings.
+            _hasStoredOverride = PreviewMetadataStore.TryGetFrame(contentId, prefabName, _frameId, out _);
+            _settings = PreviewMetadataStore.GetOrDefaultForFrame(contentId, prefabName, _frameId);
             _controlsScroll = Vector2.zero;
 
             DiscoverAnimation();
             MarkDirty();
         }
+
+        private void DiscoverFrames()
+        {
+            _frames = AttractionLayoutFramePreviews.DisplayFrames(
+                _prefab != null ? _prefab.GetComponent<AttractionTemplate>() : null);
+            _frameOptions = new string[_frames.Count];
+            for (int i = 0; i < _frames.Count; i++)
+                _frameOptions[i] = $"{_frames[i].name}  ·  {AttractionLayoutFramePreviews.FormatFeet(_frames[i].sizeFeet)}";
+        }
+
+        private int FrameIndexOf(string frameId)
+        {
+            if (_frames == null) return -1;
+            string id = PreviewMetadataStore.IsBaseFrame(frameId) ? AttractionTemplate.BaseFrameId : frameId;
+            for (int i = 0; i < _frames.Count; i++)
+                if (_frames[i].frameId == id) return i;
+            return -1;
+        }
+
+        private bool EditingFrame => !string.IsNullOrEmpty(_frameId);
 
         // Animated-entity discovery walks the whole prefab and hits the
         // AssetDatabase, so it happens once per opened prefab rather than on
@@ -168,6 +211,7 @@ namespace DreamPark
             // A domain reload (script compile, play-mode toggle) wipes the
             // NonSerialized caches while the window itself survives.
             if (_entities == null) DiscoverAnimation();
+            if (_frames == null) DiscoverFrames();
 
             using (new EditorGUILayout.HorizontalScope())
             {
@@ -296,10 +340,18 @@ namespace DreamPark
                     GUILayout.Label(_prefabName, EditorStyles.boldLabel);
                     GUILayout.Label($"{_subLabel}  ·  {_contentId}", EditorStyles.miniLabel);
 
+                    DrawFrameSelector();
+
                     GUILayout.Space(2);
-                    string overrideState = _hasStoredOverride
-                        ? "Custom preview saved for this prefab."
-                        : "Using default framing (no override saved).";
+                    string overrideState;
+                    if (EditingFrame)
+                        overrideState = _hasStoredOverride
+                            ? "Custom preview saved for this frame."
+                            : "Using the Base preview settings (no frame override saved).";
+                    else
+                        overrideState = _hasStoredOverride
+                            ? "Custom preview saved for this prefab."
+                            : "Using default framing (no override saved).";
                     EditorGUILayout.LabelField(overrideState, EditorStyles.miniLabel);
 
                     DrawCameraControls();
@@ -313,6 +365,27 @@ namespace DreamPark
                 }
 
                 DrawActionRow();
+            }
+        }
+
+        // Layout frames each have their own preview. Switching discards unsaved
+        // edits exactly like opening another prefab would. The switch is
+        // queued (see _pendingChange) so this pass's control ids stay stable.
+        private void DrawFrameSelector()
+        {
+            if (_frames == null || _frames.Count <= 1) return;
+
+            GUILayout.Space(6);
+            int current = Mathf.Max(0, FrameIndexOf(_frameId));
+            int next = EditorGUILayout.Popup(
+                new GUIContent("Layout Frame",
+                    "Each layout frame has its own preview image. A frame with no saved override " +
+                    "uses the Base preview settings."),
+                current, _frameOptions);
+            if (next != current && next >= 0 && next < _frames.Count)
+            {
+                string frameId = _frames[next].IsBase ? null : _frames[next].frameId;
+                _pendingChange = () => Load(_contentId, _assetPath, _prefabName, _subLabel, frameId);
             }
         }
 
@@ -704,7 +777,7 @@ namespace DreamPark
 
             try
             {
-                Texture2D fresh = PrefabPreviewRenderer.RenderPreview(_prefab, _settings, kRenderResolution);
+                Texture2D fresh = PrefabPreviewRenderer.RenderPreview(_prefab, _settings, kRenderResolution, _frameId);
                 DestroyPreviewTexture();
                 _preview = fresh;
                 _renderedEmpty = fresh == null;
@@ -771,34 +844,44 @@ namespace DreamPark
             var sanitized = _settings.Sanitized();
             _settings = sanitized;
 
-            // Storing a value identical to the default would only add noise to
-            // the metadata file (and mark the prefab "overridden" for no
-            // reason), so a default-valued Save clears the override instead.
-            if (sanitized.IsDefault)
+            // Storing a value identical to what the prefab/frame would render
+            // with anyway only adds noise to the metadata file (and marks it
+            // "overridden" for no reason), so such a Save clears the override
+            // instead. For Base that fallback is the default framing; for a
+            // layout frame it is the prefab's Base settings.
+            bool matchesFallback = EditingFrame
+                ? SameSettings(sanitized, PreviewMetadataStore.GetOrDefault(_contentId, _prefabName))
+                : sanitized.IsDefault;
+            if (matchesFallback)
             {
-                PreviewMetadataStore.Clear(_contentId, _prefabName);
+                PreviewMetadataStore.ClearFrame(_contentId, _prefabName, _frameId);
                 _hasStoredOverride = false;
             }
             else
             {
-                PreviewMetadataStore.Set(_contentId, _prefabName, sanitized);
+                PreviewMetadataStore.SetFrame(_contentId, _prefabName, _frameId, sanitized);
                 _hasStoredOverride = true;
             }
 
             string contentId = _contentId;
             string assetPath = _assetPath;
+            string frameId = _frameId;
             _statusMessage = "Saving preview…";
 
-            // Bake the PNG off the OnGUI stack (URP render-pass safety).
+            // Bake the PNG off the OnGUI stack (URP render-pass safety). A Base
+            // save re-renders the frames too: those without an override of
+            // their own inherit the settings just saved.
             EditorApplication.delayCall += () =>
             {
-                bool ok = ContentProcessor.RegeneratePreviewForPrefab(contentId, assetPath);
+                bool ok = string.IsNullOrEmpty(frameId)
+                    ? ContentProcessor.RegeneratePreviewForPrefab(contentId, assetPath)
+                    : ContentProcessor.RegenerateFramePreview(contentId, assetPath, frameId);
                 _statusMessage = ok
                     ? $"Saved · {DateTime.Now:HH:mm:ss}"
                     : "Save failed — see Console.";
                 if (ok)
                 {
-                    PreviewSaved?.Invoke(contentId);
+                    PreviewSaved?.Invoke(contentId, assetPath);
                     ShowNotification(new GUIContent("Preview saved"));
                 }
                 Repaint();
@@ -809,19 +892,25 @@ namespace DreamPark
         {
             StopPlayback();
 
-            PreviewMetadataStore.Clear(_contentId, _prefabName);
+            // A layout frame without an override follows the Base settings.
+            PreviewMetadataStore.ClearFrame(_contentId, _prefabName, _frameId);
             _hasStoredOverride = false;
-            _settings = PreviewSettings.Default;
+            _settings = PreviewMetadataStore.GetOrDefaultForFrame(_contentId, _prefabName, _frameId);
 
             string contentId = _contentId;
             string assetPath = _assetPath;
+            string frameId = _frameId;
             _statusMessage = "Reverting to default…";
 
             EditorApplication.delayCall += () =>
             {
-                bool ok = ContentProcessor.RegeneratePreviewForPrefab(contentId, assetPath);
-                _statusMessage = ok ? "Reverted to default framing." : "Revert failed — see Console.";
-                if (ok) PreviewSaved?.Invoke(contentId);
+                bool ok = string.IsNullOrEmpty(frameId)
+                    ? ContentProcessor.RegeneratePreviewForPrefab(contentId, assetPath)
+                    : ContentProcessor.RegenerateFramePreview(contentId, assetPath, frameId);
+                _statusMessage = ok
+                    ? (string.IsNullOrEmpty(frameId) ? "Reverted to default framing." : "Reverted to the Base settings.")
+                    : "Revert failed — see Console.";
+                if (ok) PreviewSaved?.Invoke(contentId, assetPath);
                 Repaint();
             };
 
@@ -829,6 +918,9 @@ namespace DreamPark
         }
 
         // ── Helpers ─────────────────────────────────────────────────────────
+        private static bool SameSettings(PreviewSettings a, PreviewSettings b)
+            => JsonUtility.ToJson(a.Sanitized()) == JsonUtility.ToJson(b.Sanitized());
+
         private void DestroyPreviewTexture()
         {
             if (_preview != null)

@@ -93,6 +93,37 @@ namespace DreamPark
             }
         }
 
+        // ── GROUND POLICY SEAMS (Sep 27 2026) ─────────────────────────────
+        //  Two answers the SDK cannot compute for itself, filled in by the
+        //  project the same way GroundGeometryChanged is raised from it: the
+        //  SDK learns a generic question, never ARKit, RoomPlan or SpaceMap.
+        //  Both default to null, and null is byte-for-byte the old behaviour
+        //  (every editor / Park Simulator path, every SDK-only build).
+
+        /// "Is the ground at this point an ARCHITECTURAL floor, and at what
+        /// height?" Answered true inside a room whose floor is a built floor
+        /// (walls measured round it, observed flat). The conform then trusts
+        /// that floor over the scan: a coffee table, a box or a rug inside a
+        /// house is furniture, not terrain, and must not bend an attraction.
+        /// Outdoors, or anywhere the project cannot say, it answers false and
+        /// the scan is searched exactly as before.
+        public delegate bool ArchitecturalFloorFn(Vector3 worldPoint, out float worldFloorY);
+        public static ArchitecturalFloorFn ArchitecturalFloorAt;
+
+        /// "Is this floor-facing hit really the top of an object?" A rejected
+        /// hit is skipped and the search carries on to the next surface on
+        /// the same ray, so the floor under a table wins when the scan saw it.
+        /// When it didn't — under a bed or a sofa there is usually no scanned
+        /// floor at all — the rejecting answer may name where the floor is
+        /// (<paramref name="floorBelowWorldY"/>, the object's own bottom; NaN
+        /// when unknown) and that is used only if no pass — live, prior or
+        /// estimate, down or up — finds real ground. Without it those vertices would miss, and a level standing
+        /// mostly over one big object would fail CalibrateLevel's coverage
+        /// gate and stay flat. The project answers from semantically detected
+        /// furniture only.
+        public delegate bool RejectCandidateFn(Vector3 worldPoint, out float floorBelowWorldY);
+        public static RejectCandidateFn RejectCandidate;
+
         /// Minimum upward component of a surface normal for a hit to be
         /// CONSIDERED as floor.
         ///
@@ -281,15 +312,39 @@ namespace DreamPark
             LayerMask estimateMask,
             out RaycastHit hit)
         {
+            // ARCHITECTURAL FLOOR FIRST. Inside a built room the floor is a
+            // known plane, so no scanned surface (furniture included) gets a
+            // vote. See ArchitecturalFloorAt.
+            if (TryArchitecturalFloor(samplePoint, span, out hit)) return true;
+
+            // A furniture STAND-IN (an object's own bottom, see
+            // RejectCandidate) is only ever a last resort: it is remembered
+            // from whichever pass finds it first and used only after EVERY
+            // pass below — down and up, live, prior and estimate — found no
+            // real ground. The prior or the plane estimate usually does see the
+            // floor under a sofa the live mesh never reached. With no
+            // RejectCandidate hook nothing is ever remembered, so this is the
+            // old search exactly.
+            bool haveSubstitute = false;
+            RaycastHit substitute = default(RaycastHit);
+            // A stand-in floor must lie inside the search span, like the
+            // architectural floor: an object's bottom far below (the storey
+            // under a mezzanine, a bad RoomPlan box) is not ground here.
+            float subMinY = samplePoint.y - span.below;
+            float subMaxY = samplePoint.y + span.above;
+
             // DOWNWARD. The common case, so it runs first and short-circuits.
             Vector3 topOrigin = samplePoint + Vector3.up * span.above;
             float downLength = span.Length;
 
-            if (TryFloorHit(new Ray(topOrigin, Vector3.down), downLength, liveMask, out hit)) return true;
+            if (TryFloorHit(new Ray(topOrigin, Vector3.down), downLength, liveMask, out hit,
+                    subMinY, subMaxY, ref haveSubstitute, ref substitute)) return true;
             if (priorMask.value != 0
-                && TryFloorHit(new Ray(topOrigin, Vector3.down), downLength, priorMask, out hit)) return true;
+                && TryFloorHit(new Ray(topOrigin, Vector3.down), downLength, priorMask, out hit,
+                    subMinY, subMaxY, ref haveSubstitute, ref substitute)) return true;
             if (estimateMask.value != 0
-                && TryFloorHit(new Ray(topOrigin, Vector3.down), downLength, estimateMask, out hit)) return true;
+                && TryFloorHit(new Ray(topOrigin, Vector3.down), downLength, estimateMask, out hit,
+                    subMinY, subMaxY, ref haveSubstitute, ref substitute)) return true;
 
             // UPWARD. Only reachable when the sample point started beneath the
             // surface. Costs one extra pair of empty casts where it does not
@@ -299,22 +354,101 @@ namespace DreamPark
                 Vector3 bottomOrigin = samplePoint + Vector3.down * span.below;
                 float upLength = span.Length;
 
-                if (TryFloorHit(new Ray(bottomOrigin, Vector3.up), upLength, liveMask, out hit)) return true;
+                if (TryFloorHit(new Ray(bottomOrigin, Vector3.up), upLength, liveMask, out hit,
+                        subMinY, subMaxY, ref haveSubstitute, ref substitute)) return true;
                 if (priorMask.value != 0
-                    && TryFloorHit(new Ray(bottomOrigin, Vector3.up), upLength, priorMask, out hit)) return true;
+                    && TryFloorHit(new Ray(bottomOrigin, Vector3.up), upLength, priorMask, out hit,
+                        subMinY, subMaxY, ref haveSubstitute, ref substitute)) return true;
                 if (estimateMask.value != 0
-                    && TryFloorHit(new Ray(bottomOrigin, Vector3.up), upLength, estimateMask, out hit)) return true;
+                    && TryFloorHit(new Ray(bottomOrigin, Vector3.up), upLength, estimateMask, out hit,
+                        subMinY, subMaxY, ref haveSubstitute, ref substitute)) return true;
+            }
+
+            if (haveSubstitute) {
+                // Every floor-facing surface found was furniture and no pass saw
+                // the floor beneath it: stand on the object's own bottom.
+                hit = substitute;
+                return true;
             }
 
             hit = default(RaycastHit);
             return false;
         }
 
+        /// A synthetic hit on the architectural floor, when the project says
+        /// this point is inside a built room. Only `point`, `normal` and
+        /// `distance` are meaningful — there is no collider behind it, and no
+        /// caller reads one (CalibrateLevel and CalibrateProp use hit.point).
+        /// A floor outside the search span is ignored: a policy answering for
+        /// the storey below must not win over the ground actually here.
+        private static bool TryArchitecturalFloor(Vector3 samplePoint, Span span, out RaycastHit hit)
+        {
+            hit = default(RaycastHit);
+            var policy = ArchitecturalFloorAt;
+            if (policy == null) return false;
+            float floorY;
+            try {
+                if (!policy(samplePoint, out floorY)) return false;
+            }
+            catch (System.Exception e) {
+                Debug.LogWarning("[GroundProbe] ArchitecturalFloorAt threw: " + e.Message);
+                return false;
+            }
+            if (float.IsNaN(floorY) || float.IsInfinity(floorY)) return false;
+            if (floorY > samplePoint.y + span.above || floorY < samplePoint.y - span.below) return false;
+
+            float top = samplePoint.y + span.above;
+            hit.point = new Vector3(samplePoint.x, floorY, samplePoint.z);
+            hit.normal = Vector3.up;
+            hit.distance = Mathf.Max(0f, top - floorY);
+            return true;
+        }
+
+        /// <summary>
+        /// The project's architectural floor at this world point, if any
+        /// (ArchitecturalFloorAt, guarded). For replaying a saved bake
+        /// (CalibrateLevel, Oct 4 2026): no search span — the policy itself
+        /// only answers within a storey of the point.
+        /// </summary>
+        public static bool TryArchitecturalFloorY(Vector3 worldPoint, out float worldFloorY)
+        {
+            worldFloorY = 0f;
+            var policy = ArchitecturalFloorAt;
+            if (policy == null) return false;
+            try {
+                if (!policy(worldPoint, out worldFloorY)) return false;
+            }
+            catch (System.Exception e) {
+                Debug.LogWarning("[GroundProbe] ArchitecturalFloorAt threw: " + e.Message);
+                return false;
+            }
+            return !float.IsNaN(worldFloorY) && !float.IsInfinity(worldFloorY);
+        }
+
+        private static bool IsRejectedCandidate(Vector3 point, out float floorBelowWorldY)
+        {
+            floorBelowWorldY = float.NaN;
+            var veto = RejectCandidate;
+            if (veto == null) return false;
+            try { return veto(point, out floorBelowWorldY); }
+            catch (System.Exception e) {
+                Debug.LogWarning("[GroundProbe] RejectCandidate threw: " + e.Message);
+                floorBelowWorldY = float.NaN;
+                return false;
+            }
+        }
+
         /// RaycastAll, nearest-first, first surface whose normal says "floor".
         /// RaycastAll rather than Raycast so a wall or a ceiling between the
         /// origin and the ground does not shadow it — that is the whole reason
         /// CalibrateLevel used this shape and CalibrateProp needed to.
-        private static bool TryFloorHit(Ray ray, float distance, LayerMask mask, out RaycastHit hit)
+        /// Returns REAL ground only. A rejected (furniture) hit that names the
+        /// floor beneath it fills <paramref name="substitute"/> when none is
+        /// held yet and it lies within [substituteMinY, substituteMaxY] (the
+        /// search span); TryFindGround decides whether to use it.
+        private static bool TryFloorHit(Ray ray, float distance, LayerMask mask, out RaycastHit hit,
+            float substituteMinY, float substituteMaxY,
+            ref bool haveSubstitute, ref RaycastHit substitute)
         {
             hit = default(RaycastHit);
             if (mask.value == 0 || distance <= 0f) return false;
@@ -329,6 +463,20 @@ namespace DreamPark
                 // above or from below; an upward cast that hits the underside
                 // of a deck must not accept it as ground.
                 if (hits[i].normal.y >= MinFloorNormalY) {
+                    if (IsRejectedCandidate(hits[i].point, out float floorBelowY)) {
+                        if (!haveSubstitute && !float.IsNaN(floorBelowY) && !float.IsInfinity(floorBelowY)
+                            && floorBelowY >= substituteMinY && floorBelowY <= substituteMaxY) {
+                            // Synthetic, like TryArchitecturalFloor's: only
+                            // point, normal and distance are meaningful.
+                            Vector3 floorPoint = new Vector3(hits[i].point.x, floorBelowY, hits[i].point.z);
+                            haveSubstitute = true;
+                            substitute = default(RaycastHit);
+                            substitute.point = floorPoint;
+                            substitute.normal = Vector3.up;
+                            substitute.distance = Mathf.Abs(Vector3.Dot(floorPoint - ray.origin, ray.direction));
+                        }
+                        continue;
+                    }
                     hit = hits[i];
                     return true;
                 }

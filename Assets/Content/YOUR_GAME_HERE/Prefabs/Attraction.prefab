@@ -1,5 +1,815 @@
 %YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
+--- !u!1 &655604766673982918
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 3994052280316109472}
+  - component: {fileID: 8513351580015948495}
+  - component: {fileID: 6638435416203746640}
+  m_Layer: 0
+  m_Name: EXAMPLE Wall Panel (Left wall)
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 0
+--- !u!4 &3994052280316109472
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 655604766673982918}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: -2.08, y: 1, z: 0}
+  m_LocalScale: {x: 0.06, y: 1.2, z: 1.6}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 6098716299121031711}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!33 &8513351580015948495
+MeshFilter:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 655604766673982918}
+  m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
+--- !u!23 &6638435416203746640
+MeshRenderer:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 655604766673982918}
+  m_Enabled: 1
+  m_CastShadows: 1
+  m_ReceiveShadows: 1
+  m_DynamicOccludee: 1
+  m_StaticShadowCaster: 0
+  m_MotionVectors: 1
+  m_LightProbeUsage: 1
+  m_ReflectionProbeUsage: 1
+  m_RayTracingMode: 2
+  m_RayTraceProcedural: 0
+  m_RayTracingAccelStructBuildFlagsOverride: 0
+  m_RayTracingAccelStructBuildFlags: 1
+  m_SmallMeshCulling: 1
+  m_ForceMeshLod: -1
+  m_MeshLodSelectionBias: 0
+  m_RenderingLayerMask: 1
+  m_RendererPriority: 0
+  m_Materials:
+  - {fileID: 2100000, guid: 2792ed91927484ea794adc7e0a104b30, type: 2}
+  m_StaticBatchInfo:
+    firstSubMesh: 0
+    subMeshCount: 0
+  m_StaticBatchRoot: {fileID: 0}
+  m_ProbeAnchor: {fileID: 0}
+  m_LightProbeVolumeOverride: {fileID: 0}
+  m_ScaleInLightmap: 1
+  m_ReceiveGI: 1
+  m_PreserveUVs: 1
+  m_IgnoreNormalsForChartDetection: 0
+  m_ImportantGI: 0
+  m_StitchLightmapSeams: 1
+  m_SelectedEditorRenderState: 3
+  m_MinimumChartSize: 4
+  m_AutoUVMaxDistance: 0.5
+  m_AutoUVMaxAngle: 89
+  m_LightmapParameters: {fileID: 0}
+  m_GlobalIlluminationMeshLod: 0
+  m_SortingLayerID: 0
+  m_SortingLayer: 0
+  m_SortingOrder: 0
+  m_MaskInteraction: 0
+  m_AdditionalVertexStreams: {fileID: 0}
+--- !u!1 &821418175674607356
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 4830781191600813669}
+  - component: {fileID: 632156153405398222}
+  - component: {fileID: 494000338350749200}
+  m_Layer: 0
+  m_Name: EXAMPLE Bench Right
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &4830781191600813669
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 821418175674607356}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 1.15, y: 0.225, z: 0}
+  m_LocalScale: {x: 0.4, y: 0.45, z: 1.2}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 6098716299121031711}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!33 &632156153405398222
+MeshFilter:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 821418175674607356}
+  m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
+--- !u!23 &494000338350749200
+MeshRenderer:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 821418175674607356}
+  m_Enabled: 1
+  m_CastShadows: 1
+  m_ReceiveShadows: 1
+  m_DynamicOccludee: 1
+  m_StaticShadowCaster: 0
+  m_MotionVectors: 1
+  m_LightProbeUsage: 1
+  m_ReflectionProbeUsage: 1
+  m_RayTracingMode: 2
+  m_RayTraceProcedural: 0
+  m_RayTracingAccelStructBuildFlagsOverride: 0
+  m_RayTracingAccelStructBuildFlags: 1
+  m_SmallMeshCulling: 1
+  m_ForceMeshLod: -1
+  m_MeshLodSelectionBias: 0
+  m_RenderingLayerMask: 1
+  m_RendererPriority: 0
+  m_Materials:
+  - {fileID: 2100000, guid: 2d5a51bdcfe4846b7b81c002ed303fc9, type: 2}
+  m_StaticBatchInfo:
+    firstSubMesh: 0
+    subMeshCount: 0
+  m_StaticBatchRoot: {fileID: 0}
+  m_ProbeAnchor: {fileID: 0}
+  m_LightProbeVolumeOverride: {fileID: 0}
+  m_ScaleInLightmap: 1
+  m_ReceiveGI: 1
+  m_PreserveUVs: 1
+  m_IgnoreNormalsForChartDetection: 0
+  m_ImportantGI: 0
+  m_StitchLightmapSeams: 1
+  m_SelectedEditorRenderState: 3
+  m_MinimumChartSize: 4
+  m_AutoUVMaxDistance: 0.5
+  m_AutoUVMaxAngle: 89
+  m_LightmapParameters: {fileID: 0}
+  m_GlobalIlluminationMeshLod: 0
+  m_SortingLayerID: 0
+  m_SortingLayer: 0
+  m_SortingOrder: 0
+  m_MaskInteraction: 0
+  m_AdditionalVertexStreams: {fileID: 0}
+--- !u!1 &1785448315396794418
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2511781026280861940}
+  - component: {fileID: 3499759195278463082}
+  - component: {fileID: 7981221004851985867}
+  m_Layer: 0
+  m_Name: EXAMPLE Wall Shelf (Front wall)
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 0
+--- !u!4 &2511781026280861940
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1785448315396794418}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 1.2, z: 2.25}
+  m_LocalScale: {x: 1.6, y: 0.08, z: 0.35}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 6098716299121031711}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!33 &3499759195278463082
+MeshFilter:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1785448315396794418}
+  m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
+--- !u!23 &7981221004851985867
+MeshRenderer:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1785448315396794418}
+  m_Enabled: 1
+  m_CastShadows: 1
+  m_ReceiveShadows: 1
+  m_DynamicOccludee: 1
+  m_StaticShadowCaster: 0
+  m_MotionVectors: 1
+  m_LightProbeUsage: 1
+  m_ReflectionProbeUsage: 1
+  m_RayTracingMode: 2
+  m_RayTraceProcedural: 0
+  m_RayTracingAccelStructBuildFlagsOverride: 0
+  m_RayTracingAccelStructBuildFlags: 1
+  m_SmallMeshCulling: 1
+  m_ForceMeshLod: -1
+  m_MeshLodSelectionBias: 0
+  m_RenderingLayerMask: 1
+  m_RendererPriority: 0
+  m_Materials:
+  - {fileID: 2100000, guid: 2792ed91927484ea794adc7e0a104b30, type: 2}
+  m_StaticBatchInfo:
+    firstSubMesh: 0
+    subMeshCount: 0
+  m_StaticBatchRoot: {fileID: 0}
+  m_ProbeAnchor: {fileID: 0}
+  m_LightProbeVolumeOverride: {fileID: 0}
+  m_ScaleInLightmap: 1
+  m_ReceiveGI: 1
+  m_PreserveUVs: 1
+  m_IgnoreNormalsForChartDetection: 0
+  m_ImportantGI: 0
+  m_StitchLightmapSeams: 1
+  m_SelectedEditorRenderState: 3
+  m_MinimumChartSize: 4
+  m_AutoUVMaxDistance: 0.5
+  m_AutoUVMaxAngle: 89
+  m_LightmapParameters: {fileID: 0}
+  m_GlobalIlluminationMeshLod: 0
+  m_SortingLayerID: 0
+  m_SortingLayer: 0
+  m_SortingOrder: 0
+  m_MaskInteraction: 0
+  m_AdditionalVertexStreams: {fileID: 0}
+--- !u!1 &2044962584479076701
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 7454222030832052017}
+  - component: {fileID: 8467793955682783145}
+  - component: {fileID: 8437486282622976942}
+  m_Layer: 0
+  m_Name: EXAMPLE Centerpiece
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &7454222030832052017
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2044962584479076701}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0.5, z: 0}
+  m_LocalScale: {x: 0.8, y: 0.5, z: 0.8}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 6098716299121031711}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!33 &8467793955682783145
+MeshFilter:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2044962584479076701}
+  m_Mesh: {fileID: 10206, guid: 0000000000000000e000000000000000, type: 0}
+--- !u!23 &8437486282622976942
+MeshRenderer:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2044962584479076701}
+  m_Enabled: 1
+  m_CastShadows: 1
+  m_ReceiveShadows: 1
+  m_DynamicOccludee: 1
+  m_StaticShadowCaster: 0
+  m_MotionVectors: 1
+  m_LightProbeUsage: 1
+  m_ReflectionProbeUsage: 1
+  m_RayTracingMode: 2
+  m_RayTraceProcedural: 0
+  m_RayTracingAccelStructBuildFlagsOverride: 0
+  m_RayTracingAccelStructBuildFlags: 1
+  m_SmallMeshCulling: 1
+  m_ForceMeshLod: -1
+  m_MeshLodSelectionBias: 0
+  m_RenderingLayerMask: 1
+  m_RendererPriority: 0
+  m_Materials:
+  - {fileID: 2100000, guid: 693b590dd628d41889e666dcf744ace1, type: 2}
+  m_StaticBatchInfo:
+    firstSubMesh: 0
+    subMeshCount: 0
+  m_StaticBatchRoot: {fileID: 0}
+  m_ProbeAnchor: {fileID: 0}
+  m_LightProbeVolumeOverride: {fileID: 0}
+  m_ScaleInLightmap: 1
+  m_ReceiveGI: 1
+  m_PreserveUVs: 1
+  m_IgnoreNormalsForChartDetection: 0
+  m_ImportantGI: 0
+  m_StitchLightmapSeams: 1
+  m_SelectedEditorRenderState: 3
+  m_MinimumChartSize: 4
+  m_AutoUVMaxDistance: 0.5
+  m_AutoUVMaxAngle: 89
+  m_LightmapParameters: {fileID: 0}
+  m_GlobalIlluminationMeshLod: 0
+  m_SortingLayerID: 0
+  m_SortingLayer: 0
+  m_SortingOrder: 0
+  m_MaskInteraction: 0
+  m_AdditionalVertexStreams: {fileID: 0}
+--- !u!1 &2483355788407310647
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1111451096755159227}
+  - component: {fileID: 2925598588366180479}
+  - component: {fileID: 874505342555070046}
+  m_Layer: 0
+  m_Name: EXAMPLE Pillar SE
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1111451096755159227
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2483355788407310647}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 1.6, y: 0.8, z: -1.9}
+  m_LocalScale: {x: 0.4, y: 1.6, z: 0.4}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 6098716299121031711}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!33 &2925598588366180479
+MeshFilter:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2483355788407310647}
+  m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
+--- !u!23 &874505342555070046
+MeshRenderer:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2483355788407310647}
+  m_Enabled: 1
+  m_CastShadows: 1
+  m_ReceiveShadows: 1
+  m_DynamicOccludee: 1
+  m_StaticShadowCaster: 0
+  m_MotionVectors: 1
+  m_LightProbeUsage: 1
+  m_ReflectionProbeUsage: 1
+  m_RayTracingMode: 2
+  m_RayTraceProcedural: 0
+  m_RayTracingAccelStructBuildFlagsOverride: 0
+  m_RayTracingAccelStructBuildFlags: 1
+  m_SmallMeshCulling: 1
+  m_ForceMeshLod: -1
+  m_MeshLodSelectionBias: 0
+  m_RenderingLayerMask: 1
+  m_RendererPriority: 0
+  m_Materials:
+  - {fileID: 2100000, guid: 561b02afa40ad4bebbcf80c0f5dd5eb5, type: 2}
+  m_StaticBatchInfo:
+    firstSubMesh: 0
+    subMeshCount: 0
+  m_StaticBatchRoot: {fileID: 0}
+  m_ProbeAnchor: {fileID: 0}
+  m_LightProbeVolumeOverride: {fileID: 0}
+  m_ScaleInLightmap: 1
+  m_ReceiveGI: 1
+  m_PreserveUVs: 1
+  m_IgnoreNormalsForChartDetection: 0
+  m_ImportantGI: 0
+  m_StitchLightmapSeams: 1
+  m_SelectedEditorRenderState: 3
+  m_MinimumChartSize: 4
+  m_AutoUVMaxDistance: 0.5
+  m_AutoUVMaxAngle: 89
+  m_LightmapParameters: {fileID: 0}
+  m_GlobalIlluminationMeshLod: 0
+  m_SortingLayerID: 0
+  m_SortingLayer: 0
+  m_SortingOrder: 0
+  m_MaskInteraction: 0
+  m_AdditionalVertexStreams: {fileID: 0}
+--- !u!1 &3174446654094984344
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 7981076375624806931}
+  - component: {fileID: 6133181517815220391}
+  - component: {fileID: 987417598923999452}
+  m_Layer: 0
+  m_Name: EXAMPLE Pillar NW
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &7981076375624806931
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3174446654094984344}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: -1.6, y: 0.8, z: 1.9}
+  m_LocalScale: {x: 0.4, y: 1.6, z: 0.4}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 6098716299121031711}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!33 &6133181517815220391
+MeshFilter:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3174446654094984344}
+  m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
+--- !u!23 &987417598923999452
+MeshRenderer:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3174446654094984344}
+  m_Enabled: 1
+  m_CastShadows: 1
+  m_ReceiveShadows: 1
+  m_DynamicOccludee: 1
+  m_StaticShadowCaster: 0
+  m_MotionVectors: 1
+  m_LightProbeUsage: 1
+  m_ReflectionProbeUsage: 1
+  m_RayTracingMode: 2
+  m_RayTraceProcedural: 0
+  m_RayTracingAccelStructBuildFlagsOverride: 0
+  m_RayTracingAccelStructBuildFlags: 1
+  m_SmallMeshCulling: 1
+  m_ForceMeshLod: -1
+  m_MeshLodSelectionBias: 0
+  m_RenderingLayerMask: 1
+  m_RendererPriority: 0
+  m_Materials:
+  - {fileID: 2100000, guid: 561b02afa40ad4bebbcf80c0f5dd5eb5, type: 2}
+  m_StaticBatchInfo:
+    firstSubMesh: 0
+    subMeshCount: 0
+  m_StaticBatchRoot: {fileID: 0}
+  m_ProbeAnchor: {fileID: 0}
+  m_LightProbeVolumeOverride: {fileID: 0}
+  m_ScaleInLightmap: 1
+  m_ReceiveGI: 1
+  m_PreserveUVs: 1
+  m_IgnoreNormalsForChartDetection: 0
+  m_ImportantGI: 0
+  m_StitchLightmapSeams: 1
+  m_SelectedEditorRenderState: 3
+  m_MinimumChartSize: 4
+  m_AutoUVMaxDistance: 0.5
+  m_AutoUVMaxAngle: 89
+  m_LightmapParameters: {fileID: 0}
+  m_GlobalIlluminationMeshLod: 0
+  m_SortingLayerID: 0
+  m_SortingLayer: 0
+  m_SortingOrder: 0
+  m_MaskInteraction: 0
+  m_AdditionalVertexStreams: {fileID: 0}
+--- !u!1 &3409679640399007916
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 5299191103230356154}
+  - component: {fileID: 5434172534558518993}
+  - component: {fileID: 8038276492584642512}
+  m_Layer: 0
+  m_Name: EXAMPLE Pillar SW
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &5299191103230356154
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3409679640399007916}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: -1.6, y: 0.8, z: -1.9}
+  m_LocalScale: {x: 0.4, y: 1.6, z: 0.4}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 6098716299121031711}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!33 &5434172534558518993
+MeshFilter:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3409679640399007916}
+  m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
+--- !u!23 &8038276492584642512
+MeshRenderer:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3409679640399007916}
+  m_Enabled: 1
+  m_CastShadows: 1
+  m_ReceiveShadows: 1
+  m_DynamicOccludee: 1
+  m_StaticShadowCaster: 0
+  m_MotionVectors: 1
+  m_LightProbeUsage: 1
+  m_ReflectionProbeUsage: 1
+  m_RayTracingMode: 2
+  m_RayTraceProcedural: 0
+  m_RayTracingAccelStructBuildFlagsOverride: 0
+  m_RayTracingAccelStructBuildFlags: 1
+  m_SmallMeshCulling: 1
+  m_ForceMeshLod: -1
+  m_MeshLodSelectionBias: 0
+  m_RenderingLayerMask: 1
+  m_RendererPriority: 0
+  m_Materials:
+  - {fileID: 2100000, guid: 561b02afa40ad4bebbcf80c0f5dd5eb5, type: 2}
+  m_StaticBatchInfo:
+    firstSubMesh: 0
+    subMeshCount: 0
+  m_StaticBatchRoot: {fileID: 0}
+  m_ProbeAnchor: {fileID: 0}
+  m_LightProbeVolumeOverride: {fileID: 0}
+  m_ScaleInLightmap: 1
+  m_ReceiveGI: 1
+  m_PreserveUVs: 1
+  m_IgnoreNormalsForChartDetection: 0
+  m_ImportantGI: 0
+  m_StitchLightmapSeams: 1
+  m_SelectedEditorRenderState: 3
+  m_MinimumChartSize: 4
+  m_AutoUVMaxDistance: 0.5
+  m_AutoUVMaxAngle: 89
+  m_LightmapParameters: {fileID: 0}
+  m_GlobalIlluminationMeshLod: 0
+  m_SortingLayerID: 0
+  m_SortingLayer: 0
+  m_SortingOrder: 0
+  m_MaskInteraction: 0
+  m_AdditionalVertexStreams: {fileID: 0}
+--- !u!1 &4172989275886674857
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1350476147809050758}
+  - component: {fileID: 5308921713658336924}
+  - component: {fileID: 5647514820342912596}
+  m_Layer: 0
+  m_Name: EXAMPLE Bench Left
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1350476147809050758
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4172989275886674857}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: -1.15, y: 0.225, z: 0}
+  m_LocalScale: {x: 0.4, y: 0.45, z: 1.2}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 6098716299121031711}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!33 &5308921713658336924
+MeshFilter:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4172989275886674857}
+  m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
+--- !u!23 &5647514820342912596
+MeshRenderer:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4172989275886674857}
+  m_Enabled: 1
+  m_CastShadows: 1
+  m_ReceiveShadows: 1
+  m_DynamicOccludee: 1
+  m_StaticShadowCaster: 0
+  m_MotionVectors: 1
+  m_LightProbeUsage: 1
+  m_ReflectionProbeUsage: 1
+  m_RayTracingMode: 2
+  m_RayTraceProcedural: 0
+  m_RayTracingAccelStructBuildFlagsOverride: 0
+  m_RayTracingAccelStructBuildFlags: 1
+  m_SmallMeshCulling: 1
+  m_ForceMeshLod: -1
+  m_MeshLodSelectionBias: 0
+  m_RenderingLayerMask: 1
+  m_RendererPriority: 0
+  m_Materials:
+  - {fileID: 2100000, guid: 2d5a51bdcfe4846b7b81c002ed303fc9, type: 2}
+  m_StaticBatchInfo:
+    firstSubMesh: 0
+    subMeshCount: 0
+  m_StaticBatchRoot: {fileID: 0}
+  m_ProbeAnchor: {fileID: 0}
+  m_LightProbeVolumeOverride: {fileID: 0}
+  m_ScaleInLightmap: 1
+  m_ReceiveGI: 1
+  m_PreserveUVs: 1
+  m_IgnoreNormalsForChartDetection: 0
+  m_ImportantGI: 0
+  m_StitchLightmapSeams: 1
+  m_SelectedEditorRenderState: 3
+  m_MinimumChartSize: 4
+  m_AutoUVMaxDistance: 0.5
+  m_AutoUVMaxAngle: 89
+  m_LightmapParameters: {fileID: 0}
+  m_GlobalIlluminationMeshLod: 0
+  m_SortingLayerID: 0
+  m_SortingLayer: 0
+  m_SortingOrder: 0
+  m_MaskInteraction: 0
+  m_AdditionalVertexStreams: {fileID: 0}
+--- !u!1 &4810133395262500852
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1449822573720184103}
+  - component: {fileID: 5715741905722081323}
+  - component: {fileID: 4355613341260510197}
+  m_Layer: 0
+  m_Name: EXAMPLE Play Area Rug
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1449822573720184103
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4810133395262500852}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0.01, z: 0}
+  m_LocalScale: {x: 3.9624, y: 0.02, z: 4.572}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 6098716299121031711}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!33 &5715741905722081323
+MeshFilter:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4810133395262500852}
+  m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
+--- !u!23 &4355613341260510197
+MeshRenderer:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4810133395262500852}
+  m_Enabled: 1
+  m_CastShadows: 1
+  m_ReceiveShadows: 1
+  m_DynamicOccludee: 1
+  m_StaticShadowCaster: 0
+  m_MotionVectors: 1
+  m_LightProbeUsage: 1
+  m_ReflectionProbeUsage: 1
+  m_RayTracingMode: 2
+  m_RayTraceProcedural: 0
+  m_RayTracingAccelStructBuildFlagsOverride: 0
+  m_RayTracingAccelStructBuildFlags: 1
+  m_SmallMeshCulling: 1
+  m_ForceMeshLod: -1
+  m_MeshLodSelectionBias: 0
+  m_RenderingLayerMask: 1
+  m_RendererPriority: 0
+  m_Materials:
+  - {fileID: 2100000, guid: d2be7879145b54360900a72e85d3e017, type: 2}
+  m_StaticBatchInfo:
+    firstSubMesh: 0
+    subMeshCount: 0
+  m_StaticBatchRoot: {fileID: 0}
+  m_ProbeAnchor: {fileID: 0}
+  m_LightProbeVolumeOverride: {fileID: 0}
+  m_ScaleInLightmap: 1
+  m_ReceiveGI: 1
+  m_PreserveUVs: 1
+  m_IgnoreNormalsForChartDetection: 0
+  m_ImportantGI: 0
+  m_StitchLightmapSeams: 1
+  m_SelectedEditorRenderState: 3
+  m_MinimumChartSize: 4
+  m_AutoUVMaxDistance: 0.5
+  m_AutoUVMaxAngle: 89
+  m_LightmapParameters: {fileID: 0}
+  m_GlobalIlluminationMeshLod: 0
+  m_SortingLayerID: 0
+  m_SortingLayer: 0
+  m_SortingOrder: 0
+  m_MaskInteraction: 0
+  m_AdditionalVertexStreams: {fileID: 0}
 --- !u!1 &6910875961546822376
 GameObject:
   m_ObjectHideFlags: 0
@@ -31,7 +841,17 @@ Transform:
   m_LocalPosition: {x: 0, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
-  m_Children: []
+  m_Children:
+  - {fileID: 1449822573720184103}
+  - {fileID: 7454222030832052017}
+  - {fileID: 5016038162904007436}
+  - {fileID: 7981076375624806931}
+  - {fileID: 1111451096755159227}
+  - {fileID: 5299191103230356154}
+  - {fileID: 1350476147809050758}
+  - {fileID: 4830781191600813669}
+  - {fileID: 2511781026280861940}
+  - {fileID: 3994052280316109472}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!114 &9215415555977935129
@@ -64,6 +884,581 @@ MonoBehaviour:
   gridX: 0
   gridY: 0
   floorMaterial: {fileID: 2100000, guid: 92daadbc9f8904f32a8d780277254506, type: 2}
+  displayName: 
+  gameRequiresAttraction: 0
+  safeAreaInset: 0
+  essentialProps: []
+  maxGrowthScale: {x: 1.25, y: 1.25}
+  shrinkClearanceMeters: 0.08
+  growGroupGapMeters: 0.35
+  growAlignmentToleranceMeters: 0.12
+  packingBake:
+    version: 11
+    authoredFootprintMeters: {x: 4.2672, y: 4.8768}
+    safeFootprintMeters: {x: 4.2672, y: 4.8768}
+    shrinkFootprintMeters: {x: 3.9623997, y: 4.572}
+    growFootprintMeters: {x: 5.334, y: 6.096}
+    essentialShrinkFootprintMeters: {x: 2.286, y: 3.5052001}
+    shrinkScale: {x: 0.92857134, y: 0.9375}
+    growScale: {x: 1.25, y: 1.25}
+    essentialShrinkScale: {x: 0.53571427, y: 0.71875}
+    props:
+    - prop: {fileID: 1449822573720184103}
+      hierarchyPath: EXAMPLE Play Area Rug
+      displayName: EXAMPLE Play Area Rug
+      resourceName: 
+      essential: 0
+      authoredActive: 1
+      growGroup: 0
+      footprintMeters: {x: 3.9623997, y: 4.572}
+      authoredLocalPosition: {x: 0, y: 0.01, z: 0}
+      shrunkLocalPosition: {x: 0, y: 0.01, z: 0}
+      grownLocalPosition: {x: 0, y: 0.01, z: 0}
+      essentialShrunkLocalPosition: {x: 0, y: 0.01, z: 0}
+    - prop: {fileID: 7454222030832052017}
+      hierarchyPath: EXAMPLE Centerpiece
+      displayName: EXAMPLE Centerpiece
+      resourceName: 
+      essential: 0
+      authoredActive: 1
+      growGroup: 1
+      footprintMeters: {x: 0.80000013, y: 0.8000002}
+      authoredLocalPosition: {x: 0, y: 0.5, z: 0}
+      shrunkLocalPosition: {x: 0, y: 0.5, z: 0}
+      grownLocalPosition: {x: 0, y: 0.5, z: 0}
+      essentialShrunkLocalPosition: {x: 0, y: 0.5, z: 0}
+    - prop: {fileID: 5016038162904007436}
+      hierarchyPath: EXAMPLE Pillar NE
+      displayName: EXAMPLE Pillar NE
+      resourceName: 
+      essential: 0
+      authoredActive: 1
+      growGroup: 2
+      footprintMeters: {x: 0.4000001, y: 0.39999998}
+      authoredLocalPosition: {x: 1.6, y: 0.8, z: 1.9}
+      shrunkLocalPosition: {x: 1.6, y: 0.8, z: 1.8999999}
+      grownLocalPosition: {x: 2, y: 0.8, z: 2.375}
+      essentialShrunkLocalPosition: {x: 1.6, y: 0.8, z: 1.8999999}
+    - prop: {fileID: 7981076375624806931}
+      hierarchyPath: EXAMPLE Pillar NW
+      displayName: EXAMPLE Pillar NW
+      resourceName: 
+      essential: 0
+      authoredActive: 1
+      growGroup: 3
+      footprintMeters: {x: 0.4000001, y: 0.39999998}
+      authoredLocalPosition: {x: -1.6, y: 0.8, z: 1.9}
+      shrunkLocalPosition: {x: -1.6, y: 0.8, z: 1.8999999}
+      grownLocalPosition: {x: -2, y: 0.8, z: 2.375}
+      essentialShrunkLocalPosition: {x: -1.6, y: 0.8, z: 1.8999999}
+    - prop: {fileID: 1111451096755159227}
+      hierarchyPath: EXAMPLE Pillar SE
+      displayName: EXAMPLE Pillar SE
+      resourceName: 
+      essential: 0
+      authoredActive: 1
+      growGroup: 4
+      footprintMeters: {x: 0.4000001, y: 0.39999998}
+      authoredLocalPosition: {x: 1.6, y: 0.8, z: -1.9}
+      shrunkLocalPosition: {x: 1.6, y: 0.8, z: -1.8999999}
+      grownLocalPosition: {x: 2, y: 0.8, z: -2.375}
+      essentialShrunkLocalPosition: {x: 1.6, y: 0.8, z: -1.8999999}
+    - prop: {fileID: 5299191103230356154}
+      hierarchyPath: EXAMPLE Pillar SW
+      displayName: EXAMPLE Pillar SW
+      resourceName: 
+      essential: 0
+      authoredActive: 1
+      growGroup: 5
+      footprintMeters: {x: 0.4000001, y: 0.39999998}
+      authoredLocalPosition: {x: -1.6, y: 0.8, z: -1.9}
+      shrunkLocalPosition: {x: -1.6, y: 0.8, z: -1.8999999}
+      grownLocalPosition: {x: -2, y: 0.8, z: -2.375}
+      essentialShrunkLocalPosition: {x: -1.6, y: 0.8, z: -1.8999999}
+    - prop: {fileID: 1350476147809050758}
+      hierarchyPath: EXAMPLE Bench Left
+      displayName: EXAMPLE Bench Left
+      resourceName: 
+      essential: 0
+      authoredActive: 1
+      growGroup: 1
+      footprintMeters: {x: 0.40000004, y: 1.1999999}
+      authoredLocalPosition: {x: -1.15, y: 0.225, z: 0}
+      shrunkLocalPosition: {x: -1.1499999, y: 0.225, z: 0}
+      grownLocalPosition: {x: -1.15, y: 0.225, z: 0}
+      essentialShrunkLocalPosition: {x: -1.1499999, y: 0.225, z: 0}
+    - prop: {fileID: 4830781191600813669}
+      hierarchyPath: EXAMPLE Bench Right
+      displayName: EXAMPLE Bench Right
+      resourceName: 
+      essential: 0
+      authoredActive: 1
+      growGroup: 1
+      footprintMeters: {x: 0.40000004, y: 1.1999999}
+      authoredLocalPosition: {x: 1.15, y: 0.225, z: 0}
+      shrunkLocalPosition: {x: 1.1499999, y: 0.225, z: 0}
+      grownLocalPosition: {x: 1.15, y: 0.225, z: 0}
+      essentialShrunkLocalPosition: {x: 1.1499999, y: 0.225, z: 0}
+    followers: []
+    mirrorsMinimumFrame: 1
+    layoutFootprintMeters: {x: 3.9623997, y: 4.572}
+    layoutIssue: 
+    requestedFootprintMeters: {x: 4.2672, y: 4.8768}
+    requestedGrowScale: {x: 1.25, y: 1.25}
+  packingPreviewScale: {x: 1, y: 1}
+  packingPreviewEssentialOnly: 0
+  showPackingGizmos: 1
+  layoutFrames:
+  - id: fb9260e1b
+    name: "Example 11 \xD7 14 ft"
+    kind: 0
+    sizeFeet: {x: 11, y: 14}
+    overrides:
+    - path: EXAMPLE Play Area Rug
+      target: {fileID: 1449822573720184103}
+      setActive: 0
+      active: 0
+      setPosition: 0
+      localPosition: {x: 0, y: 0, z: 0}
+      setRotation: 0
+      localRotation: {x: 0, y: 0, z: 0, w: 1}
+      setScale: 1
+      localScale: {x: 3.2004, y: 0.02, z: 4.1148}
+    - path: EXAMPLE Pillar NE
+      target: {fileID: 5016038162904007436}
+      setActive: 0
+      active: 0
+      setPosition: 1
+      localPosition: {x: 1.25, y: 0.8, z: 1.6}
+      setRotation: 0
+      localRotation: {x: 0, y: 0, z: 0, w: 1}
+      setScale: 0
+      localScale: {x: 1, y: 1, z: 1}
+    - path: EXAMPLE Pillar NW
+      target: {fileID: 7981076375624806931}
+      setActive: 0
+      active: 0
+      setPosition: 1
+      localPosition: {x: -1.25, y: 0.8, z: 1.6}
+      setRotation: 0
+      localRotation: {x: 0, y: 0, z: 0, w: 1}
+      setScale: 0
+      localScale: {x: 1, y: 1, z: 1}
+    - path: EXAMPLE Pillar SE
+      target: {fileID: 1111451096755159227}
+      setActive: 0
+      active: 0
+      setPosition: 1
+      localPosition: {x: 1.25, y: 0.8, z: -1.6}
+      setRotation: 0
+      localRotation: {x: 0, y: 0, z: 0, w: 1}
+      setScale: 0
+      localScale: {x: 1, y: 1, z: 1}
+    - path: EXAMPLE Pillar SW
+      target: {fileID: 5299191103230356154}
+      setActive: 0
+      active: 0
+      setPosition: 1
+      localPosition: {x: -1.25, y: 0.8, z: -1.6}
+      setRotation: 0
+      localRotation: {x: 0, y: 0, z: 0, w: 1}
+      setScale: 0
+      localScale: {x: 1, y: 1, z: 1}
+    - path: EXAMPLE Bench Left
+      target: {fileID: 1350476147809050758}
+      setActive: 0
+      active: 0
+      setPosition: 1
+      localPosition: {x: -0.9, y: 0.225, z: 0}
+      setRotation: 0
+      localRotation: {x: 0, y: 0, z: 0, w: 1}
+      setScale: 0
+      localScale: {x: 1, y: 1, z: 1}
+    - path: EXAMPLE Bench Right
+      target: {fileID: 4830781191600813669}
+      setActive: 0
+      active: 0
+      setPosition: 1
+      localPosition: {x: 0.9, y: 0.225, z: 0}
+      setRotation: 0
+      localRotation: {x: 0, y: 0, z: 0, w: 1}
+      setScale: 0
+      localScale: {x: 1, y: 1, z: 1}
+    overridePortals: 0
+    portals: []
+    bake:
+      version: 11
+      authoredFootprintMeters: {x: 3.3528001, y: 4.2672}
+      safeFootprintMeters: {x: 3.3528001, y: 4.2672}
+      shrinkFootprintMeters: {x: 3.2004, y: 4.1148}
+      growFootprintMeters: {x: 4.191, y: 5.334}
+      essentialShrinkFootprintMeters: {x: 3.2004, y: 4.1148}
+      shrinkScale: {x: 0.95454544, y: 0.96428573}
+      growScale: {x: 1.25, y: 1.25}
+      essentialShrinkScale: {x: 0.95454544, y: 0.96428573}
+      props:
+      - prop: {fileID: 1449822573720184103}
+        hierarchyPath: EXAMPLE Play Area Rug
+        displayName: EXAMPLE Play Area Rug
+        resourceName: 
+        essential: 0
+        authoredActive: 1
+        growGroup: 0
+        footprintMeters: {x: 3.2004, y: 4.1148}
+        authoredLocalPosition: {x: 0, y: 0.01, z: 0}
+        shrunkLocalPosition: {x: 0, y: 0.01, z: 0}
+        grownLocalPosition: {x: 0, y: 0.01, z: 0}
+        essentialShrunkLocalPosition: {x: 0, y: 0.01, z: 0}
+      - prop: {fileID: 7454222030832052017}
+        hierarchyPath: EXAMPLE Centerpiece
+        displayName: EXAMPLE Centerpiece
+        resourceName: 
+        essential: 0
+        authoredActive: 1
+        growGroup: 1
+        footprintMeters: {x: 0.80000013, y: 0.8000002}
+        authoredLocalPosition: {x: 0, y: 0.5, z: 0}
+        shrunkLocalPosition: {x: 0, y: 0.5, z: 0}
+        grownLocalPosition: {x: 0, y: 0.5, z: 0}
+        essentialShrunkLocalPosition: {x: 0, y: 0.5, z: 0}
+      - prop: {fileID: 5016038162904007436}
+        hierarchyPath: EXAMPLE Pillar NE
+        displayName: EXAMPLE Pillar NE
+        resourceName: 
+        essential: 0
+        authoredActive: 1
+        growGroup: 2
+        footprintMeters: {x: 0.4000001, y: 0.4000001}
+        authoredLocalPosition: {x: 1.25, y: 0.8, z: 1.6}
+        shrunkLocalPosition: {x: 1.25, y: 0.8, z: 1.6}
+        grownLocalPosition: {x: 1.5625, y: 0.8, z: 2}
+        essentialShrunkLocalPosition: {x: 1.25, y: 0.8, z: 1.6}
+      - prop: {fileID: 7981076375624806931}
+        hierarchyPath: EXAMPLE Pillar NW
+        displayName: EXAMPLE Pillar NW
+        resourceName: 
+        essential: 0
+        authoredActive: 1
+        growGroup: 3
+        footprintMeters: {x: 0.4000001, y: 0.4000001}
+        authoredLocalPosition: {x: -1.25, y: 0.8, z: 1.6}
+        shrunkLocalPosition: {x: -1.25, y: 0.8, z: 1.6}
+        grownLocalPosition: {x: -1.5625, y: 0.8, z: 2}
+        essentialShrunkLocalPosition: {x: -1.25, y: 0.8, z: 1.6}
+      - prop: {fileID: 1111451096755159227}
+        hierarchyPath: EXAMPLE Pillar SE
+        displayName: EXAMPLE Pillar SE
+        resourceName: 
+        essential: 0
+        authoredActive: 1
+        growGroup: 4
+        footprintMeters: {x: 0.4000001, y: 0.4000001}
+        authoredLocalPosition: {x: 1.25, y: 0.8, z: -1.6}
+        shrunkLocalPosition: {x: 1.25, y: 0.8, z: -1.6}
+        grownLocalPosition: {x: 1.5625, y: 0.8, z: -2}
+        essentialShrunkLocalPosition: {x: 1.25, y: 0.8, z: -1.6}
+      - prop: {fileID: 5299191103230356154}
+        hierarchyPath: EXAMPLE Pillar SW
+        displayName: EXAMPLE Pillar SW
+        resourceName: 
+        essential: 0
+        authoredActive: 1
+        growGroup: 5
+        footprintMeters: {x: 0.4000001, y: 0.4000001}
+        authoredLocalPosition: {x: -1.25, y: 0.8, z: -1.6}
+        shrunkLocalPosition: {x: -1.25, y: 0.8, z: -1.6}
+        grownLocalPosition: {x: -1.5625, y: 0.8, z: -2}
+        essentialShrunkLocalPosition: {x: -1.25, y: 0.8, z: -1.6}
+      - prop: {fileID: 1350476147809050758}
+        hierarchyPath: EXAMPLE Bench Left
+        displayName: EXAMPLE Bench Left
+        resourceName: 
+        essential: 0
+        authoredActive: 1
+        growGroup: 1
+        footprintMeters: {x: 0.40000004, y: 1.1999999}
+        authoredLocalPosition: {x: -0.9, y: 0.225, z: 0}
+        shrunkLocalPosition: {x: -0.8999999, y: 0.225, z: 0}
+        grownLocalPosition: {x: -0.9, y: 0.225, z: 0}
+        essentialShrunkLocalPosition: {x: -0.8999999, y: 0.225, z: 0}
+      - prop: {fileID: 4830781191600813669}
+        hierarchyPath: EXAMPLE Bench Right
+        displayName: EXAMPLE Bench Right
+        resourceName: 
+        essential: 0
+        authoredActive: 1
+        growGroup: 1
+        footprintMeters: {x: 0.40000004, y: 1.1999999}
+        authoredLocalPosition: {x: 0.9, y: 0.225, z: 0}
+        shrunkLocalPosition: {x: 0.8999999, y: 0.225, z: 0}
+        grownLocalPosition: {x: 0.9, y: 0.225, z: 0}
+        essentialShrunkLocalPosition: {x: 0.8999999, y: 0.225, z: 0}
+      followers: []
+      mirrorsMinimumFrame: 0
+      layoutFootprintMeters: {x: 3.2004, y: 4.1148}
+      layoutIssue: 
+      requestedFootprintMeters: {x: 3.3528001, y: 4.2672}
+      requestedGrowScale: {x: 1.25, y: 1.25}
+  - id: minimum
+    name: "Example 8 \xD7 12 ft (Minimum)"
+    kind: 1
+    sizeFeet: {x: 8, y: 12}
+    overrides:
+    - path: EXAMPLE Play Area Rug
+      target: {fileID: 1449822573720184103}
+      setActive: 0
+      active: 0
+      setPosition: 0
+      localPosition: {x: 0, y: 0, z: 0}
+      setRotation: 0
+      localRotation: {x: 0, y: 0, z: 0, w: 1}
+      setScale: 1
+      localScale: {x: 2.286, y: 0.02, z: 3.5052001}
+    - path: EXAMPLE Pillar NE
+      target: {fileID: 5016038162904007436}
+      setActive: 0
+      active: 0
+      setPosition: 1
+      localPosition: {x: 0.85, y: 0.8, z: 1.4}
+      setRotation: 0
+      localRotation: {x: 0, y: 0, z: 0, w: 1}
+      setScale: 0
+      localScale: {x: 1, y: 1, z: 1}
+    - path: EXAMPLE Pillar SW
+      target: {fileID: 5299191103230356154}
+      setActive: 0
+      active: 0
+      setPosition: 1
+      localPosition: {x: -0.85, y: 0.8, z: -1.4}
+      setRotation: 0
+      localRotation: {x: 0, y: 0, z: 0, w: 1}
+      setScale: 0
+      localScale: {x: 1, y: 1, z: 1}
+    - path: EXAMPLE Pillar NW
+      target: {fileID: 7981076375624806931}
+      setActive: 1
+      active: 0
+      setPosition: 0
+      localPosition: {x: 0, y: 0, z: 0}
+      setRotation: 0
+      localRotation: {x: 0, y: 0, z: 0, w: 1}
+      setScale: 0
+      localScale: {x: 1, y: 1, z: 1}
+    - path: EXAMPLE Pillar SE
+      target: {fileID: 1111451096755159227}
+      setActive: 1
+      active: 0
+      setPosition: 0
+      localPosition: {x: 0, y: 0, z: 0}
+      setRotation: 0
+      localRotation: {x: 0, y: 0, z: 0, w: 1}
+      setScale: 0
+      localScale: {x: 1, y: 1, z: 1}
+    - path: EXAMPLE Bench Left
+      target: {fileID: 1350476147809050758}
+      setActive: 1
+      active: 0
+      setPosition: 0
+      localPosition: {x: 0, y: 0, z: 0}
+      setRotation: 0
+      localRotation: {x: 0, y: 0, z: 0, w: 1}
+      setScale: 0
+      localScale: {x: 1, y: 1, z: 1}
+    - path: EXAMPLE Bench Right
+      target: {fileID: 4830781191600813669}
+      setActive: 1
+      active: 0
+      setPosition: 0
+      localPosition: {x: 0, y: 0, z: 0}
+      setRotation: 0
+      localRotation: {x: 0, y: 0, z: 0, w: 1}
+      setScale: 0
+      localScale: {x: 1, y: 1, z: 1}
+    overridePortals: 0
+    portals: []
+    bake:
+      version: 11
+      authoredFootprintMeters: {x: 2.4384, y: 3.6576}
+      safeFootprintMeters: {x: 2.4384, y: 3.6576}
+      shrinkFootprintMeters: {x: 2.286, y: 3.5052001}
+      growFootprintMeters: {x: 3.9623997, y: 4.572}
+      essentialShrinkFootprintMeters: {x: 2.286, y: 3.5052001}
+      shrinkScale: {x: 0.9375, y: 0.9583334}
+      growScale: {x: 1.6249999, y: 1.25}
+      essentialShrinkScale: {x: 0.9375, y: 0.9583334}
+      props:
+      - prop: {fileID: 1449822573720184103}
+        hierarchyPath: EXAMPLE Play Area Rug
+        displayName: EXAMPLE Play Area Rug
+        resourceName: 
+        essential: 0
+        authoredActive: 1
+        growGroup: 0
+        footprintMeters: {x: 2.286, y: 3.5052001}
+        authoredLocalPosition: {x: 0, y: 0.01, z: 0}
+        shrunkLocalPosition: {x: 0, y: 0.01, z: 0}
+        grownLocalPosition: {x: 0, y: 0.01, z: 0}
+        essentialShrunkLocalPosition: {x: 0, y: 0.01, z: 0}
+      - prop: {fileID: 7454222030832052017}
+        hierarchyPath: EXAMPLE Centerpiece
+        displayName: EXAMPLE Centerpiece
+        resourceName: 
+        essential: 0
+        authoredActive: 1
+        growGroup: 1
+        footprintMeters: {x: 0.80000013, y: 0.8000002}
+        authoredLocalPosition: {x: 0, y: 0.5, z: 0}
+        shrunkLocalPosition: {x: 0, y: 0.5, z: 0}
+        grownLocalPosition: {x: 0, y: 0.5, z: 0}
+        essentialShrunkLocalPosition: {x: 0, y: 0.5, z: 0}
+      - prop: {fileID: 5016038162904007436}
+        hierarchyPath: EXAMPLE Pillar NE
+        displayName: EXAMPLE Pillar NE
+        resourceName: 
+        essential: 0
+        authoredActive: 1
+        growGroup: 2
+        footprintMeters: {x: 0.40000004, y: 0.4000001}
+        authoredLocalPosition: {x: 0.85, y: 0.8, z: 1.4}
+        shrunkLocalPosition: {x: 0.85, y: 0.8, z: 1.4}
+        grownLocalPosition: {x: 1.3812499, y: 0.8, z: 1.75}
+        essentialShrunkLocalPosition: {x: 0.85, y: 0.8, z: 1.4}
+      - prop: {fileID: 5299191103230356154}
+        hierarchyPath: EXAMPLE Pillar SW
+        displayName: EXAMPLE Pillar SW
+        resourceName: 
+        essential: 0
+        authoredActive: 1
+        growGroup: 3
+        footprintMeters: {x: 0.40000004, y: 0.4000001}
+        authoredLocalPosition: {x: -0.85, y: 0.8, z: -1.4}
+        shrunkLocalPosition: {x: -0.85, y: 0.8, z: -1.4}
+        grownLocalPosition: {x: -1.3812499, y: 0.8, z: -1.75}
+        essentialShrunkLocalPosition: {x: -0.85, y: 0.8, z: -1.4}
+      followers: []
+      mirrorsMinimumFrame: 0
+      layoutFootprintMeters: {x: 2.286, y: 3.5052001}
+      layoutIssue: 
+      requestedFootprintMeters: {x: 2.4384, y: 3.6576}
+      requestedGrowScale: {x: 1.25, y: 1.25}
+  layoutBaseStates:
+  - path: EXAMPLE Play Area Rug
+    target: {fileID: 1449822573720184103}
+    active: 1
+    localPosition: {x: 0, y: 0.01, z: 0}
+    localRotation: {x: 0, y: 0, z: 0, w: 1}
+    localScale: {x: 3.9624, y: 0.02, z: 4.572}
+  - path: EXAMPLE Pillar NE
+    target: {fileID: 5016038162904007436}
+    active: 1
+    localPosition: {x: 1.6, y: 0.8, z: 1.9}
+    localRotation: {x: 0, y: 0, z: 0, w: 1}
+    localScale: {x: 0.4, y: 1.6, z: 0.4}
+  - path: EXAMPLE Pillar NW
+    target: {fileID: 7981076375624806931}
+    active: 1
+    localPosition: {x: -1.6, y: 0.8, z: 1.9}
+    localRotation: {x: 0, y: 0, z: 0, w: 1}
+    localScale: {x: 0.4, y: 1.6, z: 0.4}
+  - path: EXAMPLE Pillar SE
+    target: {fileID: 1111451096755159227}
+    active: 1
+    localPosition: {x: 1.6, y: 0.8, z: -1.9}
+    localRotation: {x: 0, y: 0, z: 0, w: 1}
+    localScale: {x: 0.4, y: 1.6, z: 0.4}
+  - path: EXAMPLE Pillar SW
+    target: {fileID: 5299191103230356154}
+    active: 1
+    localPosition: {x: -1.6, y: 0.8, z: -1.9}
+    localRotation: {x: 0, y: 0, z: 0, w: 1}
+    localScale: {x: 0.4, y: 1.6, z: 0.4}
+  - path: EXAMPLE Bench Left
+    target: {fileID: 1350476147809050758}
+    active: 1
+    localPosition: {x: -1.15, y: 0.225, z: 0}
+    localRotation: {x: 0, y: 0, z: 0, w: 1}
+    localScale: {x: 0.4, y: 0.45, z: 1.2}
+  - path: EXAMPLE Bench Right
+    target: {fileID: 4830781191600813669}
+    active: 1
+    localPosition: {x: 1.15, y: 0.225, z: 0}
+    localRotation: {x: 0, y: 0, z: 0, w: 1}
+    localScale: {x: 0.4, y: 0.45, z: 1.2}
+  - path: EXAMPLE Wall Shelf (Front wall)
+    target: {fileID: 2511781026280861940}
+    active: 0
+    localPosition: {x: 0, y: 1.2, z: 2.25}
+    localRotation: {x: 0, y: 0, z: 0, w: 1}
+    localScale: {x: 1.6, y: 0.08, z: 0.35}
+  - path: EXAMPLE Centerpiece
+    target: {fileID: 7454222030832052017}
+    active: 1
+    localPosition: {x: 0, y: 0.5, z: 0}
+    localRotation: {x: 0, y: 0, z: 0, w: 1}
+    localScale: {x: 0.8, y: 0.5, z: 0.8}
+  - path: EXAMPLE Wall Panel (Left wall)
+    target: {fileID: 3994052280316109472}
+    active: 0
+    localPosition: {x: -2.08, y: 1, z: 0}
+    localRotation: {x: 0, y: 0, z: 0, w: 1}
+    localScale: {x: 0.06, y: 1.2, z: 1.6}
+  legacyEssentialMigrated: 0
+  portals:
+  - kind: 0
+    position: 0
+    width: 0
+    tag: 
+  wallLayers:
+  - id: wda4cb2f3
+    side: 0
+    overrides:
+    - path: EXAMPLE Wall Shelf (Front wall)
+      target: {fileID: 2511781026280861940}
+      setActive: 1
+      active: 1
+      setPosition: 0
+      localPosition: {x: 0, y: 0, z: 0}
+      setRotation: 0
+      localRotation: {x: 0, y: 0, z: 0, w: 1}
+      setScale: 0
+      localScale: {x: 1, y: 1, z: 1}
+    - path: EXAMPLE Centerpiece
+      target: {fileID: 7454222030832052017}
+      setActive: 0
+      active: 0
+      setPosition: 1
+      localPosition: {x: 0, y: 0.5, z: -0.4}
+      setRotation: 0
+      localRotation: {x: 0, y: 0, z: 0, w: 1}
+      setScale: 0
+      localScale: {x: 1, y: 1, z: 1}
+    authoredFootprintMeters: {x: 4.2672, y: 4.8768}
+  - id: wd453b9b2
+    side: 3
+    overrides:
+    - path: EXAMPLE Wall Panel (Left wall)
+      target: {fileID: 3994052280316109472}
+      setActive: 1
+      active: 1
+      setPosition: 0
+      localPosition: {x: 0, y: 0, z: 0}
+      setRotation: 0
+      localRotation: {x: 0, y: 0, z: 0, w: 1}
+      setScale: 0
+      localScale: {x: 1, y: 1, z: 1}
+    authoredFootprintMeters: {x: 4.2672, y: 4.8768}
+  layoutPreviewWalls: 0
+  layoutPreviewFootprintMeters: {x: 0, y: 0}
+  layoutPreviewFrameId: 
+  useRectOpeningsPreview: 0
+  rectOpeningsPreview:
+    rectId: 
+    rectSize: {x: 0, y: 0}
+    rectCenter: {x: 0, y: 0}
+    sides: []
+    hasData: 0
+    entrySide: 
+    entryReason: 
 --- !u!114 &3187582560410740841
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -102,3 +1497,93 @@ MonoBehaviour:
   priority: 0
   isPlaying: 0
   isFocused: 0
+--- !u!1 &7511898904771247016
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 5016038162904007436}
+  - component: {fileID: 1881052274676525955}
+  - component: {fileID: 9067032188069021481}
+  m_Layer: 0
+  m_Name: EXAMPLE Pillar NE
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &5016038162904007436
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7511898904771247016}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 1.6, y: 0.8, z: 1.9}
+  m_LocalScale: {x: 0.4, y: 1.6, z: 0.4}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 6098716299121031711}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!33 &1881052274676525955
+MeshFilter:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7511898904771247016}
+  m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
+--- !u!23 &9067032188069021481
+MeshRenderer:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7511898904771247016}
+  m_Enabled: 1
+  m_CastShadows: 1
+  m_ReceiveShadows: 1
+  m_DynamicOccludee: 1
+  m_StaticShadowCaster: 0
+  m_MotionVectors: 1
+  m_LightProbeUsage: 1
+  m_ReflectionProbeUsage: 1
+  m_RayTracingMode: 2
+  m_RayTraceProcedural: 0
+  m_RayTracingAccelStructBuildFlagsOverride: 0
+  m_RayTracingAccelStructBuildFlags: 1
+  m_SmallMeshCulling: 1
+  m_ForceMeshLod: -1
+  m_MeshLodSelectionBias: 0
+  m_RenderingLayerMask: 1
+  m_RendererPriority: 0
+  m_Materials:
+  - {fileID: 2100000, guid: 561b02afa40ad4bebbcf80c0f5dd5eb5, type: 2}
+  m_StaticBatchInfo:
+    firstSubMesh: 0
+    subMeshCount: 0
+  m_StaticBatchRoot: {fileID: 0}
+  m_ProbeAnchor: {fileID: 0}
+  m_LightProbeVolumeOverride: {fileID: 0}
+  m_ScaleInLightmap: 1
+  m_ReceiveGI: 1
+  m_PreserveUVs: 1
+  m_IgnoreNormalsForChartDetection: 0
+  m_ImportantGI: 0
+  m_StitchLightmapSeams: 1
+  m_SelectedEditorRenderState: 3
+  m_MinimumChartSize: 4
+  m_AutoUVMaxDistance: 0.5
+  m_AutoUVMaxAngle: 89
+  m_LightmapParameters: {fileID: 0}
+  m_GlobalIlluminationMeshLod: 0
+  m_SortingLayerID: 0
+  m_SortingLayer: 0
+  m_SortingOrder: 0
+  m_MaskInteraction: 0
+  m_AdditionalVertexStreams: {fileID: 0}

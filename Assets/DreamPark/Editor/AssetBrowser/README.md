@@ -46,9 +46,9 @@ ship true roughness (glTF's convention), so binding it directly renders every
 surface inside out — matte reads glossy. `RoughnessToSmoothness` bakes an
 inverted copy at import and binds that; the original stays on disk, unbound.
 
-The real fix is a OneMinus node in the shader. That file must stay
-byte-identical to dreampark-core, so it is a core-side decision — this is the
-workaround that does not touch a synced file.
+The real fix is a OneMinus node in the shader. The shader is shared by every
+title, so changing it is a platform decision — this is the workaround that
+does not touch it.
 
 **3. Provenance lives in `AssetImporter.userData`, and it has to.**
 `ThirdPartySyncTool` moves referenced files from `ThirdPartyLocal/` to

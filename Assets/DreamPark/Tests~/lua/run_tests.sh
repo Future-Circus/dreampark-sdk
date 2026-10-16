@@ -19,4 +19,12 @@ echo "== typed wire (dp.pack / dp.unpack across two parks) =="
 $LUA typed_wire_harness.lua dp_bootstrap.lua
 echo "== peers (dp.peers / on_peer_join / state bags) =="
 $LUA peers_harness.lua dp_bootstrap.lua
+echo "== gestures + device (dp.on_tap / on_touch / on_drag / on_pinch, dp.device) =="
+$LUA gestures_harness.lua dp_bootstrap.lua
+echo "== device time (dp.time.now / utc / hour / format / debug_set) =="
+python3 extract_bootstrap.py ../../Scripts/Core/DreamParkLuaTime.cs dp_time_bootstrap.lua dp.time.bootstrap
+$LUA time_harness.lua dp_time_bootstrap.lua
+echo "== room light (dp.light.ambient / direction / confidence / live / debug_set) =="
+python3 extract_bootstrap.py ../../Scripts/Core/DreamParkLuaLight.cs light_bootstrap.lua dp.light.bootstrap
+$LUA light_harness.lua light_bootstrap.lua
 echo "ALL SUITES PASSED"

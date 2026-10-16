@@ -62,6 +62,12 @@ namespace XLua
 				translator.RegisterPushAndGetAndUpdate<UnityEngine.AI.NavMeshPathStatus>(translator.PushUnityEngineAINavMeshPathStatus, translator.Get, translator.UpdateUnityEngineAINavMeshPathStatus);
 				translator.RegisterPushAndGetAndUpdate<UnityEngine.AI.ObstacleAvoidanceType>(translator.PushUnityEngineAIObstacleAvoidanceType, translator.Get, translator.UpdateUnityEngineAIObstacleAvoidanceType);
 				translator.RegisterPushAndGetAndUpdate<TMPro.TextAlignmentOptions>(translator.PushTMProTextAlignmentOptions, translator.Get, translator.UpdateTMProTextAlignmentOptions);
+				translator.RegisterPushAndGetAndUpdate<DreamPark.DreamParkGestureKind>(translator.PushDreamParkDreamParkGestureKind, translator.Get, translator.UpdateDreamParkDreamParkGestureKind);
+				translator.RegisterPushAndGetAndUpdate<DreamPark.AttractionPortalKind>(translator.PushDreamParkAttractionPortalKind, translator.Get, translator.UpdateDreamParkAttractionPortalKind);
+				translator.RegisterPushAndGetAndUpdate<DreamPark.AttractionWallSide>(translator.PushDreamParkAttractionWallSide, translator.Get, translator.UpdateDreamParkAttractionWallSide);
+				translator.RegisterPushAndGetAndUpdate<DreamPark.AttractionWallMask>(translator.PushDreamParkAttractionWallMask, translator.Get, translator.UpdateDreamParkAttractionWallMask);
+				translator.RegisterPushAndGetAndUpdate<UnityEngine.TextAnchor>(translator.PushUnityEngineTextAnchor, translator.Get, translator.UpdateUnityEngineTextAnchor);
+				translator.RegisterPushAndGetAndUpdate<UnityEngine.TextAlignment>(translator.PushUnityEngineTextAlignment, translator.Get, translator.UpdateUnityEngineTextAlignment);
 			
 			}
         }
@@ -2896,6 +2902,510 @@ namespace XLua
             }
         }
         
+        int DreamParkDreamParkGestureKind_TypeID = -1;
+		int DreamParkDreamParkGestureKind_EnumRef = -1;
+        
+        public void PushDreamParkDreamParkGestureKind(RealStatePtr L, DreamPark.DreamParkGestureKind val)
+        {
+            if (DreamParkDreamParkGestureKind_TypeID == -1)
+            {
+			    bool is_first;
+                DreamParkDreamParkGestureKind_TypeID = getTypeId(L, typeof(DreamPark.DreamParkGestureKind), out is_first);
+				
+				if (DreamParkDreamParkGestureKind_EnumRef == -1)
+				{
+				    Utils.LoadCSTable(L, typeof(DreamPark.DreamParkGestureKind));
+				    DreamParkDreamParkGestureKind_EnumRef = LuaAPI.luaL_ref(L, LuaIndexes.LUA_REGISTRYINDEX);
+				}
+				
+            }
+			
+			if (LuaAPI.xlua_tryget_cachedud(L, (int)val, DreamParkDreamParkGestureKind_EnumRef) == 1)
+            {
+			    return;
+			}
+			
+            IntPtr buff = LuaAPI.xlua_pushstruct(L, 4, DreamParkDreamParkGestureKind_TypeID);
+            if (!CopyByValue.Pack(buff, 0, (int)val))
+            {
+                throw new Exception("pack fail fail for DreamPark.DreamParkGestureKind ,value="+val);
+            }
+			
+			LuaAPI.lua_getref(L, DreamParkDreamParkGestureKind_EnumRef);
+			LuaAPI.lua_pushvalue(L, -2);
+			LuaAPI.xlua_rawseti(L, -2, (int)val);
+			LuaAPI.lua_pop(L, 1);
+			
+        }
+		
+        public void Get(RealStatePtr L, int index, out DreamPark.DreamParkGestureKind val)
+        {
+		    LuaTypes type = LuaAPI.lua_type(L, index);
+            if (type == LuaTypes.LUA_TUSERDATA )
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != DreamParkDreamParkGestureKind_TypeID)
+				{
+				    throw new Exception("invalid userdata for DreamPark.DreamParkGestureKind");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+				int e;
+                if (!CopyByValue.UnPack(buff, 0, out e))
+                {
+                    throw new Exception("unpack fail for DreamPark.DreamParkGestureKind");
+                }
+				val = (DreamPark.DreamParkGestureKind)e;
+                
+            }
+            else
+            {
+                val = (DreamPark.DreamParkGestureKind)objectCasters.GetCaster(typeof(DreamPark.DreamParkGestureKind))(L, index, null);
+            }
+        }
+		
+        public void UpdateDreamParkDreamParkGestureKind(RealStatePtr L, int index, DreamPark.DreamParkGestureKind val)
+        {
+		    
+            if (LuaAPI.lua_type(L, index) == LuaTypes.LUA_TUSERDATA)
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != DreamParkDreamParkGestureKind_TypeID)
+				{
+				    throw new Exception("invalid userdata for DreamPark.DreamParkGestureKind");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+                if (!CopyByValue.Pack(buff, 0,  (int)val))
+                {
+                    throw new Exception("pack fail for DreamPark.DreamParkGestureKind ,value="+val);
+                }
+            }
+			
+            else
+            {
+                throw new Exception("try to update a data with lua type:" + LuaAPI.lua_type(L, index));
+            }
+        }
+        
+        int DreamParkAttractionPortalKind_TypeID = -1;
+		int DreamParkAttractionPortalKind_EnumRef = -1;
+        
+        public void PushDreamParkAttractionPortalKind(RealStatePtr L, DreamPark.AttractionPortalKind val)
+        {
+            if (DreamParkAttractionPortalKind_TypeID == -1)
+            {
+			    bool is_first;
+                DreamParkAttractionPortalKind_TypeID = getTypeId(L, typeof(DreamPark.AttractionPortalKind), out is_first);
+				
+				if (DreamParkAttractionPortalKind_EnumRef == -1)
+				{
+				    Utils.LoadCSTable(L, typeof(DreamPark.AttractionPortalKind));
+				    DreamParkAttractionPortalKind_EnumRef = LuaAPI.luaL_ref(L, LuaIndexes.LUA_REGISTRYINDEX);
+				}
+				
+            }
+			
+			if (LuaAPI.xlua_tryget_cachedud(L, (int)val, DreamParkAttractionPortalKind_EnumRef) == 1)
+            {
+			    return;
+			}
+			
+            IntPtr buff = LuaAPI.xlua_pushstruct(L, 4, DreamParkAttractionPortalKind_TypeID);
+            if (!CopyByValue.Pack(buff, 0, (int)val))
+            {
+                throw new Exception("pack fail fail for DreamPark.AttractionPortalKind ,value="+val);
+            }
+			
+			LuaAPI.lua_getref(L, DreamParkAttractionPortalKind_EnumRef);
+			LuaAPI.lua_pushvalue(L, -2);
+			LuaAPI.xlua_rawseti(L, -2, (int)val);
+			LuaAPI.lua_pop(L, 1);
+			
+        }
+		
+        public void Get(RealStatePtr L, int index, out DreamPark.AttractionPortalKind val)
+        {
+		    LuaTypes type = LuaAPI.lua_type(L, index);
+            if (type == LuaTypes.LUA_TUSERDATA )
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != DreamParkAttractionPortalKind_TypeID)
+				{
+				    throw new Exception("invalid userdata for DreamPark.AttractionPortalKind");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+				int e;
+                if (!CopyByValue.UnPack(buff, 0, out e))
+                {
+                    throw new Exception("unpack fail for DreamPark.AttractionPortalKind");
+                }
+				val = (DreamPark.AttractionPortalKind)e;
+                
+            }
+            else
+            {
+                val = (DreamPark.AttractionPortalKind)objectCasters.GetCaster(typeof(DreamPark.AttractionPortalKind))(L, index, null);
+            }
+        }
+		
+        public void UpdateDreamParkAttractionPortalKind(RealStatePtr L, int index, DreamPark.AttractionPortalKind val)
+        {
+		    
+            if (LuaAPI.lua_type(L, index) == LuaTypes.LUA_TUSERDATA)
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != DreamParkAttractionPortalKind_TypeID)
+				{
+				    throw new Exception("invalid userdata for DreamPark.AttractionPortalKind");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+                if (!CopyByValue.Pack(buff, 0,  (int)val))
+                {
+                    throw new Exception("pack fail for DreamPark.AttractionPortalKind ,value="+val);
+                }
+            }
+			
+            else
+            {
+                throw new Exception("try to update a data with lua type:" + LuaAPI.lua_type(L, index));
+            }
+        }
+        
+        int DreamParkAttractionWallSide_TypeID = -1;
+		int DreamParkAttractionWallSide_EnumRef = -1;
+        
+        public void PushDreamParkAttractionWallSide(RealStatePtr L, DreamPark.AttractionWallSide val)
+        {
+            if (DreamParkAttractionWallSide_TypeID == -1)
+            {
+			    bool is_first;
+                DreamParkAttractionWallSide_TypeID = getTypeId(L, typeof(DreamPark.AttractionWallSide), out is_first);
+				
+				if (DreamParkAttractionWallSide_EnumRef == -1)
+				{
+				    Utils.LoadCSTable(L, typeof(DreamPark.AttractionWallSide));
+				    DreamParkAttractionWallSide_EnumRef = LuaAPI.luaL_ref(L, LuaIndexes.LUA_REGISTRYINDEX);
+				}
+				
+            }
+			
+			if (LuaAPI.xlua_tryget_cachedud(L, (int)val, DreamParkAttractionWallSide_EnumRef) == 1)
+            {
+			    return;
+			}
+			
+            IntPtr buff = LuaAPI.xlua_pushstruct(L, 4, DreamParkAttractionWallSide_TypeID);
+            if (!CopyByValue.Pack(buff, 0, (int)val))
+            {
+                throw new Exception("pack fail fail for DreamPark.AttractionWallSide ,value="+val);
+            }
+			
+			LuaAPI.lua_getref(L, DreamParkAttractionWallSide_EnumRef);
+			LuaAPI.lua_pushvalue(L, -2);
+			LuaAPI.xlua_rawseti(L, -2, (int)val);
+			LuaAPI.lua_pop(L, 1);
+			
+        }
+		
+        public void Get(RealStatePtr L, int index, out DreamPark.AttractionWallSide val)
+        {
+		    LuaTypes type = LuaAPI.lua_type(L, index);
+            if (type == LuaTypes.LUA_TUSERDATA )
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != DreamParkAttractionWallSide_TypeID)
+				{
+				    throw new Exception("invalid userdata for DreamPark.AttractionWallSide");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+				int e;
+                if (!CopyByValue.UnPack(buff, 0, out e))
+                {
+                    throw new Exception("unpack fail for DreamPark.AttractionWallSide");
+                }
+				val = (DreamPark.AttractionWallSide)e;
+                
+            }
+            else
+            {
+                val = (DreamPark.AttractionWallSide)objectCasters.GetCaster(typeof(DreamPark.AttractionWallSide))(L, index, null);
+            }
+        }
+		
+        public void UpdateDreamParkAttractionWallSide(RealStatePtr L, int index, DreamPark.AttractionWallSide val)
+        {
+		    
+            if (LuaAPI.lua_type(L, index) == LuaTypes.LUA_TUSERDATA)
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != DreamParkAttractionWallSide_TypeID)
+				{
+				    throw new Exception("invalid userdata for DreamPark.AttractionWallSide");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+                if (!CopyByValue.Pack(buff, 0,  (int)val))
+                {
+                    throw new Exception("pack fail for DreamPark.AttractionWallSide ,value="+val);
+                }
+            }
+			
+            else
+            {
+                throw new Exception("try to update a data with lua type:" + LuaAPI.lua_type(L, index));
+            }
+        }
+        
+        int DreamParkAttractionWallMask_TypeID = -1;
+		int DreamParkAttractionWallMask_EnumRef = -1;
+        
+        public void PushDreamParkAttractionWallMask(RealStatePtr L, DreamPark.AttractionWallMask val)
+        {
+            if (DreamParkAttractionWallMask_TypeID == -1)
+            {
+			    bool is_first;
+                DreamParkAttractionWallMask_TypeID = getTypeId(L, typeof(DreamPark.AttractionWallMask), out is_first);
+				
+				if (DreamParkAttractionWallMask_EnumRef == -1)
+				{
+				    Utils.LoadCSTable(L, typeof(DreamPark.AttractionWallMask));
+				    DreamParkAttractionWallMask_EnumRef = LuaAPI.luaL_ref(L, LuaIndexes.LUA_REGISTRYINDEX);
+				}
+				
+            }
+			
+			if (LuaAPI.xlua_tryget_cachedud(L, (int)val, DreamParkAttractionWallMask_EnumRef) == 1)
+            {
+			    return;
+			}
+			
+            IntPtr buff = LuaAPI.xlua_pushstruct(L, 4, DreamParkAttractionWallMask_TypeID);
+            if (!CopyByValue.Pack(buff, 0, (int)val))
+            {
+                throw new Exception("pack fail fail for DreamPark.AttractionWallMask ,value="+val);
+            }
+			
+			LuaAPI.lua_getref(L, DreamParkAttractionWallMask_EnumRef);
+			LuaAPI.lua_pushvalue(L, -2);
+			LuaAPI.xlua_rawseti(L, -2, (int)val);
+			LuaAPI.lua_pop(L, 1);
+			
+        }
+		
+        public void Get(RealStatePtr L, int index, out DreamPark.AttractionWallMask val)
+        {
+		    LuaTypes type = LuaAPI.lua_type(L, index);
+            if (type == LuaTypes.LUA_TUSERDATA )
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != DreamParkAttractionWallMask_TypeID)
+				{
+				    throw new Exception("invalid userdata for DreamPark.AttractionWallMask");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+				int e;
+                if (!CopyByValue.UnPack(buff, 0, out e))
+                {
+                    throw new Exception("unpack fail for DreamPark.AttractionWallMask");
+                }
+				val = (DreamPark.AttractionWallMask)e;
+                
+            }
+            else
+            {
+                val = (DreamPark.AttractionWallMask)objectCasters.GetCaster(typeof(DreamPark.AttractionWallMask))(L, index, null);
+            }
+        }
+		
+        public void UpdateDreamParkAttractionWallMask(RealStatePtr L, int index, DreamPark.AttractionWallMask val)
+        {
+		    
+            if (LuaAPI.lua_type(L, index) == LuaTypes.LUA_TUSERDATA)
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != DreamParkAttractionWallMask_TypeID)
+				{
+				    throw new Exception("invalid userdata for DreamPark.AttractionWallMask");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+                if (!CopyByValue.Pack(buff, 0,  (int)val))
+                {
+                    throw new Exception("pack fail for DreamPark.AttractionWallMask ,value="+val);
+                }
+            }
+			
+            else
+            {
+                throw new Exception("try to update a data with lua type:" + LuaAPI.lua_type(L, index));
+            }
+        }
+        
+        int UnityEngineTextAnchor_TypeID = -1;
+		int UnityEngineTextAnchor_EnumRef = -1;
+        
+        public void PushUnityEngineTextAnchor(RealStatePtr L, UnityEngine.TextAnchor val)
+        {
+            if (UnityEngineTextAnchor_TypeID == -1)
+            {
+			    bool is_first;
+                UnityEngineTextAnchor_TypeID = getTypeId(L, typeof(UnityEngine.TextAnchor), out is_first);
+				
+				if (UnityEngineTextAnchor_EnumRef == -1)
+				{
+				    Utils.LoadCSTable(L, typeof(UnityEngine.TextAnchor));
+				    UnityEngineTextAnchor_EnumRef = LuaAPI.luaL_ref(L, LuaIndexes.LUA_REGISTRYINDEX);
+				}
+				
+            }
+			
+			if (LuaAPI.xlua_tryget_cachedud(L, (int)val, UnityEngineTextAnchor_EnumRef) == 1)
+            {
+			    return;
+			}
+			
+            IntPtr buff = LuaAPI.xlua_pushstruct(L, 4, UnityEngineTextAnchor_TypeID);
+            if (!CopyByValue.Pack(buff, 0, (int)val))
+            {
+                throw new Exception("pack fail fail for UnityEngine.TextAnchor ,value="+val);
+            }
+			
+			LuaAPI.lua_getref(L, UnityEngineTextAnchor_EnumRef);
+			LuaAPI.lua_pushvalue(L, -2);
+			LuaAPI.xlua_rawseti(L, -2, (int)val);
+			LuaAPI.lua_pop(L, 1);
+			
+        }
+		
+        public void Get(RealStatePtr L, int index, out UnityEngine.TextAnchor val)
+        {
+		    LuaTypes type = LuaAPI.lua_type(L, index);
+            if (type == LuaTypes.LUA_TUSERDATA )
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != UnityEngineTextAnchor_TypeID)
+				{
+				    throw new Exception("invalid userdata for UnityEngine.TextAnchor");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+				int e;
+                if (!CopyByValue.UnPack(buff, 0, out e))
+                {
+                    throw new Exception("unpack fail for UnityEngine.TextAnchor");
+                }
+				val = (UnityEngine.TextAnchor)e;
+                
+            }
+            else
+            {
+                val = (UnityEngine.TextAnchor)objectCasters.GetCaster(typeof(UnityEngine.TextAnchor))(L, index, null);
+            }
+        }
+		
+        public void UpdateUnityEngineTextAnchor(RealStatePtr L, int index, UnityEngine.TextAnchor val)
+        {
+		    
+            if (LuaAPI.lua_type(L, index) == LuaTypes.LUA_TUSERDATA)
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != UnityEngineTextAnchor_TypeID)
+				{
+				    throw new Exception("invalid userdata for UnityEngine.TextAnchor");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+                if (!CopyByValue.Pack(buff, 0,  (int)val))
+                {
+                    throw new Exception("pack fail for UnityEngine.TextAnchor ,value="+val);
+                }
+            }
+			
+            else
+            {
+                throw new Exception("try to update a data with lua type:" + LuaAPI.lua_type(L, index));
+            }
+        }
+        
+        int UnityEngineTextAlignment_TypeID = -1;
+		int UnityEngineTextAlignment_EnumRef = -1;
+        
+        public void PushUnityEngineTextAlignment(RealStatePtr L, UnityEngine.TextAlignment val)
+        {
+            if (UnityEngineTextAlignment_TypeID == -1)
+            {
+			    bool is_first;
+                UnityEngineTextAlignment_TypeID = getTypeId(L, typeof(UnityEngine.TextAlignment), out is_first);
+				
+				if (UnityEngineTextAlignment_EnumRef == -1)
+				{
+				    Utils.LoadCSTable(L, typeof(UnityEngine.TextAlignment));
+				    UnityEngineTextAlignment_EnumRef = LuaAPI.luaL_ref(L, LuaIndexes.LUA_REGISTRYINDEX);
+				}
+				
+            }
+			
+			if (LuaAPI.xlua_tryget_cachedud(L, (int)val, UnityEngineTextAlignment_EnumRef) == 1)
+            {
+			    return;
+			}
+			
+            IntPtr buff = LuaAPI.xlua_pushstruct(L, 4, UnityEngineTextAlignment_TypeID);
+            if (!CopyByValue.Pack(buff, 0, (int)val))
+            {
+                throw new Exception("pack fail fail for UnityEngine.TextAlignment ,value="+val);
+            }
+			
+			LuaAPI.lua_getref(L, UnityEngineTextAlignment_EnumRef);
+			LuaAPI.lua_pushvalue(L, -2);
+			LuaAPI.xlua_rawseti(L, -2, (int)val);
+			LuaAPI.lua_pop(L, 1);
+			
+        }
+		
+        public void Get(RealStatePtr L, int index, out UnityEngine.TextAlignment val)
+        {
+		    LuaTypes type = LuaAPI.lua_type(L, index);
+            if (type == LuaTypes.LUA_TUSERDATA )
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != UnityEngineTextAlignment_TypeID)
+				{
+				    throw new Exception("invalid userdata for UnityEngine.TextAlignment");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+				int e;
+                if (!CopyByValue.UnPack(buff, 0, out e))
+                {
+                    throw new Exception("unpack fail for UnityEngine.TextAlignment");
+                }
+				val = (UnityEngine.TextAlignment)e;
+                
+            }
+            else
+            {
+                val = (UnityEngine.TextAlignment)objectCasters.GetCaster(typeof(UnityEngine.TextAlignment))(L, index, null);
+            }
+        }
+		
+        public void UpdateUnityEngineTextAlignment(RealStatePtr L, int index, UnityEngine.TextAlignment val)
+        {
+		    
+            if (LuaAPI.lua_type(L, index) == LuaTypes.LUA_TUSERDATA)
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != UnityEngineTextAlignment_TypeID)
+				{
+				    throw new Exception("invalid userdata for UnityEngine.TextAlignment");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+                if (!CopyByValue.Pack(buff, 0,  (int)val))
+                {
+                    throw new Exception("pack fail for UnityEngine.TextAlignment ,value="+val);
+                }
+            }
+			
+            else
+            {
+                throw new Exception("try to update a data with lua type:" + LuaAPI.lua_type(L, index));
+            }
+        }
+        
         
 		// table cast optimze
 		
@@ -3123,6 +3633,42 @@ namespace XLua
 				translator.PushTMProTextAlignmentOptions(L, array[index]);
 				return true;
 			}
+			else if (type == typeof(DreamPark.DreamParkGestureKind[]))
+			{
+			    DreamPark.DreamParkGestureKind[] array = obj as DreamPark.DreamParkGestureKind[];
+				translator.PushDreamParkDreamParkGestureKind(L, array[index]);
+				return true;
+			}
+			else if (type == typeof(DreamPark.AttractionPortalKind[]))
+			{
+			    DreamPark.AttractionPortalKind[] array = obj as DreamPark.AttractionPortalKind[];
+				translator.PushDreamParkAttractionPortalKind(L, array[index]);
+				return true;
+			}
+			else if (type == typeof(DreamPark.AttractionWallSide[]))
+			{
+			    DreamPark.AttractionWallSide[] array = obj as DreamPark.AttractionWallSide[];
+				translator.PushDreamParkAttractionWallSide(L, array[index]);
+				return true;
+			}
+			else if (type == typeof(DreamPark.AttractionWallMask[]))
+			{
+			    DreamPark.AttractionWallMask[] array = obj as DreamPark.AttractionWallMask[];
+				translator.PushDreamParkAttractionWallMask(L, array[index]);
+				return true;
+			}
+			else if (type == typeof(UnityEngine.TextAnchor[]))
+			{
+			    UnityEngine.TextAnchor[] array = obj as UnityEngine.TextAnchor[];
+				translator.PushUnityEngineTextAnchor(L, array[index]);
+				return true;
+			}
+			else if (type == typeof(UnityEngine.TextAlignment[]))
+			{
+			    UnityEngine.TextAlignment[] array = obj as UnityEngine.TextAlignment[];
+				translator.PushUnityEngineTextAlignment(L, array[index]);
+				return true;
+			}
             return false;
 		}
 		
@@ -3342,6 +3888,42 @@ namespace XLua
 			else if (type == typeof(TMPro.TextAlignmentOptions[]))
 			{
 			    TMPro.TextAlignmentOptions[] array = obj as TMPro.TextAlignmentOptions[];
+				translator.Get(L, obj_idx, out array[array_idx]);
+				return true;
+			}
+			else if (type == typeof(DreamPark.DreamParkGestureKind[]))
+			{
+			    DreamPark.DreamParkGestureKind[] array = obj as DreamPark.DreamParkGestureKind[];
+				translator.Get(L, obj_idx, out array[array_idx]);
+				return true;
+			}
+			else if (type == typeof(DreamPark.AttractionPortalKind[]))
+			{
+			    DreamPark.AttractionPortalKind[] array = obj as DreamPark.AttractionPortalKind[];
+				translator.Get(L, obj_idx, out array[array_idx]);
+				return true;
+			}
+			else if (type == typeof(DreamPark.AttractionWallSide[]))
+			{
+			    DreamPark.AttractionWallSide[] array = obj as DreamPark.AttractionWallSide[];
+				translator.Get(L, obj_idx, out array[array_idx]);
+				return true;
+			}
+			else if (type == typeof(DreamPark.AttractionWallMask[]))
+			{
+			    DreamPark.AttractionWallMask[] array = obj as DreamPark.AttractionWallMask[];
+				translator.Get(L, obj_idx, out array[array_idx]);
+				return true;
+			}
+			else if (type == typeof(UnityEngine.TextAnchor[]))
+			{
+			    UnityEngine.TextAnchor[] array = obj as UnityEngine.TextAnchor[];
+				translator.Get(L, obj_idx, out array[array_idx]);
+				return true;
+			}
+			else if (type == typeof(UnityEngine.TextAlignment[]))
+			{
+			    UnityEngine.TextAlignment[] array = obj as UnityEngine.TextAlignment[];
 				translator.Get(L, obj_idx, out array[array_idx]);
 				return true;
 			}

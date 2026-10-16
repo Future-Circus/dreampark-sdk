@@ -143,6 +143,8 @@ namespace DreamPark.EditorTools.TextureOptimization
             bool sRGB = true;
             int currentMax = 2048;
             string importerType = "Default";
+            bool isCubemap = false;
+            int androidMax = 0, iPhoneMax = 0;
 
             var importer = AssetImporter.GetAtPath(path) as TextureImporter;
             if (importer != null)
@@ -161,6 +163,11 @@ namespace DreamPark.EditorTools.TextureOptimization
                 sRGB = importer.sRGBTexture;
                 currentMax = importer.maxTextureSize;
                 importerType = importer.textureType.ToString();
+                isCubemap = importer.textureShape == TextureImporterShape.TextureCube;
+                var android = importer.GetPlatformTextureSettings("Android");
+                if (android != null && android.overridden) androidMax = android.maxTextureSize;
+                var iphone = importer.GetPlatformTextureSettings("iPhone");
+                if (iphone != null && iphone.overridden) iPhoneMax = iphone.maxTextureSize;
             }
 
             return new TextureUsage
@@ -176,6 +183,10 @@ namespace DreamPark.EditorTools.TextureOptimization
                 sRGBTexture = sRGB,
                 currentMaxSize = currentMax,
                 currentImporterType = importerType,
+                isCubemap = isCubemap,
+                isAtlasLike = importerType == "Sprite" || importerType == "GUI" || TextureSizingPolicy.LooksLikeAtlas(path),
+                androidOverrideMaxSize = androidMax,
+                iPhoneOverrideMaxSize = iPhoneMax,
                 kind = TextureUsageKind.Orphan, // upgraded later
                 role = TextureRole.Unknown,
             };
@@ -396,7 +407,7 @@ namespace DreamPark.EditorTools.TextureOptimization
 
         // ─── Step 4 helpers — final kind classification ─────────────────
 
-        private static void FinalizeKind(TextureUsage u)
+        internal static void FinalizeKind(TextureUsage u)
         {
             // Importer-type-based overrides take priority — these are
             // unambiguous from Unity's classification.
@@ -406,7 +417,10 @@ namespace DreamPark.EditorTools.TextureOptimization
                 u.note = "Lightmap output — leave alone.";
                 return;
             }
-            if (u.currentImporterType == "Cubemap" || u.currentImporterType == "SingleChannel")
+            // Oct 2026: only a real cube texture is a skybox. "SingleChannel"
+            // is a 2D importer type (masks such as *_Smooth); treating it as a
+            // cubemap hard-skipped 130 CrashCourse masks, some at 4096.
+            if (u.isCubemap || u.currentImporterType == "Cubemap")
             {
                 u.kind = TextureUsageKind.Skybox;
                 u.note = "Cubemap / skybox source — leave alone.";

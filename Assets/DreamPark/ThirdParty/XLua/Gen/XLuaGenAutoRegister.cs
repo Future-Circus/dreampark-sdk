@@ -390,19 +390,71 @@ namespace XLua.CSObjectWrap
             translator.DelayWrapLoader(typeof(HandTracker), HandTrackerWrap.__Register);
         
         
+            translator.DelayWrapLoader(typeof(DreamPark.DreamParkPackageHost), DreamParkDreamParkPackageHostWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.DreamParkGestures), DreamParkDreamParkGesturesWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.DreamParkGesture), DreamParkDreamParkGestureWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.DreamParkGestureKind), DreamParkDreamParkGestureKindWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.DreamParkRoutedGesture), DreamParkDreamParkRoutedGestureWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.AttractionPortal), DreamParkAttractionPortalWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.AttractionPortalKind), DreamParkAttractionPortalKindWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.AttractionPortalGeometry), DreamParkAttractionPortalGeometryWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.AttractionWallSide), DreamParkAttractionWallSideWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.AttractionWallMask), DreamParkAttractionWallMaskWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(UnityEngine.TextMesh), UnityEngineTextMeshWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(UnityEngine.TextAnchor), UnityEngineTextAnchorWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(UnityEngine.TextAlignment), UnityEngineTextAlignmentWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamBoxClient), DreamBoxClientWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.NetSessionArbiter), DreamParkNetSessionArbiterWrap.__Register);
+        
+        
             translator.DelayWrapLoader(typeof(EasyLua), EasyLuaWrap.__Register);
         
         
             translator.DelayWrapLoader(typeof(LuaBehaviour), LuaBehaviourWrap.__Register);
         
         
+        
+        
             translator.DelayWrapLoader(typeof(DreamPark.DreamParkLuaAPI), DreamParkDreamParkLuaAPIWrap.__Register);
+        
+        
         
         
             translator.DelayWrapLoader(typeof(DreamPark.API.GameStorageAPI), DreamParkAPIGameStorageAPIWrap.__Register);
         
         
             translator.DelayWrapLoader(typeof(DreamPark.API.ProfileAPI), DreamParkAPIProfileAPIWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.API.ScoreAPI), DreamParkAPIScoreAPIWrap.__Register);
         
         
         

@@ -24,6 +24,15 @@ namespace DreamPark.API
     /// to stop honest mistakes (a park-wide script awarding on Start, a prop
     /// firing before the player ever reached the room) from touching guest
     /// profiles. The server-side rate limits are the actual defence.
+    ///
+    /// TWIN-AWARE (Oct 13 2026, Aidan: Beta and release SHARE save progress).
+    /// A Beta upload stamps every id a title exposes to "&lt;id&gt;Beta", so on a
+    /// beta build the player only ever walks into "&lt;id&gt;Beta" zones. The
+    /// latch treats a release id and its beta twin as ONE title: entering either
+    /// opens both, and work held under either is released together. Save data
+    /// itself lives under <see cref="StorageId"/> (the release id) — see
+    /// GameStorageAPI. Scores/leaderboards are NOT merged (they post to their
+    /// own per-id path; ScoreAPI is untouched).
     /// </summary>
     public static class ContentGate
     {
@@ -48,6 +57,30 @@ namespace DreamPark.API
         static readonly HashSet<string> _open = new HashSet<string>();
         static readonly Dictionary<string, List<Action>> _pending = new Dictionary<string, List<Action>>();
         static bool _hooked;
+
+        /// <summary>Reserved beta-target suffix (mirrors web lib/betaTargets
+        /// BETA_SUFFIX and the uploader's BetaContentId.Suffix; a release id can
+        /// never end in it, any case).</summary>
+        public const string BetaSuffix = "Beta";
+
+        /// <summary>The id a title's SAVE DATA lives under: a beta twin
+        /// "&lt;id&gt;Beta" (suffix any case, non-empty stem) maps to "&lt;id&gt;";
+        /// every other id is returned unchanged. Pure.</summary>
+        public static string StorageId(string contentId)
+        {
+            if (string.IsNullOrEmpty(contentId) || contentId.Length <= BetaSuffix.Length) return contentId;
+            return contentId.EndsWith(BetaSuffix, StringComparison.OrdinalIgnoreCase)
+                ? contentId.Substring(0, contentId.Length - BetaSuffix.Length)
+                : contentId;
+        }
+
+        /// <summary>True when both ids name the same title — equal, or one is the
+        /// other's beta twin. Empty never matches. Pure.</summary>
+        public static bool SameTitle(string a, string b)
+        {
+            if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)) return false;
+            return string.Equals(StorageId(a), StorageId(b), StringComparison.Ordinal);
+        }
 
         /// <summary>Fired when a content id latches open. Arg = content id.</summary>
         public static event Action<string> OnOpened;
@@ -86,12 +119,22 @@ namespace DreamPark.API
             // this, every write after a rebind would be held forever.
             var here = GameArea.currentGameArea;
             if (here != null && !string.IsNullOrEmpty(here.gameId)
-                && (string.IsNullOrEmpty(contentId) || here.gameId == contentId))
+                && (string.IsNullOrEmpty(contentId) || SameTitle(here.gameId, contentId)))
                 return true;
 
+            return IsLatched(contentId);
+        }
+
+        /// <summary>The latch alone (no live GameArea / editor check): opened for
+        /// this title or its beta twin. Split out so it is testable offline.</summary>
+        internal static bool IsLatched(string contentId)
+        {
             if (_open.Count == 0) return false;
             if (string.IsNullOrEmpty(contentId)) return true; // any entry releases unscoped work
-            return _open.Contains(contentId);
+            if (_open.Contains(contentId)) return true;
+            foreach (var id in _open)
+                if (SameTitle(id, contentId)) return true;
+            return false;
         }
 
         /// <summary>Run <paramref name="work"/> now if the player has entered
@@ -138,7 +181,11 @@ namespace DreamPark.API
 
             Debug.Log($"[ContentGate] '{contentId}' opened — the player entered one of its attractions.");
 
-            Flush(contentId);
+            // Everything held for this title — under its own id or its beta twin.
+            List<string> keys = null;
+            foreach (var key in _pending.Keys)
+                if (key != UnscopedBucket && SameTitle(key, contentId)) (keys ??= new List<string>()).Add(key);
+            if (keys != null) foreach (var key in keys) Flush(key);
             Flush(UnscopedBucket); // the first entry also releases unscoped work
 
             try { OnOpened?.Invoke(contentId); }

@@ -61,6 +61,37 @@ namespace DreamPark.EditorTools.AnimationOptimization
             // wins instead of being silently dropped.
             var groups = GroupByFbx(work);
 
+            // Oct 2026: sample every FBX we are about to change through the
+            // runtime path BEFORE the change, so the new import can be checked
+            // between keyframes (AnimationErrorProbe). Optimal matched the old
+            // import on the 30 fps keys but reached 10.4° at the 60 Hz frames
+            // in between on CrashCourse.
+            var before = new Dictionary<string, (Dictionary<string, AnimationErrorProbe.PoseSeries> poses, PreviousSettings settings)>(StringComparer.Ordinal);
+            if (!dryRun)
+            {
+                foreach (var group in groups)
+                {
+                    var importer = AssetImporter.GetAtPath(group.Key) as ModelImporter;
+                    if (importer == null || importer.animationCompression == group.Value.compression) continue;
+                    try
+                    {
+                        var poses = AnimationErrorProbe.Sample(group.Key);
+                        if (poses != null)
+                            before[group.Key] = (poses, new PreviousSettings
+                            {
+                                compression = importer.animationCompression,
+                                rotationError = importer.animationRotationError,
+                                positionError = importer.animationPositionError,
+                                scaleError = importer.animationScaleError,
+                            });
+                    }
+                    catch (Exception e)
+                    {
+                        Debug.LogWarning($"[AnimationOptimizer] Could not sample {group.Key} before the change ({e.Message}); it will not be error-checked.");
+                    }
+                }
+            }
+
             AssetDatabase.StartAssetEditing();
             try
             {
@@ -82,6 +113,41 @@ namespace DreamPark.EditorTools.AnimationOptimization
                 if (!dryRun)
                 {
                     AssetDatabase.Refresh();
+                }
+            }
+
+            // Oct 2026: re-sample and revert any FBX whose clips now play more
+            // than 0.5° / 5 mm away from the previous import between keys.
+            foreach (var pair in before)
+            {
+                try
+                {
+                    var after = AnimationErrorProbe.Sample(pair.Key);
+                    AnimationErrorProbe.ErrorReport error = AnimationErrorProbe.Compare(pair.Value.poses, after);
+                    if (error.WithinLimits) continue;
+                    var importer = AssetImporter.GetAtPath(pair.Key) as ModelImporter;
+                    if (importer == null) continue;
+                    importer.animationCompression = pair.Value.settings.compression;
+                    importer.animationRotationError = pair.Value.settings.rotationError;
+                    importer.animationPositionError = pair.Value.settings.positionError;
+                    importer.animationScaleError = pair.Value.settings.scaleError;
+                    importer.SaveAndReimport();
+                    string reason = $"Kept {pair.Value.settings.compression}: the new compression moved clips by {error} between keyframes at 60 Hz "
+                        + $"(limit {AnimationErrorProbe.MaxRotationErrorDegrees}° / {AnimationErrorProbe.MaxPositionErrorMm} mm).";
+                    Debug.LogWarning($"[AnimationOptimizer] {pair.Key}: {reason}");
+                    foreach (var entry in result.rows)
+                    {
+                        if (entry.rowKind != AnimationRowKind.FbxSubClip || entry.assetPath != pair.Key || !entry.ok) continue;
+                        entry.ok = false;
+                        entry.error = reason;
+                        result.succeeded--;
+                        result.failed++;
+                        result.revertedForError++;
+                    }
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning($"[AnimationOptimizer] Could not error-check {pair.Key} after the change: {e.Message}");
                 }
             }
 
@@ -170,6 +236,14 @@ namespace DreamPark.EditorTools.AnimationOptimization
                 settings.rows.Add(row);
             }
             return groups;
+        }
+
+        private struct PreviousSettings
+        {
+            public ModelImporterAnimationCompression compression;
+            public float rotationError;
+            public float positionError;
+            public float scaleError;
         }
 
         private class FbxGroupSettings

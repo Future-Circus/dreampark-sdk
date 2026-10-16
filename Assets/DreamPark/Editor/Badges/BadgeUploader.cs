@@ -3,8 +3,10 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Defective.JSON;
 using DreamPark.API;
+using DreamPark.PreUploadChecks;
 using Unity.EditorCoroutines.Editor;
 using UnityEditor;
 using UnityEngine;
@@ -22,6 +24,10 @@ namespace DreamPark.Badges
     //     name         — badge title
     //     description  — badge description
     //     icon         — optional image part
+    //     awardedBy    — optional JSON array of where the badge is earned
+    //                    (earnAt + BadgeAttributionScanner rows; built by
+    //                    BadgeAwardedBy). OMITTED when there is nothing to
+    //                    send — `[]` / "" would clear AND vault the badge.
     //
     // This is the SAME endpoint the /developer/content/:id/badges web page
     // posts to. It is NOT staff-only: admin.content.routes.js mounts
@@ -61,19 +67,129 @@ namespace DreamPark.Badges
         /// Uploads every badge card that has an id. Fire-and-forget from the
         /// upload flow, or driven by the panel's "Push Badges to Portal" button.
         /// onDone is invoked exactly once, on the editor thread.
+        /// sourceContentId: the local Assets/Content folder the badges and prefabs
+        /// live in, when it differs from the upload target (a Beta upload). The
+        /// awardedBy addresses are built against contentId (the target), because
+        /// that is the gameId ContentProcessor stamps into the uploaded addresses.
         public static void UploadAll(string contentId, List<BadgeStore.Entry> badges,
-                                     bool interactive, Action<UploadReport> onDone = null)
+                                     bool interactive, Action<UploadReport> onDone = null,
+                                     string sourceContentId = null)
         {
+            // Gathered here, on the editor thread, before the coroutine starts:
+            // it loads prefabs, and the snapshot then matches the badges list.
+            AwardSites sites = null;
+            try
+            {
+                sites = CollectSites(string.IsNullOrEmpty(sourceContentId) ? contentId : sourceContentId, contentId,
+                    badges == null ? null : badges.Where(b => b != null).Select(b => (b.badgeId ?? "").Trim()));
+            }
+            catch (Exception e) { Debug.LogWarning("[Badges] award-site scan failed; awardedBy not sent: " + e.Message); }
+
             EditorCoroutineUtility.StartCoroutineOwnerless(
-                UploadAllRoutine(contentId, badges, interactive, onDone));
+                UploadAllRoutine(contentId, badges, interactive, onDone, sites));
+        }
+
+        // ── awardedBy sources ────────────────────────────────────────────
+
+        public sealed class AwardSites
+        {
+            // Attraction/Prop prefab file stem → its site (earnAt resolves through this).
+            public Dictionary<string, BadgeAwardedBy.Site> placedByName =
+                new Dictionary<string, BadgeAwardedBy.Site>(StringComparer.Ordinal);
+            public Dictionary<string, BadgeAwardedBy.Site> byAssetPath =
+                new Dictionary<string, BadgeAwardedBy.Site>(StringComparer.Ordinal);
+            public BadgeAttributionScanner.Result attribution;
+            // badgeId → a package Lua script that references it (BadgeLuaScanner),
+            // for the 'script' row when no root and not the Player awards it.
+            public Dictionary<string, string> luaScriptById =
+                new Dictionary<string, string>(StringComparer.Ordinal);
+            // True only when every scan finished and saw the package: at least
+            // one content root, every root prefab loaded, attribution + Lua scan
+            // ran. False → awardedBy is omitted (never "[]") for every badge.
+            public bool scanSucceeded;
+
+            public string AwardedByJson(string contentId, BadgeStore.Entry badge, List<string> unresolved = null)
+            {
+                if (badge == null) return null;
+                string id = (badge.badgeId ?? "").Trim();
+                var scanned = new List<BadgeAwardedBy.Site>();
+                bool player = false;
+                if (attribution != null && id.Length > 0)
+                {
+                    if (attribution.awardedByRoot.TryGetValue(id, out var roots))
+                        foreach (var r in roots)
+                            if (r != null && byAssetPath.TryGetValue(r.assetPath ?? "", out var site))
+                                scanned.Add(site);
+                    player = attribution.awardedByPlayer.Contains(id);
+                }
+                luaScriptById.TryGetValue(id, out string script);
+                return BadgeAwardedBy.BuildField(contentId, badge.earnAt, placedByName, scanned, player,
+                                                 scanSucceeded, unresolved, script);
+            }
+        }
+
+        /// Every Attraction/Prop root of the local package, with the address it
+        /// ships under for an upload to addressGameId — computed from the FILE
+        /// NAME exactly like ContentProcessor.ResolveAttractionAddress (via
+        /// ResourceNameAddressCheck.ExpectedAddress), never read from the
+        /// serialized GameArea.resourceName, which is empty until stamped.
+        public static AwardSites CollectSites(string localContentId, string addressGameId,
+                                              IEnumerable<string> knownIds = null)
+        {
+            var result = new AwardSites();
+            if (string.IsNullOrEmpty(localContentId) || string.IsNullOrEmpty(addressGameId)) return result;
+
+            var roots = ContentRootScanner.Scan(localContentId);
+            bool allLoaded = true;
+            foreach (var root in roots)
+            {
+                if (root == null || root.kind == ContentRootKindPublic.Player) continue;
+                var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(root.assetPath);
+                if (prefab == null) { allLoaded = false; continue; }
+                string address = PreUploadChecks.Checks.ResourceNameAddressCheck.ExpectedAddress(
+                    prefab, root.assetPath, addressGameId);
+                if (string.IsNullOrEmpty(address)) continue;
+
+                var attraction = prefab.GetComponent<AttractionTemplate>();
+                var site = new BadgeAwardedBy.Site
+                {
+                    kind = root.kind == ContentRootKindPublic.Attraction
+                        ? BadgeAwardedBy.KindAttraction : BadgeAwardedBy.KindProp,
+                    prefabName = root.name,
+                    resourceName = address,
+                    name = attraction != null && !string.IsNullOrEmpty(attraction.displayName)
+                        ? attraction.displayName.Trim() : null,
+                };
+                result.byAssetPath[root.assetPath] = site;
+                // Attractions win a (DuplicateNamesCheck-flagged) name clash with a prop.
+                if (!result.placedByName.ContainsKey(root.name)
+                    || (site.kind == BadgeAwardedBy.KindAttraction
+                        && result.placedByName[root.name].kind != BadgeAwardedBy.KindAttraction))
+                    result.placedByName[root.name] = site;
+            }
+
+            result.attribution = BadgeAttributionScanner.Scan(localContentId, roots, knownIds);
+
+            foreach (var d in BadgeLuaScanner.Scan(localContentId).discoveries)
+                if (d != null && !string.IsNullOrEmpty(d.badgeId) && !result.luaScriptById.ContainsKey(d.badgeId))
+                    result.luaScriptById[d.badgeId] = !string.IsNullOrEmpty(d.scriptPath) ? d.scriptPath : (d.prefabPath ?? "");
+
+            // Reached only if nothing threw (UploadAll turns a throw into sites == null).
+            result.scanSucceeded = roots.Count > 0 && allLoaded && result.attribution != null;
+            if (!result.scanSucceeded)
+                Debug.LogWarning($"[Badges] award-site scan for {localContentId} was incomplete "
+                                 + $"({roots.Count} roots, all loaded: {allLoaded}); awardedBy not sent this push.");
+            return result;
         }
 
         private static IEnumerator UploadAllRoutine(string contentId, List<BadgeStore.Entry> badges,
-                                                    bool interactive, Action<UploadReport> onDone)
+                                                    bool interactive, Action<UploadReport> onDone,
+                                                    AwardSites sites)
         {
             var report = new UploadReport();
 
-            string auth = AuthAPI.GetUserAuth();
+            // The agent key approved for THIS title, when the project stores several.
+            string auth = AuthAPI.GetUserAuthFor(contentId);
             if (string.IsNullOrEmpty(contentId) || badges == null || badges.Count == 0)
             {
                 onDone?.Invoke(report);
@@ -111,7 +227,7 @@ namespace DreamPark.Badges
                     // per call and the developer wants an ordered, readable log,
                     // not N interleaved failures.
                     string error = null;
-                    yield return SaveOne(contentId, auth, badge, e => error = e);
+                    yield return SaveOne(contentId, auth, badge, sites, e => error = e);
 
                     if (error == null)
                     {
@@ -163,7 +279,7 @@ namespace DreamPark.Badges
         }
 
         private static IEnumerator SaveOne(string contentId, string auth, BadgeStore.Entry badge,
-                                           Action<string> onResult)
+                                           AwardSites sites, Action<string> onResult)
         {
             var form = new WWWForm();
             form.AddField("entryId", (badge.badgeId ?? "").Trim());
@@ -173,6 +289,22 @@ namespace DreamPark.Badges
             // would be lying about what the portal holds.
             form.AddField("name", badge.name ?? "");
             form.AddField("description", badge.description ?? "");
+
+            // Where the badge is earned — authoritative on every push: the
+            // server REPLACES stored links with this list, and "[]" (no site, no
+            // manual link) clears them and marks the badge not awarded in this
+            // version. BuildField returns null (omit = leave stored data alone)
+            // when the scan failed or only an unresolvable manual link exists.
+            if (sites != null)
+            {
+                var unresolved = new List<string>();
+                string awardedBy = sites.AwardedByJson(contentId, badge, unresolved);
+                if (unresolved.Count > 0)
+                    Debug.LogWarning($"[Badges] '{badge.badgeId}' earnAt names with no attraction/prop prefab in this "
+                                     + "package were not sent: " + string.Join(", ", unresolved.ToArray()));
+                if (!string.IsNullOrEmpty(awardedBy))
+                    form.AddField("awardedBy", awardedBy);
+            }
 
             if (!string.IsNullOrEmpty(badge.iconAssetPath))
             {

@@ -1,597 +1,381 @@
 # DreamPark Multiplayer — the guide
 
-The reference for writing networked DreamPark content. Read this before
-writing a line of `net_send`. Every claim here is checked against the SDK
-source in `Assets/DreamPark/Scripts/Features/Net/`.
+Read this before you write a line of netcode. Since October 2026 the platform does the hard parts:
+who leads, a shared clock, shared seeded randomness, replicated encounter state with late join, physics
+props with one owner, attraction-relative positions, and NetIds that agree on every headset, including inside
+a Dream Sequence. Your job is to **use those APIs and follow the short rule list**, then **prove it with
+simulated peers** before a headset ever sees it.
 
-The reusable primitives are in **`mp_kit.lua.txt`**, next to this file — copy
-it into your park and use what you need.
-
-Attraction names like `A_MP_ButtonMash` refer to the MultiplayerLand test park,
-an internal bench where each pattern is a room you can walk into. It does not
-ship with the SDK; the patterns below stand on their own, and `mp_kit` is the
-part you actually reuse.
+Everything here is pure Lua. You add no networking components except one `NetId` on the attraction's manager.
 
 ---
 
-## 1. What the transport actually is
+## 0. The nine rules (each one broke a shipped game)
 
-There is no game server. There is a **dumb relay** — either a DreamBox kiosk
-(`Tools/DreamBoxServer`) or another headset that elected itself host
-(`PeerRelayServer`) — and it does exactly one thing: rebroadcast every message
-it receives to all *other* connected peers, verbatim, ReliableOrdered.
+1. **Encounters have one writer.** Bosses, enemies, rounds, timers, spawns: keep them in `dp.shared_state` and let
+   the leader (`dp.is_leader()`, asked every time, never cached) apply changes. Everyone else sends **requests**.
+2. **Nothing gameplay-visible is rolled per device.** Targets, attack choice, AI wander, gaze, spawn order come from
+   the leader, `dp.random(key)` or `dp.clock()`. "The boss looks at me on my headset and at you on yours" is this
+   bug. Never `math.random` for gameplay, never `math.randomseed` (the Lua VM is shared). Cosmetic jitter may stay local.
+3. **Late join is automatic with `shared_state`; starts are gated.** A late joiner is unsynced until it hears the
+   room (`s.synced()`); it may not start or reset anything. Starting is a request, so two players pressing Start in
+   the same frame get one fight. Effects (hits, sparks) are events and never replay to late joiners.
+4. **Physics props go through `dp.net_body(...)`.** One owner while it moves; never write a remote prop's transform
+   and never simulate a prop you do not own.
+5. **No world coordinates on the wire.** Typed `net_send(kind, table)` encodes positions relative to the attraction
+   for you; people come from `dp.peers()`; nobody streams player positions.
+6. **Don't set `explicitId`** except on a `Player.prefab` bus. Ids are scoped and title-unique automatically.
+7. **Audio, VO and greetings start in `onzoneenter()`** (sticky; in a Sequence the active level is the attraction),
+   never in `start()`.
+8. **One send budget per headset.** Design for `dp.relay().budget` (60 msg/s, presence included), never for `cap`.
+9. **Test before a headset does.** The simulated-peer scenarios (§7: late join mid-encounter, simultaneous start,
+   leader leaves, two players on one prop, misaligned frames, a phone peer, another title in the park, the budget)
+   must pass; then one two-headset late-join test.
 
-No parsing. No state. No authority. No concept of "a player".
+Two lifecycle facts sit under all of them (§5): **nothing sends at file scope or in `awake()`** (`net_send` is not
+injected until after the file scope runs, and in `awake()` the object's NetId is not final until `Start`), and **`ondisable()` is not "the player left"** (rigs hide in other titles' zones; the optimizer
+parks distant objects).
 
-Everything else — identity, ownership, scores, rounds — is something your Lua
-agrees on with the other headsets. That is not a limitation to work around;
-it is the design. Consensus without a coordinator is cheap if you pick data
-structures that converge, and expensive if you pick ones that need ordering.
-Most of this document is about that choice.
+---
 
-### The five facts everything follows from
+## 1. Use these
 
-| # | Fact | Where | What it forces |
-|---|------|-------|----------------|
-| 1 | **The relay never echoes to the sender** | `PeerRelayServer.NetworkReceiveEvent` skips the origin peer | Apply locally first, then broadcast. Your own `onnet` never fires for your own `net_send`. |
-| 2 | **One NetId = one broadcast bus, shared by every player's copy** | `NetId.ComputeId`, `NetRegistry.Dispatch` | An address, not an owner. Sending reaches that object's twin on every headset; *which player* rides in the payload. You never author an id — see §3. |
-| 3 | **60 messages / peer / second, then silent drops** — enforced by `PeerRelayServer`; the DreamBox kiosk does not rate limit at all | `PeerRelayServer.MaxMessagesPerPeerPerSecond`; `Tools/DreamBoxServer/` | Budget across the *whole headset*, not per script, and always against `dp.relay().budget` (the floor) — never `cap`, which changes with whoever is hosting. |
-| 4 | **ReliableOrdered only, one channel** | `DreamBoxClient.Send` | A lost packet head-of-line blocks everything behind it. Prefer absolute values over deltas. |
-| 5 | **Numbers arrive as float32** | `LuaBehaviour.JsonObjectToLuaTable` uses `JSONObject.floatValue` | Integers are exact only below 2²⁴ (16,777,216). Identity belongs in a string. |
-| 6 | **Unity world space is per headset** — `PortalAnchor` syncs the park to the QR code and leaves each headset's world origin wherever it booted | `PortalAnchor.SyncLegacyWorld`, `ParkRoot.cs` | Never put a world-space position on the wire. You mostly can't get this wrong any more — see below. |
+| You need | Call | Notes |
+|---|---|---|
+| Where the other players are | `dp.peers()`, `dp.peer(id)`, `dp.on_peer_join/leave(fn, owner)` | Heads and hands as Transforms in THIS headset's world, name tags by default, `p.state` from `dp.set_state{…}`. The SDK streams them (12 Hz, dead-banded); a game never does. Presence is park-wide: players of other titles are in the list too (`p.game`). |
+| Who I am | `dp.me()` | Stable per headset; an 8-hex **string** (never a number: §4 float32). |
+| Who decides | `dp.leader()`, `dp.is_leader()`, `dp.on_leader_changed(fn(old, new))`, `dp.rank([id])` | Scoped to **your title** (only devices running it count) and identical on every device. While anyone wears your title's `Player.prefab`, only players **wearing it** count: one standing in another title's zone (or between zones, rig hidden) never leads your game and has rank 0. The most senior live, synced headset leads, and **the incumbent keeps the lead until it leaves**, so a newcomer never takes over mid-round; equal seniority breaks on id, the same on every device. Phones lead only a room with no headset. `dp.on_leader_changed` fires once immediately with `(nil, current)`, then on each change. `dp.rank` = 1-based join order (colours, queues). |
+| One timeline | `dp.clock()`, `dp.clock_synced()` | Session seconds, beaten by the leader and slewed; once synced it never runs backwards and keeps counting through pauses. `Time.time` is per device: never compare it across headsets. |
+| Same randomness everywhere | `dp.random(key)` → [0,1), `dp.random(key, n)` → 1..n, `dp.random(key, a, b)` | Same key → same number on every device **once `dp.clock_synced()` is true** (the session seed arrives with the leader's beat; before that a device rolls on its own seed). `dp.random('wave:'..n..':spawn:'..i, 4)`. Never `math.random` for gameplay, never `math.randomseed` (the VM is shared). |
+| Encounter state + late join | `local s = dp.shared_state('boss')` | §2. One writer, revisioned, snapshot to late joiners automatically, plus per-player merge cells. |
+| A physics prop | `local body = dp.net_body(go, opts)` | §3. Toucher owns while it moves, leader owns loose motion, followers glide. |
+| A prop in the hand | `dp.hold(prop, 'right'\|'left'\|'active'[, hand_node])`, `dp.muzzle(prop)`, `dp.release_hold(prop)` | See **HANDHELD.md**. Remote copies under `RemoteRig` hands mount themselves. |
+| A custom message | `net_send(kind, table)` / `function onmessage(kind, p)` | Typed: Vector3 / Quaternion / Transform / Color convert for you, relative to the attraction (and park-local beside it). Needs a `NetId` on the same object. Hand-packed numbers: `dp.to_attraction(v)` / `dp.from_attraction(v)`. |
+| What other players see of you | `Player.prefab/RemoteRig` | Children named `Head`, `LeftHand`, `RightHand`, `Hand` follow that player. Scripts inside get `peer_id`. |
+| Link state | `dp.relay()`, `dp.on_connected(fn)` | `budget` (design against it), `cap` (diagnostic), `send_rate`, `queued`. |
 
-### What the SDK now does so you don't have to
+Inside a script, `dp.leader()`, `dp.on_leader_changed`, `dp.shared_state` handlers and `dp.to_attraction` are bound
+to that script (its title, its attraction) and handlers die with it; you never pass `self`.
 
-Three things used to make up most of every multiplayer game's netcode, and
-all three are SDK-side now:
+Where the bus lives: **one `NetId` on the attraction's manager object**, for your own `net_send` messages.
+`dp.shared_state` needs none (it addresses the attraction itself) and `dp.net_body` attaches what it needs. Props,
+buttons and pads have no NetId; they call the manager (script injection or `dp.scope`). Never set `explicitId` on
+attraction content (§4).
 
-**Player presence — `dp.peers()`.** Every headset already streams its head
-and both hands: park-local, dead-banded, rate-limited, smoothed on arrival.
-No game sends player positions, ever. Every remote player also gets a
-floating **name tag** by default (their profile name, or a stable
-`Guest XXXX` — `RemoteNameTag.cs`), so a park full of single-player games
-already feels inhabited; `p.name` is the same string in Lua.
+---
+
+## 2. Shared encounter state: `dp.shared_state`
+
+The working sample is `mp_encounter_sample.lua.txt` (next to this file); this is its core:
 
 ```lua
-for _, p in ipairs(dp.peers()) do
-    -- p.head / p.left / p.right / p.hand are Transforms in THIS
-    -- headset's world; p.state is whatever they dp.set_state()d.
-    look_at(p.head.position)
+local s                                               -- the whole encounter
+
+function start()                                      -- never at file scope or in awake()
+    s = dp.shared_state('encounter')                  -- bus = this script's attraction
+    s.on_request(function(kind, p, from)              -- runs on the WRITER only
+        if kind == 'start' and s.get('phase', 'idle') ~= 'fight' then
+            s.set('epoch', s.get('epoch', 0) + 1)
+            s.set('t0', dp.clock())
+            s.set('target', pick_target())            -- the writer picks; everyone sees it
+            s.set('phase', 'fight')
+        elseif kind == 'hit' and s.get('phase') == 'fight' then
+            s.set('hp', math.max(0, s.get('hp', 50) - (p.n or 1)))
+        end
+    end)
+    s.on_change(function(key, value) render(key, value) end)   -- fires for what is already there, then on change
+end
+
+function begin()                                      -- a touch, a button
+    if not s.synced() then return end                 -- an unsynced late joiner may not start a fight
+    s.request('start', {})                            -- idempotent: two at once = one fight
+end
+
+function pick_target()
+    local ids = { dp.me() }
+    local game = dp.game_id(self.gameObject)
+    for _, p in ipairs(dp.peers()) do                 -- presence is park-wide: keep this title's players
+        if p.game == nil or p.game == '' or p.game == game then ids[#ids + 1] = p.id end
+    end
+    table.sort(ids)                                   -- the same list on every device
+    return ids[dp.random('target:' .. s.get('epoch', 0), #ids)]
+end
+
+function update()
+    if s == nil or not s.synced() then return end
+    pose_boss(s.get('phase'), dp.clock() - s.get('t0', dp.clock()), s.get('target'))
 end
 ```
 
-`dp.me()` is your stable id, `dp.peer(id)` one player,
-`dp.set_state{ team = 'red', tint = my_color }` broadcasts a small state
-bag (resent to late joiners), `dp.on_peer_join / dp.on_peer_leave` are the
-edges. Presence costs the game's budget nothing — it is the SDK's spend.
-
-**The remote body — `RemoteRig`.** Put a child named `RemoteRig` in your
-`Player.prefab`; whatever is inside it is what other players see of you.
-Children named `Head`, `LeftHand`, `RightHand`, `Hand` (= active hand)
-follow that player's tracked body automatically. Lua scripts inside it run
-only on the clones other headsets build, with `peer_id` injected — feed it
-to `dp.peer(peer_id)` and tint/animate from their state. No components, no
-roles, no ownership anywhere. LaserTag's marker + blaster are exactly this.
-
-**The typed wire — `net_send(kind, table)` / `onmessage(kind, payload)`.**
-Send a Lua table instead of a JSON string: every `Vector3` goes out as a
-park-local point (`dp.dir(v)` for directions, `Quaternion`, `Transform`
-poses and `Color` too) and arrives as Unity values in the receiver's
-world. `A_MP_LaserSpawn` fires this way. Strings still work everywhere —
-every old script keeps running.
+- **Registers:** `s.get(k[, default])`, `s.set(k, v)` (nil deletes), `s.keys()`, `s.rev()`, `s.synced()`,
+  `s.leader()` / `s.is_leader()` (this state's writer), `s.on_change(fn(key, value))`,
+  `s.request(kind, payload)` + `s.on_request(fn(kind, payload, from))`.
+- **The writer** is chosen among the devices holding the state: headsets before phones, synced before unsynced, then
+  **seniority** (the incumbent keeps writing until it leaves), then id as the tie-break — the session leader when it
+  holds the state. `s.set` on
+  anyone else becomes a request the writer applies; prefer `s.request` + `on_request` when the change needs a rule
+  ("only if idle"). On the writer, `s.request` runs its own handler at once.
+- **Late join:** a new holder asks for the snapshot (also on every reconnect) and `s.synced()` stays false until one
+  of these: the snapshot arrives; every live player of the title has announced itself on this state and none holds
+  it (then the first of them starts the room); or 10 s pass with no holder answering. With no relay client at all a
+  state syncs alone after 0.25 s, and with a client that never connects after 6 s. When the session **knows** the
+  room is empty — this headset hosts and nobody else is on its relay, or it listened a full discovery window and heard
+  no host — the session and every state sync **at once** (a lone headset no longer waits 1.5–7 s). A state that
+  synced alone and then connects **adopts the room's snapshot** (unless the room is its own empty one). Writes made while unsynced are held: applied if the room was empty,
+  **dropped** if it already had state, so a late joiner's start can never reset a fight in progress.
+- **Hand-off:** every holder keeps the whole table, so the next writer continues from the current revision.
+- **Per-player merge cells** (no writer round trip; every device writes only its own part, everyone merges):
+  `s.add(k, n)` / `s.total(k)` (grow-only counters: damage per player, scores), `s.max(k, n)`,
+  `s.union(k, items)` / `s.has(k, item)` / `s.items(k)` (grow-only sets: claims, collected), `s.mine(k, v)` /
+  `s.of(k, id)` / `s.all(k)` (one value per player). `s.clear(k)` (writer only) starts a new epoch.
+- Values: numbers, strings, booleans, Vector3 / rotations (attraction-relative on the wire), small tables. The whole
+  table is the late-join snapshot: keep it under a few KB (hard cap 14 KB).
 
 ---
 
-## 2. The wire
-
-`net_send(kind, body)` is injected into a script's Lua scope by `LuaBehaviour`
-when the same GameObject has a `NetId` **and** a `DreamBoxClient` exists in
-the scene. What goes out is:
-
-```json
-{"type":"<kind>","payload":{"netId":<id>, <your body fields>}}
-```
-
-`onnet(raw)` receives **the whole envelope**, not just your body:
+## 3. Physics props: `dp.net_body`
 
 ```lua
-function onnet(raw)
-    local ok, t = pcall(function() return json_parse(raw) end)
-    if not ok or t == nil then return end
-    local kind, p = t.type, t.payload      -- NOT t.r, NOT t.x
-    if kind == nil or p == nil then return end
-    ...
+local body
+function start()
+    body = dp.net_body(self.gameObject, { max_speed = 2.6, max_spin = 9, max_push = 1.2, rate = 10, home = true })
+    body.on_owner_changed(function(old, new) tint(new == dp.me()) end)
 end
 ```
 
-> **This is the single most common mistake.** Reading `t.r` instead of
-> `t.payload.r` gives you `nil` with no error, and the symptom is "the other
-> headset receives nothing" — which sends people looking at the network. An
-> older version of `PIPELINE.md` documented the wrong shape; it has been
-> corrected.
+(`mp_body_sample.lua.txt`.) A Rigidbody plus that call; no NetId or component to add.
 
-### Wire hygiene
-
-- **Quantize.** `%.2f` is 1 cm — under tracking noise, and half the bytes.
-- **One message, all the fields.** Position and orientation together. Two
-  messages are two permits against the same 60/sec budget.
-- **Absolute, not delta.** A dropped absolute value is repaired by the next
-  one. A dropped delta is wrong forever.
-- **No unbounded strings.** 16 KB hard cap (`MaxIncomingMessageBytes`);
-  anything larger is dropped at the client.
-- **Ids are strings.** A random 24-bit integer collides sooner than you think,
-  and anything larger loses precision crossing float32 (fact 5).
-
-### Coordinates are park-local, never world
-
-Each Quest has its own XR tracking origin. A park is QR-calibrated into an
-arbitrary **park-local** space that is the same on every headset. Attractions
-and props live in that space. `dp.head().position`, `self.transform.position`,
-and `Camera.main.transform` are **world** — they include that headset's XR
-origin. Streaming those numbers is the classic "the room lines up, the other
-player is two metres off" bug.
-
-**Send park-local. Apply park-local.** Use the SDK helpers — do not
-hand-roll `InverseTransformPoint` against `Player.parent`.
-
-```lua
--- after onready(): dp.park() is ParkAnchor (shared park frame),
--- not player.parent (that is the LevelAnchor)
-local pos, fwd = dp.head_park()          -- nil until the head exists
--- or: local pos = dp.to_park(someWorldPos)
--- net_send those x,y,z / fx,fy,fz
-```
-
-On receive, parent the remote visual to `dp.park()` and set `localPosition`
-(plus a hover offset if you want). Or `dp.from_park(localPos)` if you must
-write a world pose on this headset. Same rule for hands, bolts, AI proxies,
-nametags. Victim-authoritative hits against *your own* body can stay in
-world; anything you *draw for a peer* cannot.
-
-`awake()` is too early — the rig is not parented or stamped yet. Do this in
-`onready()`. Editor Play with no park parent: `to_park` / `from_park` are
-identity (world), so desk Play still works.
+- **One owner while it moves.** Touch it (any collider under your PlayerRig) and it is yours while it moves; a
+  settled pose releases the lease. Loose motion nobody owns (knocked by another prop) is claimed by the leader. You
+  cannot steal a prop someone else is streaming. Ties resolve the same way on every device (higher revision, then id).
+- The owner streams its pose at ≤ `rate` Hz (≤ 10), dead-banded. Bodies, shared states and the session draw from
+  **one 24 msg/s SDK pool** per headset (`dp.budget()`); must-arrive messages (claims, settled poses, snapshots) may
+  borrow a little, live streams leave headroom for them. Followers glide (`MovePosition`/`MoveRotation`) at a capped speed and teleport only for a gross error
+  (> 3 m); they never simulate the prop themselves.
+- Speed, spin and push-out are clamped (`max_speed` m/s, `max_spin` rad/s, `max_push` m/s depenetration). Every
+  content Rigidbody also starts with process-wide caps (depenetration 2 m/s, angular 14 rad/s); values a game sets
+  explicitly are kept.
+- Poses are attraction-relative; a late joiner asks once and gets every moved body's pose; the leader re-broadcasts
+  after joins. `home = true`: a body that falls 1.5 m below or strays 6 m from where it rested goes back.
+  `body.home()` sends it home now, `body.home(pos)` moves home.
+- `body.owner()`, `body.is_mine()`, `body.claim()` (takes it and **pins** the lease until `body.release()`, e.g. while
+  it sits in a hand), `body.release()`. Idempotent per object.
+- Optimizer-safe: nothing is written while the object is parked; a parked owner's stream stops and hands back.
+- **Recipes beat streaming** for anything that can be simulated identically everywhere: a thrown ball, a bolt, a knock
+  on an idle prop. Send the recipe once (origin, direction, speed, `t = dp.clock()`) and let every headset run it
+  (§6 Spawns). Use `net_body` for things people push around.
 
 ---
 
-## 3. NetId: how objects find each other
+## 4. The bus and the wire (what the platform guarantees)
 
-**Read this section before anything else.** It is the piece people get wrong,
-and getting it wrong makes nothing else make sense.
+**A NetId is an address, not an owner.** Every player's copy of the manager has the **same** id, and sending on it
+reaches that object's twin on every other headset. *Which player* a message is about rides in the payload, never in
+the id. You do not author ids: NetId hashes the object's path below the nearest `NetScope`, and the platform stamps a
+`NetScope` on every attraction it spawns — Arena and Adventure attractions, the Dream Sequence root, its Start /
+Overlay / Game Over levels, every streamed level, and the Game Manager. Every id also mixes in the title (the content
+id of the nearest GameArea / template / PlayerRig), so two titles in one park cannot collide. The session protocol
+is version 2: apps with the old id scheme never join a session with new ones.
 
-### A NetId is an address, not an owner
+`explicitId` has exactly one use: a bus on **`Player.prefab`** (a cross-attraction bus), which no scope covers. The
+title is mixed into it too. Never set `explicitId` on attraction content.
 
-**Every player's copy of the same object has the SAME id. That is the
-transport, not a bug.**
+The facts that shape everything else:
 
-The relay has no concept of "a player" — it just rebroadcasts. So the only way
-one headset reaches another is that the *same object* on every headset computes
-the *same* id. Send on it and it lands on that object's twin in every other
-session:
-
-```
-        headset A                    headset B                headset C
-   GameManager id=1234          GameManager id=1234      GameManager id=1234
-        │                              ▲                        ▲
-        └── net_send ──▶ relay ────────┴────────────────────────┘
-```
-
-If each player's rig had a *different* id, nobody could address anyone — you
-would be shouting at an address that exists only on your own machine.
-
-### So where does "which player" live? In the payload.
-
-Every message carries a `u` field. That is the identity; the id is only the
-channel it arrived on:
-
-```
-{"type":"tr_pose","payload":{"netId":9100201,"u":"0002-7f3a91c4","x":1.2,...}}
-                    same on every headset ─┘    └─ who it is about
-```
-
-Receivers key their tables by `uid`, never by NetId. That is why the tracker
-spawns one cube **per uid** and the score counter holds one cell **per uid**,
-while both ride on a single shared address.
-
-### "Collision" means something narrower than it sounds
-
-`NetRegistry` is a per-process dictionary. `[NetRegistry] NetId COLLISION`
-fires when **two objects inside one running app** claim the same id — that is
-ambiguous routing, and it is load-bearing, do not ignore it. The same id
-existing on ten different headsets is not a collision; it is the point.
-
-(The Park Simulator triggers the real kind: it spawns its own copy of every
-attraction alongside the ones a test scene already placed.)
-
-### You do not set the id
-
-`NetId.Id` is an FNV-1a hash of the object's path through the prefab, stopping
-at the first `NetScope` ancestor. The park spawner stamps a `NetScope` on every
-spawned attraction root keyed `{levelId}|{objectIndex}|{resourceName}` — all
-park-doc data, identical on every headset — and everything below that boundary
-comes from the prefab asset, which is the same file everywhere.
-
-**For an attraction, that is automatic and correct, and you should never touch
-it.** None of the ten MultiplayerLand attractions sets an id, and neither does
-any of the SDK's shipped sample content. Two instances of the same attraction
-in one park get different `objectIndex` values, so they hash apart on their
-own.
-
-### `explicitId` is an escape hatch, and it has exactly one real use
-
-Setting `explicitId` skips the hash. Reach for it only when an object sits
-**outside any `NetScope`** and you cannot rely on its path being stable — in
-practice, a cross-attraction bus living on the **player rig**, which nothing
-stamps a scope onto. That is why LaserTag pins its Session object at
-`8210001`: every headset runs the same `Player.prefab`, every headset's Session
-object must share one address, and there is no scope anchoring it.
-
-If you do use it, it must be unique **within** a park. Core now scopes authored
-ids the same way it scopes hashed ones (`ScopeExplicit` mixes the `scopeKey`
-when there is a `NetScope` above the object, and returns the id verbatim when
-there is not), so an authored id no longer opts out of per-instance
-discrimination. Scene-placed props are unchanged byte-for-byte.
-
-### One bus per attraction
-
-Give the **attraction manager** a NetId and route everything through it.
-Props (buttons, pads, rings) get no NetId at all; they call a function on the
-manager through a Script Injection.
-
-This is not tidiness. Every prop with its own NetId is a separate id that has
-to stay aligned across builds, and it makes the wire protocol depend on how
-many buttons you happened to build. One bus, N message kinds.
-
-### Late joiners: the replay buffer
-
-`NetRegistry` buffers messages for ids that have not registered yet (256 ids ×
-32 messages) and flushes them **when something subscribes**, not when the
-NetId registers. That matters because `LuaBehaviour` refuses to boot while
-park content is parked, so a script can register its NetId long before it
-wires `onnet`.
-
-The flush is conditional on `_registered`, and that condition is why this bites
-only where you cannot see it:
-
-- **Plain scene:** the script boots in `Awake`, before `NetId.Start`, so
-  nothing flushes at subscription and the backlog arrives later via
-  `Register` — after `awake()`. No bug, and none reproducible.
-- **In a park:** booting is deferred past `NetId.Start`, so subscribing flushes
-  **synchronously**. Before the core fix this delivered to `onnet` before
-  `awake()` had run — deterministically, for all shipped content.
-
-Two consequences for content:
-
-- A message that arrives before you exist is not lost.
-- Guard `onnet` anyway. The core fix orders subscription after `awake()`, but
-  the guard costs one line and covers every other path into an unbuilt script:
-
-```lua
-function onnet(raw)
-    if room == nil then return end     -- awake() has not run yet
-    ...
-end
-```
-
----
-
-## 4. Identity, join order, and colour without a server
-
-Full implementation: `mp_kit.lua.txt`, `new_room()`.
-
-```
-uid = "%04d-%s"  =  zero-padded join sequence  +  8 random hex
-```
-
-On arrival a peer broadcasts `mp_hello`, listens for ~1 second, then takes
-`seq = 1 + max(seq of everyone heard)` and announces itself. Because the
-sequence is the *prefix*, sorting uids lexicographically sorts them into join
-order. Index = position in that sorted list.
-
-Every headset sorts the same set the same way, so every headset computes the
-same index for the same player — no assignment, no coordinator, no
-renumbering of people who were already playing when a late joiner arrives.
-
-Everything identity-shaped falls out of the index: colour, team, turn order,
-spawn point.
-
-**The provisional-uid trap.** During the listen window you need *some* uid,
-and it goes out on the wire in your `mp_hello`. If you then adopt your real
-uid and abandon the provisional one silently, it sits in everyone else's
-roster until the reaper times it out — long enough to shift a real player's
-index, which changes their colour mid-game. `new_room` sends an explicit
-`mp_bye` for the provisional id. LaserTag learned this one the hard way.
-
-**Leaving.** Send `mp_bye` on `ondisable`, *and* reap on silence. A headset
-that crashes or walks out of Wi-Fi never says goodbye.
-
-**Leader** = index 0 = earliest joiner still present. Every client computes it
-independently, so it re-elects itself the instant that uid ages out. Use it
-for "exactly one peer should do this": clock beats, snapshot replies, driving
-a shared counter.
-
-> The app leader is **not** the relay host. `NetSessionArbiter` elects the
-> host (who owns the socket); the room elects the leader (who drives
-> gameplay). They change independently. `A_MP_HostMigration` shows both.
-
----
-
-## 5. Pick a data structure that cannot desync
-
-This is the part that matters. Most multiplayer bugs are not network bugs;
-they are ordering assumptions that held in testing.
-
-### Grow-only counters (scores) — `A_MP_ButtonMash`
-
-Every peer owns one cell per slot and only ever raises its own. The score is
-the sum of all cells. Broadcast **absolute** cell values.
-
-```lua
-counter.bump(my_uid, slot, 1)      -- local, instant
-send("bm_cell", {u = my_uid, a = counter.mine(my_uid, 1), ...})   -- absolute
--- receiver: counter.set(uid, slot, n)  where set() is max()
-```
-
-| Failure | What happens |
+| Fact | Consequence |
 |---|---|
-| Two players score in the same frame | Different cells. There is no race. |
-| A message is dropped | The next broadcast carries the same absolute value. Heals itself. |
-| A message arrives twice | `max()` is idempotent. Nothing double-counts. |
-| A player leaves | Their cell stays. The score holds. |
-| They rejoin | New uid, new cell, keeps adding. |
+| The relay never echoes to the sender | Apply locally first, then send. Your own `onmessage` never fires for your own `net_send`. |
+| 60 msg/s per headset, then **silent** drops (the kiosk relay does not limit, a peer host does) | Budget against `dp.relay().budget`, never `cap`. The 60 is split: presence ≤ 12, the SDK pool (session, shared states, bodies) 24, and 24 for your own `net_send` — a promise the SDK keeps by capping itself, **not** a limit it enforces on you. A kiosk session can hand the room to a peer host mid-play. |
+| ReliableOrdered, one channel | Send absolute values, not deltas: a lost packet blocks the ones behind it, and a dropped delta is wrong forever. |
+| Numbers arrive as **float32** | Integers are exact only below 2^24. Ids, seeds and absolute times are **strings** (`dp.me()` is). `dp.clock()` values and revisions are fine. |
+| 16 KB per message | Keep snapshots small. |
+| World space is per headset | Typed `net_send` converts for you; anything hand-packed goes through `dp.to_attraction` / `dp.from_attraction` (or `dp.to_park` on a rig bus) — never a raw `transform.position`. |
 
-No peer is authoritative and no ordering is required. Clearing needs an
-explicit **epoch**, also merged with `max()`, so a reset converges the same
-way the scores do.
-
-### Monotonic value + custody (data that outlives its author) — `A_MP_StateRelay`
-
-The leader advances a number; everyone merges with `max()`; every peer
-rebroadcasts what it holds every few seconds. Custody transfers with **zero
-messages** — when the old leader ages out, everyone's `leader()` returns the
-same new uid and that peer starts driving. The redundant rebroadcast is what
-makes the hand-off lossless if the leader dies between beats.
-
-Watch the `seed` in that attraction, not the number: eight random characters
-minted once, which the only way a player five hand-offs later can have is that
-it was passed along.
-
-### Leases (single writer) — `A_MP_Ownership`
-
-Two clients streaming a position for one object is unfixable downstream. Fix
-it upstream: one writer, everyone else follows.
-
-Claims carry a shared-clock timestamp. Every client runs the identical
-comparison — *earlier claim wins; within 1 ms, lower uid wins* — so everyone
-picks the same winner with no round trip. Claims are optimistic: you take the
-object immediately and may lose it inside the grace window, because waiting
-for confirmation puts a round trip inside a hand gesture.
-
-**Leases must expire.** The owner heartbeats; silence releases. Without that,
-one player taking their headset off locks the object for everyone for the rest
-of the session.
-
-### Events (effects) — `A_MP_ParticleBurst`, `A_MP_LaserSpawn`
-
-An effect is a moment, not state.
-
-1. **Play locally first.** The relay does not echo (fact 1).
-2. **Key it `(uid, seq)`** and drop repeats. Delivery is reliable, but *your
-   own code* re-offers events: snapshot replays, retries, an attraction
-   re-entered.
-3. **Do not replay history to late joiners.** The correct late-join state for
-   an effect is "nothing is happening". Contrast a score, which *is* state.
-
-### Spawns — `A_MP_LaserSpawn`
-
-Send the **recipe**, not the object:
-
-```
-origin, direction, speed, colour, sequence, fire time
-```
-
-One message per shot regardless of how long the projectile lives — versus ~25
-for a 2.5 s bolt streamed at 10 Hz. Every client runs the same kinematics, so
-they independently agree on the flight path *and on what it hits*. Hits cost
-zero messages.
-
-Include the fire time on the **shared clock** so the receiver can advance the
-fresh object by `clock.now() - t` before its first frame. Without it, every
-remote projectile is permanently one round trip behind the shooter's. Clamp
-the age so a stale message cannot teleport something across the room.
-
-### Derive, don't broadcast — `A_MP_SharedClock`
-
-Once a clock agrees, `round = floor(now / roundLength)` agrees too. There is
-no `round_start` event to miss, drop, or double-apply. Rounds cost **zero
-messages**; the only traffic is one clock beat per second from the leader, and
-adding players does not add round traffic.
-
-This inversion is the biggest message-count saving available to a DreamPark
-game. Reach for it before optimising anything else.
-
-**The clock itself:** `Time.time` counts from when *your* app launched, so it
-is meaningless across headsets. The leader publishes its already-synced value
-(not raw `Time.time`), which is what lets a leader change continue the same
-timeline instead of restarting it. Corrections are slewed so a countdown never
-visibly jumps; large ones snap, because one visible jump on join beats ten
-seconds of a wrong number. Accuracy is one-way, so it carries LAN latency as
-bias — single-digit milliseconds. Fine for rounds and spawn compensation.
-**Do not** use it to arbitrate who pressed a button first; use a token compare.
+Typed wire: `net_send('shot', { from = muzzle_pos, dir = dp.dir(muzzle_fwd), t = dp.clock() })` →
+`function onmessage(kind, p) … p.from is a Vector3 in THIS headset's world … end`. A Vector3 is a point, `dp.dir(v)` a
+direction. Inside an attraction points travel attraction-relative (`$a`) beside park-local (`$p`): receivers in the
+attraction use the first, so two headsets whose park alignment differs a little still agree on where things are in
+the attraction; older apps read the second. A string body passes through untouched; `onnet(raw)` still gets the raw
+envelope `{"type":kind,"payload":{"netId":N,…}}` — read `t.payload.x`, not `t.x`.
 
 ---
 
-## 6. The budget
+## 5. Lifecycle under park loading
 
-**60 messages per second, per sending peer — on a peer-hosted session.**
-Message 61 is dropped by `PeerRelayServer`. Not queued, not rejected, not
-logged on the sender. The only symptom is that state quietly stops matching.
+- File scope: no `net_send` yet (it is injected after the file runs). `awake()`: publish globals only — the object is
+  not parented or posed yet, and its NetId is not final until `Start`, so a send would go out on the wrong id.
+- `start()` / `onready()`: everything that reads the hierarchy, positions, or sends. Register `dp.on_connected`,
+  `dp.on_peer_join`, `s.on_change`, `dp.on_leader_changed` here, with `self.gameObject` as the owner when the call
+  takes one, so the handler dies with the object (a streamed Sequence level is destroyed when the level changes).
+- `onmessage` can arrive before `start()` (a backlog flushed when you subscribe): guard it (`if s == nil then return end`).
+- `ondisable()` is not "the player left". The rig hides when its player walks into another title's zone, and the
+  optimizer parks distant objects. Never leave the room or drop a lease in `ondisable()`; the platform's
+  leader/state/body logic does not depend on it.
 
-**The DreamBox kiosk relay does not rate limit at all** — there was no such
-code in `Tools/DreamBoxServer/`, and that turned out to be accretion rather than
-a decision (see SDK-CHANGES §7).
+---
 
-So there are two numbers, and only one of them belongs in your head:
+## 6. Patterns the platform does not do for you
 
-| | Meaning |
+**Per-player counters outside a shared state.** `s.add` / `s.total` cover most games. If you roll your own: every
+player owns one cell and only raises its own, broadcast the cell **absolute**, merge with `max()`, sum for the total;
+clearing needs an epoch, also merged with `max()` (`mp_kit.lua.txt` `new_counter()`).
+
+**Events (effects).** Play locally first; key `(uid, seq)` and drop repeats; never replay to late joiners.
+
+**Spawns.** Send the recipe, not the object: origin, direction, speed, `t = dp.clock()`. Every headset runs the
+same kinematics and agrees on the path and on what it hits. Advance a fresh projectile by `dp.clock() - p.t`
+(clamped) so remote shots are not a round trip behind.
+
+**Derive, don't broadcast.** With one clock, `round = math.floor(dp.clock() / roundLength)` agrees everywhere at
+zero messages. Reach for this before optimising anything.
+
+---
+
+## 7. Testing: simulated peers in the Editor
+
+You do not need two headsets to find the bugs above. **DreamPark → Multiplayer → Simulated Peers** (or the
+`dreampark_peers_*` CLI) adds simulated players to your Play session:
+
+- They join over the **real relay** (the shipping `PeerRelayServer`, hosted on loopback with no beacon: no echo to the
+  sender, 60 msg/s per peer, ReliableOrdered) and stream **real presence**, so `dp.peers()`, name tags and RemoteRig
+  clones react to them exactly as to a headset.
+- **Each peer runs the platform's own engines** — its own session (beats, sync, leader election, clock, seed) and a
+  replica of every `dp.shared_state` your game opened — the same C# a headset runs. So peers agree (or not) on the
+  leader, answer a late joiner with the snapshot, and can become the state's writer when you leave. What a peer does
+  **not** run is your game's Lua: the Editor runs the one real copy of the game (one Unity process has one NetRegistry,
+  one `dp.me()`, one rig). A peer's `s.request` reaches your `on_request`, but a peer that writes the state cannot
+  run *your* `on_request` handlers.
+- You can move them, walk them, put their hands on things, push a `dp.net_body` prop, make them `s.request` / `s.set`
+  through their replica or `net_send` anything to any NetId, drop their Wi-Fi, quit them cleanly or crash them, make
+  them a phone or another title's player, and make the Editor itself leave and rejoin as the newest member.
+- **The Editor's world is turned away from the park frame** for every scenario (`misalign`, 35° by default), as it is
+  on every headset. At a desk the park frame is usually identity, which hides every world-space number on the wire;
+  misaligned, those land metres off and fail the position checks.
+- The Park Simulator gives a Sequence root the NetScope a device gives it (device parity), so a Sequence that only works
+  in the Editor fails in the Editor too.
+
+**Scenarios** (JSON → pass/fail log in `Logs/DreamParkPeers/<time>_<name>/`), six built in:
+
+| Scenario | What it proves |
 |---|---|
-| `dp.relay().budget` | **what you design against.** Always the floor — 60 — whoever is hosting. |
-| `dp.relay().cap` | what *this* host enforces right now. 0 = none advertised. Diagnostic only. |
+| `late_join` | B plays, the encounter starts, C joins mid-fight: C sees everyone, C's replica holds the same state (revision + values), positions on the wire are park-correct, the encounter stays healthy, the leader does not change and every peer agrees on it. |
+| `simultaneous_start` | You and B start in the same frame (B through its replica's `s.request`): exactly one encounter; B holds the same state. |
+| `leader_leaves` | L is the most senior player and leads (the Editor rejoins after it and must resync its state from the room); L crashes: leadership comes back to the Editor, everyone agrees, the encounter carries on from the state it had. |
+| `shared_prop` | You and B touch the same `dp.net_body` prop at once: one owner, no fling, settled and consistent. |
+| `budget` | Three peers (one a phone) walk around while your game runs: peak ≤ 60 msg/s, zero relay drops, a by-kind breakdown, everyone holds the same state. |
+| `other_title` | A player of another title (senior, lower id) and one in another attraction: your game counts only its own players and keeps its own leader. |
 
-**Always budget against `budget`.** A kiosk session can lose the kiosk and fall
-back to a peer host mid-play (`NetSessionArbiter` has a `Reelection` state), and
-content tuned to kiosk headroom falls over at exactly that moment — which is
-also the moment everything else is going wrong. `cap` is for readouts and
-diagnosis; it moves, and you should not design against something that moves.
+Each scenario becomes a test of **your** game through params (`mp_encounter_sample.peers.json` is a complete example):
 
-Three things are easy to get wrong:
+```sh
+unity command --project-path . editor_play
+unity command --project-path . --timeout 400 dreampark_peers_scenario --name all --wait true --params '{
+  "target": "A_MyGame/Boss", "start": "begin()", "healthy": "healthy()", "one_encounter": "one_encounter()",
+  "state": "encounter", "peer_request": "start",
+  "body": "A_MyGame/Gift", "body_touch": "claim()",
+  "activity": "hit(1)", "roster": "#players()", "roster_count": 2 }'
+unity command --project-path . editor_stop
+```
 
-- **It is per headset, not per script.** Four systems each politely sending
-  "only 20 a second" is 80, and a third of everything is gone. Draw from one
-  budget (`kit.new_budget`).
-- **It is not the real ceiling.** The relay fans every message to every other
-  peer, so air traffic is O(N²). Eight headsets at 30/s each is 240 sends and
-  1,680 deliveries per second over one Wi-Fi radio. The relay will allow it.
-  The radio will not enjoy it.
-- **The sender cannot tell you it happened.** The client's meter and the
-  relay's window are different windows, so an over-cap warning means "you are
-  sending at a rate that may be truncated", not "you were truncated". The host
-  logs the real drops: `[PeerRelay] Rate limit: dropped N message(s)`.
+`target` is the object path of your manager; Lua params run in that script's scope (`body_touch` in the body's).
+`bus` is where your own `net_send` messages travel when that is not the manager (e.g. a `Player.prefab` bus; default
+`target`); `warmup` waits before the start for games with their own join gate. A `recv` step on `target`/`bus` also
+counts your `dp.shared_state` traffic there (snapshots, merges, writes and requests on that object's state bus), so a
+game fully on `dp.shared_state` that never `net_send`s passes it. In a peer's `peer_send` body, `"@me"`
+becomes that peer's id. Add `--reset_park true` so the Park Simulator rebuilds the park before each scenario and no game
+state carries over (an Arena preview's size auto-cycle is paused for the run). After the rebuild it wakes the Game
+Manager (the optimizer never un-parks it on its own) and refuses to run a scenario whose `target` script is not
+running, with what parks it, instead of failing every step with "has not booted". An unset param skips its steps and says
+so (`skip`), never a silent pass. Write your own scenarios as JSON (the step list
+is at the top of `Assets/DreamPark/Editor/ParkSimulator/ParkSimPeerScenario.cs`) and pass a file path or inline JSON as
+`--name`.
 
-`A_MP_Bandwidth` lets you walk the rate up and watch the cliff, with per-sender
-loss measured from sequence gaps.
+Interactive: `dreampark_peers_add --name B [--rank low] [--device phone]`, `dreampark_peers_act --step
+'{"do":"peer_request","name":"B","state":"encounter","kind":"hit","body":{"n":1}}'`, `dreampark_peers_inbox --name B`,
+`dreampark_peers_remove --name B --mode crash`, `dreampark_peers_status` (each peer's leader, sync and replica
+revisions). **Peers on Play** in the window adds N peers every time you press Play.
 
-### A budget that works
+**What simulated peers cannot show** (so do these on hardware once): two copies of your game's *Lua* disagreeing with
+each other (for that, a headless Lua harness that runs your scripts N times over a simulated wire, kept in
+your content folder's `Tests~/`), real Wi-Fi loss and latency, tracking and park alignment between two real headsets.
 
-| Stream | Rate | Technique |
-|---|---:|---|
-| Head / hand pose | 10 Hz | dead-band + quantize + coalesce |
-| Held-object pose | 12 Hz | only the lease owner sends |
-| Score / counters | ≤10 Hz | coalesced absolute values |
-| Clock beat | 1 Hz | leader only |
-| Roster heartbeat | 0.5 Hz | |
-| Effects / spawns | on demand | budgeted, keyed |
-
-**Dead-banding is the rule people skip and it is the one that decides whether
-eight players fit.** A room of people standing still costs one keyframe per
-second each, not ten messages per second each.
+**Then one two-headset test:** headset A starts the encounter, headset B joins late and walks to the same spot. Both
+must see the same phase, HP and target, and B's name tag must stand on B.
 
 ---
 
-## 7. Diagnosing it
+## 8. Diagnosing
 
 | Symptom | First thing to check |
 |---|---|
-| Nothing arrives, both sides look fine | `NetId` mismatch. Compare `[NetRegistry] Registered NetId N` lines side by side. Use `explicitId`. |
-| `Event for UNREGISTERED NetId N — buffering` | The sender's id does not exist on this client. Same cause. |
-| `Event delivered but NO subscribers` | No `onnet` (or `TestNetObject`) on that object on this client. |
-| `NetId COLLISION` | Duplicate `explicitId`, or duplicate scene-root names. |
-| Works solo, breaks with 3+ | The budget. Turn on `Verbose Net Logs`, watch `SendRate`. |
-| `Sending N msg/s — over the relay's 60/s cap` | You are being silently truncated. Coalesce. |
-| `[PeerRelay] Rate limit: dropped N message(s)` | Same, seen from the host. |
-| State drifts and never recovers | A delta or a non-idempotent handler. See `A_MP_Ordering`. |
-| Desync only after someone leaves | Something keyed on roster position without re-deriving it. |
-| Nothing networks at all, no errors | No `DreamBoxClient` in the scene — `net_send` is a warning stub. |
+| Name tags work, nothing your game sends arrives | Both headsets must log the same `[NetRegistry] Registered NetId N` for your manager. Mismatch = an older app, or `explicitId` on attraction content. |
+| `Event for UNREGISTERED NetId N` | The sender's id does not exist here. Same cause. (Traffic for an object this headset just left — a level torn down — is dropped for 5 s instead, so a quick re-entry never replays the last visit's messages.) |
+| `Event delivered but NO subscribers` | No script with `onmessage`/`onnet` on that object here, or it errored at file scope. |
+| `NetId COLLISION … waits until it is released` | Two objects in one app claim one id (duplicate scene-root names, a duplicated rig). The first keeps it; the newcomer takes over only when the first is destroyed. |
+| `attempt to call a nil value (global 'net_send')` | You sent from file scope or `awake()`. Move it to `start()`. |
+| Two fights, two targets, two of anything | Something written outside the writer, or rolled with `math.random`. Run `simultaneous_start`. |
+| Late joiner sees a fresh encounter | It started one while unsynced. Gate starts on `s.synced()`. |
+| Works solo, breaks with 3+ | The budget. `dp.relay().send_rate`; the host logs `[PeerRelay] Rate limit: dropped N`. |
+| Positions right in the Editor, metres off on a headset | World coordinates on the wire. Run a scenario (they misalign the Editor's frame) or use typed `net_send`. |
 
-**Turn on `Verbose Net Logs`** (checkbox on `DreamBoxClient`, live in Play
-Mode). It shows beacons, inbound previews, relay fan-out, and NetId
-registrations. Warnings that indicate real problems always log regardless.
-
-Useful from Lua:
-
-```lua
-local r = dp.relay()
--- present   is there a DreamBoxClient at all      r.sent       outbound this session
--- state     connection state as a string          r.send_rate  outbound msg/s, last full second
--- connected state == Connected                    r.cap        what THIS host enforces (0 = none)
--- ping      ms, -1 when unknown                   r.budget     what to DESIGN against (never moves)
--- received  inbound this session                  r.queued     waiting for the link to come up
-
-local s = dp.session()
--- present, state, host, is_host, peers, park
-
-dp.on_connected(function() ... end)   -- one-shot; fires now if already up
-```
-
-`dp.relay().cap` is 0 when the relay advertises no cap — treat that as
-*unknown*, not as *zero allowed*. If you are budgeting, use `budget`; `cap` is
-for readouts.
-
-**Sending before the link is up is handled, but only halfway.** The client
-queues pre-connection messages (64 deep, 5 s TTL) and flushes them on connect,
-so a hello is delivered rather than dropped. It does **not** fix timing: if
-your handshake opens a listen window at `start()`, that window can open and
-close while the client is still connecting, and it will close against an empty
-roster. Anything whose *timing* depends on the link — a join window, a
-first-frame state request — belongs in `dp.on_connected`.
+Turn on **Verbose Net Logs** on `DreamBoxClient` for beacons, inbound previews, relay fan-out and NetId registrations.
 
 ---
 
-## 8. Sessions and host migration
+## 9. Sessions and host migration
 
-`NetSessionArbiter` owns the fallback ladder:
-
-```
-Searching ── DreamBox beacon ──▶ ClientDreamBox   (the kiosk always wins)
-    │
-    ├── peer beacon ───────────▶ ClientPeer
-    │
-    └── silence for T_listen ──▶ Hosting  (PeerRelayServer + beacon + self-connect)
-```
-
-Host loss triggers coordinator-free re-election: every client sorts the live
-hostIds identically, rank 0 hosts immediately, rank n waits n × 750 ms. Two
-simultaneous hosts resolve by lowest hostId.
-
-Things worth knowing:
-
-- **A live connection is ground truth.** Beacon silence alone never kills a
-  healthy session — UDP broadcast is lossy on phone hotspots.
-- **Channels.** Core builds beacon on `prod`, SDK projects on `sdk`, so a
-  creator testing in a studio cannot attract production headsets on the same
-  Wi-Fi. Set `channelOverride` to cross deliberately.
-- **`parkId`** scopes peer sessions so two groups in different parks on one LAN
-  do not merge.
-- **iOS is client-only** (no multicast entitlement in v1).
-
-`A_MP_HostMigration` shows the ladder live. The number to measure is how long
-the shared clock stalls during a migration — that gap is your worst-case
-gameplay hitch.
+`NetSessionArbiter` finds or becomes the relay: a DreamBox kiosk always wins; otherwise it joins a peer host; after
+3–5 s of silence it hosts itself; a headset hosting with nobody else on its relay knows it is alone, so its session
+and shared states sync the moment it connects. Host loss re-elects in 1–3 s. **The relay host is not the leader**: the arbiter
+picks who owns the socket, `dp.leader()` picks who drives gameplay, and they change independently. Nothing
+migrates with the host: state lives in the peers (`shared_state` snapshots, `max()`-merged cells), which is why
+it survives. Channels (`prod` in the app, `sdk` in SDK projects), `parkId` and the protocol version (2 since October
+2026) keep sessions apart.
 
 ---
 
-## 9. Checklist for a new networked attraction
+## 10. Checklist for a networked attraction
 
-- [ ] One `NetId` on the manager, `explicitId` from your park's block
-- [ ] `LuaBehaviour` with `onnet` on the **same** GameObject
-- [ ] `onnet` guards against running before `awake()`
-- [ ] Props have no NetId; they call the manager through a Script Injection
-- [ ] Every message identifies its sender (`u`)
-- [ ] Non-idempotent effects carry `(uid, seq)` and are deduped
-- [ ] Player positions come from `dp.peers()` — the game never streams them
-- [ ] The remote body lives in `Player.prefab/RemoteRig`, not in spawn code
-- [ ] State is absolute, and merges with `max()` or last-writer-per-cell
-- [ ] Continuous streams are rate-limited, dead-banded, quantized, coalesced
-- [ ] Everything draws from one send budget under 60/s
-- [ ] Late joiners get a snapshot — and effects do **not** replay
-- [ ] Peers are reaped on silence, not only on `mp_bye`
-- [ ] Anything derivable from the shared clock is derived, not broadcast
-- [ ] Tested with the host walking out mid-round
-- [ ] Poses, hands, projectiles, markers are park-local — never world (`dp.head().position` is world)
+- [ ] One `NetId` on the manager (hashed — no `explicitId`); props have none and call the manager
+- [ ] Encounter state in `dp.shared_state`; starts and hits are requests; starts gated on `s.synced()`
+- [ ] Every gameplay choice from the leader or `dp.random(key)`; timing from `dp.clock()`
+- [ ] Per-player scores as grow-only cells; effects keyed `(uid, seq)` and not replayed
+- [ ] Physics props through `dp.net_body`; hand-held props through `dp.hold` (HANDHELD.md)
+- [ ] Typed `net_send`; no `transform.position` in a hand-packed message; players from `dp.peers()`
+- [ ] Nothing sends at file scope or in `awake()`; handlers registered in `start()` with an owner
+- [ ] Music/VO in `onzoneenter()`
+- [ ] Under 60 msg/s with presence included (`budget` scenario)
+- [ ] All six simulated-peer scenarios pass with your params; then one two-headset late-join test
 
 ---
 
-## 10. Where to look
+## 11. Upgrading a game with hand-rolled netcode
 
-| You want... | File |
+The October 2026 release changes NetId keys (Sequence levels and the Game Manager get scopes; ids mix in the title)
+and bumps the session protocol, so **old and new apps do not join one session**. A title cannot require an app
+version: the new APIs exist only in the DreamPark app release that carries them (headsets are told to update when
+DreamPark marks that build required). Publish a title that calls `dp.shared_state` / `dp.net_body` / `dp.hold` after
+that app release is out, keep a fallback for `nil` APIs if older apps matter to you, and re-run the scenarios and the
+two-headset late-join test.
+
+What you can usually delete: your own roster/join/leader/heartbeat code (→ `dp.leader()`), your clock beat
+(→ `dp.clock()`), seed broadcasts (→ `dp.random`), encounter/phase snapshot-and-sync code (→ `dp.shared_state`),
+position-streaming for pushed props (→ `dp.net_body`), hand-mount maths (→ `dp.hold`), explicit-id rig buses that
+only existed to dodge the Sequence id bug (→ the manager's hashed NetId). Keep: grow-only per-player cells, recipes
+and deterministic sims, victim-authoritative hits. Migrate leadership all at once — a game that mixes its own
+leader with `dp.leader()` has two leaders.
+
+---
+
+## Where to look
+
+| | |
 |---|---|
-| The reusable primitives | `Scripts/mp_kit.lua.txt` |
-| Concurrent scoring | `Scripts/mp_buttonmash.lua.txt` |
-| Player presence, read not sent | `Scripts/mp_tracker.lua.txt` |
-| A shared timeline | `Scripts/mp_clock.lua.txt` |
-| Effects | `Scripts/mp_particles.lua.txt` |
-| Spawns + lag compensation | `Scripts/mp_laser.lua.txt` |
-| Data custody | `Scripts/mp_staterelay.lua.txt` |
-| Ownership | `Scripts/mp_ownership.lua.txt` |
-| The transport itself | `Assets/DreamPark/Scripts/Features/Net/` |
+| Simulated peers + scenarios | `Assets/DreamPark/Editor/ParkSimulator/ParkSimPeers*.cs` |
+| A networked encounter + a pushable prop | `mp_encounter_sample.lua.txt`, `mp_body_sample.lua.txt`, `mp_encounter_sample.peers.json` |
+| The platform services | `Scripts/Features/Net/DreamParkSession.cs`, `SharedState.cs`, `NetBodies.cs`; Lua face `Scripts/Core/DreamParkLuaNet.cs` |
+| The transport | `Assets/DreamPark/Scripts/Features/Net/` |
+| Hand-held props | `HANDHELD.md` |
+| Reusable Lua (counters, budget, dedupe) | `mp_kit.lua.txt` (its room/leader/clock predate `DreamParkSession`: use the platform's) |
+| Touch-to-recolour sample | `lua_touch_color_switch.lua.txt` |
 | Running a dev relay | `Tools/DreamBoxServer/README.md` |

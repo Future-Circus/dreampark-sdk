@@ -4,6 +4,26 @@ using UnityEditor;
 
 namespace DreamPark.PreUploadChecks.Checks
 {
+    // Shared by every SDK-publish surface. Keeping the comparison here prevents the
+    // release CLI and the Editor publish panel from drifting into different gates.
+    internal static class NetBudgetInvariant
+    {
+        internal static bool IsSatisfied(out int budget, out int cap)
+        {
+            budget = DreamBoxClient.DesignBudget;
+            cap = PeerRelayServer.MaxMessagesPerPeerPerSecond;
+            return budget <= cap;
+        }
+
+        internal static string FailureMessage(int budget, int cap)
+        {
+            return $"DreamBoxClient.DesignBudget ({budget}/s) exceeds "
+                 + $"PeerRelayServer.MaxMessagesPerPeerPerSecond ({cap}/s). "
+                 + "Raise the relay cap or intentionally lower and announce the content design "
+                 + "budget before publishing the SDK.";
+        }
+    }
+
     // DreamBoxClient.DesignBudget must stay at or below what a peer relay enforces.
     //
     // WHY THIS IS A BUILD GATE AND NOT A RUNTIME LOG
@@ -54,9 +74,9 @@ namespace DreamPark.PreUploadChecks.Checks
 
         public CheckResult Run(PreUploadCheckContext ctx)
         {
-            int budget = DreamBoxClient.DesignBudget;
-            int cap = PeerRelayServer.MaxMessagesPerPeerPerSecond;
-            if (budget <= cap) return CheckResult.Clean(CheckId);
+            int budget, cap;
+            if (NetBudgetInvariant.IsSatisfied(out budget, out cap))
+                return CheckResult.Clean(CheckId);
 
             var finding = new Finding
             {

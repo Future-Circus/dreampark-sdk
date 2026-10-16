@@ -27,6 +27,13 @@ namespace DreamPark.ParkBuilder {
         public int layer;
         public bool isPriority = false;
         public bool ignoreOptimization = false;
+        // WHY ignoreOptimization is set (Oct 2026), so dp.optimizer_ignore(go, false) can hand
+        // back only what Lua asked for. ignoredByPlatform = the constructor's argument (an
+        // OptimizedAFIgnore component: Game Manager, floors, transitions) and is never undone
+        // from Lua; ignoredByLua = a "-- @optimizer-ignore" script or dp.optimizer_ignore.
+        internal bool ignoredByPlatform = false;
+        internal bool ignoredByLua = false;
+        internal string ignoredByLuaTitle;
         public Bounds? _bounds = null;
         public bool? forceDisabled = null;
 
@@ -57,8 +64,13 @@ namespace DreamPark.ParkBuilder {
                     (root.position - _boundsOrigin).sqrMagnitude <= BoundsRecomputeThresholdSqr)
                     return (Bounds)_bounds;
 
+                // Particle-only (or currently inactive) objects have no stable
+                // non-particle renderer bounds. An empty Bounds() is centered at
+                // world origin, so distance culling would park an effect at a
+                // distant venue even while the player is standing beside it.
+                Vector3 fallbackCenter = root != null ? root.position : Vector3.zero;
                 if (renderers == null || renderers.Length == 0)
-                    return new Bounds();
+                    return new Bounds(fallbackCenter, Vector3.zero);
 
                 bool init = false;
                 Bounds combined = new Bounds();
@@ -88,7 +100,7 @@ namespace DreamPark.ParkBuilder {
                     }
                 }
 
-                if (!init) combined = new Bounds();
+                if (!init) combined = new Bounds(fallbackCenter, Vector3.zero);
 
                 _bounds = combined;
                 _boundsOrigin = root != null ? root.position : Vector3.zero;
@@ -203,6 +215,14 @@ namespace DreamPark.ParkBuilder {
         //  culled object from somewhere else — and polling every component every
         //  frame to catch that would cost more than it saves.
         //
+        //  OPT-IN WAY ROUND IT (Oct 2026): dp.enabled(c) / dp.set_enabled(c, on)
+        //  (LevelObjectManager.TryGetIntendedEnabled / SetIntendedEnabled). While
+        //  a component is parked they read and write the SNAPSHOT below instead of
+        //  the live flag, so a read sees what the unpark will restore and a write
+        //  lands at the unpark. Nothing here changes for content that never calls
+        //  them: the members they use (IsParked, IntendedEnabled,
+        //  SetIntendedEnabled) only read or write these same fields.
+        //
         //  INVARIANT this depends on: a component appears in exactly ONE of the
         //  arrays below (see the LevelObject constructor). Two arrays toggling the
         //  same component would make the second read see what the first just
@@ -237,6 +257,16 @@ namespace DreamPark.ParkBuilder {
                 }
                 return true;
             }
+
+            /// <summary>True while the optimizer holds this collider parked.</summary>
+            public bool IsParked => parked;
+            /// <summary>What the game intends: the snapshot the unpark restores while parked, else live.</summary>
+            public bool IntendedEnabled => parked ? enabled : collider.enabled;
+            /// <summary>While parked, write the snapshot (applied at unpark; stays off meanwhile); else live.</summary>
+            public void SetIntendedEnabled(bool on) {
+                if (parked) enabled = on;
+                else collider.enabled = on;
+            }
         }
 
         public class ParticleSystemSettings {
@@ -256,9 +286,30 @@ namespace DreamPark.ParkBuilder {
             // otherwise stall the frame the creator enters build mode on.
             private const float MaxPoseSeconds = 5f;
 
+            // Frame these settings were made (= the object's spawn/registration).
+            // playOnAwake is only a PREDICTION of "Unity is about to start this",
+            // valid until Unity has had a frame to act on it. A first park long
+            // after spawn (an object registered at load and first culled minutes
+            // later) must read the live state, or a system the game stopped
+            // replays on the first re-approach (Oct 2026 watch item).
+            private readonly int createdFrame;
+            public static int FrameOverride = -1;     // tests only; -1 = Time.frameCount
+            internal static int CurrentFrame => FrameOverride >= 0 ? FrameOverride : Time.frameCount;
+            // Spawn frame + the next one: playOnAwake systems start on their first enabled frame.
+            internal const int PlayOnAwakeTrustFrames = 1;
+
             public ParticleSystemSettings(ParticleSystem particleSystem) {
                 this.particleSystem = particleSystem;
                 enabled = particleSystem.isPlaying || particleSystem.main.playOnAwake;
+                createdFrame = CurrentFrame;
+            }
+
+            /// <summary>What the next park would record as "playing" (tests / diagnostics).</summary>
+            public bool ReadPlayingForPark() {
+                bool trustPlayOnAwake = firstPark && CurrentFrame - createdFrame <= PlayOnAwakeTrustFrames;
+                return trustPlayOnAwake
+                    ? (particleSystem.isPlaying || particleSystem.isPaused || particleSystem.main.playOnAwake)
+                    : (particleSystem.isPlaying || particleSystem.isPaused);
             }
 
             // Build mode is a STAGING view, not a paused game. An attraction's
@@ -310,9 +361,11 @@ namespace DreamPark.ParkBuilder {
                         // term, a system posed for build mode and re-read on a later
                         // park records enabled=false and never plays again — particles
                         // that work the first time you enter build mode and never after.
-                        this.enabled = firstPark
-                            ? (particleSystem.isPlaying || particleSystem.isPaused || particleSystem.main.playOnAwake)
-                            : (particleSystem.isPlaying || particleSystem.isPaused);
+                        //
+                        // "Once" means the spawn frame: a FIRST park that comes later
+                        // (registered at load, culled minutes after) reads the live
+                        // state too — see createdFrame.
+                        this.enabled = ReadPlayingForPark();
                         firstPark = false;
                         parked = true;
                     }
@@ -353,12 +406,12 @@ namespace DreamPark.ParkBuilder {
             #if DREAMPARKCORE
                 , typeof(PortalAnchor), typeof(ParkAnchor), typeof(LevelAnchor), typeof(DreamBand)
             #endif
-            #if SUPERADVENTURELAND
-                , typeof(ProceduralLavaPit)
-            #endif
             };
 
             private bool parked = false;
+
+            /// <summary>Exempt from parking (and from the game pause's freeze).</summary>
+            public bool IsProtected => isProtected;
 
             // Whether this component type is exempt from parking. Computed ONCE.
             //
@@ -411,6 +464,16 @@ namespace DreamPark.ParkBuilder {
                 }
                 return true;
             }
+
+            /// <summary>True while the optimizer holds this behaviour parked (only Behaviours ever park).</summary>
+            public bool IsParked => parked;
+            /// <summary>What the game intends: the snapshot the unpark restores while parked, else live.</summary>
+            public bool IntendedEnabled => parked ? enabled : (component is Behaviour b && b.enabled);
+            /// <summary>While parked, write the snapshot (applied at unpark; stays off meanwhile); else live.</summary>
+            public void SetIntendedEnabled(bool on) {
+                if (parked) enabled = on;
+                else if (component is Behaviour b) b.enabled = on;
+            }
         }
         public class RendererSettings {
             public Renderer renderer;
@@ -420,6 +483,9 @@ namespace DreamPark.ParkBuilder {
             private Material[] optimizedSharedMats; // same length as originalSharedMats
             private Material[] liveSharedMats;       // what the GAME had before parking
             private bool parked = false;
+            // The level of the last park (1 = simplified, still drawn; 2 = hidden). Only
+            // SetIntendedEnabled reads it, to apply the same visibility rule Toggle does.
+            private int parkedLevel = 0;
             public bool enabled;
             public bool enableOptimizedMaterial = false;
             public RendererSettings(Renderer renderer) {
@@ -505,6 +571,7 @@ namespace DreamPark.ParkBuilder {
                         renderer.sharedMaterials = optimizedSharedMats;
                         enableOptimizedMaterial = true;
                     }
+                    parkedLevel = optimizationLevel;
                     renderer.enabled = optimizationLevel != 2 && this.enabled;
                 } else if (parked) {
                     // Only write the slots back if we actually changed them.
@@ -523,6 +590,24 @@ namespace DreamPark.ParkBuilder {
                 // renderer.enabled on EVERY in-range frame, which clobbered any
                 // runtime change the instant it was made.
                 return true;
+            }
+
+            /// <summary>True while the optimizer holds this renderer parked (hidden or simplified).</summary>
+            public bool IsParked => parked;
+            /// <summary>What the game intends: the snapshot the unpark restores while parked, else live.</summary>
+            public bool IntendedEnabled => parked ? enabled : renderer.enabled;
+            /// <summary>
+            /// While parked, write the snapshot (applied at unpark) and keep the park's own
+            /// visibility rule meanwhile: a simplified park (level 1) still draws an enabled
+            /// renderer, a hidden park (level 2) draws nothing. Else live.
+            /// </summary>
+            public void SetIntendedEnabled(bool on) {
+                if (parked) {
+                    enabled = on;
+                    renderer.enabled = parkedLevel != 2 && on;
+                } else {
+                    renderer.enabled = on;
+                }
             }
         }
         public bool FrustumCullCheck(Plane[] frustumPlanes) {
@@ -543,6 +628,7 @@ namespace DreamPark.ParkBuilder {
             this.gameObject = gameObject;
             this.isPriority = isPriority;
             this.ignoreOptimization = ignoreOptimization;
+            ignoredByPlatform = ignoreOptimization;
             name = gameObject.name;
             tag = gameObject.tag;
             layer = gameObject.layer;
@@ -557,11 +643,27 @@ namespace DreamPark.ParkBuilder {
             // never actually written by ComponentSettings (they are not Behaviours),
             // but excluding them keeps the invariant true by construction instead of
             // by coincidence.
+            //
+            // LuaRelay is excluded for the same reason, between a component and its
+            // OWNER (Oct 2026). A LuaBehaviour/EasyLua adds its message relays
+            // (lateupdate, fixedupdate, ontrigger*, oncollision*, onzone*, onready,
+            // onpause/onresume …) at boot and keeps them in lockstep with itself: its
+            // OnDisable turns them off, its OnEnable turns every one back on. When a
+            // script boots BEFORE it is registered — every live spawn on device
+            // (LiveParkContent / a release while objectsEnabled is true), never the
+            // Editor's Park Simulator — the relays used to be snapshotted too. On park
+            // the host was disabled first, so each relay's entry then re-read "off";
+            // on unpark the host turned them on and their entries restored "off" right
+            // after. The relays stayed dead for the rest of the session: no
+            // lateupdate(), no fixedupdate(), no onzoneenter() (BirthdayBash's Cake
+            // Boss rendered inside its own cake). The host is managed here like any
+            // other Behaviour, so its relays still park and unpark — through it.
             colliders = gameObject.GetComponentsInChildren<Collider>(true).Select(c => new ColliderSettings(c)).ToArray();
             rigidbodies = gameObject.GetComponentsInChildren<Rigidbody>(true).Select(r => new RigidbodySettings(r)).ToArray();
             components = gameObject.GetComponentsInChildren<Component>(true)
                 .Where(c => !(c is ParticleSystem) && !(c is Animator)
-                         && !(c is Renderer) && !(c is Collider) && !(c is Rigidbody))
+                         && !(c is Renderer) && !(c is Collider) && !(c is Rigidbody)
+                         && !(c is LuaRelay))
                 .Select(c => new ComponentSettings(c))
                 .ToArray();
             particleSystems = gameObject.GetComponentsInChildren<ParticleSystem>(true).Select(ps => new ParticleSystemSettings(ps)).ToArray();
@@ -627,6 +729,20 @@ namespace DreamPark.ParkBuilder {
                 enabled = !forceDisabled.Value;
             }
 
+            // GAME PAUSE (Oct 2026, GamePause.cs): an operator / parent hold.
+            // Nothing parked may come back to life while the game is held —
+            // the request is remembered and replayed on resume (through these
+            // same clamps). Parking still works (the optimizer keeps culling),
+            // but a FROZEN object is thawed first, so the re-read below sees
+            // the game's own state, never the freeze's.
+            if (GamePause.IsPaused && !isPriority) {
+                if (enabled) {
+                    if (!this.enabled) GamePause.DeferEnable(this);
+                    return;
+                }
+                GamePause.ClearDeferred(this);
+                if (this.enabled) GamePause.Thaw(this);
+            }
 
             if (this.enabled == enabled) {
                 return;
@@ -988,18 +1104,30 @@ namespace DreamPark.ParkBuilder {
             // everything is.
             //
             // Fold the second registration into the first so intent still lands.
+            // "-- @optimizer-ignore" in a script on this object, above it or below it, or
+            // an earlier dp.optimizer_ignore(go, true) that arrived before registration
+            // (awake() runs before SetupNewObject registers a live spawn on device). Read
+            // HERE, not from Lua at runtime: on device content can be parked before its
+            // awake() ever runs. An OptimizedAFIgnore component already covers it.
+            bool luaIgnore = !ignoreOptimization && LuaAsksOptimizerIgnore(obj);
+
             LevelObject existing = levelObjects.Find(lo => lo.gameObject == obj);
             if (existing != null) {
                 if (isPriority) existing.isPriority = true;
-                if (ignoreOptimization) existing.ignoreOptimization = true;
+                if (ignoreOptimization) { existing.ignoreOptimization = true; existing.ignoredByPlatform = true; }
+                if (luaIgnore) MarkLuaIgnored(existing);
                 if (startDisabled) existing.Disable();
                 return true;
             }
 
             LevelObject levelObject = new LevelObject(obj, isPriority, ignoreOptimization);
+            if (luaIgnore) MarkLuaIgnored(levelObject);
             levelObjects.Add(levelObject);
             if (startDisabled) {
                 levelObject.Disable();
+            } else {
+                // Content arriving live while the game is held is frozen on arrival.
+                GamePause.NoteRegistered(levelObject);
             }
             return true;
         }
@@ -1037,11 +1165,16 @@ namespace DreamPark.ParkBuilder {
 
             public bool IsAlive => gameObject != null;
             public bool HasBodies => rigidbodies != null && rigidbodies.Length > 0;
+            /// Parked by the game pause, or asked to come back while paused: the resume releases it.
+            internal bool pausedByGame;
 
             public void Toggle(bool enable) {
                 // Same global clamps LevelObject.Enable applies. No isPriority
                 // equivalent here: a template root is never the player rig.
                 if (!LevelObjectManager.objectsEnabled || LevelObjectManager.ParkContentLocked) enable = false;
+                // Game pause: the body stays parked; the resume replays this.
+                if (enable && GamePause.IsPaused) { if (!enabled) pausedByGame = true; return; }
+                if (!enable) pausedByGame = false;
                 if (enabled == enable) return;
                 enabled = enable;
 
@@ -1080,6 +1213,28 @@ namespace DreamPark.ParkBuilder {
                     continue;
                 }
                 templateRoots[i].Toggle(enable);
+            }
+        }
+
+        /// GamePause: park every live template-root body (a placed prop's own Rigidbody).
+        internal void PauseTemplateRootBodies() {
+            for (int i = templateRoots.Count - 1; i >= 0; i--) {
+                var t = templateRoots[i];
+                if (!t.IsAlive) { templateRoots.RemoveAt(i); continue; }
+                if (!t.enabled) continue;
+                t.Toggle(false);
+                t.pausedByGame = true;
+            }
+        }
+
+        /// GamePause: release exactly the bodies the pause parked (or that asked to come back meanwhile).
+        internal void ResumeTemplateRootBodies() {
+            for (int i = templateRoots.Count - 1; i >= 0; i--) {
+                var t = templateRoots[i];
+                if (!t.IsAlive) { templateRoots.RemoveAt(i); continue; }
+                if (!t.pausedByGame) continue;
+                t.pausedByGame = false;
+                t.Toggle(true);
             }
         }
 
@@ -1147,6 +1302,270 @@ namespace DreamPark.ParkBuilder {
                 }
             }
             ToggleTemplateRootBodies(false);
+        }
+
+        // ── OPTIMIZER IGNORE FROM LUA: -- @optimizer-ignore / dp.optimizer_ignore (Oct 2026) ──
+        //
+        //  The Lua equivalent of an OptimizedAFIgnore component, for managers and
+        //  always-on systems that must keep running wherever the player stands. Same
+        //  meaning as the component, exactly: the object is still registered, still
+        //  parked by the park load, build mode and the operator pause, but the
+        //  DISTANCE sweep (OptimizedAF.RunOptimizedFrame) skips it.
+        //
+        //   • "-- @optimizer-ignore" in a LuaBehaviour's script (a Lua comment, like
+        //     "-- @packing-ignore"), read at REGISTRATION. It covers the object holding
+        //     the script and its subtree. The optimizer's unit is the LevelObject, so
+        //     every LevelObject at, under, or containing that object is exempt.
+        //   • dp.optimizer_ignore(go, on) at runtime. true: restore whatever is parked
+        //     (from its snapshot, renderers included) and exempt it; false: hand it back
+        //     (the next sweep parks it if it is far). Idempotent, nil-safe, remembered
+        //     for objects not registered yet. Never undoes an OptimizedAFIgnore.
+        //
+        //  Every exempt object costs Quest frame time all session, so the first title
+        //  to exempt more than LuaIgnoreWarnThreshold objects gets one warning.
+
+        public const string OptimizerIgnoreMarker = "@optimizer-ignore";
+        public const int LuaIgnoreWarnThreshold = 20;
+
+    #if !UNITY_EDITOR
+        static readonly Dictionary<int, bool> s_scriptMarker = new();          // TextAsset id → has marker
+    #endif
+        static readonly HashSet<GameObject> s_ignoreRequests = new();          // dp.optimizer_ignore(go, true)
+        static readonly HashSet<string> s_ignoreWarnedTitles = new();
+        static OptimizationSettings s_restoreAll;                              // every control on
+
+        /// <summary>The marker must be in a Lua comment ("-- @optimizer-ignore"), not just any string.</summary>
+        public static bool ScriptHasOptimizerIgnore(string source) {
+            if (string.IsNullOrEmpty(source)) return false;
+            int at = source.IndexOf(OptimizerIgnoreMarker, StringComparison.Ordinal);
+            while (at >= 0) {
+                int lineStart = source.LastIndexOf('\n', at) + 1;
+                if (source.IndexOf("--", lineStart, at - lineStart, StringComparison.Ordinal) >= 0) return true;
+                at = source.IndexOf(OptimizerIgnoreMarker, at + OptimizerIgnoreMarker.Length, StringComparison.Ordinal);
+            }
+            return false;
+        }
+
+        static bool ScriptMarked(LuaBehaviour lb) {
+            var src = lb != null ? lb.luaScript : null;
+            if (src == null) return false;
+        #if UNITY_EDITOR
+            // A script edited between Play sessions keeps its instance id (and statics
+            // survive when domain reload is off), so the Editor always reads the source.
+            return ScriptHasOptimizerIgnore(src.text);
+        #else
+            int id = src.GetInstanceID();
+            if (!s_scriptMarker.TryGetValue(id, out bool marked)) {
+                marked = ScriptHasOptimizerIgnore(src.text);   // .text allocates: once per script asset
+                s_scriptMarker[id] = marked;
+            }
+            return marked;
+        #endif
+        }
+
+        static bool LuaAsksOptimizerIgnore(GameObject obj) {
+            foreach (var lb in obj.GetComponentsInParent<LuaBehaviour>(true)) if (ScriptMarked(lb)) return true;
+            foreach (var lb in obj.GetComponentsInChildren<LuaBehaviour>(true)) if (ScriptMarked(lb)) return true;
+            if (s_ignoreRequests.Count == 0) return false;
+            s_ignoreRequests.RemoveWhere(g => g == null);
+            var t = obj.transform;
+            foreach (var g in s_ignoreRequests)
+                if (t.IsChildOf(g.transform) || g.transform.IsChildOf(t)) return true;
+            return false;
+        }
+
+        void MarkLuaIgnored(LevelObject lo) {
+            lo.ignoreOptimization = true;
+            if (lo.ignoredByLua) return;
+            lo.ignoredByLua = true;
+            lo.ignoredByLuaTitle = DreamParkLuaAPI.GameId(lo.gameObject) ?? "";
+            int count = 0;
+            foreach (var x in levelObjects)
+                if (x != null && x.ignoredByLua && x.gameObject != null && x.ignoredByLuaTitle == lo.ignoredByLuaTitle) count++;
+            if (!levelObjects.Contains(lo)) count++;
+            if (count > LuaIgnoreWarnThreshold && s_ignoreWarnedTitles.Add(lo.ignoredByLuaTitle)) {
+                string title = lo.ignoredByLuaTitle.Length > 0 ? lo.ignoredByLuaTitle : "(no title)";
+                Debug.LogWarning($"[OptimizedAF] {title}: {count} objects are exempt from distance culling " +
+                                 "(-- @optimizer-ignore / dp.optimizer_ignore). Each one runs and renders all session " +
+                                 "wherever the player stands, which costs Quest frame time. Keep it to managers and " +
+                                 "always-on systems, not props.");
+            }
+        }
+
+        /// <summary>
+        /// dp.optimizer_ignore(go, on). Returns how many registered LevelObjects it changed
+        /// (0 = none registered yet: the request is remembered and applied at registration).
+        /// </summary>
+        public static int SetOptimizerIgnore(GameObject go, bool on) {
+            if (go == null) return 0;
+            if (on) s_ignoreRequests.Add(go); else s_ignoreRequests.Remove(go);
+            var lom = Instance;
+            if (lom == null || lom.levelObjects == null) return 0;
+            var t = go.transform;
+            int changed = 0;
+            foreach (var lo in lom.levelObjects.ToArray()) {
+                if (lo == null || lo.gameObject == null) continue;
+                var lt = lo.gameObject.transform;
+                if (!lt.IsChildOf(t) && !t.IsChildOf(lt)) continue;
+                if (on) {
+                    lom.MarkLuaIgnored(lo);
+                    RestoreParked(lo);
+                    changed++;
+                } else if (lo.ignoredByLua) {
+                    lo.ignoredByLua = false;
+                    lo.ignoreOptimization = lo.ignoredByPlatform;
+                    changed++;
+                }
+            }
+            return changed;
+        }
+
+        /// <summary>True when the distance sweep skips <paramref name="go"/>'s LevelObject (any reason).</summary>
+        public static bool IsOptimizerIgnored(GameObject go) {
+            var lom = Instance;
+            if (go == null || lom == null || lom.levelObjects == null) return false;
+            var t = go.transform;
+            foreach (var lo in lom.levelObjects) {
+                if (lo == null || lo.gameObject == null) continue;
+                var lt = lo.gameObject.transform;
+                if ((lt.IsChildOf(t) || t.IsChildOf(lt)) && lo.ignoreOptimization) return true;
+            }
+            return false;
+        }
+
+        // Bring a distance-parked object back from its snapshot. Enable() keeps every
+        // global clamp (park load lock, build mode, forceDisabled, the operator pause),
+        // so this only undoes the optimizer's own parking. Renderers are restored with
+        // an all-on settings object: Enable(true) without settings never touches them,
+        // and an exempt object will never be swept back in.
+        static void RestoreParked(LevelObject lo) {
+            if (s_restoreAll == null) {
+                s_restoreAll = ScriptableObject.CreateInstance<OptimizationSettings>();
+                s_restoreAll.hideFlags = HideFlags.HideAndDontSave;
+            }
+            if (!lo.enabled) lo.Enable(true, s_restoreAll, 0);
+            if (!lo.enabled || lo.renderers == null) return;
+            foreach (var rs in lo.renderers) if (rs != null && rs.IsParked) rs.Toggle(0);
+        }
+
+        // ── INTENDED ENABLED STATE: dp.enabled / dp.set_enabled (Oct 2026) ──────
+        //
+        //  Parking writes `enabled = false` onto the live component, so a script
+        //  that reads `renderer.enabled` (or any `.enabled`) while the object it
+        //  points at is parked reads the PARK, not the game. start() is the usual
+        //  place: a manager boots live while the child it inspects is still parked
+        //  by the load or culled by distance. BirthdayBash's Cake Boss recorded
+        //  every rig renderer as "should be off" that way and never rendered again.
+        //
+        //  These two are the opt-in fix, and they are purely additive: they read and
+        //  write the very snapshot the unpark restores, through the members the
+        //  Settings classes expose for it, and touch nothing else. start() is NOT
+        //  delayed (content depends on it arriving early), and nothing changes for
+        //  content that never calls them.
+        //
+        //  Covered: anything with an enabled flag — every Behaviour (MonoBehaviour,
+        //  LuaBehaviour, Light, AudioSource, Camera, Animator…), Renderer, Collider.
+        //  A component the optimizer never snapshotted (unregistered content, the
+        //  protected types, a renderer inactive at registration, a Lua relay) has no
+        //  parked state, so both read and write the live flag. The game pause's
+        //  freeze is honoured the same way (GamePause.TryGetFrozenIntended).
+        //
+        //  Main thread only. Cost is paid only by the caller: a walk up the
+        //  component's parents, one reference scan of levelObjects per ancestor.
+
+        /// <summary>
+        /// The enabled state the game intends for <paramref name="component"/>: while the
+        /// optimizer has it parked (or the game pause has it frozen), the value it will
+        /// restore; otherwise the live <c>.enabled</c>. False when the component is null,
+        /// destroyed, or has no enabled flag (Transform, Rigidbody, ParticleSystem…).
+        /// </summary>
+        public static bool TryGetIntendedEnabled(Component component, out bool on) {
+            on = false;
+            if (component == null || !HasEnabledFlag(component)) return false;
+            var settings = FindSettings(component, out var owner);
+            switch (settings) {
+                case LevelObject.ColliderSettings cs when cs.IsParked:  on = cs.IntendedEnabled; return true;
+                case LevelObject.RendererSettings rs when rs.IsParked:  on = rs.IntendedEnabled; return true;
+                case LevelObject.ComponentSettings bs when bs.IsParked: on = bs.IntendedEnabled; return true;
+            }
+            if (owner != null && GamePause.TryGetFrozenIntended(owner, component, out on)) return true;
+            on = LiveEnabled(component);
+            return true;
+        }
+
+        /// <summary>
+        /// Set the enabled state the game intends. Parked (or frozen by the game pause):
+        /// the restore snapshot is written and the change lands at the unpark/resume, the
+        /// component staying parked meanwhile. Otherwise the live <c>.enabled</c> is set,
+        /// exactly as <c>component.enabled = on</c> would. False when the component is
+        /// null, destroyed, or has no enabled flag.
+        /// </summary>
+        public static bool SetIntendedEnabled(Component component, bool on) {
+            if (component == null || !HasEnabledFlag(component)) return false;
+            var settings = FindSettings(component, out var owner);
+            switch (settings) {
+                case LevelObject.ColliderSettings cs when cs.IsParked:  cs.SetIntendedEnabled(on); return true;
+                case LevelObject.RendererSettings rs when rs.IsParked:  rs.SetIntendedEnabled(on); return true;
+                case LevelObject.ComponentSettings bs when bs.IsParked: bs.SetIntendedEnabled(on); return true;
+            }
+            if (owner != null && GamePause.TrySetFrozenIntended(owner, component, on)) return true;
+            switch (component) {
+                case Behaviour b: b.enabled = on; break;
+                case Renderer r:  r.enabled = on; break;
+                case Collider c:  c.enabled = on; break;
+            }
+            return true;
+        }
+
+        static bool HasEnabledFlag(Component c) => c is Behaviour || c is Renderer || c is Collider;
+
+        static bool LiveEnabled(Component c) {
+            switch (c) {
+                case Behaviour b: return b.enabled;
+                case Renderer r:  return r.enabled;
+                case Collider col: return col.enabled;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// The optimizer's snapshot of <paramref name="component"/> (a ColliderSettings,
+        /// RendererSettings or ComponentSettings) and the LevelObject that holds it, or
+        /// null/null when nothing registered snapshots it. Nearest registered ancestor
+        /// first; a LevelObject whose arrays don't hold the component is passed over.
+        /// </summary>
+        internal static object FindSettings(Component component, out LevelObject owner) {
+            owner = null;
+            var lom = Instance;
+            if (lom == null || lom.levelObjects == null || component == null) return null;
+            var list = lom.levelObjects;
+            for (var t = component.transform; t != null; t = t.parent) {
+                var go = t.gameObject;
+                for (int i = 0; i < list.Count; i++) {
+                    var lo = list[i];
+                    if (lo == null || !ReferenceEquals(lo.gameObject, go)) continue;
+                    var s = SettingsIn(lo, component);
+                    if (s != null) { owner = lo; return s; }
+                }
+            }
+            return null;
+        }
+
+        static object SettingsIn(LevelObject lo, Component c) {
+            switch (c) {
+                case Collider _:
+                    if (lo.colliders != null) foreach (var s in lo.colliders) if (s != null && ReferenceEquals(s.collider, c)) return s;
+                    return null;
+                case Renderer _:
+                    if (lo.renderers != null) foreach (var s in lo.renderers) if (s != null && ReferenceEquals(s.renderer, c)) return s;
+                    return null;
+                case Animator _:
+                    if (lo.animators != null) foreach (var s in lo.animators) if (s != null && ReferenceEquals(s.component, c)) return s;
+                    return null;
+                default:
+                    if (lo.components != null) foreach (var s in lo.components) if (s != null && ReferenceEquals(s.component, c)) return s;
+                    return null;
+            }
         }
 
         public void Enable()

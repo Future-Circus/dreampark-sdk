@@ -60,11 +60,11 @@ namespace DreamPark.EditorTools.AudioOptimization
 
             if (needsEncoder && !OggVorbisEncoderBootstrap.IsAvailable)
             {
-                EditorUtility.DisplayDialog(
-                    "Audio Optimizer not ready",
-                    "OggVorbisEncoder isn't loaded. Close and reopen the Audio Optimizer window — "
-                    + "it auto-installs on first use.",
-                    "OK");
+                // Oct 2026: never a modal from the executor (automation); the
+                // window shows result.error.
+                result.error = "OggVorbisEncoder isn't loaded. Close and reopen the Audio Optimizer window — "
+                    + "it auto-installs on first use.";
+                Debug.LogError("[AudioOptimizer] " + result.error);
                 return result;
             }
 
@@ -303,8 +303,45 @@ namespace DreamPark.EditorTools.AudioOptimization
 
             importer.defaultSampleSettings = settings;
 
+            // Oct 2026: an existing platform override still wins over the
+            // default — clamp it to the plan too (never raise it).
+            foreach (string platform in AudioUsageGraph.OverridePlatforms)
+            {
+                if (!importer.ContainsSampleSettingsOverride(platform)) continue;
+                var o = importer.GetOverrideSampleSettings(platform);
+                importer.SetOverrideSampleSettings(platform, ClampOverride(o, settings));
+            }
+
             EditorUtility.SetDirty(importer);
             importer.SaveAndReimport();
+        }
+
+        /// Pure (EditMode-tested): an override after the plan is applied —
+        /// never larger, never higher quality, never a higher rate than either
+        /// what it was or the planned default.
+        internal static AudioImporterSampleSettings ClampOverride(AudioImporterSampleSettings o, AudioImporterSampleSettings planned)
+        {
+            int Rank(AudioCompressionFormat f) => f == AudioCompressionFormat.Vorbis ? 0
+                : f == AudioCompressionFormat.ADPCM ? 1 : f == AudioCompressionFormat.PCM ? 2 : 3;
+            if (Rank(planned.compressionFormat) < Rank(o.compressionFormat))
+            {
+                o.compressionFormat = planned.compressionFormat;
+                o.quality = planned.quality;
+            }
+            else if (o.compressionFormat == AudioCompressionFormat.Vorbis && planned.compressionFormat == AudioCompressionFormat.Vorbis)
+            {
+                o.quality = Mathf.Min(o.quality, planned.quality);
+            }
+            if (planned.sampleRateSetting == AudioSampleRateSetting.OverrideSampleRate)
+            {
+                uint current = o.sampleRateSetting == AudioSampleRateSetting.OverrideSampleRate ? o.sampleRateOverride : uint.MaxValue;
+                if (planned.sampleRateOverride < current)
+                {
+                    o.sampleRateSetting = AudioSampleRateSetting.OverrideSampleRate;
+                    o.sampleRateOverride = planned.sampleRateOverride;
+                }
+            }
+            return o;
         }
     }
 }

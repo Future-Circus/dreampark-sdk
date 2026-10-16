@@ -229,11 +229,31 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
     private Action luaOnEnable;
     private Action luaOnDisable;
     private Action<string> luaOnNet;
+    // onwalls(walls): walls is "front,left"-style ("" = no walls). Fired once after
+    // start() with the owning attraction's walled sides, then whenever they change
+    // (WALL_LAYERS_SPEC.md). Bonus content only — never gate gameplay on walls.
+    private Action<string> luaOnWalls;
+    private DreamPark.AttractionTemplate wallsSource;
+    // on_rect_changed(openings): the dp.rect_openings() table, fired once after
+    // start() and again whenever core re-seats the attraction or the map changes
+    // (RECT_EDGES_SPEC.md). A LuaFunction, not a typed delegate, so no new
+    // CSharpCallLua bridge is needed.
+    private LuaFunction luaOnRectChanged;
+    private DreamPark.AttractionTemplate rectSource;
+    // onlayout(frame_id, scale, footprint): the owning attraction's applied layout
+    // frame ('base', 'minimum' or a custom id), its frame scale (Vector2, x/z) and
+    // the runtime footprint in metres (Vector2). Fired once after start() and again
+    // whenever ApplyLayout changes any of them (LayoutApplied). A LuaFunction, so no
+    // new CSharpCallLua bridge.
+    private LuaFunction luaOnLayout;
+    private DreamPark.AttractionTemplate layoutSource;
 
     // Optional Unity messages (FixedUpdate, OnTrigger*, OnCollision*, app pause/focus)
     // are wired via lightweight relay components added only when the Lua script defines
     // the matching function — see LuaMessageRelays. Tracked here so OnEnable/OnDisable
-    // can toggle them in step with this component.
+    // can toggle them in step with this component. This component is their ONLY owner:
+    // OptimizedAF's LevelObject leaves relays out of its snapshot and parks them through
+    // this host (Oct 2026), so OnEnable must keep re-enabling every one of them.
     private readonly List<Behaviour> luaRelays = new List<Behaviour>();
 
     private LuaTable scriptScopeTable;
@@ -373,6 +393,102 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
             EnsureBooted();
     }
 
+    // ── Compiled-chunk cache (Oct 11 2026, load-hitch #3 / Zombiez A7 / ArcadeLand A7) ──
+    // EnsureBooted used to DoString(luaScript.text) for EVERY instance, so each
+    // LuaBehaviour allocated the TextAsset's string and re-lexed + re-parsed the whole
+    // file: Zombiez's Atrium boots 228 scripts (3.4 MB of source, 96 x supply_pickup,
+    // 11 x zombie_ai), an ArcadeLand attraction 360-480 KB with mp_kit and
+    // arcade_scoreboard compiled again per attraction - all in the load frames.
+    //
+    // Now each TextAsset is compiled ONCE into a function whose first statement binds
+    // its argument as _ENV ("local _ENV = ...;" on line 1, so error line numbers do not
+    // move), and every instance calls that one function with its own scope table.
+    // Every global the file reads or writes resolves through that local exactly as it
+    // did through the env upvalue DoString set, and the functions the file defines
+    // close over THIS call's _ENV, so instances never share state. No bytecode is
+    // produced or loaded, so the sandbox (which removes load) is untouched: the
+    // source is the TextAsset's own text, compiled by the same loader.
+    // A file the wrapper cannot compile (e.g. one already at Lua's 200-local limit)
+    // falls back to the plain DoString, which also reports real syntax errors exactly
+    // as before.
+    internal static bool ChunkCacheEnabled = true;
+    private const string ChunkEnvPrefix = "local _ENV = ...; ";
+
+    private struct CachedChunk {
+        public TextAsset asset;
+        public LuaFunction fn;   // null = the wrapper did not compile: use DoString
+#if UNITY_EDITOR
+        public string source;    // an Editor reimport keeps the instance id
+#endif
+    }
+    private static readonly Dictionary<int, CachedChunk> s_chunks = new Dictionary<int, CachedChunk>();
+    private static readonly Dictionary<string, LuaFunction> s_snippets = new Dictionary<string, LuaFunction>(StringComparer.Ordinal);
+    internal static int ChunkCompiles, ChunkHits;
+
+    /// Run a script's file scope in `scope` (what DoString(text, name, scope) did).
+    internal static void RunScriptChunk(TextAsset script, LuaTable scope) {
+        LuaFunction fn = ChunkCacheEnabled ? CompiledChunk(script) : null;
+        if (fn == null) {
+            luaEnv.DoString(script.text, script.name, scope);
+            return;
+        }
+        fn.Call(scope);
+    }
+
+    /// A constant boot snippet, compiled once (same contract as RunScriptChunk).
+    internal static object[] RunCachedSnippet(string code, string chunkName, LuaTable scope) {
+        if (!ChunkCacheEnabled) return luaEnv.DoString(code, chunkName, scope);
+        if (!s_snippets.TryGetValue(code, out LuaFunction fn)) {
+            fn = luaEnv.LoadString(ChunkEnvPrefix + code, chunkName);
+            s_snippets[code] = fn;
+        }
+        return fn.Call(scope);
+    }
+
+    private static LuaFunction CompiledChunk(TextAsset script) {
+        int id = script.GetInstanceID();
+        if (s_chunks.TryGetValue(id, out CachedChunk hit) && hit.asset == script) {
+#if UNITY_EDITOR
+            if (string.Equals(hit.source, script.text, StringComparison.Ordinal))
+#endif
+            {
+                ChunkHits++;
+                return hit.fn;
+            }
+            hit.fn?.Dispose();
+            s_chunks.Remove(id);
+        }
+        string text = script.text;
+        LuaFunction fn = null;
+        try {
+            fn = luaEnv.LoadString(ChunkEnvPrefix + text, script.name);
+            ChunkCompiles++;
+        }
+        catch (Exception) {
+            fn = null; // DoString reports the real error / runs the unwrapped file
+        }
+        if (s_chunks.Count >= 512) PruneChunks();
+        s_chunks[id] = new CachedChunk {
+            asset = script,
+            fn = fn,
+#if UNITY_EDITOR
+            source = text,
+#endif
+        };
+        return fn;
+    }
+
+    // Titles unload their bundles (destroying their TextAssets); drop those entries.
+    private static void PruneChunks() {
+        var dead = new List<int>();
+        foreach (var pair in s_chunks)
+            if (pair.Value.asset == null) dead.Add(pair.Key);
+        foreach (int key in dead) {
+            s_chunks[key].fn?.Dispose();
+            s_chunks.Remove(key);
+        }
+    }
+
     /// <summary>
     /// Run this script's file scope and awake() exactly once, unless the park still has
     /// content parked. Safe to call from anywhere; every entry point after the first is
@@ -392,6 +508,11 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
         }
 
         scriptScopeTable.Set("self", this);
+
+        // A scope-local facade captures this script's GameObject. Package helpers
+        // therefore resolve the correct Container even with multiple packages in
+        // the same park, and creator Lua never passes game IDs or manager paths.
+        DreamPark.DreamParkLuaAPI.BindScope(scriptScopeTable);
 
         // peer_id: inside a cloned RemoteRig (another player's remote
         // representation on this headset, RemoteRig.cs) it is that player's
@@ -413,10 +534,10 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
         // the GameArea/PropTemplate/LevelTemplate walk happens on first use.
         // Pure Lua-side wiring: no C#→Lua delegate bridging, IL2CPP-safe.
         // (nil-guarded so an Inspector injection named `storage` wins.)
-        luaEnv.DoString("if storage == nil then storage = __dp_storage_lazy and __dp_storage_lazy(self.gameObject) or nil end",
+        RunCachedSnippet("if storage == nil then storage = __dp_storage_lazy and __dp_storage_lazy(self.gameObject) or nil end",
             "gamestorage.inject", scriptScopeTable);
 
-        luaEnv.DoString(luaScript.text, luaScript.name, scriptScopeTable);
+        RunScriptChunk(luaScript, scriptScopeTable);
 
         luaAwake = scriptScopeTable.Get<Action>("awake");
         scriptScopeTable.Get("start",             out luaStart);
@@ -425,6 +546,9 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
         scriptScopeTable.Get("onenable",          out luaOnEnable);
         scriptScopeTable.Get("ondisable",         out luaOnDisable);
         scriptScopeTable.Get("onnet",             out luaOnNet);
+        scriptScopeTable.Get("onwalls",           out luaOnWalls);
+        scriptScopeTable.Get("on_rect_changed",   out luaOnRectChanged);
+        scriptScopeTable.Get("onlayout",          out luaOnLayout);
 
         // Opt-in physics + frame-timing + app-lifecycle messages. Only adds a relay
         // (and its per-object engine cost) for functions this script actually defines.
@@ -473,12 +597,18 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
             // dp.pack — every Vector3 as a park-local POINT, dp.dir(v) as a
             // direction, Quaternion/Transform as park-local rotation/pose — so
             // a creator never formats JSON and never learns that Unity world
-            // space is per headset (see ParkRoot.cs). A string body is passed
-            // through untouched, so every existing script keeps working.
-            luaEnv.DoString(
+            // space is per headset (see ParkRoot.cs). Inside an attraction
+            // each value ALSO travels relative to the attraction ($a beside
+            // $p), which receivers in the same attraction prefer: robust even
+            // when two headsets' park frames disagree slightly. Older apps
+            // read the park-local half. A string body is passed through
+            // untouched, so every existing script keeps working.
+            RunCachedSnippet(
                 "local __raw = net_send\n" +
                 "net_send = function(kind, body)\n" +
-                "    if type(body) == 'table' and dp ~= nil and dp.pack ~= nil then body = dp.pack(body) end\n" +
+                "    if type(body) == 'table' and dp ~= nil and dp.pack ~= nil then\n" +
+                "        body = dp.pack(body, dp_net_frame ~= nil and dp_net_frame(self.gameObject) or nil)\n" +
+                "    end\n" +
                 "    return __raw(kind, body)\n" +
                 "end",
                 "net_send.typed", scriptScopeTable);
@@ -493,14 +623,14 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
         Action<string> luaOnMessage = null;
         if (netId != null) {
             try {
-                var probe = luaEnv.DoString("return type(onmessage) == 'function'", "onmessage.probe", scriptScopeTable);
+                var probe = RunCachedSnippet("return type(onmessage) == 'function'", "onmessage.probe", scriptScopeTable);
                 if (probe != null && probe.Length > 0 && probe[0] is bool hasOnMessage && hasOnMessage) {
-                    luaEnv.DoString(
+                    RunCachedSnippet(
                         "function __dp_onnet_typed(raw)\n" +
                         "    local ok, t = pcall(json_parse, raw)\n" +
                         "    if not ok or t == nil then return end\n" +
                         "    local payload = t.payload\n" +
-                        "    if dp ~= nil and dp.unpack ~= nil then payload = dp.unpack(payload) end\n" +
+                        "    if dp ~= nil and dp.unpack ~= nil then payload = dp.unpack(payload, dp_net_frame ~= nil and dp_net_frame(self.gameObject) or nil) end\n" +
                         "    local ok2, err = pcall(onmessage, t.type, payload, t)\n" +
                         "    if not ok2 then print('[LuaBehaviour] onmessage threw: ' .. tostring(err)) end\n" +
                         "end",
@@ -556,7 +686,67 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
     void DispatchStart() {
         if (startDispatched || !booted) return;
         startDispatched = true;
-        luaStart?.Invoke();
+        try {
+            luaStart?.Invoke();
+        }
+        finally {
+            // Zone relays hold their first delivery until here: they are wired
+            // before awake(), and a player already standing in the attraction must
+            // get onzoneenter AFTER start(), not before awake() (LuaZoneRelay).
+            LuaMessageRelays.NotifyHostStarted(luaRelays);
+        }
+        BindWalls();
+        BindRect();
+        BindLayout();
+    }
+
+    // Same timing as BindWalls: the park parents spawned content after Awake.
+    void BindLayout() {
+        if (luaOnLayout == null || layoutSource != null) return;
+        layoutSource = GetComponentInParent<DreamPark.AttractionTemplate>(true);
+        if (layoutSource == null) return;
+        layoutSource.LayoutApplied += OnLayoutApplied;
+        OnLayoutApplied(layoutSource);
+    }
+
+    void OnLayoutApplied(DreamPark.AttractionTemplate attraction) {
+        if (luaOnLayout == null || attraction == null) return;
+        try {
+            luaOnLayout.Call(attraction.CurrentFrameId, attraction.CurrentFrameScale, attraction.RuntimeFootprintMeters);
+        } catch (Exception e) {
+            Debug.LogError("[Lua] onlayout failed in " + name + ": " + e.Message);
+        }
+    }
+
+    // Same timing as BindWalls: the park parents spawned content after Awake.
+    void BindRect() {
+        if (luaOnRectChanged == null || rectSource != null) return;
+        rectSource = GetComponentInParent<DreamPark.AttractionTemplate>(true);
+        if (rectSource == null) return;
+        rectSource.RectChanged += OnRectChanged;
+        OnRectChanged(rectSource);
+    }
+
+    void OnRectChanged(DreamPark.AttractionTemplate attraction) {
+        if (luaOnRectChanged == null || attraction == null) return;
+        try {
+            luaOnRectChanged.Call(DreamPark.DreamParkLuaAPI.RectOpeningsToLua(GetLuaEnv(), attraction));
+        } catch (Exception e) {
+            Debug.LogError("[Lua] on_rect_changed failed in " + name + ": " + e.Message);
+        }
+    }
+
+    // Resolved after start(): the park parents spawned content after Awake.
+    void BindWalls() {
+        if (luaOnWalls == null || wallsSource != null) return;
+        wallsSource = GetComponentInParent<DreamPark.AttractionTemplate>(true);
+        if (wallsSource == null) return;
+        wallsSource.WallsApplied += OnWallsApplied;
+        luaOnWalls(wallsSource.WallsWire);
+    }
+
+    void OnWallsApplied(DreamPark.AttractionTemplate attraction) {
+        luaOnWalls?.Invoke(attraction != null ? attraction.WallsWire : "");
     }
 
     /// <summary>
@@ -630,6 +820,17 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
     }
 
     void OnDestroy() {
+        if (wallsSource != null) wallsSource.WallsApplied -= OnWallsApplied;
+        wallsSource = null;
+        luaOnWalls = null;
+        if (rectSource != null) rectSource.RectChanged -= OnRectChanged;
+        rectSource = null;
+        luaOnRectChanged?.Dispose();
+        luaOnRectChanged = null;
+        if (layoutSource != null) layoutSource.LayoutApplied -= OnLayoutApplied;
+        layoutSource = null;
+        luaOnLayout?.Dispose();
+        luaOnLayout = null;
         luaOnDestroy?.Invoke();
         if (scriptScopeTable != null)
             scriptScopeTable.Dispose();

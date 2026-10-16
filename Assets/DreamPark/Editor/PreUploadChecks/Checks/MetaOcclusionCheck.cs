@@ -5,8 +5,10 @@ using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
+using DreamPark.ConvertReady;
 using DreamPark.EditorTools;
 using DreamPark.EditorTools.MaterialConversion;
+using DreamPark.EditorTools.Shaders;
 
 namespace DreamPark.PreUploadChecks.Checks
 {
@@ -59,9 +61,11 @@ namespace DreamPark.PreUploadChecks.Checks
             get
             {
                 return "Without environment occlusion, virtual geometry draws on top of the guest's "
-                     + "hands, furniture and walls on Quest. Only materials on MeshRenderers and "
-                     + "SkinnedMeshRenderers inside this package's prefabs are checked — content ships "
-                     + "as prefabs, so scene-only materials are not covered.";
+                     + "hands, furniture and walls on Quest. Checked: materials on MeshRenderers, "
+                     + "SkinnedMeshRenderers and ParticleSystemRenderers (including trails), and "
+                     + "materials injected into LuaBehaviours, inside this package's prefabs and its "
+                     + "Sequence Start / Overlay / Game Over levels. Content ships as prefabs, so "
+                     + "scene-only materials are not covered.";
             }
         }
 
@@ -114,11 +118,8 @@ namespace DreamPark.PreUploadChecks.Checks
 
         // Non-DreamPark shaders that are occluders or depth producers by design. These
         // live in Packages/, so the SDK path rule doesn't reach them.
-        private static readonly HashSet<string> IntentionallyExempt = new HashSet<string>(StringComparer.Ordinal)
-        {
-            "Meta/EnvironmentDepth/DepthMask",                      // produces depth, isn't occluded by it
-            "Meta/MRUK/MixedReality/InvisibleOccluderCulled",       // z-only geometric occluder
-        };
+        // The list lives in PreUploadScopes.OcclusionExemptShaders (unit-tested in core too):
+        // DepthMask, and both MRUK InvisibleOccluder variants (Culled and plain, Oct 2026).
 
         private static bool IsSdkOwned(string assetPath)
         {
@@ -127,6 +128,31 @@ namespace DreamPark.PreUploadChecks.Checks
         }
 
         private enum Support { Supported, Missing, Unknown }
+
+        private sealed class MaterialEntry
+        {
+            public Material material;
+            public string assetPath;
+            public string key;
+            public readonly List<ContentRootInfo> users = new List<ContentRootInfo>();
+            public readonly List<string> usingPrefabs = new List<string>();
+            // Reached through a ParticleSystemRenderer: the repair converts it to
+            // DreamPark/Particles, whatever its shader is called.
+            public bool particle;
+            public bool mesh;
+            public readonly SortedSet<string> drawnBy = new SortedSet<string>(StringComparer.Ordinal);
+        }
+
+        private static string DrawnByLabel(PreUploadMaterialSources.Source s)
+        {
+            switch (s)
+            {
+                case PreUploadMaterialSources.Source.Particle:      return "a particle system";
+                case PreUploadMaterialSources.Source.ParticleTrail: return "a particle trail";
+                case PreUploadMaterialSources.Source.LuaInjection:  return "a LuaBehaviour material injection";
+                default:                                            return "a mesh renderer";
+            }
+        }
 
         // Keyed by shader ASSET GUID, not instance id: a reimported shader usually
         // keeps its instance id, so an instance-id cache would hand back the stale
@@ -150,20 +176,25 @@ namespace DreamPark.PreUploadChecks.Checks
         {
             var findings = new List<Finding>();
 
-            // material asset path → the roots that use it on a mesh renderer
-            var meshMaterials = new Dictionary<string, List<ContentRootInfo>>(StringComparer.OrdinalIgnoreCase);
-            var usingPrefabs = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            // Embedded materials in one model all share the model's asset path, so
+            // path alone is not an identity. The key includes the material's local
+            // file id and keeps each sub-asset independently actionable.
+            var meshMaterials = new Dictionary<string, MaterialEntry>(StringComparer.Ordinal);
+
+            // The Sequence special levels are not content roots (ContentRootScanner skips
+            // them) but they ship, so their materials are checked too (Oct 2026).
+            var scanRoots = ContentRootScanner.WithSequenceSpecialLevels(ctx.contentId, ctx.roots);
 
             int i = 0;
-            foreach (var root in ctx.roots)
+            foreach (var root in scanRoots)
             {
-                ctx.Progress((float)i / Mathf.Max(1, ctx.roots.Count) * 0.6f,
+                ctx.Progress((float)i / Mathf.Max(1, scanRoots.Count) * 0.6f,
                              $"Collecting materials in {root.name}…");
                 i++;
 
                 try
                 {
-                    CollectMeshMaterials(root, meshMaterials, usingPrefabs);
+                    CollectMeshMaterials(root, meshMaterials);
                 }
                 catch (Exception e)
                 {
@@ -172,22 +203,35 @@ namespace DreamPark.PreUploadChecks.Checks
             }
 
             int j = 0;
-            foreach (var kv in meshMaterials)
+            foreach (var entry in meshMaterials.Values.OrderBy(e => e.key, StringComparer.Ordinal))
             {
                 ctx.Progress(0.6f + (float)j / Mathf.Max(1, meshMaterials.Count) * 0.4f,
                              "Checking shaders for Meta occlusion…");
                 j++;
 
-                string matPath = kv.Key;
-                var users = kv.Value;
-
-                var mat = AssetDatabase.LoadAssetAtPath<Material>(matPath);
+                string matPath = entry.assetPath;
+                var users = entry.users;
+                var mat = entry.material;
                 if (mat == null) continue;
 
                 var shader = mat.shader;
                 string shaderName = shader != null ? shader.name : "(none)";
 
-                if (IntentionallyExempt.Contains(shaderName)) continue;
+                if (PreUploadScopes.IsOcclusionExempt(shaderName)) continue;
+
+                // TextMesh Pro on a stock SDF shader (Oct 2026). TMP's shaders live under
+                // Assets/DreamPark/ThirdParty/ in a game project, so the SDK-owned-shader rule
+                // below used to skip every TMP material without a word — and world-space text
+                // drew over the guest's hands and furniture in every title. The material is
+                // the creator's and the repair is lossless (same properties, DreamPark twin
+                // shader), so it is reported here, as a Warning: the new app also swaps
+                // world-space content text at runtime (DreamParkTmpOcclusion), so it is not
+                // Blocking. SDK-owned TMP materials ship re-pointed already.
+                if (DreamParkTmpShaders.IsStockTmpSdf(shader))
+                {
+                    if (!IsSdkOwned(matPath)) findings.Add(TmpFinding(entry, shaderName));
+                    continue;
+                }
 
                 // SDK-owned material, or a creator material still pointing at an SDK
                 // shader. Either way the occlusion decision belongs to the SDK, not to
@@ -201,10 +245,13 @@ namespace DreamPark.PreUploadChecks.Checks
                 // A material embedded in an FBX is ReadOnlyEmbedded and cannot be
                 // converted in place. Offering a Convert button that silently no-ops
                 // is worse than saying so.
-                bool embedded = !matPath.EndsWith(".mat", StringComparison.OrdinalIgnoreCase);
+                bool embedded = AssetDatabase.IsSubAsset(mat)
+                    || !matPath.EndsWith(".mat", StringComparison.OrdinalIgnoreCase);
+                bool contentOwned = ContentRootScanner.IsUnderContentRoot(matPath, ctx.contentRoot);
 
                 var owner = users.FirstOrDefault();
-                string userList = string.Join(", ", users.Select(u => u.name).Distinct().Take(6));
+                string userList = string.Join(", ", users.Select(u => u.name).Distinct().Take(6))
+                                + (entry.drawnBy.Count > 0 ? "\nDrawn by: " + string.Join(", ", entry.drawnBy) : "");
 
                 var finding = new Finding
                 {
@@ -212,46 +259,97 @@ namespace DreamPark.PreUploadChecks.Checks
                     severity = support == Support.Missing ? CheckSeverity.Blocking : CheckSeverity.Warning,
                     assetGuid = owner != null ? owner.guid : AssetDatabase.AssetPathToGUID(matPath),
                     assetPath = owner != null ? owner.assetPath : matPath,
-                    subKey = matPath,
+                    subKey = entry.key,
                     title = support == Support.Missing
-                        ? $"{Path.GetFileNameWithoutExtension(matPath)} — shader '{shaderName}' has no Meta occlusion"
-                        : $"{Path.GetFileNameWithoutExtension(matPath)} — could not verify occlusion on '{shaderName}'",
+                        ? $"{(embedded ? mat.name + " (in " + Path.GetFileName(matPath) + ")" : Path.GetFileNameWithoutExtension(matPath))} — shader '{shaderName}' has no Meta occlusion"
+                        : $"{(embedded ? mat.name + " (in " + Path.GetFileName(matPath) + ")" : Path.GetFileNameWithoutExtension(matPath))} — could not verify occlusion on '{shaderName}'",
                     detail = support == Support.Missing
                         ? $"{matPath}\nUsed by: {userList}\n\n"
                         + "This material will render at full opacity regardless of real-world depth, so "
                         + "it draws over the guest's hands, furniture and walls."
                         + (embedded ? "\n\nThis material is embedded in a model file and cannot be converted "
-                                    + "in place — run Extract Materials on the source asset first." : "")
+                                    + "in place. DreamPark can extract the model's materials beside it, "
+                                    + "rebind the model, and convert the affected extracted materials." : "")
                         : $"{matPath}\nUsed by: {userList}\n\n"
-                        + "The shader could not be read (compile error, unreadable package, or an "
-                        + "unresolvable subgraph reference), so this is reported rather than blocked. "
-                        + "Verify by hand.",
+                         + "The shader could not be read (compile error, unreadable package, or an "
+                         + "unresolvable subgraph reference), so this is reported rather than blocked. "
+                         + "Verify by hand.",
                 };
 
-                if (support == Support.Missing && !embedded)
+                if (!contentOwned)
+                {
+                    finding.detail += "\n\nThis asset is outside the selected content package. DreamPark "
+                                    + "will not rewrite a shared or package-owned source in place; resolve "
+                                    + "it into the content folder first, then run the material repair.";
+                }
+
+                if (support == Support.Missing)
                 {
                     string capturedPath = matPath;
-                    List<string> prefabs;
-                    usingPrefabs.TryGetValue(matPath, out prefabs);
-                    var capturedPrefabs = prefabs ?? new List<string>();
+                    var capturedPrefabs = entry.usingPrefabs.ToList();
 
-                    finding.fixes.Add(new FixAction(
-                        "Convert to DreamPark shader",
-                        () => Convert(capturedPath, capturedPrefabs))
+                    if (!contentOwned && owner != null
+                        && OutsideContentFolderCheck.Classify(capturedPath, ctx.contentId)
+                            == OutsideContentFolderCheck.Verdict.Violation
+                        && OutsideContentFolderCheck.CanOfferMove(capturedPath))
                     {
-                        tooltip = "Runs the existing MaterialConverter, preserving textures and "
-                                + "colour/scalar values.",
-                        confirmTitle = "Convert material",
-                        confirmMessage =
-                            $"Convert {Path.GetFileName(capturedPath)} to a DreamPark shader?\n\n"
-                          + "Textures and colour/scalar values are remapped by alias. GUIDs are "
-                          + "preserved — prefab references stay valid.\n\n"
-                          + "Conversion is LOSSY for anything the DreamPark shaders don't replicate: "
-                          + "screen-space refraction, gradient/LUT remapping, custom channel masks, "
-                          + "per-axis UV scrolling, rim/fresnel. Vector and int properties are not "
-                          + "carried across at all.\n\n"
-                          + "Cannot be undone via Ctrl-Z. Use version control to revert.",
-                    });
+                        string rootPath = owner.assetPath;
+                        string contentId = ctx.contentId;
+                        string contentRoot = ctx.contentRoot;
+                        finding.fixes.Add(FixAction.Interactive("Resolve into content first…", completed =>
+                        {
+                            OutsideContentDependencyResolverPopup.Show(
+                                rootPath, capturedPath, contentId, contentRoot, completed);
+                        }, OutsideContentFolderCheck.CheckId, OpaqueAlphaClipCheck.CheckId));
+                    }
+                    else if (contentOwned && embedded)
+                    {
+                        finding.fixes.Add(new FixAction(
+                            "Extract Materials + Convert",
+                            () => ExtractAndConvert(capturedPath, capturedPrefabs))
+                        {
+                            tooltip = "Extracts all embedded materials beside the model, rebinds the model, "
+                                    + "then converts extracted materials that lack Meta occlusion.",
+                            bulkKey = "extract-and-convert-embedded-materials",
+                            bulkLabel = "Extract Materials + Convert",
+                            // One extraction repairs every embedded material in this
+                            // model; sibling findings would otherwise run it twice.
+                            canBulk = false,
+                            affectedPaths = new[] { capturedPath },
+                            alsoRerunCheckIds = new[] { OpaqueAlphaClipCheck.CheckId },
+                            confirmTitle = "Extract and convert embedded materials",
+                            confirmMessage =
+                                $"Extract all embedded materials from {Path.GetFileName(capturedPath)} and "
+                              + "convert the affected materials to DreamPark shaders?\n\n"
+                              + "The .mat files will be created beside the model and the model importer will "
+                              + "be rebound to them. Conversion preserves common textures and values, but is "
+                              + "lossy for custom shader features DreamPark shaders do not replicate.\n\n"
+                              + "This modifies the model's import remaps and creates new assets. It cannot be "
+                              + "undone via Ctrl-Z; use version control to revert.",
+                        });
+                    }
+                    else if (contentOwned)
+                    {
+                        bool capturedParticle = entry.particle && !entry.mesh;
+                        finding.fixes.Add(new FixAction(
+                            "Convert to DreamPark shader",
+                            () => Convert(capturedPath, capturedPrefabs, capturedParticle))
+                        {
+                            tooltip = "Runs the existing MaterialConverter, preserving textures and "
+                                    + "colour/scalar values.",
+                            confirmTitle = "Convert material",
+                            confirmMessage =
+                                $"Convert {Path.GetFileName(capturedPath)} to a DreamPark shader?\n\n"
+                              + "Textures and colour/scalar values are remapped by alias. GUIDs are "
+                              + "preserved — prefab references stay valid.\n\n"
+                              + "Conversion is LOSSY for anything the DreamPark shaders don't replicate: "
+                              + "screen-space refraction, gradient/LUT remapping, custom channel masks, "
+                              + "per-axis UV scrolling, rim/fresnel. Vector and int properties are not "
+                              + "carried across at all.\n\n"
+                              + "Cannot be undone via Ctrl-Z. Use version control to revert.",
+                            alsoRerunCheckIds = new[] { OpaqueAlphaClipCheck.CheckId },
+                        });
+                    }
                 }
 
                 // Navigation last: the actionable fix should be the leftmost button,
@@ -270,48 +368,157 @@ namespace DreamPark.PreUploadChecks.Checks
         }
 
         // ------------------------------------------------------------------
-        // Scoping: mesh renderers only
+        // TextMesh Pro: stock SDF shader → DreamPark TMP twin (Warning + one-click repair).
+
+        private static Finding TmpFinding(MaterialEntry entry, string shaderName)
+        {
+            var mat = entry.material;
+            string matPath = entry.assetPath;
+            var owner = entry.users.FirstOrDefault();
+            string userList = string.Join(", ", entry.users.Select(u => u.name).Distinct().Take(6));
+            bool subAsset = AssetDatabase.IsSubAsset(mat)
+                || !matPath.EndsWith(".mat", StringComparison.OrdinalIgnoreCase);
+            string label = subAsset ? mat.name + " (in " + Path.GetFileName(matPath) + ")"
+                                    : Path.GetFileNameWithoutExtension(matPath);
+            string target = DreamParkTmpOcclusion.OccludedShaderNameFor(shaderName);
+
+            var finding = new Finding
+            {
+                checkId = CheckId,
+                severity = CheckSeverity.Warning,
+                assetGuid = owner != null ? owner.guid : AssetDatabase.AssetPathToGUID(matPath),
+                assetPath = owner != null ? owner.assetPath : matPath,
+                subKey = entry.key,
+                title = $"{label} — TextMesh Pro shader '{shaderName}' has no Meta occlusion",
+                detail = $"{matPath}\nUsed by: {userList}\n\n"
+                       + "World-space text on this material draws over the guest's hands, furniture and "
+                       + "walls on Quest. DreamPark apps from Oct 2026 swap world-space text in content to "
+                       + "the occluded shader at runtime; older apps render the material as shipped.\n\n"
+                       + $"Fix: re-point it to '{target}' — TMP's same shader plus Meta occlusion. Same "
+                       + "properties, keywords and look; only the shader reference changes.",
+            };
+
+            bool editable = matPath.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase);
+            if (editable)
+            {
+                Material captured = mat;
+                string capturedPath = matPath;
+                string capturedKey = entry.key;
+                finding.fixes.Add(new FixAction("Use DreamPark TMP shader", () =>
+                {
+                    Material m = captured != null ? captured : ReloadMaterial(capturedPath, capturedKey);
+                    bool ok = DreamParkTmpShaders.Repoint(m);
+                    InvalidateShaderCaches();
+                    return ok && m != null && !DreamParkTmpShaders.IsStockTmpSdf(m.shader);
+                })
+                {
+                    tooltip = "Re-points the material to the DreamPark TextMesh Pro shader (TMP's SDF shader "
+                            + "with Meta environment occlusion). Lossless: properties, keywords, render "
+                            + "queue and GUIDs are kept.",
+                    bulkKey = "tmp-use-dreampark-shader",
+                    bulkLabel = "Use DreamPark TMP shaders",
+                    affectedPaths = new[] { capturedPath },
+                    confirmTitle = "Use DreamPark TMP shader",
+                    confirmMessage =
+                        $"Re-point {label} from '{shaderName}' to '{target}'?\n\n"
+                      + "It is the same TextMesh Pro shader with Meta environment occlusion added: every "
+                      + "property, keyword and the render queue are kept, and the text looks the same in "
+                      + "the Editor. If this font is also used by screen-space UI, that UI gets the same "
+                      + "shader, which is a no-op off-headset.\n\n"
+                      + "Cannot be undone via Ctrl-Z once saved. Use version control to revert.",
+                });
+            }
+            else
+            {
+                finding.detail += "\n\nThis material is in a read-only package and cannot be re-pointed in "
+                                + "place. Duplicate the font asset into the content folder and use that.";
+            }
+
+            string pingPath = matPath;
+            finding.fixes.Add(FixAction.Navigate("Select material", () =>
+            {
+                var obj = AssetDatabase.LoadMainAssetAtPath(pingPath);
+                if (obj != null) { Selection.activeObject = obj; EditorGUIUtility.PingObject(obj); }
+            }));
+            return finding;
+        }
+
+        // The finding's key is the path, or "path::localFileId" for a sub-asset (a font asset's
+        // material). Used only when the captured reference went stale across a reimport.
+        private static Material ReloadMaterial(string path, string key)
+        {
+            long wanted = 0;
+            int sep = key != null ? key.LastIndexOf("::", StringComparison.Ordinal) : -1;
+            if (sep >= 0) long.TryParse(key.Substring(sep + 2), out wanted);
+            foreach (var m in AssetDatabase.LoadAllAssetsAtPath(path).OfType<Material>())
+            {
+                if (wanted == 0) return m;
+                string g; long id;
+                if (AssetDatabase.TryGetGUIDAndLocalFileIdentifier(m, out g, out id) && id == wanted) return m;
+            }
+            return null;
+        }
+
+        // ------------------------------------------------------------------
+        // Scoping: what draws in the world
         //
         // MaterialUsageGraph deliberately over-collects — its own comment says
         // GetDependencies "follows Renderer.sharedMaterials, UI Image.material,
         // ParticleSystemRenderer materials, etc. without us having to know every
-        // component type" — so it cannot answer "is this on an actual mesh?".
-        // LineRenderer, TrailRenderer, SpriteRenderer and BillboardRenderer all derive
-        // from Renderer but NOT from MeshRenderer, so a positive type test excludes
-        // them cleanly.
+        // component type" — so it cannot answer "is this drawn in the world?".
+        // PreUploadMaterialSources.Collect answers it with positive type tests:
+        // MeshRenderer, SkinnedMeshRenderer, ParticleSystemRenderer (main + trail
+        // material) and Lua material injections (a LuaBehaviour that assigns an injected
+        // Material at runtime draws it on a mesh — Zombiez, Oct 2026: 29 such materials
+        // drew over the guest's hands with no finding). LineRenderer, TrailRenderer,
+        // SpriteRenderer, BillboardRenderer and UI stay out.
 
         private static void CollectMeshMaterials(
             ContentRootInfo root,
-            Dictionary<string, List<ContentRootInfo>> meshMaterials,
-            Dictionary<string, List<string>> usingPrefabs)
+            Dictionary<string, MaterialEntry> meshMaterials)
         {
             GameObject go = PrefabUtility.LoadPrefabContents(root.assetPath);
             if (go == null) return;
 
             try
             {
-                foreach (var r in go.GetComponentsInChildren<Renderer>(true))
+                foreach (var hit in PreUploadMaterialSources.Collect(go))
                 {
-                    if (r == null) continue;
-                    if (!(r is MeshRenderer || r is SkinnedMeshRenderer)) continue;
+                    var m = hit.material;
+                    if (m == null) continue;
+                    string mp = AssetDatabase.GetAssetPath(m);
+                    if (string.IsNullOrEmpty(mp)) continue;
+                    if (ContentRootScanner.IsThirdPartyLocal(mp)) continue;
 
-                    foreach (var m in r.sharedMaterials)
+                    string key = mp;
+                    string guid;
+                    long localId;
+                    // Preserve the historical path-only ignore key for ordinary
+                    // .mat assets. Only sub-assets need the local id to avoid
+                    // collapsing every material in one model into one finding.
+                    if (AssetDatabase.IsSubAsset(m)
+                        && AssetDatabase.TryGetGUIDAndLocalFileIdentifier(m, out guid, out localId))
+                        key = mp + "::" + localId;
+
+                    MaterialEntry entry;
+                    if (!meshMaterials.TryGetValue(key, out entry))
                     {
-                        if (m == null) continue;
-                        string mp = AssetDatabase.GetAssetPath(m);
-                        if (string.IsNullOrEmpty(mp)) continue;
-                        if (ContentRootScanner.IsThirdPartyLocal(mp)) continue;
-
-                        List<ContentRootInfo> users;
-                        if (!meshMaterials.TryGetValue(mp, out users))
-                            meshMaterials[mp] = users = new List<ContentRootInfo>();
-                        if (!users.Contains(root)) users.Add(root);
-
-                        List<string> prefabs;
-                        if (!usingPrefabs.TryGetValue(mp, out prefabs))
-                            usingPrefabs[mp] = prefabs = new List<string>();
-                        if (!prefabs.Contains(root.assetPath)) prefabs.Add(root.assetPath);
+                        meshMaterials[key] = entry = new MaterialEntry
+                        {
+                            material = m,
+                            assetPath = mp,
+                            key = key,
+                        };
                     }
+                    if (hit.source == PreUploadMaterialSources.Source.Particle
+                        || hit.source == PreUploadMaterialSources.Source.ParticleTrail)
+                        entry.particle = true;
+                    else if (hit.source == PreUploadMaterialSources.Source.Mesh)
+                        entry.mesh = true;
+                    entry.drawnBy.Add(DrawnByLabel(hit.source));
+                    if (!entry.users.Contains(root)) entry.users.Add(root);
+                    if (!entry.usingPrefabs.Contains(root.assetPath))
+                        entry.usingPrefabs.Add(root.assetPath);
                 }
             }
             finally
@@ -529,14 +736,72 @@ namespace DreamPark.PreUploadChecks.Checks
         // ------------------------------------------------------------------
         // Fix: reuse the existing converter.
 
-        private static bool Convert(string materialPath, List<string> prefabPaths)
+        private static bool ExtractAndConvert(string modelPath, List<string> prefabPaths)
+        {
+            try
+            {
+                var extraction = new ConversionResult { sourcePath = modelPath, ok = true };
+                int extracted;
+                List<string> extractedPaths;
+                string destination = AssetClassifier.DefaultMaterialsFolder(modelPath);
+
+                if (!AssetClassifier.ExtractEmbeddedMaterials(
+                        modelPath, destination, extraction, out extracted, out extractedPaths))
+                {
+                    Debug.LogWarning($"[DreamPark] Could not extract embedded materials from "
+                                   + $"{modelPath}: {extraction.error ?? "unknown extraction error"}");
+                    return false;
+                }
+
+                bool convertedAll = true;
+                foreach (string path in extractedPaths)
+                {
+                    var material = AssetDatabase.LoadAssetAtPath<Material>(path);
+                    if (material == null) { convertedAll = false; continue; }
+                    if (Evaluate(material.shader) != Support.Missing) continue;
+                    if (!Convert(path, prefabPaths, false)) convertedAll = false;
+                }
+
+                AssetDatabase.SaveAssets();
+                InvalidateShaderCaches();
+
+                bool blockingExtractedRemains = extractedPaths
+                    .Select(AssetDatabase.LoadAssetAtPath<Material>)
+                    .Where(m => m != null)
+                    .Any(m => Evaluate(m.shader) == Support.Missing);
+
+                // Verify the model no longer contains a blocking embedded material.
+                // This catches partial ExtractAsset failures and importer remaps that
+                // did not persist even when the individual calls reported success.
+                bool blockingEmbeddedRemains = AssetDatabase.LoadAllAssetsAtPath(modelPath)
+                    .OfType<Material>()
+                    .Any(m => AssetDatabase.IsSubAsset(m) && Evaluate(m.shader) == Support.Missing);
+
+                return convertedAll && !blockingExtractedRemains && !blockingEmbeddedRemains;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[DreamPark] Could not extract and convert materials from {modelPath}: {e}");
+                return false;
+            }
+            finally
+            {
+                EditorUtility.ClearProgressBar();
+                InvalidateShaderCaches();
+            }
+        }
+
+        private static bool Convert(string materialPath, List<string> prefabPaths, bool usedByParticles)
         {
             try
             {
                 var mat = AssetDatabase.LoadAssetAtPath<Material>(materialPath);
                 if (mat == null) return false;
 
-                bool isParticle = MaterialConverter.IsParticleMaterial(mat);
+                // A material on a ParticleSystemRenderer belongs on DreamPark/Particles even
+                // when its shader name does not say "particle" (the planner uses the same
+                // signal: MaterialUsage.isUsedByParticleRenderer).
+                bool isParticle = usedByParticles || MaterialConverter.IsParticleMaterial(mat);
 
                 var row = new MaterialPlanRow
                 {
@@ -549,6 +814,7 @@ namespace DreamPark.PreUploadChecks.Checks
                         // refresh ParticleSystemRenderers. An empty list silently skips
                         // the flipbook auto-fix.
                         usingPrefabs = prefabPaths ?? new List<string>(),
+                        isUsedByParticleRenderer = usedByParticles,
                     },
                     kind = isParticle
                         ? MaterialConvertKind.ConvertParticle

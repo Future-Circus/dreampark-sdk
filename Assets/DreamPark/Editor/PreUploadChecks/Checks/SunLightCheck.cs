@@ -58,6 +58,7 @@ namespace DreamPark.PreUploadChecks.Checks
             public bool activeInHierarchy;
             public float intensity;
             public string nestedSourcePath;   // null when the Light is defined on this prefab
+            public string nestedSourceHierarchyPath;
             public bool goIsBare;             // Transform + Light only, no children
         }
 
@@ -121,11 +122,34 @@ namespace DreamPark.PreUploadChecks.Checks
 
                         string nested = hit.nestedSourcePath;
                         string hierarchy = hit.hierarchyPath;
+                        string nestedHierarchy = hit.nestedSourceHierarchyPath;
 
                         if (!nestedIsOurs)
                         {
                             finding.detail += $"\n\n{nested} is outside this content package, so no "
-                                            + "automatic fix is offered — edit it where it lives.";
+                                            + "source asset will be edited. DreamPark can instead record "
+                                            + "a removed-component override on this content prefab only; "
+                                            + "other consumers of the nested prefab remain unchanged.";
+                            string outerPrefab = root.assetPath;
+                            finding.fixes.Add(new FixAction(
+                                "Remove from this prefab only",
+                                () => RemoveNestedLightOverride(outerPrefab, hierarchy, nested))
+                            {
+                                tooltip = "Records a removed-Light override on this content prefab; the "
+                                        + "nested source prefab and its other consumers are unchanged.",
+                                bulkKey = "remove-external-nested-light-override",
+                                bulkLabel = "Remove external nested lights locally",
+                                affectedPaths = new[] { outerPrefab },
+                                alsoRerunCheckIds = new[] { RootComponentsCheck.CheckId },
+                                confirmTitle = "Remove nested light from this prefab only",
+                                confirmMessage =
+                                    $"Remove the directional Light at '{hierarchy}' from {root.name} only?\n\n"
+                                  + $"DreamPark will save a removed-component override in:\n{outerPrefab}\n\n"
+                                  + $"It will NOT edit the nested source:\n{nested}\n\n"
+                                  + "If the nested prefab is replaced or its hierarchy is substantially "
+                                  + "changed later, review this override. Cannot be undone via Ctrl-Z; use "
+                                  + "version control to revert.",
+                            });
                             finding.fixes.Add(FixAction.Navigate("Select nested prefab", () =>
                             {
                                 var obj = AssetDatabase.LoadMainAssetAtPath(nested);
@@ -137,8 +161,11 @@ namespace DreamPark.PreUploadChecks.Checks
 
                         finding.fixes.Add(new FixAction(
                             $"Fix in {System.IO.Path.GetFileName(nested)}",
-                            () => RemoveLights(nested, null))
+                            () => RemoveLights(nested, nestedHierarchy))
                         {
+                            canBulk = false,
+                            affectedPaths = new[] { nested },
+                            alsoRerunCheckIds = new[] { RootComponentsCheck.CheckId },
                             tooltip = "Removes the Light component from the nested prefab asset.",
                             confirmTitle = "Remove directional light",
                             confirmMessage =
@@ -160,6 +187,7 @@ namespace DreamPark.PreUploadChecks.Checks
                         finding.fixes.Add(new FixAction("Fix Now", () => RemoveLights(path, hierarchy))
                         {
                             tooltip = "Removes the Light component (keeps the GameObject).",
+                            alsoRerunCheckIds = new[] { RootComponentsCheck.CheckId },
                             confirmTitle = "Remove directional light",
                             confirmMessage =
                                 $"Remove the directional Light on '{hierarchy}' from {root.name}?\n\n"
@@ -199,6 +227,7 @@ namespace DreamPark.PreUploadChecks.Checks
                     // component defined directly on the prefab being edited, which is
                     // exactly what makes this test work.
                     string nestedSource = null;
+                    string nestedSourceHierarchy = null;
                     try
                     {
                         var original = PrefabUtility.GetCorrespondingObjectFromOriginalSource(light);
@@ -207,7 +236,13 @@ namespace DreamPark.PreUploadChecks.Checks
                             string p = AssetDatabase.GetAssetPath(original);
                             if (!string.IsNullOrEmpty(p) &&
                                 !string.Equals(p, prefabPath, StringComparison.OrdinalIgnoreCase))
+                            {
                                 nestedSource = p;
+                                var sourceRoot = original.transform;
+                                while (sourceRoot.parent != null) sourceRoot = sourceRoot.parent;
+                                nestedSourceHierarchy = HierarchyPath(
+                                    sourceRoot, original.transform);
+                            }
                         }
                     }
                     catch { /* nesting detection is a nicety, not a correctness gate */ }
@@ -221,6 +256,7 @@ namespace DreamPark.PreUploadChecks.Checks
                         activeInHierarchy = go.activeInHierarchy,
                         intensity = light.intensity,
                         nestedSourcePath = nestedSource,
+                        nestedSourceHierarchyPath = nestedSourceHierarchy,
                         goIsBare = go.transform.childCount == 0
                                 && go.GetComponents<Component>().Length <= 2,
                     });
@@ -235,9 +271,105 @@ namespace DreamPark.PreUploadChecks.Checks
             return hits;
         }
 
-        // Removes directional Lights from a prefab asset. When hierarchyPath is null,
-        // every directional light in the prefab is removed (used for the nested-source
-        // fix, where the hierarchy path belongs to a different prefab's tree).
+        // Remove a Light inherited from a nested prefab without touching that nested
+        // source asset. Destroying the inherited component while editing the OUTER
+        // prefab records a removed-component override in the outer asset. We verify
+        // both the source identity before mutation and the resolved hierarchy after
+        // saving so a stale finding cannot delete the wrong component.
+        private static bool RemoveNestedLightOverride(
+            string outerPrefabPath, string hierarchyPath, string expectedNestedSourcePath)
+        {
+            GameObject root = null;
+            try
+            {
+                root = PrefabUtility.LoadPrefabContents(outerPrefabPath);
+                if (root == null) return false;
+
+                var light = root.GetComponentsInChildren<Light>(true)
+                    .FirstOrDefault(l => l != null
+                                      && l.type == LightType.Directional
+                                      && HierarchyPath(root.transform, l.transform) == hierarchyPath);
+                if (light == null)
+                {
+                    Debug.LogWarning($"[DreamPark] The directional light at '{hierarchyPath}' no longer "
+                                   + $"exists in {outerPrefabPath}; re-run the check.");
+                    return false;
+                }
+
+                var original = PrefabUtility.GetCorrespondingObjectFromOriginalSource(light);
+                string actualSourcePath = original != null ? AssetDatabase.GetAssetPath(original) : null;
+                if (string.IsNullOrEmpty(actualSourcePath)
+                    || !string.Equals(actualSourcePath, expectedNestedSourcePath,
+                                      StringComparison.OrdinalIgnoreCase)
+                    || !PrefabUtility.IsPartOfPrefabInstance(light))
+                {
+                    Debug.LogWarning($"[DreamPark] Refused to remove '{hierarchyPath}': its nested source "
+                                   + $"changed from {expectedNestedSourcePath} to "
+                                   + $"{actualSourcePath ?? "(none)"}. Re-run the check.");
+                    return false;
+                }
+
+                UnityEngine.Object.DestroyImmediate(light, true);
+
+                bool saved;
+                PrefabUtility.SaveAsPrefabAsset(root, outerPrefabPath, out saved);
+                if (!saved)
+                {
+                    Debug.LogWarning($"[DreamPark] Failed to save the removed-Light override in "
+                                   + outerPrefabPath + ".");
+                    return false;
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[DreamPark] Could not remove the nested directional light from "
+                               + $"{outerPrefabPath}: {e}");
+                return false;
+            }
+            finally
+            {
+                if (root != null) PrefabUtility.UnloadPrefabContents(root);
+            }
+
+            // Reload from disk rather than trusting the in-memory deletion. This also
+            // confirms that Unity serialized the removal as an override successfully.
+            GameObject verifyRoot = null;
+            try
+            {
+                verifyRoot = PrefabUtility.LoadPrefabContents(outerPrefabPath);
+                if (verifyRoot == null) return false;
+
+                bool stillPresent = verifyRoot.GetComponentsInChildren<Light>(true)
+                    .Any(l => l != null
+                           && l.type == LightType.Directional
+                           && HierarchyPath(verifyRoot.transform, l.transform) == hierarchyPath);
+                if (stillPresent)
+                {
+                    Debug.LogWarning($"[DreamPark] Unity did not persist the removed-Light override at "
+                                   + $"'{hierarchyPath}' in {outerPrefabPath}.");
+                    return false;
+                }
+
+                Debug.Log($"[DreamPark] Removed the nested directional light at '{hierarchyPath}' "
+                        + $"from {outerPrefabPath} only. Source left unchanged: "
+                        + expectedNestedSourcePath);
+                return true;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[DreamPark] Could not verify the removed-Light override in "
+                               + $"{outerPrefabPath}: {e}");
+                return false;
+            }
+            finally
+            {
+                if (verifyRoot != null) PrefabUtility.UnloadPrefabContents(verifyRoot);
+            }
+        }
+
+        // Removes the directional Light at one sibling-indexed hierarchy path from a
+        // prefab asset. A null path remains supported for deliberate whole-prefab
+        // callers, but pre-upload findings always pass the exact scanned component.
         private static bool RemoveLights(string prefabPath, string hierarchyPath)
         {
             GameObject root = null;

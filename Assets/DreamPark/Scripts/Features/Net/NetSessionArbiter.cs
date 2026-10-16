@@ -37,6 +37,15 @@ namespace DreamPark
         [Tooltip("Allow this device to self-elect as host. Hosting is compiled for Android (Quest) and the Editor; iOS builds are always client-only.")]
         public bool allowHosting = true;
 
+        [Tooltip("Self-election waits up to this long after start for a park id (SetParkContext), so a headset does not host a park-less room that the park load then has to rename. 0 = never wait.")]
+        public float parkContextWaitSeconds = DefaultParkContextWait;
+
+#if DREAMPARKCORE
+        const float DefaultParkContextWait = 15f;   // core: ParkAnchor always sets it on park load
+#else
+        const float DefaultParkContextWait = 0f;    // creator SDK projects: nobody sets it — host at once
+#endif
+
         [Header("Timing (seconds)")]
         public float listenBaseSeconds = 3f;      // + deterministic 0..2 s jitter from hostId
         public float beaconStaleSeconds = 3f;     // host beacons are 1 Hz → 3 missed = dead
@@ -57,6 +66,29 @@ namespace DreamPark
         public int HostAdvertisedCap { get; private set; }
         public bool IsHost => State == SessionState.Hosting;
         public int HostedPeerCount => _relay?.PeerCount ?? 0;
+
+        /// <summary>
+        /// True only when nobody else can be in this device's session right now:
+        ///   • it HOSTS a session it started from a fresh search (not a
+        ///     re-election, where the old room is on its way over) and no other
+        ///     device is connected to its relay — only its own loopback client; or
+        ///   • it is still searching after a FULL listen window in which it heard
+        ///     no kiosk and no peer host (an iOS client, or a host that could not
+        ///     beacon for lack of a LAN address).
+        /// Never while any host is beaconing. The session (DreamParkSession) and
+        /// every dp.shared_state then sync at once instead of waiting out the
+        /// silence windows for answers nobody can send (SOLO_OFFLINE.md B/C).
+        /// </summary>
+        public bool KnownAlone
+        {
+            get
+            {
+                if (_dreamBox.HasValue || _peerHosts.Count > 0) return false;
+                if (State == SessionState.Hosting) return _hostingFromSearch && _relay != null && HostedPeerCount <= 1;
+                if (State == SessionState.Searching) return _listenedSilent;
+                return false;
+            }
+        }
         public event Action<SessionState> OnStateChanged;
 
         /// <summary>True while an enabled arbiter exists — DreamBoxClient defers discovery to it.</summary>
@@ -80,7 +112,32 @@ namespace DreamPark
             if (a.parkId == newParkId) return;
 
             Debug.Log($"[Arbiter] Park context: '{a.parkId}' → '{newParkId}'");
+            string oldParkId = a.parkId;
             a.parkId = newParkId;
+
+            // Oct 11 2026 (net-arbiter, FINDINGS "Restart didn't rejoin"): headsets
+            // boot with an empty park id and learn it when the park loads. A room
+            // formed under "match any" is not the wrong park's room — it is this
+            // park's room, found early. Keep it:
+            //   • hosting from empty → put the park id on the SAME beacon (same
+            //     relay, same key, clients stay connected);
+            //   • a client whose host advertises no park, or this park → stay.
+            // Only a real park change (or a host in another park) re-runs the ladder.
+            bool fromUnknown = string.IsNullOrEmpty(oldParkId);
+            if (a.State == SessionState.Hosting && fromUnknown)
+            {
+                a._beacon?.SetParkId(newParkId);
+                return;
+            }
+            if (a.State == SessionState.ClientPeer && a.CurrentHostParkAllows(newParkId))
+            {
+                Debug.Log($"[Arbiter] Host {a.CurrentHostId} advertises park '{a.CurrentHostParkId()}' — staying in its session.");
+                return;
+            }
+            if (fromUnknown && a.State != SessionState.ClientPeer)
+                return;   // searching / re-electing: the silence we heard matched ANY park, so it still counts
+
+            a._listenedSilent = false;   // a new park's room: listen again before claiming to be alone
 
             // Membership in the old park's session is no longer valid.
             if (a.State == SessionState.Hosting)
@@ -96,6 +153,43 @@ namespace DreamPark
             }
             // ClientDreamBox is left alone: the kiosk relay is park-agnostic and
             // paired sessions are governed by SessionContext, not the beacon scope.
+        }
+
+        /// <summary>Park id the host we're in (or joining) advertises, from its latest beacon.</summary>
+        string CurrentHostParkId()
+        {
+            if (CurrentHostId != null && _peerHosts.TryGetValue(CurrentHostId, out var r)) return r.info.parkId ?? "";
+            return _joinBeacon.hostId == CurrentHostId ? (_joinBeacon.parkId ?? "") : "";
+        }
+
+        bool CurrentHostParkAllows(string park)
+        {
+            string hostPark = CurrentHostParkId();
+            return string.IsNullOrEmpty(hostPark) || hostPark == park;
+        }
+
+        /// <summary>
+        /// Oct 11 2026 (net-arbiter): Wi-Fi / network changed — called for the iOS
+        /// host app's NETWORK_CHANGED (DPNetworkStatus path change) and by the
+        /// arbiter's own 2 s LAN-address watcher. Drops everything learned on the
+        /// old network and searches again if we are not connected.
+        /// </summary>
+        public static void NotifyNetworkChanged(string reason)
+        {
+            var a = Instance;
+            if (a == null) return;
+            a._lastLocalIp = NetPlatform.GetLocalIPv4();
+            a._nextIpCheckAt = Time.unscaledTime + IpWatchSeconds;
+            a.OnNetworkChanged(reason);
+        }
+
+        /// <summary>
+        /// The app is back in front (iOS embedded runtime: HOST_LIFECYCLE foreground,
+        /// which never reaches OnApplicationPause). Same as OnApplicationPause(false).
+        /// </summary>
+        public static void NotifyAppResumed(string reason)
+        {
+            Instance?.OnResumed(reason);
         }
 
 #if UNITY_ANDROID || UNITY_EDITOR
@@ -128,6 +222,12 @@ namespace DreamPark
         const string HostLeavingEvent = "host_leaving";
         const float BeaconRecordTtl = 5f;
         const float BlacklistSeconds = 5f;
+
+        /// <summary>Oct 11 2026 (NR10): how often the LAN address is re-read.</summary>
+        const float IpWatchSeconds = 2f;
+
+        /// <summary>Oct 11 2026 (NR4): retry cadence for a discovery socket that will not bind.</summary>
+        const float DiscoveryRetrySeconds = 2f;
 
         /// <summary>
         /// Failed joins in a row before we stop treating a host as joinable.
@@ -187,6 +287,27 @@ namespace DreamPark
 
         float _nextSplitBrainReportAt;
 
+        // Oct 11 2026 (net-arbiter): the session key each blacklist / join-failure
+        // verdict was earned against. A host that restarts keeps its hostId (it is
+        // derived from the device) but always generates a NEW key — so a beacon
+        // with the same hostId and a different key is a different session, and
+        // the verdict about the old one must not keep it out.
+        readonly Dictionary<string, string> _verdictKeys = new();
+
+        // Oct 11 2026 (net-arbiter): park context gate for self-electing, the
+        // LAN-address watcher (NR10), discovery self-heal (NR4), and pause.
+        float _enabledAt;
+        bool _waitParkLogged;
+        string _lastLocalIp;
+        float _nextIpCheckAt;
+        float _nextDiscoveryRetryAt;
+        bool _pausedOutOfHosting;
+
+        // KnownAlone: a full listen window passed with no host heard (reset by
+        // any accepted beacon), and whether hosting began from that search.
+        bool _listenedSilent;
+        bool _hostingFromSearch;
+
         // One "ignored beacon" log per hostId+reason — visibility without spam.
         readonly HashSet<string> _ignoredLogged = new();
 
@@ -219,6 +340,10 @@ namespace DreamPark
             Instance = this;
             _client.OnGlobalEvent += OnGlobalEvent;
             SessionContext.OnSessionPaired += OnSessionPaired;
+            _enabledAt = Time.unscaledTime;
+            _lastLocalIp = NetPlatform.GetLocalIPv4();
+            _nextIpCheckAt = Time.unscaledTime + IpWatchSeconds;
+            _pausedOutOfHosting = false;
             BeginSearching();
         }
 
@@ -257,7 +382,51 @@ namespace DreamPark
                     _relay?.Poll();
                     System.Threading.Thread.Sleep(20);
                 }
+
+                // Oct 11 2026 (net-arbiter, FINDINGS drop cause A): then REALLY
+                // stop. A paused host used to keep its relay and connections open
+                // while forwarding nothing and beaconing nothing; clients trust a
+                // live connection over beacon silence, so the whole room froze
+                // until the host was worn again. Closing the relay disconnects
+                // every client at once and they re-elect among themselves. On
+                // resume this device searches like a fresh one (and, having a new
+                // key, is accepted at once even by a client that blacklisted it).
+                Debug.Log("[Arbiter] Paused while hosting — goodbye sent, relay closed, leaving the session until resume.");
+                StopHosting(announce: false);
+                _client.Disconnect();
+                CurrentHostId = null;
+                StopDiscovery();
+                _pausedOutOfHosting = true;
+                SetState(SessionState.Idle);
             }
+            else if (!paused)
+            {
+                OnResumed("resume");
+            }
+        }
+
+        void OnApplicationFocus(bool focused)
+        {
+            if (focused) OnResumed("focus");
+        }
+
+        /// <summary>
+        /// Back from a pause / regained focus. A host that stepped down searches
+        /// again; everyone else rebinds discovery — the OS may have reclaimed the
+        /// socket while we were away (iOS), and rebinding is cheap (NR4).
+        /// </summary>
+        void OnResumed(string reason)
+        {
+            if (!isActiveAndEnabled) return;
+            if (_pausedOutOfHosting)
+            {
+                _pausedOutOfHosting = false;
+                Debug.Log($"[Arbiter] Resumed ({reason}) after stepping down as host — searching.");
+                BeginSearching();
+                return;
+            }
+            if (State == SessionState.Idle) return;
+            RestartDiscovery(reason);
         }
 
         // ------------------------------------------------------------------
@@ -266,8 +435,12 @@ namespace DreamPark
 
         void Update()
         {
+            // Running Update means we are not paused, whatever callbacks we missed.
+            if (_pausedOutOfHosting) OnResumed("update");
+
             DrainBeacons();
             ExpireRecords();
+            TickNetworkWatch();
 
             if (State == SessionState.Hosting)
             {
@@ -309,8 +482,11 @@ namespace DreamPark
             if (best.HasValue) { Join(best.Value.info, SessionState.ClientPeer); return; }
 
             // 3. Silence — become the host.
-            if (Time.unscaledTime >= _listenDeadline && CanHost)
-                StartHosting();
+            if (Time.unscaledTime >= _listenDeadline)
+            {
+                _listenedSilent = true;   // a full window, nobody beaconing
+                if (CanHost) StartHosting();
+            }
         }
 
         void TickClientDreamBox()
@@ -360,6 +536,20 @@ namespace DreamPark
                 // was unreachable for a while isn't held against it forever.
                 _joinLanded = true;
                 ClearJoinFailures(CurrentHostId);
+            }
+
+            // Oct 11 2026 (net-arbiter): the host restarted (same hostId, new session
+            // key) while our link was down. Our client is retrying the OLD key, which
+            // the new relay refuses — and the beacon never goes stale, so nothing
+            // below would fire for minutes. Join the new session now.
+            if (!connected && _peerHosts.TryGetValue(CurrentHostId ?? "", out var liveHost)
+                && !string.IsNullOrEmpty(liveHost.info.key) && liveHost.info.key != _joinBeacon.key)
+            {
+                Debug.Log($"[Arbiter] Host {CurrentHostId} restarted (new session key) — rejoining it now.");
+                ClearJoinFailures(CurrentHostId);
+                _client.Disconnect();
+                Join(liveHost.info, SessionState.ClientPeer);
+                return;
             }
 
             bool beaconStale = !IsPeerHostAlive(CurrentHostId);
@@ -598,6 +788,7 @@ namespace DreamPark
         void RecordJoinFailure(string hostId)
         {
             if (string.IsNullOrEmpty(hostId)) return;
+            StampVerdictKey(hostId);
             _joinFailures.TryGetValue(hostId, out var f);
             f.count++;
             f.lastAt = Time.unscaledTime;
@@ -614,6 +805,31 @@ namespace DreamPark
             if (string.IsNullOrEmpty(hostId)) return;
             _joinFailures.Remove(hostId);
             _yieldRefusedLogged.Remove(hostId);
+            if (!_blacklist.ContainsKey(hostId)) _verdictKeys.Remove(hostId);
+        }
+
+        /// <summary>Remember which session (key) of this host a verdict is about.</summary>
+        void StampVerdictKey(string hostId)
+        {
+            string key = null;
+            if (_joinBeacon.hostId == hostId) key = _joinBeacon.key;
+            else if (_peerHosts.TryGetValue(hostId, out var r)) key = r.info.key;
+            if (!string.IsNullOrEmpty(key)) _verdictKeys[hostId] = key;
+        }
+
+        /// <summary>
+        /// A beacon from a host we hold a verdict against, under a DIFFERENT
+        /// session key: the host restarted. The verdict was about the old session;
+        /// drop it so the new one is joinable at once instead of after 5-60 s.
+        /// </summary>
+        void ForgiveIfRestarted(string hostId, string key)
+        {
+            if (string.IsNullOrEmpty(key) || !_verdictKeys.TryGetValue(hostId, out var verdictKey)) return;
+            if (verdictKey == key) return;
+            bool had = _blacklist.Remove(hostId) | _joinFailures.Remove(hostId);
+            _verdictKeys.Remove(hostId);
+            _yieldRefusedLogged.Remove(hostId);
+            if (had) Debug.Log($"[Arbiter] Host {hostId} is beaconing a new session — it restarted; clearing its blacklist/unreachable verdict.");
         }
 
         /// <summary>
@@ -628,6 +844,21 @@ namespace DreamPark
 
         void StartHosting()
         {
+            // Oct 11 2026 (net-arbiter): wait for the park id before self-electing,
+            // bounded so a device that never learns one still hosts eventually.
+            if (string.IsNullOrEmpty(parkId) && Time.unscaledTime - _enabledAt < parkContextWaitSeconds)
+            {
+                if (!_waitParkLogged)
+                {
+                    _waitParkLogged = true;
+                    Debug.Log($"[Arbiter] Not hosting yet — waiting up to {parkContextWaitSeconds:0}s for the park id. " +
+                              "Joining any host that appears meanwhile.");
+                }
+                if (State != SessionState.Searching) BeginSearching();
+                return;
+            }
+
+            _hostingFromSearch = State == SessionState.Searching;
             _sessionKey = GenerateKey(8);
             _relay = new PeerRelayServer();
             if (!_relay.Start(_sessionKey))
@@ -728,6 +959,8 @@ namespace DreamPark
         void StartDiscovery()
         {
             if (_discovery != null && _discovery.IsRunning) return;
+            if (_discovery != null) StopDiscovery();   // a dead listener still holds its socket + multicast lock ref
+            _nextDiscoveryRetryAt = Time.unscaledTime + DiscoveryRetrySeconds;
             _discovery = new DiscoveryListener();
             _discovery.OnBeacon += QueueBeacon;
             _discovery.Start();
@@ -741,6 +974,72 @@ namespace DreamPark
             _discovery = null;
         }
 
+        void RestartDiscovery(string reason)
+        {
+            Debug.Log($"[Arbiter] Restarting discovery ({reason}).");
+            StopDiscovery();
+            StartDiscovery();
+        }
+
+        /// <summary>
+        /// Oct 11 2026 (net-arbiter): NR4 discovery self-heal + NR10 LAN-address
+        /// watcher. Discovery runs in every non-idle state (it is how we hear the
+        /// host's beacons), so a listener that died — failed bind, or a socket
+        /// the OS reclaimed — is rebound every 2 s until it holds. And every 2 s
+        /// the LAN address is re-read: a change (Wi-Fi joined late, new SSID,
+        /// roam to another subnet) is a network change.
+        /// </summary>
+        void TickNetworkWatch()
+        {
+            if (State == SessionState.Idle) return;
+            float now = Time.unscaledTime;
+
+            if ((_discovery == null || !_discovery.IsRunning) && now >= _nextDiscoveryRetryAt)
+            {
+                string why = _discovery?.LastError;
+                RestartDiscovery(why != null ? "listener stopped: " + why : "listener not running");
+            }
+
+            if (now < _nextIpCheckAt) return;
+            _nextIpCheckAt = now + IpWatchSeconds;
+            string ip = NetPlatform.GetLocalIPv4();
+            if (ip == _lastLocalIp) return;
+            string was = _lastLocalIp;
+            _lastLocalIp = ip;
+            OnNetworkChanged($"LAN address {(string.IsNullOrEmpty(was) ? "none" : was)} → {(string.IsNullOrEmpty(ip) ? "none" : ip)}");
+        }
+
+        void OnNetworkChanged(string reason)
+        {
+            if (!isActiveAndEnabled || State == SessionState.Idle) return;
+            Debug.Log($"[Arbiter] Network changed ({reason}) — rebinding discovery, forgetting hosts heard on the old network.");
+
+            RestartDiscovery("network changed");
+            _joinFailures.Clear();
+            _blacklist.Clear();
+            _verdictKeys.Clear();
+            _yieldRefusedLogged.Clear();
+            _peerHosts.Clear();
+            _dreamBox = null;
+            _listenedSilent = false;
+            lock (_beaconLock) _pendingBeacons.Clear();
+
+            bool connected = _client.ConnectionState == DreamBoxClient.State.Connected;
+            switch (State)
+            {
+                case SessionState.ClientPeer:
+                case SessionState.ClientDreamBox:
+                    if (!connected) { _client.Disconnect(); CurrentHostId = null; BeginSearching(); }
+                    break;
+                case SessionState.Hosting:
+                    _beacon?.RefreshAddressNow();   // joiners need the new address
+                    break;
+                case SessionState.Searching:
+                    BeginSearching();               // listen a full window on the new LAN before self-electing
+                    break;
+            }
+        }
+
         void QueueBeacon(DiscoveryListener.BeaconInfo info)   // discovery thread!
         {
             lock (_beaconLock) _pendingBeacons.Add(info);
@@ -750,25 +1049,39 @@ namespace DreamPark
         {
             lock (_beaconLock)
             {
+                double clockNow = DiscoveryListener.Clock;
                 for (int i = 0; i < _pendingBeacons.Count; i++)
                 {
                     var b = _pendingBeacons[i];
                     bool isPeer = b.hostType == "peer";
 
+                    // Oct 11 2026 (net-arbiter, FINDINGS drop cause D): age a beacon
+                    // from when it ARRIVED. Beacons queued while the app was paused
+                    // used to be stamped "now" on resume, so a host that died during
+                    // the pause looked alive and cost a 10 s join timeout.
+                    float age = b.receivedAt > 0 ? (float)Math.Max(0, clockNow - b.receivedAt) : 0f;
+                    if (age > beaconStaleSeconds) continue;
+                    float seenAt = Time.unscaledTime - age;
+
                     if (isPeer)
                     {
                         if (b.hostId == HostId) continue;                    // our own echo
-                        if (b.v > BeaconBroadcaster.ProtocolVersion) { LogIgnoredOnce(b.hostId, $"protocol v{b.v} > v{BeaconBroadcaster.ProtocolVersion}"); continue; }
+                        // Exact match, not "not newer": an older app hashes NetIds
+                        // differently, so a mixed session is a deaf one.
+                        if (b.v != BeaconBroadcaster.ProtocolVersion) { LogIgnoredOnce(b.hostId, $"protocol v{b.v} != v{BeaconBroadcaster.ProtocolVersion}"); continue; }
                         if (!ChannelMatches(b.channel)) { LogIgnoredOnce(b.hostId, $"channel '{b.channel}' != ours '{Channel}' (set channelOverride to cross)"); continue; }
                         if (!ParkMatches(b.parkId)) { LogIgnoredOnce(b.hostId, $"parkId '{b.parkId}' != ours '{parkId}'"); continue; }
+                        ForgiveIfRestarted(b.hostId, b.key);
                         if (IsBlacklisted(b.hostId)) continue;
-                        _peerHosts[b.hostId] = new BeaconRecord { info = b, seenAt = Time.unscaledTime };
+                        _peerHosts[b.hostId] = new BeaconRecord { info = b, seenAt = seenAt };
+                        _listenedSilent = false;
                     }
                     else
                     {
                         // No hostType (or "dreambox") = kiosk beacon. Kiosk outranks
                         // everything; park scoping doesn't apply to it.
-                        _dreamBox = new BeaconRecord { info = b, seenAt = Time.unscaledTime };
+                        _dreamBox = new BeaconRecord { info = b, seenAt = seenAt };
+                        _listenedSilent = false;
                     }
                 }
                 _pendingBeacons.Clear();
@@ -805,6 +1118,15 @@ namespace DreamPark
                     _yieldRefusedLogged.Remove(k);
                     Debug.Log($"[Arbiter] Giving host {k} another chance (unreachable verdict expired).");
                 }
+
+            if (_verdictKeys.Count > 0)
+            {
+                drop = null;
+                foreach (var kv in _verdictKeys)
+                    if (!_blacklist.ContainsKey(kv.Key) && !_joinFailures.ContainsKey(kv.Key))
+                        (drop ??= new List<string>()).Add(kv.Key);
+                if (drop != null) foreach (var k in drop) _verdictKeys.Remove(k);
+            }
         }
 
         /// <summary>
@@ -854,6 +1176,7 @@ namespace DreamPark
         {
             if (string.IsNullOrEmpty(hostId)) return;
 
+            StampVerdictKey(hostId);
             _joinFailures.TryGetValue(hostId, out var f);
             float window = Mathf.Min(BlacklistSeconds * Mathf.Pow(2f, Mathf.Max(0, f.count - 1)), 60f);
 

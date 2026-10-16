@@ -175,7 +175,17 @@ namespace DreamPark
                 string fileName = $"dreampark-sdk-v{SDKVersion.Current}-{timestamp}.unitypackage";
                 string outPath = Path.Combine(buildsDir, fileName);
 
-                AssetDatabase.ExportPackage(SDKAssetPath, outPath, ExportPackageOptions.Recurse);
+                // A local test build is exactly what gets imported over real projects,
+                // so it passes the same XLua gate as a publish.
+                if (!XLuaGenGuard.PrepareSdkExport(out string xluaReport))
+                {
+                    Debug.LogError("[DreamPark] " + xluaReport);
+                    FailWith("Export blocked: XLua generated code is not safe to ship. See the Console.");
+                    return;
+                }
+
+                using (DreamParkSdkDocs.StageForExport())
+                    AssetDatabase.ExportPackage(SDKAssetPath, outPath, ExportPackageOptions.Recurse);
 
                 if (!File.Exists(outPath))
                 {
@@ -218,6 +228,26 @@ namespace DreamPark
 
         private void Publish()
         {
+            int designBudget, relayCap;
+            if (!PreUploadChecks.Checks.NetBudgetInvariant.IsSatisfied(
+                    out designBudget, out relayCap))
+            {
+                string message = PreUploadChecks.Checks.NetBudgetInvariant.FailureMessage(
+                    designBudget, relayCap);
+                FailWith("Publish blocked: " + message);
+                EditorUtility.DisplayDialog("SDK publish blocked", message, "OK");
+                return;
+            }
+
+            // Before the version bump, so a blocked publish leaves nothing to roll back.
+            if (!XLuaGenGuard.PrepareSdkExport(out string xluaReport))
+            {
+                Debug.LogError("[DreamPark] " + xluaReport);
+                FailWith("Publish blocked: XLua generated code is not safe to ship. See the Console.");
+                EditorUtility.DisplayDialog("SDK publish blocked", xluaReport, "OK");
+                return;
+            }
+
             isPublishing = true;
             status = "Bumping version file and exporting package...";
             statusIsError = false;
@@ -262,7 +292,8 @@ namespace DreamPark
 
                 // 2. Export as .unitypackage to Temp/.
                 string tempPath = Path.Combine(Path.GetTempPath(), $"dreampark-sdk-v{newVersion}.unitypackage");
-                AssetDatabase.ExportPackage(SDKAssetPath, tempPath, ExportPackageOptions.Recurse);
+                using (DreamParkSdkDocs.StageForExport())
+                    AssetDatabase.ExportPackage(SDKAssetPath, tempPath, ExportPackageOptions.Recurse);
 
                 if (!File.Exists(tempPath))
                 {
@@ -277,7 +308,8 @@ namespace DreamPark
                 Repaint();
 
                 // 3. Upload. Server validates admin access and that version > prior latest.
-                SDKAPI.PublishVersion(newVersion, releaseNotes, bytes, fileName, (success, response) =>
+                string retiredAssets = string.Join("\n", SDKUpgradeCleanup.GetPublishedRetiredAssetPaths());
+                SDKAPI.PublishVersion(newVersion, releaseNotes, bytes, fileName, retiredAssets, (success, response) =>
                 {
                     isPublishing = false;
                     if (success)

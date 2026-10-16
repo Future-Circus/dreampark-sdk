@@ -66,10 +66,14 @@ PlayerSettings:
   useOSAutorotation: 1
   use32BitDisplayBuffer: 1
   preserveFramebufferAlpha: 0
+  adjustIOSFPSUsingThermalState: 1
+  thermalStateSeriousIOSFPS: 30
+  thermalStateCriticalIOSFPS: 15
   disableDepthAndStencilBuffers: 0
   androidStartInFullscreen: 1
   androidRenderOutsideSafeArea: 1
   androidUseSwappy: 1
+  androidDisplayOptions: 1
   androidBlitType: 0
   androidResizeableActivity: 1
   androidDefaultWindowWidth: 1920
@@ -86,6 +90,7 @@ PlayerSettings:
   muteOtherAudioSources: 0
   Prepare IOS For Recording: 1
   Force IOS Speakers When Recording: 1
+  audioSpatialExperience: 0
   deferSystemGesturesMode: 0
   hideHomeButton: 1
   submitAnalytics: 1
@@ -112,6 +117,7 @@ PlayerSettings:
   xboxEnableGuest: 0
   xboxEnablePIXSampling: 0
   metalFramebufferOnly: 0
+  metalUseMetalDisplayLink: 0
   xboxOneResolution: 0
   xboxOneSResolution: 0
   xboxOneXResolution: 3
@@ -132,6 +138,7 @@ PlayerSettings:
   switchNVNMaxPublicSamplerIDCount: 0
   switchMaxWorkerMultiple: 8
   switchNVNGraphicsFirmwareMemory: 32
+  switchGraphicsJobsSyncAfterKick: 1
   vulkanNumSwapchainBuffers: 3
   vulkanEnableSetSRGBWrite: 0
   vulkanEnablePreTransform: 0
@@ -180,6 +187,7 @@ PlayerSettings:
   AndroidMinSdkVersion: 32
   AndroidTargetSdkVersion: 34
   AndroidPreferredInstallLocation: 0
+  AndroidPreferredDataLocation: 1
   aotOptions: 
   stripEngineCode: 1
   iPhoneStrippingLevel: 0
@@ -194,11 +202,11 @@ PlayerSettings:
   VertexChannelCompressionMask: 4054
   iPhoneSdkVersion: 988
   iOSSimulatorArchitecture: 0
-  iOSTargetOSVersionString: 13.0
+  iOSTargetOSVersionString: 15.0
   tvOSSdkVersion: 0
   tvOSSimulatorArchitecture: 0
   tvOSRequireExtendedGameController: 0
-  tvOSTargetOSVersionString: 13.0
+  tvOSTargetOSVersionString: 15.0
   VisionOSSdkVersion: 0
   VisionOSTargetOSVersionString: 1.0
   uIPrerenderedIcon: 0
@@ -268,6 +276,7 @@ PlayerSettings:
   useCustomGradleSettingsTemplate: 0
   useCustomProguardFile: 0
   AndroidTargetArchitectures: 2
+  AndroidAllowedArchitectures: -1
   AndroidSplashScreenScale: 0
   androidSplashScreen: {fileID: 0}
   AndroidKeystoreName: '{inproject}: '
@@ -277,6 +286,9 @@ PlayerSettings:
   AndroidBuildApkPerCpuArchitecture: 0
   AndroidTVCompatibility: 0
   AndroidIsGame: 1
+  androidAppCategory: 3
+  useAndroidAppCategory: 1
+  androidAppCategoryOther: 
   AndroidEnableTango: 0
   androidEnableBanner: 1
   androidUseLowAccuracyLocation: 0
@@ -512,6 +524,7 @@ PlayerSettings:
     iPhone: 1
     tvOS: 1
   m_BuildTargetGroupLightmapEncodingQuality: []
+  m_BuildTargetGroupHDRCubemapEncodingQuality: []
   m_BuildTargetGroupLightmapSettings: []
   m_BuildTargetGroupLoadStoreDebugModeSettings: []
   m_BuildTargetNormalMapEncoding: []
@@ -533,7 +546,7 @@ PlayerSettings:
   locationUsageDescription: Geolocating AR Content
   microphoneUsageDescription: Video Recording
   bluetoothUsageDescription: 
-  macOSTargetOSVersion: 11.0
+  macOSTargetOSVersion: 12.0
   switchNMETAOverride: 
   switchNetLibKey: 
   switchSocketMemoryPoolSize: 6144
@@ -781,31 +794,32 @@ PlayerSettings:
   webGLMemoryLinearGrowthStep: 16
   webGLMemoryGeometricGrowthStep: 0.2
   webGLMemoryGeometricGrowthCap: 96
-  webGLEnableWebGPU: 0
   webGLPowerPreference: 2
   webGLWebAssemblyTable: 0
   webGLWebAssemblyBigInt: 0
   webGLCloseOnQuit: 0
   webWasm2023: 0
+  webEnableSubmoduleStrippingCompatibility: 0
   scriptingDefineSymbols:
-    Android: ENABLE_JSON_CATALOG;ISDK_OPENXR_HAND;NOT_GEN_WARNING
-    EmbeddedLinux: ENABLE_JSON_CATALOG;PHOTON_FUSION_PHYSICS_ADDON_DEFINED
+    Android: ENABLE_JSON_CATALOG;ISDK_OPENXR_HAND;NOT_GEN_WARNING;DREAMPARK_SDK_PACKAGES_READY
+    EmbeddedLinux: ENABLE_JSON_CATALOG;PHOTON_FUSION_PHYSICS_ADDON_DEFINED;DREAMPARK_SDK_PACKAGES_READY
     GameCoreScarlett: PHOTON_FUSION_PHYSICS_ADDON_DEFINED
     GameCoreXboxOne: PHOTON_FUSION_PHYSICS_ADDON_DEFINED
-    LinuxHeadlessSimulation: ENABLE_JSON_CATALOG;PHOTON_FUSION_PHYSICS_ADDON_DEFINED
-    Nintendo Switch: ENABLE_JSON_CATALOG;PHOTON_FUSION_PHYSICS_ADDON_DEFINED
-    PS4: ENABLE_JSON_CATALOG;PHOTON_FUSION_PHYSICS_ADDON_DEFINED
-    PS5: PHOTON_FUSION_PHYSICS_ADDON_DEFINED
-    QNX: ENABLE_JSON_CATALOG;PHOTON_FUSION_PHYSICS_ADDON_DEFINED
+    LinuxHeadlessSimulation: ENABLE_JSON_CATALOG;PHOTON_FUSION_PHYSICS_ADDON_DEFINED;DREAMPARK_SDK_PACKAGES_READY
+    Nintendo Switch: ENABLE_JSON_CATALOG;PHOTON_FUSION_PHYSICS_ADDON_DEFINED;DREAMPARK_SDK_PACKAGES_READY
+    Nintendo Switch 2: DREAMPARK_SDK_PACKAGES_READY
+    PS4: ENABLE_JSON_CATALOG;PHOTON_FUSION_PHYSICS_ADDON_DEFINED;DREAMPARK_SDK_PACKAGES_READY
+    PS5: PHOTON_FUSION_PHYSICS_ADDON_DEFINED;DREAMPARK_SDK_PACKAGES_READY
+    QNX: ENABLE_JSON_CATALOG;PHOTON_FUSION_PHYSICS_ADDON_DEFINED;DREAMPARK_SDK_PACKAGES_READY
     ReservedCFE: PHOTON_FUSION_PHYSICS_ADDON_DEFINED
-    Server: ENABLE_JSON_CATALOG
-    Standalone: ENABLE_JSON_CATALOG;USE_INPUT_SYSTEM;ISDK_OPENXR_HAND
-    VisionOS: PHOTON_FUSION_PHYSICS_ADDON_DEFINED
-    WebGL: ENABLE_JSON_CATALOG;PHOTON_FUSION_PHYSICS_ADDON_DEFINED
-    Windows Store Apps: ENABLE_JSON_CATALOG;PHOTON_FUSION_PHYSICS_ADDON_DEFINED
-    XboxOne: ENABLE_JSON_CATALOG;PHOTON_FUSION_PHYSICS_ADDON_DEFINED
-    iPhone: ENABLE_JSON_CATALOG;UNITY_XR_ARKIT_LOADER_ENABLED;NOT_GEN_WARNING
-    tvOS: ENABLE_JSON_CATALOG;PHOTON_FUSION_PHYSICS_ADDON_DEFINED
+    Server: ENABLE_JSON_CATALOG;DREAMPARK_SDK_PACKAGES_READY
+    Standalone: ENABLE_JSON_CATALOG;USE_INPUT_SYSTEM;ISDK_OPENXR_HAND;DREAMPARK_SDK_PACKAGES_READY
+    VisionOS: PHOTON_FUSION_PHYSICS_ADDON_DEFINED;DREAMPARK_SDK_PACKAGES_READY
+    WebGL: ENABLE_JSON_CATALOG;PHOTON_FUSION_PHYSICS_ADDON_DEFINED;DREAMPARK_SDK_PACKAGES_READY
+    Windows Store Apps: ENABLE_JSON_CATALOG;PHOTON_FUSION_PHYSICS_ADDON_DEFINED;DREAMPARK_SDK_PACKAGES_READY
+    XboxOne: ENABLE_JSON_CATALOG;PHOTON_FUSION_PHYSICS_ADDON_DEFINED;DREAMPARK_SDK_PACKAGES_READY
+    iPhone: ENABLE_JSON_CATALOG;UNITY_XR_ARKIT_LOADER_ENABLED;NOT_GEN_WARNING;DREAMPARK_SDK_PACKAGES_READY
+    tvOS: ENABLE_JSON_CATALOG;PHOTON_FUSION_PHYSICS_ADDON_DEFINED;DREAMPARK_SDK_PACKAGES_READY
   additionalCompilerArguments: {}
   platformArchitecture: {}
   scriptingBackend: {}
@@ -916,3 +930,6 @@ PlayerSettings:
   insecureHttpOption: 2
   androidVulkanDenyFilterList: []
   androidVulkanAllowFilterList: []
+  androidVulkanDeviceFilterListAsset: {fileID: 0}
+  d3d12DeviceFilterListAsset: {fileID: 0}
+  allowedHttpConnections: 3

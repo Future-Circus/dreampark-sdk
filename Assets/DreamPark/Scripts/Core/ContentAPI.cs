@@ -350,12 +350,12 @@ namespace DreamPark.API
             });
         }
         public static void GetContent(string contentId, Action<bool, APIResponse> callback) {
-            DreamParkAPI.GET($"/api/content/{contentId}", AuthAPI.GetUserAuth(), (success, response) => {
+            DreamParkAPI.GET($"/api/content/{contentId}", AuthAPI.GetUserAuthFor(contentId), (success, response) => {
                 callback?.Invoke(success, response);
             });
         }
         public static void UpdateContent(string contentId, JSONObject update, Action<bool, APIResponse> callback) {
-            DreamParkAPI.POST($"/api/content/{contentId}/update", AuthAPI.GetUserAuth(), update, (success, response) => {
+            DreamParkAPI.POST($"/api/content/{contentId}/update", AuthAPI.GetUserAuthFor(contentId), update, (success, response) => {
                 callback?.Invoke(success, response);
             });
         }
@@ -367,7 +367,20 @@ namespace DreamPark.API
             if (!string.IsNullOrEmpty(logoAddress)) {
                 body.AddField("logoAddress", logoAddress);
             }
-            DreamParkAPI.POST($"/api/content/add", AuthAPI.GetUserAuth(), body, (success, response) => {
+            DreamParkAPI.POST($"/api/content/add", AuthAPI.GetUserAuthFor(contentId), body, (success, response) => {
+                callback?.Invoke(success, response);
+            });
+        }
+
+        // Allocates (or returns) the permanent beta content target linked to a
+        // release title. The backend owns the naming and authorization rule;
+        // callers must use the returned contentId rather than assuming that a
+        // locally-derived suffix is authoritative. The endpoint is idempotent,
+        // so the uploader intentionally calls it before every beta upload.
+        public static void EnsureBetaContentTarget(string releaseContentId, Action<bool, APIResponse> callback) {
+            string encodedContentId = UnityWebRequest.EscapeURL(releaseContentId ?? "");
+            var body = new JSONObject(JSONObject.Type.Object);
+            DreamParkAPI.POST($"/api/content/{encodedContentId}/beta", AuthAPI.GetUserAuthFor(releaseContentId), body, (success, response) => {
                 callback?.Invoke(success, response);
             });
         }
@@ -375,7 +388,7 @@ namespace DreamPark.API
         // List collaborators (owners) on a content record. Server returns:
         //   { success, contentOwner, contentOwners: [uid...], owners: [{userId, email}...] }
         public static void ListContentUsers(string contentId, Action<bool, APIResponse> callback) {
-            DreamParkAPI.GET($"/api/content/{contentId}/users/", AuthAPI.GetUserAuth(), (success, response) => {
+            DreamParkAPI.GET($"/api/content/{contentId}/users/", AuthAPI.GetUserAuthFor(contentId), (success, response) => {
                 callback?.Invoke(success, response);
             });
         }
@@ -384,7 +397,7 @@ namespace DreamPark.API
         public static void AddContentUser(string contentId, string email, Action<bool, APIResponse> callback) {
             JSONObject body = new JSONObject();
             body.AddField("email", email);
-            DreamParkAPI.POST($"/api/content/{contentId}/users/add", AuthAPI.GetUserAuth(), body, (success, response) => {
+            DreamParkAPI.POST($"/api/content/{contentId}/users/add", AuthAPI.GetUserAuthFor(contentId), body, (success, response) => {
                 callback?.Invoke(success, response);
             });
         }
@@ -395,7 +408,7 @@ namespace DreamPark.API
         // application/json with a 400 HTML page before our route handler even runs.
         public static void RemoveContentUser(string contentId, string ownerId, Action<bool, APIResponse> callback) {
             var body = new JSONObject(JSONObject.Type.Object);
-            DreamParkAPI.POST($"/api/content/{contentId}/users/{ownerId}/remove", AuthAPI.GetUserAuth(), body, (success, response) => {
+            DreamParkAPI.POST($"/api/content/{contentId}/users/{ownerId}/remove", AuthAPI.GetUserAuthFor(contentId), body, (success, response) => {
                 callback?.Invoke(success, response);
             });
         }
@@ -440,6 +453,27 @@ namespace DreamPark.API
         // Pass null (or an empty list) for the normal "Reupload All" / first-
         // upload path.
         public static void UploadContent(string contentId, string releaseNotes, int? schemaVersion, HashSet<string> skipFileKeys, JSONObject manifestSummary, List<UploadedFileRecord> preUploadedFiles, Action<bool, APIResponse> callback) {
+            UploadContent(contentId, releaseNotes, schemaVersion, skipFileKeys, manifestSummary, preUploadedFiles, null, 0, callback);
+        }
+
+        // reservedReleaseId / expectedVersionNumber tie this upload to the
+        // release the uploader reserved BEFORE it built. The catalog bakes
+        // its bundle URLs as addressables-v2/{contentId}/{version}/..., and
+        // /uploadUrl stores the bundles under the reserved release's
+        // version, so the two MUST be the same number or every bundle 404s
+        // on device (SuperAdventureLandBeta v2, Sep 2026: catalog said /1/,
+        // bundles landed in /2/).
+        //
+        //   reservedReleaseId    — reuse this release (status endpoint)
+        //                          instead of preparing a new one. null =
+        //                          prepare a fresh release (legacy).
+        //   expectedVersionNumber — the version the caller baked into the
+        //                          build. 0 = unknown. The catalog files
+        //                          themselves are also scanned, and they win.
+        //
+        // Either way the upload ABORTS before sending a single file when the
+        // server's release version differs from what the catalog points at.
+        public static void UploadContent(string contentId, string releaseNotes, int? schemaVersion, HashSet<string> skipFileKeys, JSONObject manifestSummary, List<UploadedFileRecord> preUploadedFiles, string reservedReleaseId, int expectedVersionNumber, Action<bool, APIResponse> callback) {
             // 1️⃣ Collect local files for all platforms
             UploadContentRequest data = new UploadContentRequest();
             var files = data.ToList();
@@ -453,6 +487,27 @@ namespace DreamPark.API
             }
 
             int totalCollected = files.Count;
+
+            // Read the version this build's catalog(s) actually point at
+            // BEFORE the skip filter below — a Patch / Failed-Only upload may
+            // drop files from `files`, but the version guard in
+            // UploadFlowAsync has to see every catalog the build produced.
+            SortedSet<int> bakedCatalogVersions = DetectBakedCatalogVersions(contentId, files.Select(kv => kv.Value));
+
+            // A catalog baked for a DIFFERENT content id (ServerData is shared
+            // by the Release and Beta targets, so "Try Reupload" on one can
+            // pick up the other's build) finds no addressables-v2/{contentId}/
+            // URL at all, and the version guard alone would only warn. Its
+            // bundles would be stored under this content while every device
+            // fetches them from the other one — refuse before anything is sent.
+            SortedSet<string> foreignCatalogIds = DetectForeignCatalogContentIds(contentId, files.Select(kv => kv.Value));
+            if (foreignCatalogIds.Count > 0)
+            {
+                string foreignMsg = $"This build's catalog was built for '{string.Join("', '", foreignCatalogIds)}', not '{contentId}'. Rebuild for '{contentId}' and upload again.";
+                Debug.LogError($"[ContentUploader] {foreignMsg}");
+                callback?.Invoke(false, new DreamParkAPI.APIResponse(false, 0, foreignMsg));
+                return;
+            }
             if (skipFileKeys != null && skipFileKeys.Count > 0)
             {
                 var replayedKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -494,9 +549,9 @@ namespace DreamPark.API
                 Debug.Log("[ContentAPI] No changed files to upload; proceeding to finalize.");
                 InitializeUploadProgress(files);
             #if UNITY_EDITOR
-                Unity.EditorCoroutines.Editor.EditorCoroutineUtility.StartCoroutineOwnerless(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, inheritedBundles, preUploadedFiles, callback));
+                Unity.EditorCoroutines.Editor.EditorCoroutineUtility.StartCoroutineOwnerless(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, inheritedBundles, preUploadedFiles, reservedReleaseId, expectedVersionNumber, bakedCatalogVersions, callback));
             #else
-                CoroutineRunner.Run(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, inheritedBundles, preUploadedFiles, callback));
+                CoroutineRunner.Run(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, inheritedBundles, preUploadedFiles, reservedReleaseId, expectedVersionNumber, bakedCatalogVersions, callback));
             #endif
                 return;
             }
@@ -514,9 +569,9 @@ namespace DreamPark.API
             }
 
         #if UNITY_EDITOR
-            Unity.EditorCoroutines.Editor.EditorCoroutineUtility.StartCoroutineOwnerless(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, inheritedBundles, preUploadedFiles, callback));
+            Unity.EditorCoroutines.Editor.EditorCoroutineUtility.StartCoroutineOwnerless(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, inheritedBundles, preUploadedFiles, reservedReleaseId, expectedVersionNumber, bakedCatalogVersions, callback));
         #else
-            CoroutineRunner.Run(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, inheritedBundles, preUploadedFiles, callback));
+            CoroutineRunner.Run(UploadFlow(contentId, files, releaseNotes, schemaVersion, manifestSummary, inheritedBundles, preUploadedFiles, reservedReleaseId, expectedVersionNumber, bakedCatalogVersions, callback));
         #endif
         }
 
@@ -528,7 +583,7 @@ namespace DreamPark.API
             JSONObject body = new JSONObject();
             body.AddField("versionNumber", versionNumber);
             body.AddField("requiresUpdate", requiresUpdate);
-            DreamParkAPI.POST($"/api/content/{contentId}/approve", AuthAPI.GetUserAuth(), body, (success, response) => {
+            DreamParkAPI.POST($"/api/content/{contentId}/approve", AuthAPI.GetUserAuthFor(contentId), body, (success, response) => {
                 callback?.Invoke(success, response);
             });
         }
@@ -1423,14 +1478,177 @@ namespace DreamPark.API
             return (successUpload, successUpload ? uploadPath : null);
         }
 
-        private static IEnumerator UploadFlow(string contentId, List<KeyValuePair<string, UploadContentData>> files, string releaseNotes, int? schemaVersion, JSONObject manifestSummary, List<InheritedBundleRecord> inheritedBundles, List<UploadedFileRecord> preUploadedFiles, Action<bool, APIResponse> callback)
+        // ─── Release reservation ─────────────────────────────────────
+        // POST /api/content/{id}/releases/prepare reserves one immutable
+        // version (server: max(committed versionNumber, content.
+        // nextContentReleaseVersion) + 1). The uploader calls this BEFORE it
+        // builds so it can bake that exact version into the catalog's
+        // RemoteLoadPath, then hands the releaseId to UploadContent so the
+        // upload rides the same release. releaseNotes must be non-empty
+        // (server 400s otherwise).
+        public static void PrepareContentRelease(string contentId, string releaseNotes, Action<bool, string, int, APIResponse> callback)
+        {
+            PostReleasePrepare(contentId, releaseNotes, (success, response) =>
+            {
+                string releaseId = null;
+                int versionNumber = 0;
+                if (success && response != null && response.json != null)
+                {
+                    var releaseJson = response.json.GetField("release");
+                    releaseId = releaseJson?.GetField("releaseId")?.stringValue;
+                    versionNumber = releaseJson?.GetField("versionNumber")?.intValue ?? 0;
+                }
+                bool ok = success && !string.IsNullOrEmpty(releaseId) && versionNumber > 0;
+                callback?.Invoke(ok, releaseId, versionNumber, response);
+            });
+        }
+
+        private static void PostReleasePrepare(string contentId, string releaseNotes, Action<bool, APIResponse> callback)
+        {
+            // The idempotency key lives only for this one reservation.
+            var prepareBody = new JSONObject(JSONObject.Type.Object);
+            prepareBody.AddField("releaseNotes", releaseNotes ?? "");
+            prepareBody.AddField("idempotencyKey", $"unity-{contentId}-{Guid.NewGuid():N}");
+            DreamParkAPI.POST($"/api/content/{contentId}/releases/prepare", AuthAPI.GetUserAuthFor(contentId), prepareBody,
+                (success, response) => callback?.Invoke(success, response));
+        }
+
+        private static UniTask<(bool success, DreamParkAPI.APIResponse response)> PrepareReleaseAsync(string contentId, string releaseNotes)
+        {
+            var tcs = new UniTaskCompletionSource<(bool success, DreamParkAPI.APIResponse response)>();
+            PostReleasePrepare(contentId, releaseNotes, (success, response) => tcs.TrySetResult((success, response)));
+            return tcs.Task;
+        }
+
+        private static UniTask<(bool success, DreamParkAPI.APIResponse response)> FetchReleaseStatusAsync(string contentId, string releaseId)
+        {
+            var tcs = new UniTaskCompletionSource<(bool success, DreamParkAPI.APIResponse response)>();
+            DreamParkAPI.GET($"/api/content/{contentId}/releases/{releaseId}/status", AuthAPI.GetUserAuthFor(contentId),
+                (success, response) => tcs.TrySetResult((success, response)));
+            return tcs.Task;
+        }
+
+        // ─── Baked catalog version ───────────────────────────────────
+        // Reads the version a build's catalog(s) point at by scanning for
+        // addressables-v2/{contentId}/{version} in catalog*.json (and .bin,
+        // best effort). This is ground truth for "which folder will devices
+        // fetch bundles from" — the number the uploader *meant* to bake can
+        // be stale (reupload of an older ServerData, a Check Patch Size
+        // estimate raced by another prepare). Empty set = no such URL found.
+        public static SortedSet<int> DetectBakedCatalogVersions(string contentId, IEnumerable<UploadContentData> files)
+        {
+            var versions = new SortedSet<int>();
+            if (string.IsNullOrEmpty(contentId) || files == null) return versions;
+            foreach (var file in files)
+            {
+                if (file == null || file.data == null || !IsCatalogFileName(file.fileName)) continue;
+                CollectBakedVersions(contentId, file.data, versions);
+            }
+            return versions;
+        }
+
+        public static SortedSet<int> DetectBakedCatalogVersionsOnDisk(string contentId, string serverDataRoot = "ServerData")
+        {
+            var versions = new SortedSet<int>();
+            if (string.IsNullOrEmpty(contentId) || string.IsNullOrEmpty(serverDataRoot) || !Directory.Exists(serverDataRoot))
+                return versions;
+            foreach (var platformDir in Directory.GetDirectories(serverDataRoot))
+            {
+                foreach (var path in Directory.GetFiles(platformDir, "*", SearchOption.AllDirectories))
+                {
+                    if (!IsCatalogFileName(path)) continue;
+                    try
+                    {
+                        CollectBakedVersions(contentId, File.ReadAllBytes(path), versions);
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogWarning($"[ContentUploader] Could not read catalog {path}: {ex.Message}");
+                    }
+                }
+            }
+            return versions;
+        }
+
+        // Content ids other than `contentId` that a build's catalog(s) bake
+        // into addressables-v2/{id}/{version} URLs. Empty = none (the normal
+        // case: RemoteLoadPath is always built from the upload content id).
+        public static SortedSet<string> DetectForeignCatalogContentIds(string contentId, IEnumerable<UploadContentData> files)
+        {
+            var ids = new SortedSet<string>(StringComparer.Ordinal);
+            if (string.IsNullOrEmpty(contentId) || files == null) return ids;
+            const string sep = @"(?:\\/|/)";
+            string pattern = "addressables-v2" + sep + @"([A-Za-z0-9_.\-]+)" + sep + @"\d+(?!\d)";
+            foreach (var file in files)
+            {
+                if (file == null || file.data == null || !IsCatalogFileName(file.fileName)) continue;
+                string text = System.Text.Encoding.UTF8.GetString(file.data);
+                foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(text, pattern))
+                {
+                    string id = m.Groups[1].Value;
+                    if (!string.Equals(id, contentId, StringComparison.Ordinal)) ids.Add(id);
+                }
+            }
+            return ids;
+        }
+
+        private static bool IsCatalogFileName(string fileName)
+        {
+            if (string.IsNullOrEmpty(fileName)) return false;
+            string leaf = Path.GetFileName(fileName);
+            if (string.IsNullOrEmpty(leaf) || !leaf.StartsWith("catalog", StringComparison.OrdinalIgnoreCase)) return false;
+            return leaf.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
+                || leaf.EndsWith(".bin", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static void CollectBakedVersions(string contentId, byte[] bytes, SortedSet<int> into)
+        {
+            if (bytes == null || bytes.Length == 0 || into == null) return;
+            string text = System.Text.Encoding.UTF8.GetString(bytes);
+            // JSON may or may not escape '/' as '\/'; accept both. The
+            // version is followed by '/' (or by the end of an internal-id
+            // prefix), so just require it not to run on into more digits.
+            const string sep = @"(?:\\/|/)";
+            string pattern = "addressables-v2" + sep + System.Text.RegularExpressions.Regex.Escape(contentId) + sep + @"(\d+)(?!\d)";
+            foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(text, pattern))
+            {
+                int parsed;
+                if (int.TryParse(m.Groups[1].Value, out parsed) && parsed > 0) into.Add(parsed);
+            }
+        }
+
+        // null = safe to upload; otherwise the user-facing abort message.
+        // The catalog scan wins over the caller's expectedVersionNumber —
+        // it is what devices will actually request.
+        private static string DescribeBakedVersionMismatch(string contentId, int reservedVersion, int expectedVersionNumber, SortedSet<int> bakedCatalogVersions)
+        {
+            if (bakedCatalogVersions != null && bakedCatalogVersions.Count > 1)
+            {
+                return $"Server reserved v{reservedVersion} but this build's catalogs point at more than one version (v{string.Join(", v", bakedCatalogVersions)}). Rebuild and upload again.";
+            }
+            if (bakedCatalogVersions != null && bakedCatalogVersions.Count == 1)
+            {
+                int baked = bakedCatalogVersions.Min;
+                if (baked != reservedVersion)
+                    return $"Server reserved v{reservedVersion} but this build's catalog points at v{baked}. Rebuild and upload again.";
+                if (expectedVersionNumber > 0 && expectedVersionNumber != baked)
+                    Debug.LogWarning($"[ContentUploader] Uploader expected v{expectedVersionNumber} but the catalog (and server) say v{baked}; trusting the catalog.");
+                return null;
+            }
+            if (expectedVersionNumber > 0 && expectedVersionNumber != reservedVersion)
+                return $"Server reserved v{reservedVersion} but this build's catalog points at v{expectedVersionNumber}. Rebuild and upload again.";
+            Debug.LogWarning($"[ContentUploader] No addressables-v2/{contentId}/<version>/ URL found in this build's catalog; could not cross-check it against reserved v{reservedVersion}.");
+            return null;
+        }
+
+        private static IEnumerator UploadFlow(string contentId, List<KeyValuePair<string, UploadContentData>> files, string releaseNotes, int? schemaVersion, JSONObject manifestSummary, List<InheritedBundleRecord> inheritedBundles, List<UploadedFileRecord> preUploadedFiles, string reservedReleaseId, int expectedVersionNumber, SortedSet<int> bakedCatalogVersions, Action<bool, APIResponse> callback)
         {
             // Convert coroutine to async UniTask for concurrency
-            UploadFlowAsync(contentId, files, releaseNotes, schemaVersion, manifestSummary, inheritedBundles, preUploadedFiles, callback).Forget();
+            UploadFlowAsync(contentId, files, releaseNotes, schemaVersion, manifestSummary, inheritedBundles, preUploadedFiles, reservedReleaseId, expectedVersionNumber, bakedCatalogVersions, callback).Forget();
             yield break;
         }
 
-        private static async UniTaskVoid UploadFlowAsync(string contentId, List<KeyValuePair<string, UploadContentData>> files, string releaseNotes, int? schemaVersion, JSONObject manifestSummary, List<InheritedBundleRecord> inheritedBundles, List<UploadedFileRecord> preUploadedFiles, Action<bool, DreamParkAPI.APIResponse> callback)
+        private static async UniTaskVoid UploadFlowAsync(string contentId, List<KeyValuePair<string, UploadContentData>> files, string releaseNotes, int? schemaVersion, JSONObject manifestSummary, List<InheritedBundleRecord> inheritedBundles, List<UploadedFileRecord> preUploadedFiles, string reservedReleaseId, int expectedVersionNumber, SortedSet<int> bakedCatalogVersions, Action<bool, DreamParkAPI.APIResponse> callback)
         {
             int uploaded = 0;
             int failed = 0;
@@ -1439,25 +1657,41 @@ namespace DreamPark.API
             var uploadTasks = new List<UniTask>();
             var uploadedFilesDict = new Dictionary<string, List<string>>();
 
-            // Reserve one immutable server version before requesting any
-            // signed URLs. The key lives only for this upload attempt; every
-            // per-file retry shares the same releaseId/version.
+            // Reserve (or reuse) one immutable server version before
+            // requesting any signed URLs; every per-file retry shares the
+            // same releaseId/version.
+            //
+            // Which release, in order: a Failed-Only retry's own release
+            // (its replayed uploadPaths already live under that version),
+            // then the release the uploader reserved BEFORE it built — the
+            // one whose version is baked into the catalog — and only then a
+            // fresh prepare. See the version-baking note in CLAUDE.md.
             var priorReleaseId = preUploadedFiles?.FirstOrDefault(r => !string.IsNullOrEmpty(r?.releaseId))?.releaseId;
-            var prepareTcs = new UniTaskCompletionSource<(bool success, DreamParkAPI.APIResponse response)>();
+            (bool success, DreamParkAPI.APIResponse response) prepared;
             if (!string.IsNullOrEmpty(priorReleaseId))
             {
-                DreamParkAPI.GET($"/api/content/{contentId}/releases/{priorReleaseId}/status", AuthAPI.GetUserAuth(),
-                    (success, response) => prepareTcs.TrySetResult((success, response)));
+                prepared = await FetchReleaseStatusAsync(contentId, priorReleaseId);
+            }
+            else if (!string.IsNullOrEmpty(reservedReleaseId))
+            {
+                prepared = await FetchReleaseStatusAsync(contentId, reservedReleaseId);
+                string reservedStatus = prepared.success
+                    ? prepared.response?.json?.GetField("release")?.GetField("status")?.stringValue
+                    : null;
+                if (!prepared.success || reservedStatus == "completed")
+                {
+                    // The reservation is gone or already published. Prepare a
+                    // fresh release; the baked-version guard below decides
+                    // whether this build can still ride it (it can't if the
+                    // catalog was baked for the old reservation).
+                    Debug.LogWarning($"[ContentUploader] Reserved release {reservedReleaseId} is not reusable ({(prepared.success ? reservedStatus : "lookup failed")}); preparing a new release.");
+                    prepared = await PrepareReleaseAsync(contentId, releaseNotes);
+                }
             }
             else
             {
-                var prepareBody = new JSONObject(JSONObject.Type.Object);
-                prepareBody.AddField("releaseNotes", releaseNotes ?? "");
-                prepareBody.AddField("idempotencyKey", $"unity-{contentId}-{Guid.NewGuid():N}");
-                DreamParkAPI.POST($"/api/content/{contentId}/releases/prepare", AuthAPI.GetUserAuth(), prepareBody,
-                    (success, response) => prepareTcs.TrySetResult((success, response)));
+                prepared = await PrepareReleaseAsync(contentId, releaseNotes);
             }
-            var prepared = await prepareTcs.Task;
             if (!prepared.success || prepared.response == null || prepared.response.json == null)
             {
                 callback?.Invoke(false, prepared.response ?? new DreamParkAPI.APIResponse(false, 0,
@@ -1471,6 +1705,26 @@ namespace DreamPark.API
             {
                 callback?.Invoke(false, new DreamParkAPI.APIResponse(false, 0,
                     "Release prepare response was missing releaseId/versionNumber."));
+                return;
+            }
+            if (releaseJson?.GetField("status")?.stringValue == "completed")
+            {
+                string publishedMsg = $"Release v{versionNumber} ({releaseId}) is already published. Rebuild and upload again to publish a new version.";
+                Debug.LogError($"[ContentUploader] {publishedMsg}");
+                callback?.Invoke(false, new DreamParkAPI.APIResponse(false, 0, publishedMsg));
+                return;
+            }
+
+            // 🛑 Never upload a mismatched catalog. The catalog's bundle URLs
+            // were baked at build time as addressables-v2/{contentId}/{v}/…,
+            // and /uploadUrl is about to store every file under THIS
+            // release's version. If the two differ, devices 404 on every
+            // bundle — abort before a single byte leaves.
+            string bakedVersionError = DescribeBakedVersionMismatch(contentId, versionNumber, expectedVersionNumber, bakedCatalogVersions);
+            if (bakedVersionError != null)
+            {
+                Debug.LogError($"[ContentUploader] {bakedVersionError}");
+                callback?.Invoke(false, new DreamParkAPI.APIResponse(false, 0, bakedVersionError));
                 return;
             }
 
@@ -1663,10 +1917,18 @@ namespace DreamPark.API
             }
             if (manifestSummary != null) {
                 commitBody.AddField("manifest", manifestSummary);
+                // Web's commitUpload reads packages from the request root,
+                // not from manifest.uploader or manifest.packages.
+                JSONObject packages = manifestSummary.GetField("packages");
+                if (packages != null) commitBody.AddField("packages", packages);
+                // Oct 10 2026: build metadata; Web stores a sanitized copy on
+                // the version (older backends ignore unknown root fields).
+                JSONObject buildInfo = manifestSummary.GetField("buildInfo");
+                if (buildInfo != null) commitBody.AddField("buildInfo", buildInfo);
             }
 
             // 🔹 Commit upload version metadata to server
-            DreamParkAPI.POST($"/api/content/{contentId}/commitUpload", AuthAPI.GetUserAuth(), commitBody,
+            DreamParkAPI.POST($"/api/content/{contentId}/commitUpload", AuthAPI.GetUserAuthFor(contentId), commitBody,
                 (success, response) =>
                 {
                     Debug.Log(success ? "✅ Version committed!" : $"❌ Commit failed: {response.error}");
@@ -1801,7 +2063,7 @@ namespace DreamPark.API
             body.AddField("releaseId", releaseId);
 
             var tcs = new UniTaskCompletionSource<(bool success, string url, string uploadPath)>();
-            DreamParkAPI.POST($"/api/content/{contentId}/uploadUrl", AuthAPI.GetUserAuth(), body, (success, response) =>
+            DreamParkAPI.POST($"/api/content/{contentId}/uploadUrl", AuthAPI.GetUserAuthFor(contentId), body, (success, response) =>
             {
                 if (success && response.json != null)
                 {
@@ -1862,7 +2124,7 @@ namespace DreamPark.API
             observed.AddField("layers", layersArray);
             body.AddField("observed", observed);
 
-            DreamParkAPI.POST("/api/content/schema/sync", AuthAPI.GetUserAuth(), body, (success, response) => {
+            DreamParkAPI.POST("/api/content/schema/sync", AuthAPI.GetUserAuthFor(contentId), body, (success, response) => {
                 callback?.Invoke(success, response);
             });
         }
@@ -1892,7 +2154,7 @@ namespace DreamPark.API
             observed.AddField("layers", layersArray);
             body.AddField("observed", observed);
 
-            DreamParkAPI.POST("/api/content/schema/publish-core", AuthAPI.GetUserAuth(), body, (success, response) => {
+            DreamParkAPI.POST("/api/content/schema/publish-core", AuthAPI.GetUserAuthFor(contentId), body, (success, response) => {
                 callback?.Invoke(success, response);
             });
         }
@@ -1901,7 +2163,7 @@ namespace DreamPark.API
         {
             var body = new JSONObject();
             body.AddField("contentId", contentId ?? "");
-            DreamParkAPI.POST("/api/content/schema/accept", AuthAPI.GetUserAuth(), body, (success, response) => {
+            DreamParkAPI.POST("/api/content/schema/accept", AuthAPI.GetUserAuthFor(contentId), body, (success, response) => {
                 callback?.Invoke(success, response);
             });
         }
@@ -1911,7 +2173,7 @@ namespace DreamPark.API
         {
             string encodedContentId = UnityWebRequest.EscapeURL(contentId ?? "");
 
-            DreamParkAPI.GET($"/api/content/schema/proposal/{encodedContentId}", AuthAPI.GetUserAuth(), (success, response) =>
+            DreamParkAPI.GET($"/api/content/schema/proposal/{encodedContentId}", AuthAPI.GetUserAuthFor(contentId), (success, response) =>
             {
                 if (success || response == null || (response.statusCode != 404 && response.statusCode != 405))
                 {
@@ -1920,7 +2182,7 @@ namespace DreamPark.API
                 }
 
                 // Backward compatibility with older backend shape.
-                DreamParkAPI.GET($"/api/content/schema/proposal?contentId={encodedContentId}", AuthAPI.GetUserAuth(), (fallbackSuccess, fallbackResponse) =>
+                DreamParkAPI.GET($"/api/content/schema/proposal?contentId={encodedContentId}", AuthAPI.GetUserAuthFor(contentId), (fallbackSuccess, fallbackResponse) =>
                 {
                     callback?.Invoke(fallbackSuccess, fallbackResponse);
                 });

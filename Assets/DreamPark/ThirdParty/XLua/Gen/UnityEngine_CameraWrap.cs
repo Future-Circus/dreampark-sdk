@@ -21,7 +21,7 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(UnityEngine.Camera);
-			Utils.BeginObjectRegister(type, L, translator, 0, 41, 67, 53);
+			Utils.BeginObjectRegister(type, L, translator, 0, 41, 68, 53);
 			
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "Reset", _m_Reset);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "ResetTransparencySortSettings", _m_ResetTransparencySortSettings);
@@ -132,6 +132,7 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "stereoActiveEye", _g_get_stereoActiveEye);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "sceneViewFilterMode", _g_get_sceneViewFilterMode);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "renderCloudsInSceneView", _g_get_renderCloudsInSceneView);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "isProcessingRenderRequest", _g_get_isProcessingRenderRequest);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "commandBufferCount", _g_get_commandBufferCount);
             
 			Utils.RegisterFunc(L, Utils.SETTER_IDX, "nearClipPlane", _s_set_nearClipPlane);
@@ -2780,6 +2781,20 @@ namespace XLua.CSObjectWrap
 			
                 UnityEngine.Camera gen_to_be_invoked = (UnityEngine.Camera)translator.FastGetCSObj(L, 1);
                 LuaAPI.lua_pushboolean(L, gen_to_be_invoked.renderCloudsInSceneView);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_isProcessingRenderRequest(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                UnityEngine.Camera gen_to_be_invoked = (UnityEngine.Camera)translator.FastGetCSObj(L, 1);
+                LuaAPI.lua_pushboolean(L, gen_to_be_invoked.isProcessingRenderRequest);
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }

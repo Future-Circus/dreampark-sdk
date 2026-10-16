@@ -11,6 +11,7 @@ using System;
 using UnityEditor.AddressableAssets.Settings.GroupSchemas;
 using System.Text;
 using System.Text.RegularExpressions;
+using DreamPark.Editor;
 
 namespace DreamPark {
     [InitializeOnLoad]
@@ -106,7 +107,15 @@ namespace DreamPark {
                 || groupName == prefix + "Previews"
                 || groupName.StartsWith(prefix + "Previews-", StringComparison.Ordinal)      // Previews-2, ...
                 || groupName == prefix + "Code"
-                || groupName.StartsWith(prefix + "Code-", StringComparison.Ordinal);         // Code-2, ...
+                || groupName.StartsWith(prefix + "Code-", StringComparison.Ordinal)          // Code-2, ...
+                // Oct 9 2026: without these an incremental pass (e.g. the watchdog
+                // after a package compile rewrote the manifest) moved the entry back
+                // to its Legacy folder group ({id}-Root), so the editor's groups
+                // drifted from what the last build shipped.
+                || groupName == prefix + "Bootstrap"
+                || groupName == prefix + "Shared-Foundation"
+                || groupName.StartsWith(prefix + "Shared-Foundation-", StringComparison.Ordinal)
+                || groupName.StartsWith(prefix + SmartBundleGrouper.SharedSetSuffix + "-", StringComparison.Ordinal);
         }
 
         private static void EnsureGlobalLabel(AddressableAssetSettings settings, string gameId)
@@ -131,7 +140,7 @@ namespace DreamPark {
                 .ToArray();
 
             foreach (string contentId in contentIds) {
-                ForceUpdateContentInternal(contentId);
+                ForceUpdateContentInternal(contentId, contentId);
             }
         }
 
@@ -345,22 +354,93 @@ namespace DreamPark {
 
         public static void ForceUpdateContent(string contentId)
         {
-            ExecuteWithWatchdogPaused(() => ForceUpdateContentInternal(contentId));
+            ForceUpdateContent(contentId, contentId);
         }
 
-        private static void ForceUpdateContentInternal(string contentId)
+        // Builds addressable/runtime identity from targetContentId while reading
+        // assets from sourceContentId's one real folder. Beta uploads use this
+        // to produce a completely separate catalog and bundle namespace without
+        // requiring (or creating) a duplicate Assets/Content folder.
+        public static void ForceUpdateContent(string sourceContentId, string targetContentId)
         {
-            Debug.Log("🔄 Assigning contentId " + contentId + " to files in Assets/Content/" + contentId + "..");
-            if (EditorApplication.isCompiling || EditorApplication.isUpdating) return;
+            ExecuteWithWatchdogPaused(() => ForceUpdateContentInternal(sourceContentId, targetContentId));
+        }
 
-            string contentRoot = $"Assets/Content/{contentId}";
+        // Beta compilation temporarily stamps the target id into prefab fields
+        // and moves entries into target-named Addressables groups so the built
+        // bytes are self-consistent. Restore the author's one real source tree
+        // immediately after the bundles have been emitted; the already-built
+        // ServerData files are untouched.
+        public static void RestoreContentAfterTargetBuild(string sourceContentId, string targetContentId)
+        {
+            if (string.IsNullOrEmpty(sourceContentId)
+                || string.IsNullOrEmpty(targetContentId)
+                || string.Equals(sourceContentId, targetContentId, StringComparison.Ordinal))
+                return;
+
+            ExecuteWithWatchdogPaused(() =>
+            {
+                // targetContentId is passed so Lua string injections stamped
+                // to the target id (exact or "<target>/..." prefix) flip back
+                // to the source id, even for a non-canonical target name or
+                // a stamp pass that was interrupted half-way.
+                ForceUpdateContentInternal(sourceContentId, sourceContentId, targetContentId);
+
+                var settings = AddressableAssetSettingsDefaultObject.Settings;
+                string root = $"Assets/Content/{sourceContentId}/";
+                if (settings != null)
+                {
+                    foreach (var group in settings.groups.Where(g => g != null))
+                    {
+                        foreach (var entry in group.entries)
+                        {
+                            string path = AssetDatabase.GUIDToAssetPath(entry.guid).Replace('\\', '/');
+                            if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;
+                            if (entry.labels.Contains(targetContentId))
+                                entry.SetLabel(targetContentId, false, false);
+                        }
+                    }
+                    EditorUtility.SetDirty(settings);
+                    AssetDatabase.SaveAssets();
+                }
+
+                // The restore pass moves entries back to source-named groups.
+                // This removes the now-empty transient target groups.
+                CleanupAddressableSettings();
+            });
+        }
+
+        private static void ForceUpdateContentInternal(string sourceContentId, string targetContentId,
+            string restoreFromContentId = null)
+        {
+            if (string.IsNullOrEmpty(targetContentId)) targetContentId = sourceContentId;
+            Debug.Log("🔄 Assigning target contentId " + targetContentId + " to files in Assets/Content/" + sourceContentId + "..");
+            // Fail loudly, never skip quietly (Oct 13 2026). This used to `return`, and
+            // every caller carried on as if the pass had run: SuperAdventureLand's beta
+            // publish hit it while a ThirdParty Sync script move was compiling, so the
+            // Beta id was never stamped and no group was renamed, the build produced 0
+            // beta bundles, and only the server noticed ("invalid bundle count"). A
+            // publish catches this and fails with the message; a menu run logs it.
+            if (EditorApplication.isCompiling || EditorApplication.isUpdating)
+            {
+                string what = string.Equals(sourceContentId, targetContentId, StringComparison.Ordinal)
+                    ? $"refresh {sourceContentId}'s Addressables groups and ids"
+                    : $"stamp the target id {targetContentId} into {sourceContentId} and rename its Addressables groups";
+                throw new InvalidOperationException(
+                    $"ForceUpdateContent could not {what}: Unity is "
+                    + (EditorApplication.isCompiling ? "compiling scripts" : "refreshing assets")
+                    + ". A build now would ship the wrong (or no) bundles, so it was stopped. "
+                    + "Wait until the Editor is idle, then run it again.");
+            }
+
+            string contentRoot = $"Assets/Content/{sourceContentId}";
             if (!AssetDatabase.IsValidFolder(contentRoot))
             {
                 Debug.LogWarning($"⚠️ No folder found at {contentRoot}");
                 return;
             }
 
-            Debug.Log($"🔄 Force updating all prefabs and addressables for {contentId}...");
+            Debug.Log($"🔄 Force updating all prefabs from {sourceContentId} for target {targetContentId}...");
 
             // Process all prefabs under this content folder, EXCLUDING
             // ThirdPartyLocal — those prefabs never ship and frequently
@@ -371,15 +451,37 @@ namespace DreamPark {
             string[] allPrefabs = AssetDatabase.FindAssets("t:Prefab", new[] { contentRoot })
                 .Select(AssetDatabase.GUIDToAssetPath)
                 .Where(p => !string.IsNullOrEmpty(p))
+                .Where(p => !p.EndsWith("/DreamSequence/Dream Sequence.prefab", StringComparison.OrdinalIgnoreCase))
                 .Where(p => p.IndexOf("/ThirdPartyLocal/", StringComparison.OrdinalIgnoreCase) < 0)
                 .ToArray();
 
-            UpdateSpecificPrefabs(allPrefabs.ToList(), contentId);
+            // Lua string injections: a Beta stamp rewrites source -> target; a
+            // source == target pass (restore, release upload, manual Force
+            // Update) rewrites the known/canonical Beta id back -> source, so
+            // a publish that never reached RestoreContentAfterTargetBuild is
+            // healed by the next plain pass instead of shipping Beta ids.
+            List<string> injectionFromIds = BetaInjectionStamp.FromIdsFor(
+                sourceContentId, targetContentId, restoreFromContentId, BetaContentId.Suffix);
+            UpdateSpecificPrefabs(allPrefabs.ToList(), targetContentId, injectionFromIds);
+            // A beta catalog uses the beta id in every runtime recipe address.
+            // The lazy Sequence definition must also be retargeted before the
+            // manifest is compiled; otherwise beta level swaps request source
+            // catalog addresses. The restore pass returns both to source id.
+            if (AssetDatabase.LoadAssetAtPath<DreamParkPackageManifest>(
+                    DreamParkPackageCompiler.ManifestPath(sourceContentId)) != null)
+            {
+                if (DreamSequencePackageCompiler.IsAuthored(sourceContentId))
+                    DreamSequencePackageCompiler.Compile(sourceContentId, targetContentId);
+                DreamParkPackageCompiler.Compile(sourceContentId, targetContentId);
+            }
             // Pin particle-system seeds so FX-bearing bundles build
             // deterministically and borrow on patches (idempotent).
-            NormalizeParticleSeeds(contentId);
-            GenerateAllLevelPreviews(contentId);
-            ApplyGameIdLabelToContentEntries(AddressableAssetSettingsDefaultObject.Settings, contentId);
+            NormalizeParticleSeeds(sourceContentId);
+            GenerateAllLevelPreviews(sourceContentId);
+            ApplyGameIdLabelToContentEntries(
+                AddressableAssetSettingsDefaultObject.Settings,
+                sourceContentId,
+                targetContentId);
 
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
@@ -467,12 +569,12 @@ namespace DreamPark {
                 if (prefabPaths.Count > 0)
                 {
                     UpdateSpecificPrefabs(prefabPaths, gameId);
-                    ApplyGameIdLabelToContentEntries(settings, gameId, prefabPaths);
+                    ApplyGameIdLabelToContentEntries(settings, gameId, gameId, prefabPaths);
                 }
 
                 if (otherAssets.Count > 0)
                 {
-                    ApplyGameIdLabelToContentEntries(settings, gameId, otherAssets);
+                    ApplyGameIdLabelToContentEntries(settings, gameId, gameId, otherAssets);
                 }
 
                 if (scriptPaths.Count > 0)
@@ -516,11 +618,18 @@ namespace DreamPark {
         // ---------------------------------------------------------------------
         // Prefab Updates (incremental)
         // ---------------------------------------------------------------------
-        private static void UpdateSpecificPrefabs(List<string> prefabPaths, string gameId)
+        private static void UpdateSpecificPrefabs(List<string> prefabPaths, string gameId,
+            IList<string> injectionFromIds = null)
         {
             if (prefabPaths == null || prefabPaths.Count == 0) return;
 
             int modified = 0;
+            int injectionsRewritten = 0;
+            bool rewriteInjections = injectionFromIds != null && injectionFromIds.Count > 0;
+            var processedPaths = rewriteInjections
+                ? new HashSet<string>(prefabPaths.Where(p => !string.IsNullOrEmpty(p)).Select(p => p.Replace('\\', '/')),
+                    StringComparer.OrdinalIgnoreCase)
+                : null;
             try
             {
                 AssetDatabase.StartAssetEditing();
@@ -590,6 +699,18 @@ namespace DreamPark {
                             }
                         }
 
+                        if (rewriteInjections)
+                        {
+                            int rewritten = RewriteLuaStringInjections(root, injectionFromIds, gameId, processedPaths);
+                            if (rewritten > 0)
+                            {
+                                injectionsRewritten += rewritten;
+                                any = true;
+                                Debug.Log($"🧩 {path}: rewrote {rewritten} Lua string injection(s) " +
+                                          $"{string.Join("/", injectionFromIds)} → {gameId}.");
+                            }
+                        }
+
                         if (any)
                         {
                             // Save *only if* all components resolved
@@ -605,7 +726,59 @@ namespace DreamPark {
             }
 
             if (modified > 0)
-                Debug.Log($"🧩 Updated {modified} prefab(s) for gameId={gameId} (safe mode).");
+                Debug.Log($"🧩 Updated {modified} prefab(s) for gameId={gameId} (safe mode)" +
+                          (injectionsRewritten > 0 ? $", {injectionsRewritten} Lua string injection(s) rewritten." : "."));
+        }
+
+        // Beta stamp / restore of LuaBehaviour + EasyLua string injections
+        // (beta-gameid-audit §4 option 1). Content injects the title id as a
+        // plain string (gameIdFilter, storageGameId, contentId, "<id>/FX_..."),
+        // which the `gameId` reflection above never sees. Only string values
+        // are touched, and only by BetaInjectionStamp.Rewrite's exact-id /
+        // "<id>/" prefix rule. Edited through SerializedObject so overrides on
+        // nested prefab instances are recorded the way prefab saves expect.
+        // A nested instance's INHERITED value is left alone when its source
+        // prefab is in this same pass: that asset is rewritten on its own, and
+        // stamping the copy here would leave a stray override behind after
+        // restore.
+        private static int RewriteLuaStringInjections(GameObject root, IList<string> fromIds, string toId,
+            HashSet<string> processedPaths)
+        {
+            int count = 0;
+            foreach (var comp in root.GetComponentsInChildren<Component>(true))
+            {
+                if (comp == null || !(comp is ILuaInjectable)) continue;
+
+                bool inheritsFromProcessedPrefab = false;
+                if (PrefabUtility.IsPartOfPrefabInstance(comp))
+                {
+                    string sourcePath = PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(comp);
+                    inheritsFromProcessedPrefab = !string.IsNullOrEmpty(sourcePath)
+                        && processedPaths != null
+                        && processedPaths.Contains(sourcePath.Replace('\\', '/'));
+                }
+
+                var so = new SerializedObject(comp);
+                var array = so.FindProperty("stringInjections");
+                if (array == null || !array.isArray) continue;
+
+                bool changed = false;
+                for (int i = 0; i < array.arraySize; i++)
+                {
+                    var valueProp = array.GetArrayElementAtIndex(i).FindPropertyRelative("value");
+                    if (valueProp == null || valueProp.propertyType != SerializedPropertyType.String) continue;
+                    if (inheritsFromProcessedPrefab && !valueProp.prefabOverride) continue;
+
+                    string current = valueProp.stringValue;
+                    string next = BetaInjectionStamp.Rewrite(current, fromIds, toId);
+                    if (string.Equals(current, next, StringComparison.Ordinal)) continue;
+                    valueProp.stringValue = next;
+                    changed = true;
+                    count++;
+                }
+                if (changed) so.ApplyModifiedPropertiesWithoutUndo();
+            }
+            return count;
         }
 
         // The addressable address DreamPark assigns to an attraction/prop prefab —
@@ -727,9 +900,46 @@ namespace DreamPark {
             sb.Append(t.GetSiblingIndex());
         }
 
-        private static bool ShouldSkipAsset(string assetPath)
+        // Layout-frame previews (Assets/Content/{id}/Previews/Frames/{prefab}@{frameId}.png)
+        // are author-time art that the uploader pushes to the backend, exactly
+        // like the base preview — but unlike the base preview they never get an
+        // Addressables entry at all. Left to the folder rules they would land in
+        // the build-excluded {id}-Previews group as {id}/Previews/{prefab}@{frame},
+        // an address that only a prefab literally named "{prefab}@{frame}" could
+        // ever collide with — but there is no reader for it either, so the clean
+        // answer is no address. Anchored to the content root's own Previews/Frames
+        // so a vendor pack's "Previews/Frames" folder under ThirdParty/ is untouched.
+        internal static bool IsLayoutFramePreviewAsset(string assetPath)
+        {
+            if (string.IsNullOrEmpty(assetPath)) return false;
+            string path = assetPath.Replace("\\", "/");
+            const string contentRoot = "Assets/Content/";
+            if (!path.StartsWith(contentRoot, StringComparison.OrdinalIgnoreCase)) return false;
+            int slash = path.IndexOf('/', contentRoot.Length);
+            if (slash < 0) return false;
+            return path.Substring(slash + 1).StartsWith(
+                "Previews/" + AttractionLayoutFramePreviewPaths.FolderName + "/",
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal static bool ShouldSkipAsset(string assetPath)
         {
             assetPath = assetPath.Replace("\\", "/");
+
+            // Layout-frame previews are never Addressables (see IsLayoutFramePreviewAsset).
+            if (IsLayoutFramePreviewAsset(assetPath)) return true;
+
+            // Legacy compiled Sequence prefabs are no longer shipped. The
+            // addressable package definition is the runtime entry point now.
+            if (assetPath.EndsWith("/DreamSequence/Dream Sequence.prefab",
+                    StringComparison.OrdinalIgnoreCase)) return true;
+
+            // Version-controlled uploader metadata is published through the content
+            // API / release manifest, not shipped as a runtime Addressable.
+            if (assetPath.EndsWith("/.dreampark-sequence.json", StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (assetPath.EndsWith("/.dreampark-arena.json", StringComparison.OrdinalIgnoreCase))
+                return true;
 
             if (disallowedExtensionsList.Any(ext => assetPath.EndsWith(ext, StringComparison.OrdinalIgnoreCase)))
             {
@@ -827,6 +1037,10 @@ namespace DreamPark {
         {
             if (string.IsNullOrEmpty(assetPath)) return true;
             assetPath = assetPath.Replace("\\", "/");
+            if (IsLayoutFramePreviewAsset(assetPath)) return true;
+            if (assetPath.EndsWith("/.dreampark-sequence.json", StringComparison.OrdinalIgnoreCase)) return true;
+            if (assetPath.EndsWith("/.dreampark-arena.json", StringComparison.OrdinalIgnoreCase)) return true;
+            if (assetPath.EndsWith("/DreamSequence/Dream Sequence.prefab", StringComparison.OrdinalIgnoreCase)) return true;
             if (disallowedExtensionsList.Any(ext => assetPath.EndsWith(ext, StringComparison.OrdinalIgnoreCase))) return true;
             if (assetPath.Contains("/Editor/")) return true;
             if (assetPath.IndexOf("/ThirdPartyLocal/", StringComparison.OrdinalIgnoreCase) >= 0) return true;
@@ -886,11 +1100,16 @@ namespace DreamPark {
         // ---------------------------------------------------------------------
         // Addressable Updates (targeted)
         // ---------------------------------------------------------------------
-        private static void ApplyGameIdLabelToContentEntries(AddressableAssetSettings settings, string gameId, List<string> specificPaths = null)
+        private static void ApplyGameIdLabelToContentEntries(
+            AddressableAssetSettings settings,
+            string sourceGameId,
+            string targetGameId,
+            List<string> specificPaths = null)
         {
             if (settings == null) return;
+            if (string.IsNullOrEmpty(targetGameId)) targetGameId = sourceGameId;
 
-            EnsureGlobalLabel(settings, gameId);
+            EnsureGlobalLabel(settings, targetGameId);
 
             // Determine which asset paths to operate on
             IEnumerable<string> assetPaths;
@@ -900,7 +1119,7 @@ namespace DreamPark {
             }
             else
             {
-                string contentRoot = $"Assets/Content/{gameId}/";
+                string contentRoot = $"Assets/Content/{sourceGameId}/";
                 // FindAssets accepts paths with or without trailing slash, but
                 // we strip it defensively because some Unity versions handle
                 // the trailing slash inconsistently and silently return fewer
@@ -908,7 +1127,7 @@ namespace DreamPark {
                 string contentRootForFind = contentRoot.TrimEnd('/');
                 Debug.Log($"🔍 Searching for assets in {contentRoot}");
 
-                RestoreAssetSaveability(gameId);
+                RestoreAssetSaveability(sourceGameId);
 
                 // Build the initial list from AssetDatabase.FindAssets.
                 var foundAssets = new HashSet<string>(
@@ -992,7 +1211,7 @@ namespace DreamPark {
                 }
             }
 
-            Debug.Log($"🔍 Found {assetPaths.Count()} assets to process for gameId={gameId}.");
+            Debug.Log($"🔍 Found {assetPaths.Count()} assets to process from {sourceGameId} for target contentId={targetGameId}.");
 
             int labeled = 0, moved = 0;
             foreach (var assetPath in assetPaths)
@@ -1000,21 +1219,34 @@ namespace DreamPark {
                 var guid = AssetDatabase.AssetPathToGUID(assetPath);
                 if (string.IsNullOrEmpty(guid)) continue;
 
+                // Incremental passes hand us raw watchdog paths (no ShouldSkipAsset
+                // filter), so a freshly written frame preview arrives here too.
+                // Never register one, and evict any entry an older pass created.
+                if (IsLayoutFramePreviewAsset(assetPath))
+                {
+                    if (settings.FindAssetEntry(guid) != null) settings.RemoveAssetEntry(guid);
+                    continue;
+                }
+
                 var rel = assetPath.Replace("\\", "/");
-                int idx = rel.IndexOf($"{gameId}/");
+                int idx = rel.IndexOf($"{sourceGameId}/", StringComparison.OrdinalIgnoreCase);
                 if (idx < 0) continue;
 
-                var subPath = rel.Substring(idx + gameId.Length + 1);
+                var subPath = rel.Substring(idx + sourceGameId.Length + 1);
                 var firstSlash = subPath.IndexOf('/');
                 string folderName = firstSlash > 0 ? subPath.Substring(0, firstSlash) : "Root";
-                string groupName = $"{Sanitize(gameId)}-{folderName}";
+                string groupName = $"{Sanitize(targetGameId)}-{folderName}";
 
-                var group = settings.groups.FirstOrDefault(g => g != null && g.Name == groupName)
-                    ?? settings.CreateGroup(groupName, false, false, true,
+                var group = settings.groups.FirstOrDefault(g => g != null && g.Name == groupName);
+                if (group == null)
+                {
+                    group = settings.CreateGroup(groupName, false, false, true,
                         new List<AddressableAssetGroupSchema> {
                             ScriptableObject.CreateInstance<BundledAssetGroupSchema>(),
                             ScriptableObject.CreateInstance<ContentUpdateGroupSchema>()
                         });
+                    SmartBundleGrouper.UseStableGuid(group);   // same name → same bundle ids → Patch works
+                }
 
                 var bag = group.GetSchema<BundledAssetGroupSchema>() ?? group.AddSchema<BundledAssetGroupSchema>();
                 bag.BuildPath.SetVariableByName(settings, AddressableAssetSettings.kRemoteBuildPath);
@@ -1052,7 +1284,7 @@ namespace DreamPark {
                 // specificPaths == null), so this is the right place to
                 // protect Smart membership.
                 bool inSmartGroup = entry?.parentGroup != null
-                    && IsSmartManagedGroupName(gameId, entry.parentGroup.Name);
+                    && IsSmartManagedGroupName(targetGameId, entry.parentGroup.Name);
                 bool isIncremental = specificPaths != null && specificPaths.Count > 0;
                 bool preserveSmart = isIncremental
                     && BundlingStrategyPrefs.Current == BundlingStrategy.Smart
@@ -1093,20 +1325,20 @@ namespace DreamPark {
                     var levelTemplate = prefab.GetComponent<LevelTemplate>();
                     var propTemplate = prefab.GetComponent<PropTemplate>();
                     if (levelTemplate != null) {
-                        desiredAddress = $"{gameId}/Levels/{levelTemplate.size.ToString()}/{Path.GetFileNameWithoutExtension(assetPath)}";
-                        string filePreview = $"Assets/Content/{gameId}/Previews/{Path.GetFileNameWithoutExtension(assetPath)}.png";
+                        desiredAddress = $"{targetGameId}/Levels/{levelTemplate.size.ToString()}/{Path.GetFileNameWithoutExtension(assetPath)}";
+                        string filePreview = $"Assets/Content/{sourceGameId}/Previews/{Path.GetFileNameWithoutExtension(assetPath)}.png";
                         // if (!File.Exists(filePreview)) {
                         //     GeneratePreview(prefab).ContinueWith(t => SavePreview(t.Result, filePreview));
                         // }
                     } else if (propTemplate != null) {
-                        desiredAddress = $"{gameId}/Props/{propTemplate.category.ToString()}/{Path.GetFileNameWithoutExtension(assetPath)}";
+                        desiredAddress = $"{targetGameId}/Props/{propTemplate.category.ToString()}/{Path.GetFileNameWithoutExtension(assetPath)}";
                     } else {
-                        desiredAddress = $"{gameId}/{Path.GetFileNameWithoutExtension(assetPath)}";
+                        desiredAddress = $"{targetGameId}/{Path.GetFileNameWithoutExtension(assetPath)}";
                     }
                 } else if (typeFolder == "Textures" && assetPath.Contains("Previews")) {
-                    desiredAddress =  $"{gameId}/Previews/{Path.GetFileNameWithoutExtension(assetPath)}";
+                    desiredAddress =  $"{targetGameId}/Previews/{Path.GetFileNameWithoutExtension(assetPath)}";
                 } else if (!string.IsNullOrEmpty(typeFolder)) {
-                    desiredAddress = $"{gameId}/{typeFolder}/{Path.GetFileNameWithoutExtension(assetPath)}";
+                    desiredAddress = $"{targetGameId}/{typeFolder}/{Path.GetFileNameWithoutExtension(assetPath)}";
                 } else {
                     desiredAddress = assetPath;
                 }
@@ -1118,18 +1350,24 @@ namespace DreamPark {
                     entry.address = desiredAddress;
                 }
 
-                if (!entry.labels.Contains(gameId))
+                if (!string.Equals(sourceGameId, targetGameId, StringComparison.Ordinal)
+                    && entry.labels.Contains(sourceGameId))
+                {
+                    entry.SetLabel(sourceGameId, false, false);
+                }
+
+                if (!entry.labels.Contains(targetGameId))
                 {
                     Debug.Log("🔍 Label changed for: " + assetPath);
-                    Debug.Log("gameId: " + gameId);
+                    Debug.Log("gameId: " + targetGameId);
                     Debug.Log("entry.labels: " + string.Join(", ", entry.labels));
-                    entry.SetLabel(gameId, true, true);
+                    entry.SetLabel(targetGameId, true, true);
                     labeled++;
                 }
             }
 
             if (labeled > 0 || moved > 0)
-                Debug.Log($"🏷 Addressables: {moved} moved/created, {labeled} labeled for '{gameId}'.");
+                Debug.Log($"🏷 Addressables: {moved} moved/created, {labeled} labeled for '{targetGameId}'.");
 
             // ── Bundling strategy ────────────────────────────────────────
             // After the folder-based grouping has finished assigning every
@@ -1148,8 +1386,8 @@ namespace DreamPark {
             // editing is recovered by the time we build.
             if (specificPaths == null && BundlingStrategyPrefs.Current == BundlingStrategy.Smart)
             {
-                var result = SmartBundleGrouper.ApplyDependencyAwareGrouping(settings, gameId);
-                Debug.Log($"📦 Smart bundling for '{gameId}': " +
+                var result = SmartBundleGrouper.ApplyDependencyAwareGrouping(settings, targetGameId);
+                Debug.Log($"📦 Smart bundling for '{targetGameId}': " +
                           $"{result.rootBundles} root bundles, {result.runtimeAssets} runtime assets, " +
                           $"+{result.groupsCreated}/-{result.groupsRemoved} groups, " +
                           $"{result.orphanFilesRemoved} orphan files cleaned.");
@@ -1161,7 +1399,7 @@ namespace DreamPark {
             // 2026). Runs on BOTH strategies and on incremental passes — the
             // groups exist in every project that ever published, and a project
             // that hasn't run the Smart pass yet still must not build them.
-            SmartBundleGrouper.ExcludeRetiredArtGroupsFromBuild(settings, gameId);
+            SmartBundleGrouper.ExcludeRetiredArtGroupsFromBuild(settings, targetGameId);
         }
 
         public static Texture2D CreateAlphaMask(Texture2D original, Color bg, float threshold = 0.1f)
@@ -1205,15 +1443,29 @@ namespace DreamPark {
             // Find all prefabs with LevelTemplate or PropTemplate component
             string[] allPrefabs = AssetDatabase.FindAssets("t:Prefab", new[] { contentRoot })
                 .Select(AssetDatabase.GUIDToAssetPath)
+                .Where(path => !path.EndsWith("/DreamSequence/Dream Sequence.prefab",
+                    StringComparison.OrdinalIgnoreCase))
                 .ToArray();
 
             int generated = 0;
             int skipped = 0;
+            var frames = new FramePreviewResult();
+            // Case-insensitive: on macOS/Windows "A_stack@f.png" left by a
+            // case-only prefab rename IS the file SyncFramePreviews' skip-if-exists
+            // check keeps for "A_Stack", so the orphan sweep must not delete it.
+            var rootPrefabNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (string prefabPath in allPrefabs)
             {
+                bool isSequenceLevel = Editor.DreamSequenceGenerator.IsSpecialLevelPath(contentId, prefabPath);
                 var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
-                if (prefab == null) continue;
+                if (prefab == null)
+                {
+                    // Unloadable right now is not the same as gone: keep its
+                    // frame previews out of the orphan sweep below.
+                    rootPrefabNames.Add(Path.GetFileNameWithoutExtension(prefabPath));
+                    continue;
+                }
 
                 // Same root-prefab predicate the SmartBundleGrouper and the
                 // Park Assets preview grid use: LevelTemplate (catches
@@ -1225,6 +1477,7 @@ namespace DreamPark {
                 var propTemplate = prefab.GetComponent<PropTemplate>();
                 var playerRig = prefab.GetComponent<PlayerRig>();
                 if (levelTemplate == null && propTemplate == null && playerRig == null) continue;
+                rootPrefabNames.Add(Path.GetFileNameWithoutExtension(prefabPath));
 
                 string previewPath = $"Assets/Content/{contentId}/Previews/{Path.GetFileNameWithoutExtension(prefabPath)}.png";
 
@@ -1234,6 +1487,13 @@ namespace DreamPark {
                 {
                     Directory.CreateDirectory(previewDir);
                 }
+
+                // Layout frames get their own PNGs under Previews/Frames/ at the
+                // base resolution, with the same skip-unless-forced rule as the
+                // base preview below; PNGs of frames that no longer exist are
+                // deleted. A no-op for anything without layout frames.
+                frames.Add(SyncFramePreviews(contentId, prefab,
+                    Path.GetFileNameWithoutExtension(prefabPath), isSequenceLevel ? 1024 : 512, forceRegenerate));
 
                 // Only generate a preview when one doesn't exist yet (i.e. the
                 // first time a prefab is seen). Previews are otherwise LEFT
@@ -1259,22 +1519,60 @@ namespace DreamPark {
                 // historical output, so untouched previews don't churn.
                 string prefabName = Path.GetFileNameWithoutExtension(prefabPath);
                 PreviewSettings settings = PreviewMetadataStore.GetOrDefault(contentId, prefabName);
-                Texture2D preview = PrefabPreviewRenderer.RenderPreview(prefab, settings);
+                int resolution = isSequenceLevel ? 1024 : 512;
+                Texture2D preview = PrefabPreviewRenderer.RenderPreview(prefab, settings, resolution);
                 if (preview == null)
                 {
                     Debug.LogWarning($"⚠️ Could not generate preview for {prefabPath}");
                     continue;
                 }
 
-                WritePreviewPng(previewPath, preview);
+                WritePreviewPng(previewPath, preview, resolution);
                 UnityEngine.Object.DestroyImmediate(preview);
 
                 generated++;
                 Debug.Log($"🖼️ Generated preview: {previewPath}");
             }
 
+            // Frame PNGs whose prefab is gone (deleted or renamed) are orphans.
+            frames.deleted += DeleteOrphanFramePreviews(contentId, rootPrefabNames);
+
             AssetDatabase.Refresh();
             Debug.Log($"✅ Preview generation complete. Generated {generated}, skipped {skipped} (already up-to-date).");
+            if (frames.generated + frames.skipped + frames.deleted + frames.failed > 0)
+                Debug.Log($"🖼️ Layout frame previews: generated {frames.generated}, skipped {frames.skipped}, " +
+                          $"removed {frames.deleted} stale, {frames.failed} failed.");
+        }
+
+        public static bool HasSequenceLevelPreviews(string contentId)
+        {
+            if (string.IsNullOrEmpty(contentId)) return false;
+            string[] paths =
+            {
+                Editor.DreamSequenceGenerator.StartLevelPath(contentId),
+                Editor.DreamSequenceGenerator.OverlayLevelPath(contentId),
+                Editor.DreamSequenceGenerator.GameOverLevelPath(contentId)
+            };
+            return paths.All(path => File.Exists(
+                $"Assets/Content/{contentId}/Previews/{Path.GetFileNameWithoutExtension(path)}.png"));
+        }
+
+        public static void GenerateSequenceLevelPreviews(string contentId, bool forceRegenerate = false)
+        {
+            if (string.IsNullOrEmpty(contentId)) return;
+            string[] paths =
+            {
+                Editor.DreamSequenceGenerator.StartLevelPath(contentId),
+                Editor.DreamSequenceGenerator.OverlayLevelPath(contentId),
+                Editor.DreamSequenceGenerator.GameOverLevelPath(contentId)
+            };
+            foreach (string path in paths)
+            {
+                if (AssetDatabase.LoadAssetAtPath<GameObject>(path) == null) continue;
+                string preview = $"Assets/Content/{contentId}/Previews/{Path.GetFileNameWithoutExtension(path)}.png";
+                if (forceRegenerate || !File.Exists(preview))
+                    RegeneratePreviewForPrefab(contentId, path);
+            }
         }
 
         // Regenerates the preview PNG for a single prefab using whatever
@@ -1283,7 +1581,12 @@ namespace DreamPark {
         // the Content Uploader grid, and the next batch all agree. Returns
         // true on success. Renders and writes exactly like the batch loop —
         // same importer settings, same GUID preservation.
-        public static bool RegeneratePreviewForPrefab(string contentId, string prefabPath)
+        //
+        // includeFrames: also re-render every layout frame's PNG (forced — a
+        // frame with no override of its own inherits these Base settings, so a
+        // Base save can change it) and delete PNGs of frames that no longer
+        // exist. The frames' result never decides the return value.
+        public static bool RegeneratePreviewForPrefab(string contentId, string prefabPath, bool includeFrames = true)
         {
             try
             {
@@ -1305,14 +1608,18 @@ namespace DreamPark {
                     Directory.CreateDirectory(previewDir);
 
                 PreviewSettings settings = PreviewMetadataStore.GetOrDefault(contentId, prefabName);
-                Texture2D preview = PrefabPreviewRenderer.RenderPreview(prefab, settings);
+                int resolution = Editor.DreamSequenceGenerator.IsSpecialLevelPath(contentId, prefabPath)
+                    ? 1024 : 512;
+                if (includeFrames)
+                    SyncFramePreviews(contentId, prefab, prefabName, resolution, forceRegenerate: true);
+                Texture2D preview = PrefabPreviewRenderer.RenderPreview(prefab, settings, resolution);
                 if (preview == null)
                 {
                     Debug.LogWarning($"⚠️ Could not generate preview for {prefabPath}");
                     return false;
                 }
 
-                WritePreviewPng(previewPath, preview);
+                WritePreviewPng(previewPath, preview, resolution);
                 UnityEngine.Object.DestroyImmediate(preview);
 
                 AssetDatabase.Refresh();
@@ -1326,11 +1633,200 @@ namespace DreamPark {
             }
         }
 
+        // ── Layout frame previews ───────────────────────────────────────
+        // Every Custom/Minimum frame of an AttractionTemplate gets its own PNG at
+        // Previews/Frames/{prefab}@{frameId}.png (AttractionLayoutFramePreviewPaths)
+        // while Base keeps Previews/{prefab}.png. Frames render at the base
+        // resolution with their own PreviewSettings, falling back to the prefab's.
+        // They are never Addressables (IsLayoutFramePreviewAsset); the uploader
+        // pushes them to the backend after the base preview.
+
+        internal struct FramePreviewResult
+        {
+            public int generated;
+            public int skipped;
+            public int deleted;
+            public int failed;
+
+            public void Add(FramePreviewResult other)
+            {
+                generated += other.generated;
+                skipped += other.skipped;
+                deleted += other.deleted;
+                failed += other.failed;
+            }
+        }
+
+        // Renders every frame of one prefab (skipping existing PNGs unless
+        // forced) and deletes the PNGs — and frame overrides — of frames it no
+        // longer has. Prefabs without layout frames only get the cleanup.
+        internal static FramePreviewResult SyncFramePreviews(
+            string contentId, GameObject prefab, string prefabName, int resolution, bool forceRegenerate)
+        {
+            var result = new FramePreviewResult();
+            if (string.IsNullOrEmpty(contentId) || prefab == null || string.IsNullOrEmpty(prefabName))
+                return result;
+
+            List<string> frameIds = AttractionLayoutFramePreviews.PreviewFrameIds(
+                prefab.GetComponent<AttractionTemplate>());
+            result.deleted = DeleteStaleFramePreviews(contentId, prefabName, frameIds);
+            if (frameIds.Count == 0) return result;
+
+            EnsureFramePreviewFolder(contentId);
+            foreach (string frameId in frameIds)
+            {
+                string path = AttractionLayoutFramePreviewPaths.PathFor(contentId, prefabName, frameId);
+                if (!forceRegenerate && File.Exists(path))
+                {
+                    result.skipped++;
+                    continue;
+                }
+                try
+                {
+                    if (RenderFramePreview(contentId, prefab, prefabName, frameId, resolution, path)) result.generated++;
+                    else result.failed++;
+                }
+                catch (Exception e)
+                {
+                    // One bad frame must not stop the batch (or the base preview).
+                    result.failed++;
+                    Debug.LogError($"[ContentProcessor] Frame preview '{frameId}' failed for {prefabName}: {e.Message}\n{e.StackTrace}");
+                }
+            }
+            return result;
+        }
+
+        // Re-renders ONE frame's PNG (the Preview Editor's per-frame Save).
+        // "base" / empty delegates to the base preview alone.
+        public static bool RegenerateFramePreview(string contentId, string prefabPath, string frameId)
+        {
+            if (PreviewMetadataStore.IsBaseFrame(frameId))
+                return RegeneratePreviewForPrefab(contentId, prefabPath, includeFrames: false);
+            try
+            {
+                if (string.IsNullOrEmpty(contentId) || string.IsNullOrEmpty(prefabPath)) return false;
+                var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+                if (prefab == null)
+                {
+                    Debug.LogWarning($"⚠️ RegenerateFramePreview: no prefab at {prefabPath}");
+                    return false;
+                }
+                if (!AttractionLayoutFramePreviews.PreviewFrameIds(prefab.GetComponent<AttractionTemplate>())
+                        .Contains(frameId))
+                {
+                    Debug.LogWarning($"⚠️ RegenerateFramePreview: {prefabPath} has no layout frame '{frameId}'.");
+                    return false;
+                }
+
+                string prefabName = Path.GetFileNameWithoutExtension(prefabPath);
+                int resolution = Editor.DreamSequenceGenerator.IsSpecialLevelPath(contentId, prefabPath) ? 1024 : 512;
+                EnsureFramePreviewFolder(contentId);
+                string path = AttractionLayoutFramePreviewPaths.PathFor(contentId, prefabName, frameId);
+                if (!RenderFramePreview(contentId, prefab, prefabName, frameId, resolution, path)) return false;
+                AssetDatabase.Refresh();
+                return true;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[ContentProcessor] RegenerateFramePreview failed for {prefabPath}@{frameId}: {e.Message}\n{e.StackTrace}");
+                return false;
+            }
+        }
+
+        private static bool RenderFramePreview(string contentId, GameObject prefab, string prefabName,
+            string frameId, int resolution, string path)
+        {
+            PreviewSettings settings = PreviewMetadataStore.GetOrDefaultForFrame(contentId, prefabName, frameId);
+            Texture2D preview = PrefabPreviewRenderer.RenderPreview(prefab, settings, resolution, frameId);
+            if (preview == null)
+            {
+                Debug.LogWarning($"⚠️ Could not generate layout frame preview {path}");
+                return false;
+            }
+            WritePreviewPng(path, preview, resolution);
+            UnityEngine.Object.DestroyImmediate(preview);
+            Debug.Log($"🖼️ Generated layout frame preview: {path}");
+            return true;
+        }
+
+        // Deletes this prefab's frame PNGs (and frame overrides) for every frame
+        // id not in keepFrameIds. Returns the number of PNGs removed.
+        internal static int DeleteStaleFramePreviews(string contentId, string prefabName, ICollection<string> keepFrameIds)
+        {
+            int deleted = 0;
+            foreach (KeyValuePair<string, string> preview in
+                     AttractionLayoutFramePreviews.ExistingPreviewPaths(contentId, prefabName))
+            {
+                if (keepFrameIds != null && keepFrameIds.Contains(preview.Key)) continue;
+                if (DeletePreviewFile(preview.Value)) deleted++;
+                PreviewMetadataStore.ClearFrame(contentId, prefabName, preview.Key);
+            }
+            return deleted;
+        }
+
+        // Deletes frame PNGs whose prefab name is not one of liveRootPrefabNames
+        // (the prefab was deleted or renamed). Overrides are left alone: their
+        // key cannot be told apart from a base entry of a prefab named "a@b".
+        internal static int DeleteOrphanFramePreviews(string contentId, ICollection<string> liveRootPrefabNames)
+        {
+            int deleted = 0;
+            foreach (var preview in AttractionLayoutFramePreviews.ExistingPreviews(contentId))
+            {
+                if (liveRootPrefabNames != null && liveRootPrefabNames.Contains(preview.prefabName)) continue;
+                if (DeletePreviewFile(preview.path)) deleted++;
+            }
+            return deleted;
+        }
+
+        private static bool DeletePreviewFile(string assetPath)
+        {
+            if (AssetDatabase.DeleteAsset(assetPath))
+            {
+                Debug.Log($"🧹 Removed stale layout frame preview: {assetPath}");
+                return true;
+            }
+            try
+            {
+                // Written but never imported: DeleteAsset does not know it.
+                bool existed = File.Exists(assetPath);
+                if (existed) File.Delete(assetPath);
+                if (File.Exists(assetPath + ".meta")) File.Delete(assetPath + ".meta");
+                return existed;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[ContentProcessor] Could not delete {assetPath}: {e.Message}");
+                return false;
+            }
+        }
+
+        // Creates Assets/Content/{id}/Previews/Frames through the AssetDatabase so
+        // the folder has its .meta before the first PNG is imported into it.
+        private static void EnsureFramePreviewFolder(string contentId)
+        {
+            string folder = AttractionLayoutFramePreviewPaths.FolderFor(contentId);
+            if (AssetDatabase.IsValidFolder(folder)) return;
+            string[] parts = folder.Split('/');
+            string current = parts[0];
+            for (int i = 1; i < parts.Length; i++)
+            {
+                string next = current + "/" + parts[i];
+                if (!AssetDatabase.IsValidFolder(next))
+                {
+                    // An on-disk folder the AssetDatabase has not seen yet is
+                    // imported, never re-created (CreateFolder would make "Frames 1").
+                    if (Directory.Exists(next)) AssetDatabase.ImportAsset(next, ImportAssetOptions.ForceSynchronousImport);
+                    else AssetDatabase.CreateFolder(current, parts[i]);
+                }
+                current = next;
+            }
+        }
+
         // Encodes a rendered preview to PNG at previewPath, applies the
         // thumbnail importer settings, and preserves the asset GUID across
         // the reimport. Extracted verbatim from the batch loop so the single-
         // prefab and full-batch paths can never drift apart.
-        private static void WritePreviewPng(string previewPath, Texture2D preview)
+        private static void WritePreviewPng(string previewPath, Texture2D preview, int resolution)
         {
             // GUID preservation. Unity's v2 asset pipeline regenerates
             // the .meta — and the GUID — when a file's content changes
@@ -1368,14 +1864,13 @@ namespace DreamPark {
                 //  - Compressed + crunched (~5-10× smaller on disk
                 //    than the Uncompressed default this code shipped
                 //    with originally; ASTC/BC compression for runtime).
-                //  - Cap at 512 — that's what PrefabPreviewRenderer
-                //    outputs, so no reason to leave maxTextureSize
-                //    at the 1024 default.
+                //  - Match the rendered size. The three Sequence special
+                //    levels use 1024px HD previews; ordinary cards use 512px.
                 importer.alphaIsTransparency = true;
                 importer.sRGBTexture = true;
                 importer.isReadable = false;
                 importer.mipmapEnabled = false;
-                importer.maxTextureSize = 512;
+                importer.maxTextureSize = resolution;
                 importer.textureCompression = TextureImporterCompression.Compressed;
                 importer.crunchedCompression = true;
                 importer.compressionQuality = 50;
@@ -1761,9 +2256,14 @@ namespace DreamPark {
         }
 
         public static bool BuildUnityPackage(string contentId) {
-            Debug.Log($"Building unity package for {contentId}");
+            return BuildUnityPackage(contentId, contentId);
+        }
+
+        public static bool BuildUnityPackage(string sourceContentId, string targetContentId) {
+            if (string.IsNullOrEmpty(targetContentId)) targetContentId = sourceContentId;
+            Debug.Log($"Building unity package from {sourceContentId} for target {targetContentId}");
             try {
-                string sourceFolder = "Assets/Content/" + contentId;
+                string sourceFolder = "Assets/Content/" + sourceContentId;
                 string[] guids = AssetDatabase.FindAssets("t:Script", new[] { sourceFolder })
                     .Where(g => !g.Contains("/Editor/")).ToArray();
 
@@ -1776,7 +2276,7 @@ namespace DreamPark {
                 // left over from a previous build that did ship code.
                 string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
                 string unityPath = Path.Combine(projectRoot, "ServerData", "Unity");
-                string destPath = Path.Combine(unityPath, $"{contentId}.unitypackage");
+                string destPath = Path.Combine(unityPath, $"{targetContentId}.unitypackage");
 
                 if (assetPaths.Length == 0)
                 {
@@ -1811,7 +2311,7 @@ namespace DreamPark {
                 // causing "Could not produce class with ID X" errors at runtime
                 // when bundles try to deserialize prefabs with those components.
                 // See ContentLinkXmlGenerator for the full rationale.
-                string linkXmlPath = ContentLinkXmlGenerator.GenerateForContent(contentId);
+                string linkXmlPath = ContentLinkXmlGenerator.GenerateForContent(sourceContentId);
 
                 // Include the generated link.xml in the export alongside the
                 // scripts. If GenerateForContent returned null (no preservable
@@ -1822,7 +2322,7 @@ namespace DreamPark {
                 }
 
                 // Export to a temporary location
-                string tempPath = Path.Combine(Application.dataPath, $"../{contentId}.unitypackage");
+                string tempPath = Path.Combine(Application.dataPath, $"../{targetContentId}.unitypackage");
                 AssetDatabase.ExportPackage(assetPaths, tempPath, ExportPackageOptions.Default);
 
                 // Ensure the "ServerData" and "Unity" directories exist
@@ -2061,17 +2561,30 @@ namespace DreamPark {
                 }
             }
 
+            // Generate into Temp/ and sync Gen/ to exactly that output (stale wrappers
+            // removed, retired XLua demos deleted). XLuaGenGuard explains why a plain
+            // GenAll() into Gen/ is not safe: it never deletes what it no longer makes.
+            Debug.Log("🔧 Generating XLua wrappers...");
+            bool generated;
+            string report;
             try
             {
-                Debug.Log("🔧 Generating XLua wrappers...");
-                CSObjectWrapEditor.Generator.GenAll();
-                Debug.Log($"✅ XLua wrappers generated to {CSObjectWrapEditor.GeneratorConfig.common_path}");
+                generated = XLuaGenGuard.RegenerateClean(out report);
             }
             catch (Exception e)
             {
-                Debug.LogError("❌ XLua codegen failed: " + e);
+                generated = false;
+                report = e.ToString();
+            }
+            if (generated)
+            {
+                Debug.Log(report);
+            }
+            else
+            {
+                Debug.LogError("❌ XLua codegen failed: " + report);
                 EditorUtility.DisplayDialog("Generate XLua Code",
-                    "XLua codegen failed. See Console for details.", "OK");
+                    "XLua codegen failed; Gen/ was not changed. See Console for details.", "OK");
             }
         }
     }

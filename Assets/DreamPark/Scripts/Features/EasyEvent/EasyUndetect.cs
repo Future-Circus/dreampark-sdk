@@ -144,8 +144,8 @@ namespace DreamPark.Easy
             {
                 if (!TryAssignTargetFromObject(arg0))
                 {
-                    if (detectPlayer && Camera.main != null)
-                        _target = Camera.main.gameObject;
+                    if (detectPlayer && PlayerHead.ContentCamera() != null)
+                        _target = PlayerHead.ContentCamera().gameObject; // Oct 11 2026: the content camera (limbo stand-in while the local player is not in the park)
                     else if (detectTarget && target != null)
                         _target = target.gameObject;
                 }

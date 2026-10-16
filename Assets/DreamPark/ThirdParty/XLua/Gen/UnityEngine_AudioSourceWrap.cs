@@ -21,7 +21,7 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(UnityEngine.AudioSource);
-			Utils.BeginObjectRegister(type, L, translator, 0, 17, 29, 27);
+			Utils.BeginObjectRegister(type, L, translator, 0, 17, 31, 28);
 			
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "Play", _m_Play);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "PlayDelayed", _m_PlayDelayed);
@@ -48,6 +48,8 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "timeSamples", _g_get_timeSamples);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "clip", _g_get_clip);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "resource", _g_get_resource);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "generator", _g_get_generator);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "generatorInstance", _g_get_generatorInstance);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "outputAudioMixerGroup", _g_get_outputAudioMixerGroup);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "isPlaying", _g_get_isPlaying);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "isVirtual", _g_get_isVirtual);
@@ -78,6 +80,7 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "timeSamples", _s_set_timeSamples);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "clip", _s_set_clip);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "resource", _s_set_resource);
+            Utils.RegisterFunc(L, Utils.SETTER_IDX, "generator", _s_set_generator);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "outputAudioMixerGroup", _s_set_outputAudioMixerGroup);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "loop", _s_set_loop);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "ignoreListenerVolume", _s_set_ignoreListenerVolume);
@@ -794,6 +797,34 @@ namespace XLua.CSObjectWrap
         }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_generator(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                UnityEngine.AudioSource gen_to_be_invoked = (UnityEngine.AudioSource)translator.FastGetCSObj(L, 1);
+                translator.PushAny(L, gen_to_be_invoked.generator);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_generatorInstance(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                UnityEngine.AudioSource gen_to_be_invoked = (UnityEngine.AudioSource)translator.FastGetCSObj(L, 1);
+                translator.Push(L, gen_to_be_invoked.generatorInstance);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
         static int _g_get_outputAudioMixerGroup(RealStatePtr L)
         {
 		    try {
@@ -1200,6 +1231,21 @@ namespace XLua.CSObjectWrap
 			
                 UnityEngine.AudioSource gen_to_be_invoked = (UnityEngine.AudioSource)translator.FastGetCSObj(L, 1);
                 gen_to_be_invoked.resource = (UnityEngine.Audio.AudioResource)translator.GetObject(L, 2, typeof(UnityEngine.Audio.AudioResource));
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_generator(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                UnityEngine.AudioSource gen_to_be_invoked = (UnityEngine.AudioSource)translator.FastGetCSObj(L, 1);
+                gen_to_be_invoked.generator = (UnityEngine.Audio.IAudioGenerator)translator.GetObject(L, 2, typeof(UnityEngine.Audio.IAudioGenerator));
             
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);

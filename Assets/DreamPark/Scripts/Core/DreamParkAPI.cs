@@ -60,18 +60,14 @@ namespace DreamPark.API
         
         [Tooltip("Optional: override base URLs at runtime.")]
         public static string prodBaseUrl = "https://dreampark.app";
-        public static string devBaseUrl  = "https://dreampark-dev-da8108e9492c.herokuapp.com";
 
-        // Default ALL traffic to PROD. Internal/dev projects opt into the dev
-        // backend by adding the DREAMPARK_DEV_BACKEND scripting define in Player
-        // Settings; the shipped SDK template and release builds must NOT define
-        // it. (Previously every verb hard-coded devBaseUrl, so shipped builds
-        // sent auth/login/PII to the dev environment.)
-#if DREAMPARK_DEV_BACKEND
-        public static string baseUrl = devBaseUrl;
-#else
+        // The dev backend (dreampark-dev on Heroku) was retired Oct 2026, so
+        // every build talks to prod. devBaseUrl survives only so creator code
+        // that still references it compiles; it points at prod.
+        [Obsolete("The dev backend is retired. Use DreamParkAPI.baseUrl.")]
+        public static string devBaseUrl = prodBaseUrl;
+
         public static string baseUrl = prodBaseUrl;
-#endif
         public static void POST(string endpoint, string authToken, object body, Action<bool, APIResponse> callback)
         {
             var url = baseUrl + endpoint;
@@ -156,6 +152,24 @@ namespace DreamPark.API
             }
         }
 
+        /// Park reads are authorized per DEVICE (the headset report), which only knows
+        /// who logged in by QR pairing — not who is signed into the iOS app. A new
+        /// account's own park was a 403 on the phone that made it. Device-key reads of
+        /// /app/park/* therefore also carry the signed-in session in
+        /// X-DreamPark-User-Session (server: app.park.routes userSessionUid), which the
+        /// server honours only beside a valid device key and only for the park team.
+        /// Core-only; our own host only; a no-op when nobody is signed in.
+        internal static void AttachUserSession(UnityWebRequest req, string url, string authToken)
+        {
+#if DREAMPARKCORE
+            if (string.IsNullOrEmpty(authToken) || !authToken.StartsWith("ApiKey ")) return;
+            if (string.IsNullOrEmpty(url) || !url.StartsWith(baseUrl + "/app/park/")) return;
+            string session = AuthAPI.HumanSessionForDeviceReads;
+            if (!string.IsNullOrEmpty(session))
+                req.SetRequestHeader("X-DreamPark-User-Session", session);
+#endif
+        }
+
         private static IEnumerator GetRequest(string url, string authToken, string ifNoneMatch, Action<bool, APIResponse> callback)
         {
             using (UnityWebRequest req = new UnityWebRequest(url, UnityWebRequest.kHttpVerbGET))
@@ -164,6 +178,7 @@ namespace DreamPark.API
                 req.timeout = RequestTimeoutSeconds;
                 if (!string.IsNullOrEmpty(authToken))
                     req.SetRequestHeader("Authorization", authToken);
+                AttachUserSession(req, url, authToken);
                 if (!string.IsNullOrEmpty(ifNoneMatch))
                     req.SetRequestHeader("If-None-Match", ifNoneMatch);
 
@@ -261,6 +276,14 @@ namespace DreamPark.API
                 rawText,
                 data
             );
+            // UnityWebRequest.error only says "400 Bad Request". The API's
+            // JSON error names the rejected field or artifact, which the
+            // uploader needs to show instead of losing it here.
+            if (!success)
+            {
+                string serverError = response.json?.GetField("error")?.stringValue;
+                if (!string.IsNullOrWhiteSpace(serverError)) response.error = serverError;
+            }
             response.etag = req.GetResponseHeader("ETag");
             return response;
         }

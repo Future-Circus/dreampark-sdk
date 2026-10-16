@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# DreamPark secret guard (pre-commit). Install once per clone:
+#     git config core.hooksPath scripts/git-hooks
+#
+# Blocks a commit that stages:
+#   - CoreSecrets.cs carrying a key-shaped literal (the key lives in
+#     ~/.dreampark/editor-api-key, never in source);
+#   - any text containing a known admin/Editor API key (key-shaped strings are
+#     SHA-256'd and compared with scripts/git-hooks/known-key-sha256.txt, plus the
+#     hash of ~/.dreampark/editor-api-key / $DREAMPARK_EDITOR_API_KEY);
+#   - .env files, *.p8 keys, *-firebase-adminsdk-*.json, office documents / PDFs;
+# then runs `gitleaks protect --staged` when gitleaks is installed.
+# Never prints a matched value. Bypass only with a human decision: git commit --no-verify.
+set -u
+
+repo_root=$(git rev-parse --show-toplevel) || exit 1
+hook_dir="$repo_root/scripts/git-hooks"
+fail=0
+
+block() { printf '  BLOCKED  %s\n' "$1" >&2; fail=1; }
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR -z | tr '\0' '\n')
+[ -z "$staged" ] && exit 0
+
+# 1. Forbidden file types / names.
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  base=$(basename "$f")
+  lower=$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')
+  case "$lower" in
+    .env|.env.*)
+      case "$lower" in .env.example|.env.sample|.env.template) ;; *) block "$f: .env files hold secrets" ;; esac ;;
+    *.p8) block "$f: .p8 private key" ;;
+    *-firebase-adminsdk-*.json) block "$f: Firebase Admin SDK service-account key" ;;
+    *.doc|*.docx|*.xls|*.xlsx|*.ppt|*.pptx|*.pdf) block "$f: office document / PDF (keep these out of git)" ;;
+  esac
+done <<EOF
+$staged
+EOF
+
+# 2 + 3. CoreSecrets.cs literal values and known-key preimages (staged content, not the worktree).
+if command -v python3 >/dev/null 2>&1; then
+  printf '%s\n' "$staged" | python3 -I -c '
+import hashlib, os, re, subprocess, sys
+hook_dir = sys.argv[1]
+known = set()
+try:
+    with open(os.path.join(hook_dir, "known-key-sha256.txt")) as fh:
+        for line in fh:
+            tok = line.split("#", 1)[0].split()
+            if tok and re.fullmatch(r"[0-9a-fA-F]{64}", tok[0]):
+                known.add(tok[0].lower())
+except OSError:
+    print("  WARNING  known-key-sha256.txt missing; checking only the local key", file=sys.stderr)
+lengths = {44, 64}
+local = os.environ.get("DREAMPARK_EDITOR_API_KEY", "").strip()
+if not local:
+    try:
+        with open(os.path.expanduser("~/.dreampark/editor-api-key")) as fh:
+            local = fh.read().strip()
+    except OSError:
+        local = ""
+if local:
+    known.add(hashlib.sha256(local.encode()).hexdigest())
+    lengths.add(len(local.encode()))
+minlen = min(lengths)
+run_re = re.compile(rb"[A-Za-z0-9+/=_-]{%d,}" % minlen)
+# A key-shaped literal (>= 20 base64/hex chars incl. a digit), or ApiKey assigned any literal.
+literal_re = re.compile(rb"\"(?=[A-Za-z0-9+/=_-]*[0-9])[A-Za-z0-9+/=_-]{20,}\"|ApiKey\s*=\s*\"[^\"]+\"")
+MAX = 20 * 1024 * 1024
+LONG = 512  # longer runs (texture/lightmap hex in .asset YAML) get only edge windows: keeps commits fast
+
+def has_known_key(data):
+    for m in run_re.finditer(data):
+        run = m.group(0)
+        for L in lengths:
+            if len(run) < L:
+                continue
+            if len(run) <= LONG:
+                starts = range(0, len(run) - L + 1)
+            else:
+                starts = list(range(0, 64)) + list(range(len(run) - L - 63, len(run) - L + 1))
+            for s in starts:
+                if 0 <= s <= len(run) - L and hashlib.sha256(run[s:s + L]).hexdigest() in known:
+                    return True
+    return False
+
+paths = [p for p in sys.stdin.read().splitlines() if p]
+bad = 0
+if paths:
+    proc = subprocess.run(["git", "cat-file", "--batch"], input=b"".join((":" + p + "\n").encode() for p in paths),
+                          capture_output=True)
+    out, pos = proc.stdout, 0
+    for path in paths:
+        nl = out.find(b"\n", pos)
+        if nl < 0:
+            break
+        header = out[pos:nl].split()
+        pos = nl + 1
+        if len(header) < 3 or header[-1] == b"missing":
+            continue
+        size = int(header[2])
+        data = out[pos:pos + size]
+        pos += size + 1
+        if size > MAX:
+            continue
+        if os.path.basename(path) == "CoreSecrets.cs" and literal_re.search(data):
+            print("  BLOCKED  %s: CoreSecrets.cs must not contain a key value (use ~/.dreampark/editor-api-key)" % path, file=sys.stderr)
+            bad = 1
+        if has_known_key(data):
+            print("  BLOCKED  %s: contains a known admin/Editor API key (matched by SHA-256; value not shown)" % path, file=sys.stderr)
+            bad = 1
+sys.exit(bad)
+' "$hook_dir" || fail=1
+else
+  printf '  WARNING  python3 not found: skipped the known-key and CoreSecrets checks\n' >&2
+fi
+
+# 4. gitleaks, when installed.
+if command -v gitleaks >/dev/null 2>&1; then
+  if ! gitleaks protect --staged --redact --no-banner >/dev/null 2>&1; then
+    block "gitleaks found a likely secret in the staged changes (run: gitleaks protect --staged --redact -v)"
+  fi
+fi
+
+if [ "$fail" -ne 0 ]; then
+  printf '\npre-commit: secret guard refused this commit. Unstage the files above (git restore --staged <file>).\n' >&2
+  exit 1
+fi
+exit 0
