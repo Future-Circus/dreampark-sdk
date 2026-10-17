@@ -31,7 +31,7 @@ namespace XLua.CSObjectWrap
 			Utils.EndObjectRegister(type, L, translator, null, null,
 			    null, null, null);
 
-		    Utils.BeginClassRegister(type, L, __CreateInstance, 43, 19, 2);
+		    Utils.BeginClassRegister(type, L, __CreateInstance, 46, 19, 2);
 			Utils.RegisterFunc(L, Utils.CLS_IDX, "BeginPendingBind", _m_BeginPendingBind_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "CancelPendingBind", _m_CancelPendingBind_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "BindIdentity", _m_BindIdentity_xlua_st_);
@@ -45,6 +45,7 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.CLS_IDX, "GetItemByType", _m_GetItemByType_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "GetItemByName", _m_GetItemByName_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "GetItemsByType", _m_GetItemsByType_xlua_st_);
+            Utils.RegisterFunc(L, Utils.CLS_IDX, "GetItems", _m_GetItems_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "HasItem", _m_HasItem_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "HasItemByType", _m_HasItemByType_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "HasBadge", _m_HasBadge_xlua_st_);
@@ -57,6 +58,8 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.CLS_IDX, "CompleteAchievement", _m_CompleteAchievement_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "AwardBadge", _m_AwardBadge_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "RemoveItem", _m_RemoveItem_xlua_st_);
+            Utils.RegisterFunc(L, Utils.CLS_IDX, "UpdateItem", _m_UpdateItem_xlua_st_);
+            Utils.RegisterFunc(L, Utils.CLS_IDX, "GetItemInstance", _m_GetItemInstance_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "RemoveBadge", _m_RemoveBadge_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "SendSessionHeartbeat", _m_SendSessionHeartbeat_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "AddDreamPoints", _m_AddDreamPoints_xlua_st_);
@@ -277,10 +280,22 @@ namespace XLua.CSObjectWrap
             
             
             
-                
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 0) 
                 {
                     
                     DreamPark.API.ProfileAPI.ClearIdentity(  );
+                    
+                    
+                    
+                    return 0;
+                }
+                if(gen_param_count == 1&& LuaTypes.LUA_TBOOLEAN == LuaAPI.lua_type(L, 1)) 
+                {
+                    bool _flushPending = LuaAPI.lua_toboolean(L, 1);
+                    
+                    DreamPark.API.ProfileAPI.ClearIdentity( _flushPending );
                     
                     
                     
@@ -290,6 +305,8 @@ namespace XLua.CSObjectWrap
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to DreamPark.API.ProfileAPI.ClearIdentity!");
             
         }
         
@@ -500,6 +517,72 @@ namespace XLua.CSObjectWrap
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_GetItems_xlua_st_(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+            
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 3&& (LuaAPI.lua_isnil(L, 1) || LuaAPI.lua_type(L, 1) == LuaTypes.LUA_TSTRING)&& (LuaAPI.lua_isnil(L, 2) || LuaAPI.lua_type(L, 2) == LuaTypes.LUA_TSTRING)&& (LuaAPI.lua_isnil(L, 3) || LuaAPI.lua_type(L, 3) == LuaTypes.LUA_TSTRING)) 
+                {
+                    string _baseItemId = LuaAPI.lua_tostring(L, 1);
+                    string _type = LuaAPI.lua_tostring(L, 2);
+                    string _contentId = LuaAPI.lua_tostring(L, 3);
+                    
+                        var gen_ret = DreamPark.API.ProfileAPI.GetItems( _baseItemId, _type, _contentId );
+                        translator.Push(L, gen_ret);
+                    
+                    
+                    
+                    return 1;
+                }
+                if(gen_param_count == 2&& (LuaAPI.lua_isnil(L, 1) || LuaAPI.lua_type(L, 1) == LuaTypes.LUA_TSTRING)&& (LuaAPI.lua_isnil(L, 2) || LuaAPI.lua_type(L, 2) == LuaTypes.LUA_TSTRING)) 
+                {
+                    string _baseItemId = LuaAPI.lua_tostring(L, 1);
+                    string _type = LuaAPI.lua_tostring(L, 2);
+                    
+                        var gen_ret = DreamPark.API.ProfileAPI.GetItems( _baseItemId, _type );
+                        translator.Push(L, gen_ret);
+                    
+                    
+                    
+                    return 1;
+                }
+                if(gen_param_count == 1&& (LuaAPI.lua_isnil(L, 1) || LuaAPI.lua_type(L, 1) == LuaTypes.LUA_TSTRING)) 
+                {
+                    string _baseItemId = LuaAPI.lua_tostring(L, 1);
+                    
+                        var gen_ret = DreamPark.API.ProfileAPI.GetItems( _baseItemId );
+                        translator.Push(L, gen_ret);
+                    
+                    
+                    
+                    return 1;
+                }
+                if(gen_param_count == 0) 
+                {
+                    
+                        var gen_ret = DreamPark.API.ProfileAPI.GetItems(  );
+                        translator.Push(L, gen_ret);
+                    
+                    
+                    
+                    return 1;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to DreamPark.API.ProfileAPI.GetItems!");
             
         }
         
@@ -986,6 +1069,89 @@ namespace XLua.CSObjectWrap
             }
             
             return LuaAPI.luaL_error(L, "invalid arguments to DreamPark.API.ProfileAPI.RemoveItem!");
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_UpdateItem_xlua_st_(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+            
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 4&& (LuaAPI.lua_isnil(L, 1) || LuaAPI.lua_type(L, 1) == LuaTypes.LUA_TSTRING)&& translator.Assignable<Defective.JSON.JSONObject>(L, 2)&& LuaTypes.LUA_TBOOLEAN == LuaAPI.lua_type(L, 3)&& translator.Assignable<System.Action<bool, DreamPark.API.ProfileItem>>(L, 4)) 
+                {
+                    string _instanceId = LuaAPI.lua_tostring(L, 1);
+                    Defective.JSON.JSONObject _metadata = (Defective.JSON.JSONObject)translator.GetObject(L, 2, typeof(Defective.JSON.JSONObject));
+                    bool _replace = LuaAPI.lua_toboolean(L, 3);
+                    System.Action<bool, DreamPark.API.ProfileItem> _done = translator.GetDelegate<System.Action<bool, DreamPark.API.ProfileItem>>(L, 4);
+                    
+                    DreamPark.API.ProfileAPI.UpdateItem( _instanceId, _metadata, _replace, _done );
+                    
+                    
+                    
+                    return 0;
+                }
+                if(gen_param_count == 3&& (LuaAPI.lua_isnil(L, 1) || LuaAPI.lua_type(L, 1) == LuaTypes.LUA_TSTRING)&& translator.Assignable<Defective.JSON.JSONObject>(L, 2)&& LuaTypes.LUA_TBOOLEAN == LuaAPI.lua_type(L, 3)) 
+                {
+                    string _instanceId = LuaAPI.lua_tostring(L, 1);
+                    Defective.JSON.JSONObject _metadata = (Defective.JSON.JSONObject)translator.GetObject(L, 2, typeof(Defective.JSON.JSONObject));
+                    bool _replace = LuaAPI.lua_toboolean(L, 3);
+                    
+                    DreamPark.API.ProfileAPI.UpdateItem( _instanceId, _metadata, _replace );
+                    
+                    
+                    
+                    return 0;
+                }
+                if(gen_param_count == 2&& (LuaAPI.lua_isnil(L, 1) || LuaAPI.lua_type(L, 1) == LuaTypes.LUA_TSTRING)&& translator.Assignable<Defective.JSON.JSONObject>(L, 2)) 
+                {
+                    string _instanceId = LuaAPI.lua_tostring(L, 1);
+                    Defective.JSON.JSONObject _metadata = (Defective.JSON.JSONObject)translator.GetObject(L, 2, typeof(Defective.JSON.JSONObject));
+                    
+                    DreamPark.API.ProfileAPI.UpdateItem( _instanceId, _metadata );
+                    
+                    
+                    
+                    return 0;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to DreamPark.API.ProfileAPI.UpdateItem!");
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_GetItemInstance_xlua_st_(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+            
+                
+                {
+                    string _instanceId = LuaAPI.lua_tostring(L, 1);
+                    
+                        var gen_ret = DreamPark.API.ProfileAPI.GetItemInstance( _instanceId );
+                        translator.Push(L, gen_ret);
+                    
+                    
+                    
+                    return 1;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
             
         }
         

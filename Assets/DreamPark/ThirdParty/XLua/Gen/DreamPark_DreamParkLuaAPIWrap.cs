@@ -31,11 +31,14 @@ namespace XLua.CSObjectWrap
 			Utils.EndObjectRegister(type, L, translator, null, null,
 			    null, null, null);
 
-		    Utils.BeginClassRegister(type, L, __CreateInstance, 46, 0, 0);
+		    Utils.BeginClassRegister(type, L, __CreateInstance, 50, 0, 0);
 			Utils.RegisterFunc(L, Utils.CLS_IDX, "IsPlayer", _m_IsPlayer_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "IsPlayerObject", _m_IsPlayerObject_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "Player", _m_Player_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "Head", _m_Head_xlua_st_);
+            Utils.RegisterFunc(L, Utils.CLS_IDX, "ContentHead", _m_ContentHead_xlua_st_);
+            Utils.RegisterFunc(L, Utils.CLS_IDX, "ContentCamera", _m_ContentCamera_xlua_st_);
+            Utils.RegisterFunc(L, Utils.CLS_IDX, "LocalPlayerPresent", _m_LocalPlayerPresent_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "Park", _m_Park_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "AttractionScope", _m_AttractionScope_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "AttractionRoot", _m_AttractionRoot_xlua_st_);
@@ -66,6 +69,7 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.CLS_IDX, "OffLevelFailed", _m_OffLevelFailed_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "ShowOverlay", _m_ShowOverlay_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "SetOverlayAutoVisibility", _m_SetOverlayAutoVisibility_xlua_st_);
+            Utils.RegisterFunc(L, Utils.CLS_IDX, "DispatchOccurrenceRemoved", _m_DispatchOccurrenceRemoved_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "BindScope", _m_BindScope_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "Scope", _m_Scope_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "Hand", _m_Hand_xlua_st_);
@@ -193,6 +197,82 @@ namespace XLua.CSObjectWrap
                     
                         var gen_ret = DreamPark.DreamParkLuaAPI.Head(  );
                         translator.Push(L, gen_ret);
+                    
+                    
+                    
+                    return 1;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_ContentHead_xlua_st_(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+            
+                
+                {
+                    
+                        var gen_ret = DreamPark.DreamParkLuaAPI.ContentHead(  );
+                        translator.Push(L, gen_ret);
+                    
+                    
+                    
+                    return 1;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_ContentCamera_xlua_st_(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+            
+                
+                {
+                    
+                        var gen_ret = DreamPark.DreamParkLuaAPI.ContentCamera(  );
+                        translator.Push(L, gen_ret);
+                    
+                    
+                    
+                    return 1;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_LocalPlayerPresent_xlua_st_(RealStatePtr L)
+        {
+		    try {
+            
+            
+            
+                
+                {
+                    
+                        var gen_ret = DreamPark.DreamParkLuaAPI.LocalPlayerPresent(  );
+                        LuaAPI.lua_pushboolean(L, gen_ret);
                     
                     
                     
@@ -1096,6 +1176,35 @@ namespace XLua.CSObjectWrap
                     bool _enabled = LuaAPI.lua_toboolean(L, 2);
                     
                     DreamPark.DreamParkLuaAPI.SetOverlayAutoVisibility( _go, _enabled );
+                    
+                    
+                    
+                    return 0;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_DispatchOccurrenceRemoved_xlua_st_(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+            
+                
+                {
+                    UnityEngine.GameObject _host = (UnityEngine.GameObject)translator.GetObject(L, 1, typeof(UnityEngine.GameObject));
+                    string _occurrenceId = LuaAPI.lua_tostring(L, 2);
+                    string _resource = LuaAPI.lua_tostring(L, 3);
+                    UnityEngine.GameObject _anchor = (UnityEngine.GameObject)translator.GetObject(L, 4, typeof(UnityEngine.GameObject));
+                    
+                    DreamPark.DreamParkLuaAPI.DispatchOccurrenceRemoved( _host, _occurrenceId, _resource, _anchor );
                     
                     
                     

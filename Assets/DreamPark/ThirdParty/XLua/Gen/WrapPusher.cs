@@ -68,6 +68,11 @@ namespace XLua
 				translator.RegisterPushAndGetAndUpdate<DreamPark.AttractionWallMask>(translator.PushDreamParkAttractionWallMask, translator.Get, translator.UpdateDreamParkAttractionWallMask);
 				translator.RegisterPushAndGetAndUpdate<UnityEngine.TextAnchor>(translator.PushUnityEngineTextAnchor, translator.Get, translator.UpdateUnityEngineTextAnchor);
 				translator.RegisterPushAndGetAndUpdate<UnityEngine.TextAlignment>(translator.PushUnityEngineTextAlignment, translator.Get, translator.UpdateUnityEngineTextAlignment);
+				translator.RegisterPushAndGetAndUpdate<UnityEngine.AnimatorUpdateMode>(translator.PushUnityEngineAnimatorUpdateMode, translator.Get, translator.UpdateUnityEngineAnimatorUpdateMode);
+				translator.RegisterPushAndGetAndUpdate<UnityEngine.LineAlignment>(translator.PushUnityEngineLineAlignment, translator.Get, translator.UpdateUnityEngineLineAlignment);
+				translator.RegisterPushAndGetAndUpdate<UnityEngine.LineTextureMode>(translator.PushUnityEngineLineTextureMode, translator.Get, translator.UpdateUnityEngineLineTextureMode);
+				translator.RegisterPushAndGetAndUpdate<UnityEngine.ParticleSystemScalingMode>(translator.PushUnityEngineParticleSystemScalingMode, translator.Get, translator.UpdateUnityEngineParticleSystemScalingMode);
+				translator.RegisterPushAndGetAndUpdate<UnityEngine.ParticleSystemSimulationSpace>(translator.PushUnityEngineParticleSystemSimulationSpace, translator.Get, translator.UpdateUnityEngineParticleSystemSimulationSpace);
 			
 			}
         }
@@ -3406,6 +3411,426 @@ namespace XLua
             }
         }
         
+        int UnityEngineAnimatorUpdateMode_TypeID = -1;
+		int UnityEngineAnimatorUpdateMode_EnumRef = -1;
+        
+        public void PushUnityEngineAnimatorUpdateMode(RealStatePtr L, UnityEngine.AnimatorUpdateMode val)
+        {
+            if (UnityEngineAnimatorUpdateMode_TypeID == -1)
+            {
+			    bool is_first;
+                UnityEngineAnimatorUpdateMode_TypeID = getTypeId(L, typeof(UnityEngine.AnimatorUpdateMode), out is_first);
+				
+				if (UnityEngineAnimatorUpdateMode_EnumRef == -1)
+				{
+				    Utils.LoadCSTable(L, typeof(UnityEngine.AnimatorUpdateMode));
+				    UnityEngineAnimatorUpdateMode_EnumRef = LuaAPI.luaL_ref(L, LuaIndexes.LUA_REGISTRYINDEX);
+				}
+				
+            }
+			
+			if (LuaAPI.xlua_tryget_cachedud(L, (int)val, UnityEngineAnimatorUpdateMode_EnumRef) == 1)
+            {
+			    return;
+			}
+			
+            IntPtr buff = LuaAPI.xlua_pushstruct(L, 4, UnityEngineAnimatorUpdateMode_TypeID);
+            if (!CopyByValue.Pack(buff, 0, (int)val))
+            {
+                throw new Exception("pack fail fail for UnityEngine.AnimatorUpdateMode ,value="+val);
+            }
+			
+			LuaAPI.lua_getref(L, UnityEngineAnimatorUpdateMode_EnumRef);
+			LuaAPI.lua_pushvalue(L, -2);
+			LuaAPI.xlua_rawseti(L, -2, (int)val);
+			LuaAPI.lua_pop(L, 1);
+			
+        }
+		
+        public void Get(RealStatePtr L, int index, out UnityEngine.AnimatorUpdateMode val)
+        {
+		    LuaTypes type = LuaAPI.lua_type(L, index);
+            if (type == LuaTypes.LUA_TUSERDATA )
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != UnityEngineAnimatorUpdateMode_TypeID)
+				{
+				    throw new Exception("invalid userdata for UnityEngine.AnimatorUpdateMode");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+				int e;
+                if (!CopyByValue.UnPack(buff, 0, out e))
+                {
+                    throw new Exception("unpack fail for UnityEngine.AnimatorUpdateMode");
+                }
+				val = (UnityEngine.AnimatorUpdateMode)e;
+                
+            }
+            else
+            {
+                val = (UnityEngine.AnimatorUpdateMode)objectCasters.GetCaster(typeof(UnityEngine.AnimatorUpdateMode))(L, index, null);
+            }
+        }
+		
+        public void UpdateUnityEngineAnimatorUpdateMode(RealStatePtr L, int index, UnityEngine.AnimatorUpdateMode val)
+        {
+		    
+            if (LuaAPI.lua_type(L, index) == LuaTypes.LUA_TUSERDATA)
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != UnityEngineAnimatorUpdateMode_TypeID)
+				{
+				    throw new Exception("invalid userdata for UnityEngine.AnimatorUpdateMode");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+                if (!CopyByValue.Pack(buff, 0,  (int)val))
+                {
+                    throw new Exception("pack fail for UnityEngine.AnimatorUpdateMode ,value="+val);
+                }
+            }
+			
+            else
+            {
+                throw new Exception("try to update a data with lua type:" + LuaAPI.lua_type(L, index));
+            }
+        }
+        
+        int UnityEngineLineAlignment_TypeID = -1;
+		int UnityEngineLineAlignment_EnumRef = -1;
+        
+        public void PushUnityEngineLineAlignment(RealStatePtr L, UnityEngine.LineAlignment val)
+        {
+            if (UnityEngineLineAlignment_TypeID == -1)
+            {
+			    bool is_first;
+                UnityEngineLineAlignment_TypeID = getTypeId(L, typeof(UnityEngine.LineAlignment), out is_first);
+				
+				if (UnityEngineLineAlignment_EnumRef == -1)
+				{
+				    Utils.LoadCSTable(L, typeof(UnityEngine.LineAlignment));
+				    UnityEngineLineAlignment_EnumRef = LuaAPI.luaL_ref(L, LuaIndexes.LUA_REGISTRYINDEX);
+				}
+				
+            }
+			
+			if (LuaAPI.xlua_tryget_cachedud(L, (int)val, UnityEngineLineAlignment_EnumRef) == 1)
+            {
+			    return;
+			}
+			
+            IntPtr buff = LuaAPI.xlua_pushstruct(L, 4, UnityEngineLineAlignment_TypeID);
+            if (!CopyByValue.Pack(buff, 0, (int)val))
+            {
+                throw new Exception("pack fail fail for UnityEngine.LineAlignment ,value="+val);
+            }
+			
+			LuaAPI.lua_getref(L, UnityEngineLineAlignment_EnumRef);
+			LuaAPI.lua_pushvalue(L, -2);
+			LuaAPI.xlua_rawseti(L, -2, (int)val);
+			LuaAPI.lua_pop(L, 1);
+			
+        }
+		
+        public void Get(RealStatePtr L, int index, out UnityEngine.LineAlignment val)
+        {
+		    LuaTypes type = LuaAPI.lua_type(L, index);
+            if (type == LuaTypes.LUA_TUSERDATA )
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != UnityEngineLineAlignment_TypeID)
+				{
+				    throw new Exception("invalid userdata for UnityEngine.LineAlignment");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+				int e;
+                if (!CopyByValue.UnPack(buff, 0, out e))
+                {
+                    throw new Exception("unpack fail for UnityEngine.LineAlignment");
+                }
+				val = (UnityEngine.LineAlignment)e;
+                
+            }
+            else
+            {
+                val = (UnityEngine.LineAlignment)objectCasters.GetCaster(typeof(UnityEngine.LineAlignment))(L, index, null);
+            }
+        }
+		
+        public void UpdateUnityEngineLineAlignment(RealStatePtr L, int index, UnityEngine.LineAlignment val)
+        {
+		    
+            if (LuaAPI.lua_type(L, index) == LuaTypes.LUA_TUSERDATA)
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != UnityEngineLineAlignment_TypeID)
+				{
+				    throw new Exception("invalid userdata for UnityEngine.LineAlignment");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+                if (!CopyByValue.Pack(buff, 0,  (int)val))
+                {
+                    throw new Exception("pack fail for UnityEngine.LineAlignment ,value="+val);
+                }
+            }
+			
+            else
+            {
+                throw new Exception("try to update a data with lua type:" + LuaAPI.lua_type(L, index));
+            }
+        }
+        
+        int UnityEngineLineTextureMode_TypeID = -1;
+		int UnityEngineLineTextureMode_EnumRef = -1;
+        
+        public void PushUnityEngineLineTextureMode(RealStatePtr L, UnityEngine.LineTextureMode val)
+        {
+            if (UnityEngineLineTextureMode_TypeID == -1)
+            {
+			    bool is_first;
+                UnityEngineLineTextureMode_TypeID = getTypeId(L, typeof(UnityEngine.LineTextureMode), out is_first);
+				
+				if (UnityEngineLineTextureMode_EnumRef == -1)
+				{
+				    Utils.LoadCSTable(L, typeof(UnityEngine.LineTextureMode));
+				    UnityEngineLineTextureMode_EnumRef = LuaAPI.luaL_ref(L, LuaIndexes.LUA_REGISTRYINDEX);
+				}
+				
+            }
+			
+			if (LuaAPI.xlua_tryget_cachedud(L, (int)val, UnityEngineLineTextureMode_EnumRef) == 1)
+            {
+			    return;
+			}
+			
+            IntPtr buff = LuaAPI.xlua_pushstruct(L, 4, UnityEngineLineTextureMode_TypeID);
+            if (!CopyByValue.Pack(buff, 0, (int)val))
+            {
+                throw new Exception("pack fail fail for UnityEngine.LineTextureMode ,value="+val);
+            }
+			
+			LuaAPI.lua_getref(L, UnityEngineLineTextureMode_EnumRef);
+			LuaAPI.lua_pushvalue(L, -2);
+			LuaAPI.xlua_rawseti(L, -2, (int)val);
+			LuaAPI.lua_pop(L, 1);
+			
+        }
+		
+        public void Get(RealStatePtr L, int index, out UnityEngine.LineTextureMode val)
+        {
+		    LuaTypes type = LuaAPI.lua_type(L, index);
+            if (type == LuaTypes.LUA_TUSERDATA )
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != UnityEngineLineTextureMode_TypeID)
+				{
+				    throw new Exception("invalid userdata for UnityEngine.LineTextureMode");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+				int e;
+                if (!CopyByValue.UnPack(buff, 0, out e))
+                {
+                    throw new Exception("unpack fail for UnityEngine.LineTextureMode");
+                }
+				val = (UnityEngine.LineTextureMode)e;
+                
+            }
+            else
+            {
+                val = (UnityEngine.LineTextureMode)objectCasters.GetCaster(typeof(UnityEngine.LineTextureMode))(L, index, null);
+            }
+        }
+		
+        public void UpdateUnityEngineLineTextureMode(RealStatePtr L, int index, UnityEngine.LineTextureMode val)
+        {
+		    
+            if (LuaAPI.lua_type(L, index) == LuaTypes.LUA_TUSERDATA)
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != UnityEngineLineTextureMode_TypeID)
+				{
+				    throw new Exception("invalid userdata for UnityEngine.LineTextureMode");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+                if (!CopyByValue.Pack(buff, 0,  (int)val))
+                {
+                    throw new Exception("pack fail for UnityEngine.LineTextureMode ,value="+val);
+                }
+            }
+			
+            else
+            {
+                throw new Exception("try to update a data with lua type:" + LuaAPI.lua_type(L, index));
+            }
+        }
+        
+        int UnityEngineParticleSystemScalingMode_TypeID = -1;
+		int UnityEngineParticleSystemScalingMode_EnumRef = -1;
+        
+        public void PushUnityEngineParticleSystemScalingMode(RealStatePtr L, UnityEngine.ParticleSystemScalingMode val)
+        {
+            if (UnityEngineParticleSystemScalingMode_TypeID == -1)
+            {
+			    bool is_first;
+                UnityEngineParticleSystemScalingMode_TypeID = getTypeId(L, typeof(UnityEngine.ParticleSystemScalingMode), out is_first);
+				
+				if (UnityEngineParticleSystemScalingMode_EnumRef == -1)
+				{
+				    Utils.LoadCSTable(L, typeof(UnityEngine.ParticleSystemScalingMode));
+				    UnityEngineParticleSystemScalingMode_EnumRef = LuaAPI.luaL_ref(L, LuaIndexes.LUA_REGISTRYINDEX);
+				}
+				
+            }
+			
+			if (LuaAPI.xlua_tryget_cachedud(L, (int)val, UnityEngineParticleSystemScalingMode_EnumRef) == 1)
+            {
+			    return;
+			}
+			
+            IntPtr buff = LuaAPI.xlua_pushstruct(L, 4, UnityEngineParticleSystemScalingMode_TypeID);
+            if (!CopyByValue.Pack(buff, 0, (int)val))
+            {
+                throw new Exception("pack fail fail for UnityEngine.ParticleSystemScalingMode ,value="+val);
+            }
+			
+			LuaAPI.lua_getref(L, UnityEngineParticleSystemScalingMode_EnumRef);
+			LuaAPI.lua_pushvalue(L, -2);
+			LuaAPI.xlua_rawseti(L, -2, (int)val);
+			LuaAPI.lua_pop(L, 1);
+			
+        }
+		
+        public void Get(RealStatePtr L, int index, out UnityEngine.ParticleSystemScalingMode val)
+        {
+		    LuaTypes type = LuaAPI.lua_type(L, index);
+            if (type == LuaTypes.LUA_TUSERDATA )
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != UnityEngineParticleSystemScalingMode_TypeID)
+				{
+				    throw new Exception("invalid userdata for UnityEngine.ParticleSystemScalingMode");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+				int e;
+                if (!CopyByValue.UnPack(buff, 0, out e))
+                {
+                    throw new Exception("unpack fail for UnityEngine.ParticleSystemScalingMode");
+                }
+				val = (UnityEngine.ParticleSystemScalingMode)e;
+                
+            }
+            else
+            {
+                val = (UnityEngine.ParticleSystemScalingMode)objectCasters.GetCaster(typeof(UnityEngine.ParticleSystemScalingMode))(L, index, null);
+            }
+        }
+		
+        public void UpdateUnityEngineParticleSystemScalingMode(RealStatePtr L, int index, UnityEngine.ParticleSystemScalingMode val)
+        {
+		    
+            if (LuaAPI.lua_type(L, index) == LuaTypes.LUA_TUSERDATA)
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != UnityEngineParticleSystemScalingMode_TypeID)
+				{
+				    throw new Exception("invalid userdata for UnityEngine.ParticleSystemScalingMode");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+                if (!CopyByValue.Pack(buff, 0,  (int)val))
+                {
+                    throw new Exception("pack fail for UnityEngine.ParticleSystemScalingMode ,value="+val);
+                }
+            }
+			
+            else
+            {
+                throw new Exception("try to update a data with lua type:" + LuaAPI.lua_type(L, index));
+            }
+        }
+        
+        int UnityEngineParticleSystemSimulationSpace_TypeID = -1;
+		int UnityEngineParticleSystemSimulationSpace_EnumRef = -1;
+        
+        public void PushUnityEngineParticleSystemSimulationSpace(RealStatePtr L, UnityEngine.ParticleSystemSimulationSpace val)
+        {
+            if (UnityEngineParticleSystemSimulationSpace_TypeID == -1)
+            {
+			    bool is_first;
+                UnityEngineParticleSystemSimulationSpace_TypeID = getTypeId(L, typeof(UnityEngine.ParticleSystemSimulationSpace), out is_first);
+				
+				if (UnityEngineParticleSystemSimulationSpace_EnumRef == -1)
+				{
+				    Utils.LoadCSTable(L, typeof(UnityEngine.ParticleSystemSimulationSpace));
+				    UnityEngineParticleSystemSimulationSpace_EnumRef = LuaAPI.luaL_ref(L, LuaIndexes.LUA_REGISTRYINDEX);
+				}
+				
+            }
+			
+			if (LuaAPI.xlua_tryget_cachedud(L, (int)val, UnityEngineParticleSystemSimulationSpace_EnumRef) == 1)
+            {
+			    return;
+			}
+			
+            IntPtr buff = LuaAPI.xlua_pushstruct(L, 4, UnityEngineParticleSystemSimulationSpace_TypeID);
+            if (!CopyByValue.Pack(buff, 0, (int)val))
+            {
+                throw new Exception("pack fail fail for UnityEngine.ParticleSystemSimulationSpace ,value="+val);
+            }
+			
+			LuaAPI.lua_getref(L, UnityEngineParticleSystemSimulationSpace_EnumRef);
+			LuaAPI.lua_pushvalue(L, -2);
+			LuaAPI.xlua_rawseti(L, -2, (int)val);
+			LuaAPI.lua_pop(L, 1);
+			
+        }
+		
+        public void Get(RealStatePtr L, int index, out UnityEngine.ParticleSystemSimulationSpace val)
+        {
+		    LuaTypes type = LuaAPI.lua_type(L, index);
+            if (type == LuaTypes.LUA_TUSERDATA )
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != UnityEngineParticleSystemSimulationSpace_TypeID)
+				{
+				    throw new Exception("invalid userdata for UnityEngine.ParticleSystemSimulationSpace");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+				int e;
+                if (!CopyByValue.UnPack(buff, 0, out e))
+                {
+                    throw new Exception("unpack fail for UnityEngine.ParticleSystemSimulationSpace");
+                }
+				val = (UnityEngine.ParticleSystemSimulationSpace)e;
+                
+            }
+            else
+            {
+                val = (UnityEngine.ParticleSystemSimulationSpace)objectCasters.GetCaster(typeof(UnityEngine.ParticleSystemSimulationSpace))(L, index, null);
+            }
+        }
+		
+        public void UpdateUnityEngineParticleSystemSimulationSpace(RealStatePtr L, int index, UnityEngine.ParticleSystemSimulationSpace val)
+        {
+		    
+            if (LuaAPI.lua_type(L, index) == LuaTypes.LUA_TUSERDATA)
+            {
+			    if (LuaAPI.xlua_gettypeid(L, index) != UnityEngineParticleSystemSimulationSpace_TypeID)
+				{
+				    throw new Exception("invalid userdata for UnityEngine.ParticleSystemSimulationSpace");
+				}
+				
+                IntPtr buff = LuaAPI.lua_touserdata(L, index);
+                if (!CopyByValue.Pack(buff, 0,  (int)val))
+                {
+                    throw new Exception("pack fail for UnityEngine.ParticleSystemSimulationSpace ,value="+val);
+                }
+            }
+			
+            else
+            {
+                throw new Exception("try to update a data with lua type:" + LuaAPI.lua_type(L, index));
+            }
+        }
+        
         
 		// table cast optimze
 		
@@ -3669,6 +4094,36 @@ namespace XLua
 				translator.PushUnityEngineTextAlignment(L, array[index]);
 				return true;
 			}
+			else if (type == typeof(UnityEngine.AnimatorUpdateMode[]))
+			{
+			    UnityEngine.AnimatorUpdateMode[] array = obj as UnityEngine.AnimatorUpdateMode[];
+				translator.PushUnityEngineAnimatorUpdateMode(L, array[index]);
+				return true;
+			}
+			else if (type == typeof(UnityEngine.LineAlignment[]))
+			{
+			    UnityEngine.LineAlignment[] array = obj as UnityEngine.LineAlignment[];
+				translator.PushUnityEngineLineAlignment(L, array[index]);
+				return true;
+			}
+			else if (type == typeof(UnityEngine.LineTextureMode[]))
+			{
+			    UnityEngine.LineTextureMode[] array = obj as UnityEngine.LineTextureMode[];
+				translator.PushUnityEngineLineTextureMode(L, array[index]);
+				return true;
+			}
+			else if (type == typeof(UnityEngine.ParticleSystemScalingMode[]))
+			{
+			    UnityEngine.ParticleSystemScalingMode[] array = obj as UnityEngine.ParticleSystemScalingMode[];
+				translator.PushUnityEngineParticleSystemScalingMode(L, array[index]);
+				return true;
+			}
+			else if (type == typeof(UnityEngine.ParticleSystemSimulationSpace[]))
+			{
+			    UnityEngine.ParticleSystemSimulationSpace[] array = obj as UnityEngine.ParticleSystemSimulationSpace[];
+				translator.PushUnityEngineParticleSystemSimulationSpace(L, array[index]);
+				return true;
+			}
             return false;
 		}
 		
@@ -3924,6 +4379,36 @@ namespace XLua
 			else if (type == typeof(UnityEngine.TextAlignment[]))
 			{
 			    UnityEngine.TextAlignment[] array = obj as UnityEngine.TextAlignment[];
+				translator.Get(L, obj_idx, out array[array_idx]);
+				return true;
+			}
+			else if (type == typeof(UnityEngine.AnimatorUpdateMode[]))
+			{
+			    UnityEngine.AnimatorUpdateMode[] array = obj as UnityEngine.AnimatorUpdateMode[];
+				translator.Get(L, obj_idx, out array[array_idx]);
+				return true;
+			}
+			else if (type == typeof(UnityEngine.LineAlignment[]))
+			{
+			    UnityEngine.LineAlignment[] array = obj as UnityEngine.LineAlignment[];
+				translator.Get(L, obj_idx, out array[array_idx]);
+				return true;
+			}
+			else if (type == typeof(UnityEngine.LineTextureMode[]))
+			{
+			    UnityEngine.LineTextureMode[] array = obj as UnityEngine.LineTextureMode[];
+				translator.Get(L, obj_idx, out array[array_idx]);
+				return true;
+			}
+			else if (type == typeof(UnityEngine.ParticleSystemScalingMode[]))
+			{
+			    UnityEngine.ParticleSystemScalingMode[] array = obj as UnityEngine.ParticleSystemScalingMode[];
+				translator.Get(L, obj_idx, out array[array_idx]);
+				return true;
+			}
+			else if (type == typeof(UnityEngine.ParticleSystemSimulationSpace[]))
+			{
+			    UnityEngine.ParticleSystemSimulationSpace[] array = obj as UnityEngine.ParticleSystemSimulationSpace[];
 				translator.Get(L, obj_idx, out array[array_idx]);
 				return true;
 			}

@@ -21,7 +21,7 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(DreamPark.NetSessionArbiter);
-			Utils.BeginObjectRegister(type, L, translator, 0, 1, 17, 8);
+			Utils.BeginObjectRegister(type, L, translator, 0, 1, 18, 9);
 			
 			
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "OnStateChanged", _e_OnStateChanged);
@@ -37,6 +37,7 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "Channel", _g_get_Channel);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "parkId", _g_get_parkId);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "allowHosting", _g_get_allowHosting);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "parkContextWaitSeconds", _g_get_parkContextWaitSeconds);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "listenBaseSeconds", _g_get_listenBaseSeconds);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "beaconStaleSeconds", _g_get_beaconStaleSeconds);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "reelectionStepSeconds", _g_get_reelectionStepSeconds);
@@ -46,6 +47,7 @@ namespace XLua.CSObjectWrap
             
 			Utils.RegisterFunc(L, Utils.SETTER_IDX, "parkId", _s_set_parkId);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "allowHosting", _s_set_allowHosting);
+            Utils.RegisterFunc(L, Utils.SETTER_IDX, "parkContextWaitSeconds", _s_set_parkContextWaitSeconds);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "listenBaseSeconds", _s_set_listenBaseSeconds);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "beaconStaleSeconds", _s_set_beaconStaleSeconds);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "reelectionStepSeconds", _s_set_reelectionStepSeconds);
@@ -57,8 +59,10 @@ namespace XLua.CSObjectWrap
 			Utils.EndObjectRegister(type, L, translator, null, null,
 			    null, null, null);
 
-		    Utils.BeginClassRegister(type, L, __CreateInstance, 2, 2, 0);
+		    Utils.BeginClassRegister(type, L, __CreateInstance, 4, 2, 0);
 			Utils.RegisterFunc(L, Utils.CLS_IDX, "SetParkContext", _m_SetParkContext_xlua_st_);
+            Utils.RegisterFunc(L, Utils.CLS_IDX, "NotifyNetworkChanged", _m_NotifyNetworkChanged_xlua_st_);
+            Utils.RegisterFunc(L, Utils.CLS_IDX, "NotifyAppResumed", _m_NotifyAppResumed_xlua_st_);
             
 			
             
@@ -112,6 +116,54 @@ namespace XLua.CSObjectWrap
                     string _newParkId = LuaAPI.lua_tostring(L, 1);
                     
                     DreamPark.NetSessionArbiter.SetParkContext( _newParkId );
+                    
+                    
+                    
+                    return 0;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_NotifyNetworkChanged_xlua_st_(RealStatePtr L)
+        {
+		    try {
+            
+            
+            
+                
+                {
+                    string _reason = LuaAPI.lua_tostring(L, 1);
+                    
+                    DreamPark.NetSessionArbiter.NotifyNetworkChanged( _reason );
+                    
+                    
+                    
+                    return 0;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_NotifyAppResumed_xlua_st_(RealStatePtr L)
+        {
+		    try {
+            
+            
+            
+                
+                {
+                    string _reason = LuaAPI.lua_tostring(L, 1);
+                    
+                    DreamPark.NetSessionArbiter.NotifyAppResumed( _reason );
                     
                     
                     
@@ -306,6 +358,20 @@ namespace XLua.CSObjectWrap
         }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_parkContextWaitSeconds(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                DreamPark.NetSessionArbiter gen_to_be_invoked = (DreamPark.NetSessionArbiter)translator.FastGetCSObj(L, 1);
+                LuaAPI.lua_pushnumber(L, gen_to_be_invoked.parkContextWaitSeconds);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
         static int _g_get_listenBaseSeconds(RealStatePtr L)
         {
 		    try {
@@ -414,6 +480,21 @@ namespace XLua.CSObjectWrap
 			
                 DreamPark.NetSessionArbiter gen_to_be_invoked = (DreamPark.NetSessionArbiter)translator.FastGetCSObj(L, 1);
                 gen_to_be_invoked.allowHosting = LuaAPI.lua_toboolean(L, 2);
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_parkContextWaitSeconds(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                DreamPark.NetSessionArbiter gen_to_be_invoked = (DreamPark.NetSessionArbiter)translator.FastGetCSObj(L, 1);
+                gen_to_be_invoked.parkContextWaitSeconds = (float)LuaAPI.lua_tonumber(L, 2);
             
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);

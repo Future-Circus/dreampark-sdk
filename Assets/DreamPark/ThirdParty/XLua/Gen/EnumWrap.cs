@@ -2194,4 +2194,330 @@ namespace XLua.CSObjectWrap
 		}
 	}
     
+    public class UnityEngineAnimatorUpdateModeWrap
+    {
+		public static void __Register(RealStatePtr L)
+        {
+		    ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+		    Utils.BeginObjectRegister(typeof(UnityEngine.AnimatorUpdateMode), L, translator, 0, 0, 0, 0);
+			Utils.EndObjectRegister(typeof(UnityEngine.AnimatorUpdateMode), L, translator, null, null, null, null, null);
+			
+			Utils.BeginClassRegister(typeof(UnityEngine.AnimatorUpdateMode), L, null, 5, 0, 0);
+
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Normal", UnityEngine.AnimatorUpdateMode.Normal);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Fixed", UnityEngine.AnimatorUpdateMode.Fixed);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "UnscaledTime", UnityEngine.AnimatorUpdateMode.UnscaledTime);
+            
+
+			Utils.RegisterFunc(L, Utils.CLS_IDX, "__CastFrom", __CastFrom);
+            
+            Utils.EndClassRegister(typeof(UnityEngine.AnimatorUpdateMode), L, translator);
+        }
+		
+		[MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int __CastFrom(RealStatePtr L)
+		{
+			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			LuaTypes lua_type = LuaAPI.lua_type(L, 1);
+            if (lua_type == LuaTypes.LUA_TNUMBER)
+            {
+                translator.PushUnityEngineAnimatorUpdateMode(L, (UnityEngine.AnimatorUpdateMode)LuaAPI.xlua_tointeger(L, 1));
+            }
+			
+            else if(lua_type == LuaTypes.LUA_TSTRING)
+            {
+
+			    if (LuaAPI.xlua_is_eq_str(L, 1, "Normal"))
+                {
+                    translator.PushUnityEngineAnimatorUpdateMode(L, UnityEngine.AnimatorUpdateMode.Normal);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "Fixed"))
+                {
+                    translator.PushUnityEngineAnimatorUpdateMode(L, UnityEngine.AnimatorUpdateMode.Fixed);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "UnscaledTime"))
+                {
+                    translator.PushUnityEngineAnimatorUpdateMode(L, UnityEngine.AnimatorUpdateMode.UnscaledTime);
+                }
+				else
+                {
+                    return LuaAPI.luaL_error(L, "invalid string for UnityEngine.AnimatorUpdateMode!");
+                }
+
+            }
+			
+            else
+            {
+                return LuaAPI.luaL_error(L, "invalid lua type for UnityEngine.AnimatorUpdateMode! Expect number or string, got + " + lua_type);
+            }
+
+            return 1;
+		}
+	}
+    
+    public class UnityEngineLineAlignmentWrap
+    {
+		public static void __Register(RealStatePtr L)
+        {
+		    ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+		    Utils.BeginObjectRegister(typeof(UnityEngine.LineAlignment), L, translator, 0, 0, 0, 0);
+			Utils.EndObjectRegister(typeof(UnityEngine.LineAlignment), L, translator, null, null, null, null, null);
+			
+			Utils.BeginClassRegister(typeof(UnityEngine.LineAlignment), L, null, 4, 0, 0);
+
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "View", UnityEngine.LineAlignment.View);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "TransformZ", UnityEngine.LineAlignment.TransformZ);
+            
+
+			Utils.RegisterFunc(L, Utils.CLS_IDX, "__CastFrom", __CastFrom);
+            
+            Utils.EndClassRegister(typeof(UnityEngine.LineAlignment), L, translator);
+        }
+		
+		[MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int __CastFrom(RealStatePtr L)
+		{
+			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			LuaTypes lua_type = LuaAPI.lua_type(L, 1);
+            if (lua_type == LuaTypes.LUA_TNUMBER)
+            {
+                translator.PushUnityEngineLineAlignment(L, (UnityEngine.LineAlignment)LuaAPI.xlua_tointeger(L, 1));
+            }
+			
+            else if(lua_type == LuaTypes.LUA_TSTRING)
+            {
+
+			    if (LuaAPI.xlua_is_eq_str(L, 1, "View"))
+                {
+                    translator.PushUnityEngineLineAlignment(L, UnityEngine.LineAlignment.View);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "TransformZ"))
+                {
+                    translator.PushUnityEngineLineAlignment(L, UnityEngine.LineAlignment.TransformZ);
+                }
+				else
+                {
+                    return LuaAPI.luaL_error(L, "invalid string for UnityEngine.LineAlignment!");
+                }
+
+            }
+			
+            else
+            {
+                return LuaAPI.luaL_error(L, "invalid lua type for UnityEngine.LineAlignment! Expect number or string, got + " + lua_type);
+            }
+
+            return 1;
+		}
+	}
+    
+    public class UnityEngineLineTextureModeWrap
+    {
+		public static void __Register(RealStatePtr L)
+        {
+		    ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+		    Utils.BeginObjectRegister(typeof(UnityEngine.LineTextureMode), L, translator, 0, 0, 0, 0);
+			Utils.EndObjectRegister(typeof(UnityEngine.LineTextureMode), L, translator, null, null, null, null, null);
+			
+			Utils.BeginClassRegister(typeof(UnityEngine.LineTextureMode), L, null, 6, 0, 0);
+
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Stretch", UnityEngine.LineTextureMode.Stretch);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Tile", UnityEngine.LineTextureMode.Tile);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "DistributePerSegment", UnityEngine.LineTextureMode.DistributePerSegment);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "RepeatPerSegment", UnityEngine.LineTextureMode.RepeatPerSegment);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Static", UnityEngine.LineTextureMode.Static);
+            
+
+			Utils.RegisterFunc(L, Utils.CLS_IDX, "__CastFrom", __CastFrom);
+            
+            Utils.EndClassRegister(typeof(UnityEngine.LineTextureMode), L, translator);
+        }
+		
+		[MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int __CastFrom(RealStatePtr L)
+		{
+			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			LuaTypes lua_type = LuaAPI.lua_type(L, 1);
+            if (lua_type == LuaTypes.LUA_TNUMBER)
+            {
+                translator.PushUnityEngineLineTextureMode(L, (UnityEngine.LineTextureMode)LuaAPI.xlua_tointeger(L, 1));
+            }
+			
+            else if(lua_type == LuaTypes.LUA_TSTRING)
+            {
+
+			    if (LuaAPI.xlua_is_eq_str(L, 1, "Stretch"))
+                {
+                    translator.PushUnityEngineLineTextureMode(L, UnityEngine.LineTextureMode.Stretch);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "Tile"))
+                {
+                    translator.PushUnityEngineLineTextureMode(L, UnityEngine.LineTextureMode.Tile);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "DistributePerSegment"))
+                {
+                    translator.PushUnityEngineLineTextureMode(L, UnityEngine.LineTextureMode.DistributePerSegment);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "RepeatPerSegment"))
+                {
+                    translator.PushUnityEngineLineTextureMode(L, UnityEngine.LineTextureMode.RepeatPerSegment);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "Static"))
+                {
+                    translator.PushUnityEngineLineTextureMode(L, UnityEngine.LineTextureMode.Static);
+                }
+				else
+                {
+                    return LuaAPI.luaL_error(L, "invalid string for UnityEngine.LineTextureMode!");
+                }
+
+            }
+			
+            else
+            {
+                return LuaAPI.luaL_error(L, "invalid lua type for UnityEngine.LineTextureMode! Expect number or string, got + " + lua_type);
+            }
+
+            return 1;
+		}
+	}
+    
+    public class UnityEngineParticleSystemScalingModeWrap
+    {
+		public static void __Register(RealStatePtr L)
+        {
+		    ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+		    Utils.BeginObjectRegister(typeof(UnityEngine.ParticleSystemScalingMode), L, translator, 0, 0, 0, 0);
+			Utils.EndObjectRegister(typeof(UnityEngine.ParticleSystemScalingMode), L, translator, null, null, null, null, null);
+			
+			Utils.BeginClassRegister(typeof(UnityEngine.ParticleSystemScalingMode), L, null, 4, 0, 0);
+
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Hierarchy", UnityEngine.ParticleSystemScalingMode.Hierarchy);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Local", UnityEngine.ParticleSystemScalingMode.Local);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Shape", UnityEngine.ParticleSystemScalingMode.Shape);
+            
+
+			Utils.RegisterFunc(L, Utils.CLS_IDX, "__CastFrom", __CastFrom);
+            
+            Utils.EndClassRegister(typeof(UnityEngine.ParticleSystemScalingMode), L, translator);
+        }
+		
+		[MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int __CastFrom(RealStatePtr L)
+		{
+			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			LuaTypes lua_type = LuaAPI.lua_type(L, 1);
+            if (lua_type == LuaTypes.LUA_TNUMBER)
+            {
+                translator.PushUnityEngineParticleSystemScalingMode(L, (UnityEngine.ParticleSystemScalingMode)LuaAPI.xlua_tointeger(L, 1));
+            }
+			
+            else if(lua_type == LuaTypes.LUA_TSTRING)
+            {
+
+			    if (LuaAPI.xlua_is_eq_str(L, 1, "Hierarchy"))
+                {
+                    translator.PushUnityEngineParticleSystemScalingMode(L, UnityEngine.ParticleSystemScalingMode.Hierarchy);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "Local"))
+                {
+                    translator.PushUnityEngineParticleSystemScalingMode(L, UnityEngine.ParticleSystemScalingMode.Local);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "Shape"))
+                {
+                    translator.PushUnityEngineParticleSystemScalingMode(L, UnityEngine.ParticleSystemScalingMode.Shape);
+                }
+				else
+                {
+                    return LuaAPI.luaL_error(L, "invalid string for UnityEngine.ParticleSystemScalingMode!");
+                }
+
+            }
+			
+            else
+            {
+                return LuaAPI.luaL_error(L, "invalid lua type for UnityEngine.ParticleSystemScalingMode! Expect number or string, got + " + lua_type);
+            }
+
+            return 1;
+		}
+	}
+    
+    public class UnityEngineParticleSystemSimulationSpaceWrap
+    {
+		public static void __Register(RealStatePtr L)
+        {
+		    ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+		    Utils.BeginObjectRegister(typeof(UnityEngine.ParticleSystemSimulationSpace), L, translator, 0, 0, 0, 0);
+			Utils.EndObjectRegister(typeof(UnityEngine.ParticleSystemSimulationSpace), L, translator, null, null, null, null, null);
+			
+			Utils.BeginClassRegister(typeof(UnityEngine.ParticleSystemSimulationSpace), L, null, 4, 0, 0);
+
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Local", UnityEngine.ParticleSystemSimulationSpace.Local);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "World", UnityEngine.ParticleSystemSimulationSpace.World);
+            
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Custom", UnityEngine.ParticleSystemSimulationSpace.Custom);
+            
+
+			Utils.RegisterFunc(L, Utils.CLS_IDX, "__CastFrom", __CastFrom);
+            
+            Utils.EndClassRegister(typeof(UnityEngine.ParticleSystemSimulationSpace), L, translator);
+        }
+		
+		[MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int __CastFrom(RealStatePtr L)
+		{
+			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			LuaTypes lua_type = LuaAPI.lua_type(L, 1);
+            if (lua_type == LuaTypes.LUA_TNUMBER)
+            {
+                translator.PushUnityEngineParticleSystemSimulationSpace(L, (UnityEngine.ParticleSystemSimulationSpace)LuaAPI.xlua_tointeger(L, 1));
+            }
+			
+            else if(lua_type == LuaTypes.LUA_TSTRING)
+            {
+
+			    if (LuaAPI.xlua_is_eq_str(L, 1, "Local"))
+                {
+                    translator.PushUnityEngineParticleSystemSimulationSpace(L, UnityEngine.ParticleSystemSimulationSpace.Local);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "World"))
+                {
+                    translator.PushUnityEngineParticleSystemSimulationSpace(L, UnityEngine.ParticleSystemSimulationSpace.World);
+                }
+				else if (LuaAPI.xlua_is_eq_str(L, 1, "Custom"))
+                {
+                    translator.PushUnityEngineParticleSystemSimulationSpace(L, UnityEngine.ParticleSystemSimulationSpace.Custom);
+                }
+				else
+                {
+                    return LuaAPI.luaL_error(L, "invalid string for UnityEngine.ParticleSystemSimulationSpace!");
+                }
+
+            }
+			
+            else
+            {
+                return LuaAPI.luaL_error(L, "invalid lua type for UnityEngine.ParticleSystemSimulationSpace! Expect number or string, got + " + lua_type);
+            }
+
+            return 1;
+		}
+	}
+    
 }

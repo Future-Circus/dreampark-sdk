@@ -31,7 +31,7 @@ namespace XLua.CSObjectWrap
 			Utils.EndObjectRegister(type, L, translator, null, null,
 			    null, null, null);
 
-		    Utils.BeginClassRegister(type, L, __CreateInstance, 23, 0, 0);
+		    Utils.BeginClassRegister(type, L, __CreateInstance, 23, 1, 0);
 			Utils.RegisterFunc(L, Utils.CLS_IDX, "Slugify", _m_Slugify_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "Get", _m_Get_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "IsReady", _m_IsReady_xlua_st_);
@@ -57,7 +57,8 @@ namespace XLua.CSObjectWrap
             Utils.RegisterObject(L, translator, Utils.CLS_IDX, "MaxOpsPerRequest", DreamPark.API.GameStorageAPI.MaxOpsPerRequest);
             Utils.RegisterObject(L, translator, Utils.CLS_IDX, "ProgressKey", DreamPark.API.GameStorageAPI.ProgressKey);
             
-			
+			Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "HasPendingFlushes", _g_get_HasPendingFlushes);
+            
 			
 			
 			Utils.EndClassRegister(type, L, translator);
@@ -417,6 +418,18 @@ namespace XLua.CSObjectWrap
         
         
         
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_HasPendingFlushes(RealStatePtr L)
+        {
+		    try {
+            
+			    LuaAPI.lua_pushboolean(L, DreamPark.API.GameStorageAPI.HasPendingFlushes);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
         
         
         

@@ -420,6 +420,18 @@ namespace XLua.CSObjectWrap
             translator.DelayWrapLoader(typeof(DreamPark.AttractionWallMask), DreamParkAttractionWallMaskWrap.__Register);
         
         
+            translator.DelayWrapLoader(typeof(DreamPark.PortalScene), DreamParkPortalSceneWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.PortalSurface), DreamParkPortalSurfaceWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.PortalSceneCamera), DreamParkPortalSceneCameraWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.PortalRenderer), DreamParkPortalRendererWrap.__Register);
+        
+        
             translator.DelayWrapLoader(typeof(UnityEngine.TextMesh), UnityEngineTextMeshWrap.__Register);
         
         
@@ -435,17 +447,125 @@ namespace XLua.CSObjectWrap
             translator.DelayWrapLoader(typeof(DreamPark.NetSessionArbiter), DreamParkNetSessionArbiterWrap.__Register);
         
         
+            translator.DelayWrapLoader(typeof(DreamPark.NetScope), DreamParkNetScopeWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.RemoteNameTag), DreamParkRemoteNameTagWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.FloorCutout), DreamParkFloorCutoutWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DepthMask), DepthMaskWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(LuaLateUpdateRelay), LuaLateUpdateRelayWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(EasyEvent), EasyEventWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(EasyAnimation), EasyAnimationWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(EasyAudio), EasyAudioWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(EasyBroadcast), EasyBroadcastWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(EasyCollision), EasyCollisionWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(EasyCounter), EasyCounterWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(EasyDelay), EasyDelayWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(EasyForce), EasyForceWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(EasyInteraction), EasyInteractionWrap.__Register);
+        
+        }
+        
+        static void wrapInit3(LuaEnv luaenv, ObjectTranslator translator)
+        {
+        
+            translator.DelayWrapLoader(typeof(EasyLayer), EasyLayerWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(EasyReceiver), EasyReceiverWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(EasyRouter), EasyRouterWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(EasyScale), EasyScaleWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(EasyUnparent), EasyUnparentWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(EasyVars), EasyVarsWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(EasyVoice), EasyVoiceWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.Easy.EasyDetect), DreamParkEasyEasyDetectWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.Easy.EasyEnemy), DreamParkEasyEasyEnemyWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.Easy.EasyLookAt), DreamParkEasyEasyLookAtWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.Easy.EasyMove), DreamParkEasyEasyMoveWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.Easy.EasyShatter), DreamParkEasyEasyShatterWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.Easy.EasySpin), DreamParkEasyEasySpinWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(DreamPark.Easy.EasyThrow), DreamParkEasyEasyThrowWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(UnityEngine.Input), UnityEngineInputWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(UnityEngine.AI.NavMeshQueryFilter), UnityEngineAINavMeshQueryFilterWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(UnityEngine.CombineInstance), UnityEngineCombineInstanceWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(UnityEngine.AnimatorUpdateMode), UnityEngineAnimatorUpdateModeWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(UnityEngine.LineAlignment), UnityEngineLineAlignmentWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(UnityEngine.LineTextureMode), UnityEngineLineTextureModeWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(UnityEngine.ParticleSystemScalingMode), UnityEngineParticleSystemScalingModeWrap.__Register);
+        
+        
+            translator.DelayWrapLoader(typeof(UnityEngine.ParticleSystemSimulationSpace), UnityEngineParticleSystemSimulationSpaceWrap.__Register);
+        
+        
             translator.DelayWrapLoader(typeof(EasyLua), EasyLuaWrap.__Register);
         
         
             translator.DelayWrapLoader(typeof(LuaBehaviour), LuaBehaviourWrap.__Register);
         
         
-        
-        
             translator.DelayWrapLoader(typeof(DreamPark.DreamParkLuaAPI), DreamParkDreamParkLuaAPIWrap.__Register);
-        
-        
         
         
             translator.DelayWrapLoader(typeof(DreamPark.API.GameStorageAPI), DreamParkAPIGameStorageAPIWrap.__Register);
@@ -468,6 +588,8 @@ namespace XLua.CSObjectWrap
             wrapInit1(luaenv, translator);
             
             wrapInit2(luaenv, translator);
+            
+            wrapInit3(luaenv, translator);
             
             
         }

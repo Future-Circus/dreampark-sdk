@@ -21,7 +21,7 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(DreamPark.AttractionTemplate);
-			Utils.BeginObjectRegister(type, L, translator, 0, 33, 35, 9);
+			Utils.BeginObjectRegister(type, L, translator, 0, 33, 36, 10);
 			
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "GetPackingFootprintMeters", _m_GetPackingFootprintMeters);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "GetSafeFootprintMeters", _m_GetSafeFootprintMeters);
@@ -86,6 +86,7 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "WallLayerSides", _g_get_WallLayerSides);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "Walls", _g_get_Walls);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "WallsWire", _g_get_WallsWire);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "displayName", _g_get_displayName);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "gameRequiresAttraction", _g_get_gameRequiresAttraction);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "safeAreaInset", _g_get_safeAreaInset);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "essentialProps", _g_get_essentialProps);
@@ -96,6 +97,7 @@ namespace XLua.CSObjectWrap
             
 			Utils.RegisterFunc(L, Utils.SETTER_IDX, "safeArea", _s_set_safeArea);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "LegacyEssentialMigrated", _s_set_LegacyEssentialMigrated);
+            Utils.RegisterFunc(L, Utils.SETTER_IDX, "displayName", _s_set_displayName);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "gameRequiresAttraction", _s_set_gameRequiresAttraction);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "safeAreaInset", _s_set_safeAreaInset);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "essentialProps", _s_set_essentialProps);
@@ -1581,6 +1583,20 @@ namespace XLua.CSObjectWrap
         }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_displayName(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                DreamPark.AttractionTemplate gen_to_be_invoked = (DreamPark.AttractionTemplate)translator.FastGetCSObj(L, 1);
+                LuaAPI.lua_pushstring(L, gen_to_be_invoked.displayName);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
         static int _g_get_gameRequiresAttraction(RealStatePtr L)
         {
 		    try {
@@ -1703,6 +1719,21 @@ namespace XLua.CSObjectWrap
 			
                 DreamPark.AttractionTemplate gen_to_be_invoked = (DreamPark.AttractionTemplate)translator.FastGetCSObj(L, 1);
                 gen_to_be_invoked.LegacyEssentialMigrated = LuaAPI.lua_toboolean(L, 2);
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_displayName(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                DreamPark.AttractionTemplate gen_to_be_invoked = (DreamPark.AttractionTemplate)translator.FastGetCSObj(L, 1);
+                gen_to_be_invoked.displayName = LuaAPI.lua_tostring(L, 2);
             
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);

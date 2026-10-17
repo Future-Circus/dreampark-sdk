@@ -21,8 +21,9 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(DreamPark.DreamParkPackageHost);
-			Utils.BeginObjectRegister(type, L, translator, 0, 13, 17, 13);
+			Utils.BeginObjectRegister(type, L, translator, 0, 15, 17, 13);
 			
+			Utils.RegisterFunc(L, Utils.METHOD_IDX, "RaiseOccurrenceRemoved", _m_RaiseOccurrenceRemoved);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "GroupLevelCount", _m_GroupLevelCount);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "ResolveGroupSlot", _m_ResolveGroupSlot);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "ResolveGroupId", _m_ResolveGroupId);
@@ -37,6 +38,7 @@ namespace XLua.CSObjectWrap
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "LevelActivated", _e_LevelActivated);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "LevelPresented", _e_LevelPresented);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "LevelChangeFailed", _e_LevelChangeFailed);
+			Utils.RegisterFunc(L, Utils.METHOD_IDX, "OccurrenceRemoved", _e_OccurrenceRemoved);
 			
 			Utils.RegisterFunc(L, Utils.GETTER_IDX, "CurrentLevelIndex", _g_get_CurrentLevelIndex);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "IsChangingLevel", _g_get_IsChangingLevel);
@@ -113,6 +115,36 @@ namespace XLua.CSObjectWrap
         
         
         
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_RaiseOccurrenceRemoved(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+                DreamPark.DreamParkPackageHost gen_to_be_invoked = (DreamPark.DreamParkPackageHost)translator.FastGetCSObj(L, 1);
+            
+            
+                
+                {
+                    string _occurrenceId = LuaAPI.lua_tostring(L, 2);
+                    string _resource = LuaAPI.lua_tostring(L, 3);
+                    UnityEngine.GameObject _anchor = (UnityEngine.GameObject)translator.GetObject(L, 4, typeof(UnityEngine.GameObject));
+                    
+                    gen_to_be_invoked.RaiseOccurrenceRemoved( _occurrenceId, _resource, _anchor );
+                    
+                    
+                    
+                    return 0;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
         static int _m_GroupLevelCount(RealStatePtr L)
@@ -942,6 +974,40 @@ namespace XLua.CSObjectWrap
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
 			LuaAPI.luaL_error(L, "invalid arguments to DreamPark.DreamParkPackageHost.LevelChangeFailed!");
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _e_OccurrenceRemoved(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+			DreamPark.DreamParkPackageHost gen_to_be_invoked = (DreamPark.DreamParkPackageHost)translator.FastGetCSObj(L, 1);
+                System.Action<string, string, UnityEngine.GameObject> gen_delegate = translator.GetDelegate<System.Action<string, string, UnityEngine.GameObject>>(L, 3);
+                if (gen_delegate == null) {
+                    return LuaAPI.luaL_error(L, "#3 need System.Action<string, string, UnityEngine.GameObject>!");
+                }
+				
+				if (gen_param_count == 3)
+				{
+					
+					if (LuaAPI.xlua_is_eq_str(L, 2, "+")) {
+						gen_to_be_invoked.OccurrenceRemoved += gen_delegate;
+						return 0;
+					} 
+					
+					
+					if (LuaAPI.xlua_is_eq_str(L, 2, "-")) {
+						gen_to_be_invoked.OccurrenceRemoved -= gen_delegate;
+						return 0;
+					} 
+					
+				}
+			} catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+			LuaAPI.luaL_error(L, "invalid arguments to DreamPark.DreamParkPackageHost.OccurrenceRemoved!");
             return 0;
         }
         

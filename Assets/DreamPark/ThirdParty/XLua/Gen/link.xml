@@ -65,6 +65,9 @@
 		<type fullname="UnityEngine.HideFlags" preserve="all"/>
 		<type fullname="UnityEngine.RuntimePlatform" preserve="all"/>
 		<type fullname="UnityEngine.NetworkReachability" preserve="all"/>
+		<type fullname="UnityEngine.CombineInstance" preserve="all"/>
+		<type fullname="UnityEngine.LineAlignment" preserve="all"/>
+		<type fullname="UnityEngine.LineTextureMode" preserve="all"/>
 		
 	</assembly>
 
@@ -101,6 +104,7 @@
 		<type fullname="UnityEngine.AI.NavMeshPath" preserve="all"/>
 		<type fullname="UnityEngine.AI.NavMeshPathStatus" preserve="all"/>
 		<type fullname="UnityEngine.AI.ObstacleAvoidanceType" preserve="all"/>
+		<type fullname="UnityEngine.AI.NavMeshQueryFilter" preserve="all"/>
 		
 	</assembly>
 
@@ -109,6 +113,7 @@
 		<type fullname="UnityEngine.AnimatorCullingMode" preserve="all"/>
 		<type fullname="UnityEngine.AnimatorStateInfo" preserve="all"/>
 		<type fullname="UnityEngine.RuntimeAnimatorController" preserve="all"/>
+		<type fullname="UnityEngine.AnimatorUpdateMode" preserve="all"/>
 		
 	</assembly>
 
@@ -124,6 +129,8 @@
 	    <type fullname="UnityEngine.ParticleSystem" preserve="all"/>
 		<type fullname="UnityEngine.ParticleSystemRenderer" preserve="all"/>
 		<type fullname="UnityEngine.ParticleSystemStopBehavior" preserve="all"/>
+		<type fullname="UnityEngine.ParticleSystemScalingMode" preserve="all"/>
+		<type fullname="UnityEngine.ParticleSystemSimulationSpace" preserve="all"/>
 		
 	</assembly>
 
@@ -169,8 +176,40 @@
 		<type fullname="DreamPark.AttractionPortalGeometry" preserve="all"/>
 		<type fullname="DreamPark.AttractionWallSide" preserve="all"/>
 		<type fullname="DreamPark.AttractionWallMask" preserve="all"/>
+		<type fullname="DreamPark.PortalScene" preserve="all"/>
+		<type fullname="DreamPark.PortalSurface" preserve="all"/>
+		<type fullname="DreamPark.PortalSceneCamera" preserve="all"/>
+		<type fullname="DreamPark.PortalRenderer" preserve="all"/>
 		<type fullname="DreamBoxClient" preserve="all"/>
 		<type fullname="DreamPark.NetSessionArbiter" preserve="all"/>
+		<type fullname="DreamPark.NetScope" preserve="all"/>
+		<type fullname="DreamPark.RemoteNameTag" preserve="all"/>
+		<type fullname="DreamPark.FloorCutout" preserve="all"/>
+		<type fullname="DepthMask" preserve="all"/>
+		<type fullname="LuaLateUpdateRelay" preserve="all"/>
+		<type fullname="EasyEvent" preserve="all"/>
+		<type fullname="EasyAnimation" preserve="all"/>
+		<type fullname="EasyAudio" preserve="all"/>
+		<type fullname="EasyBroadcast" preserve="all"/>
+		<type fullname="EasyCollision" preserve="all"/>
+		<type fullname="EasyCounter" preserve="all"/>
+		<type fullname="EasyDelay" preserve="all"/>
+		<type fullname="EasyForce" preserve="all"/>
+		<type fullname="EasyInteraction" preserve="all"/>
+		<type fullname="EasyLayer" preserve="all"/>
+		<type fullname="EasyReceiver" preserve="all"/>
+		<type fullname="EasyRouter" preserve="all"/>
+		<type fullname="EasyScale" preserve="all"/>
+		<type fullname="EasyUnparent" preserve="all"/>
+		<type fullname="EasyVars" preserve="all"/>
+		<type fullname="EasyVoice" preserve="all"/>
+		<type fullname="DreamPark.Easy.EasyDetect" preserve="all"/>
+		<type fullname="DreamPark.Easy.EasyEnemy" preserve="all"/>
+		<type fullname="DreamPark.Easy.EasyLookAt" preserve="all"/>
+		<type fullname="DreamPark.Easy.EasyMove" preserve="all"/>
+		<type fullname="DreamPark.Easy.EasyShatter" preserve="all"/>
+		<type fullname="DreamPark.Easy.EasySpin" preserve="all"/>
+		<type fullname="DreamPark.Easy.EasyThrow" preserve="all"/>
 		<type fullname="EasyLua" preserve="all"/>
 		<type fullname="LuaBehaviour" preserve="all"/>
 		<type fullname="DreamPark.DreamParkLuaAPI" preserve="all"/>
@@ -184,6 +223,11 @@
 	    <type fullname="UnityEngine.TextMesh" preserve="all"/>
 		<type fullname="UnityEngine.TextAnchor" preserve="all"/>
 		<type fullname="UnityEngine.TextAlignment" preserve="all"/>
+		
+	</assembly>
+
+	<assembly fullname="UnityEngine.InputLegacyModule">
+	    <type fullname="UnityEngine.Input" preserve="all"/>
 		
 	</assembly>
 

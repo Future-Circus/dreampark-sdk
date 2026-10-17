@@ -6,16 +6,20 @@
             "sha256": "ce88799b42966fe4d32c1185a71cc6c61e29743574652f55a6935188b652f756"
         },
         {
+            "name": "DepthMaskWrap.cs",
+            "sha256": "17c6ab53788b14090f885b4e66623e2f7997509dcb03f290377eab1f01bac776"
+        },
+        {
             "name": "DreamBoxClientWrap.cs",
             "sha256": "b5b68b4f73c5d9af1f53619095f9b1d0544838812b87eb10a7d5c7d57fdb4208"
         },
         {
             "name": "DreamPark_API_GameStorageAPIWrap.cs",
-            "sha256": "45aebcee32a4fc1312314918faf049d1c153f9b90ae491852cf8ba2bcc8b8dae"
+            "sha256": "d8f13f9f64de4f36a9888bf3fe1de252476e31123331a3b14fb97073e5b03890"
         },
         {
             "name": "DreamPark_API_ProfileAPIWrap.cs",
-            "sha256": "ff78c8862cfb2ee435f707f9b49f887c9e3fc3481ad6662784f443b0fe8f3933"
+            "sha256": "44730fd2d3386585ee0961ce4ab75b018884a23ed67b487dd96c8f649bcf242e"
         },
         {
             "name": "DreamPark_API_ScoreAPIWrap.cs",
@@ -31,7 +35,7 @@
         },
         {
             "name": "DreamPark_AttractionTemplateWrap.cs",
-            "sha256": "8a4474db6070594b773300222b78617d72fda4e38a4a1897e3083736543ba2a6"
+            "sha256": "e8d045f6c6630f5cfe92b953166fb1c97ba6b0dd9e36f9bb6bc47305f02108d8"
         },
         {
             "name": "DreamPark_DreamParkGestureWrap.cs",
@@ -43,19 +47,51 @@
         },
         {
             "name": "DreamPark_DreamParkLuaAPIWrap.cs",
-            "sha256": "e6ab0d3df85ca4a1f4f2e8f029743c22d17a97b44366c8338ea553d52c5b4d71"
+            "sha256": "15c7d8969d07539df94459d5e2e309b6eed3738a66433c5e1b21d96708caeb91"
         },
         {
             "name": "DreamPark_DreamParkPackageHostWrap.cs",
-            "sha256": "1ca2f8ceb587d2f508f816b805c9fe379e941f8cef7bf63dc27e1b907898480f"
+            "sha256": "d2333341d5d83c8c35056c2fd886711e1d8b2791f0cf322c66ac3f3107b0f5a2"
         },
         {
             "name": "DreamPark_DreamParkRoutedGestureWrap.cs",
             "sha256": "4f8e0a298704e563cf78a72b1f33f05c5eea1603e937e343e824685fa9da3e17"
         },
         {
+            "name": "DreamPark_Easy_EasyDetectWrap.cs",
+            "sha256": "40c3f0effb72b85fbc6f3dfc01d1c8d10b5898b0763e5e1834d76a0f166edcf1"
+        },
+        {
+            "name": "DreamPark_Easy_EasyEnemyWrap.cs",
+            "sha256": "3feedf51900552075b81314bb5e8b26052c91ce8f550fe3fa313b872eb0e9103"
+        },
+        {
+            "name": "DreamPark_Easy_EasyLookAtWrap.cs",
+            "sha256": "698a7381db7263612b9a75a4e7f29c3dce51a32856c69c841b8d9caf56cf406e"
+        },
+        {
+            "name": "DreamPark_Easy_EasyMoveWrap.cs",
+            "sha256": "b83a0b0b2fc82dfc3f614778cc18d8c52fa905e3177c1f46126520407516fb51"
+        },
+        {
+            "name": "DreamPark_Easy_EasyShatterWrap.cs",
+            "sha256": "68b64534e15c809ac3e23e4ec5b1ba03ff49ea3cb97f86562236229fa712d9a3"
+        },
+        {
+            "name": "DreamPark_Easy_EasySpinWrap.cs",
+            "sha256": "66bf29c7383938b0a2523c191f668fa6e87863d1d7182b8a51342ba7f0b39e38"
+        },
+        {
+            "name": "DreamPark_Easy_EasyThrowWrap.cs",
+            "sha256": "35da5e598c4d23964c88a2f45e73c0ee9a631fe9ad06ff934d229e9c0d5668b8"
+        },
+        {
             "name": "DreamPark_FloorAnchorWrap.cs",
             "sha256": "9335920ba7b3bf5c7afc619ff3f67e2ef5c84b1fcb5daa8ab1ab42f4c7a590fa"
+        },
+        {
+            "name": "DreamPark_FloorCutoutWrap.cs",
+            "sha256": "296056bf586c67bd4ed00ebc905e69fd9f41c9fa3b3f4f36c8160c32903f9b43"
         },
         {
             "name": "DreamPark_GameAreaWrap.cs",
@@ -70,24 +106,112 @@
             "sha256": "531c8851cc57cdb703983eddae97c607c30b806032387a4b99169fa2676dca08"
         },
         {
+            "name": "DreamPark_NetScopeWrap.cs",
+            "sha256": "9e949a1e4916a42f55824e50a31078b27e8ef2757b1578ed189169ae2eab4894"
+        },
+        {
             "name": "DreamPark_NetSessionArbiterWrap.cs",
-            "sha256": "0e8b56c63c75cd988f4a97c014b84042ccf1c6d50498de02f121f8fc1de9d673"
+            "sha256": "79c9ba665e23a4c7c9bcf7aae7bf3ba31bd7af0dcd5f7def9ba31e9ab23562c5"
         },
         {
             "name": "DreamPark_PlayerRigWrap.cs",
             "sha256": "0360dad506eb4f8395c6509b9f2eb04cabe9362a414cc00d433489bc932d6e16"
         },
         {
+            "name": "DreamPark_PortalRendererWrap.cs",
+            "sha256": "e0cd823c1bb82bc3d462b9fe4f42de746a44fc136273ac3a2a93b3a71db367b2"
+        },
+        {
+            "name": "DreamPark_PortalSceneCameraWrap.cs",
+            "sha256": "fa5872d03b7c38a94b23b2bc86cc409845c6b9800d29f7aed0479f0a26b587f7"
+        },
+        {
+            "name": "DreamPark_PortalSceneWrap.cs",
+            "sha256": "0ee1282d998e81136d4697358007daaea24ad8729245785eb181693063396008"
+        },
+        {
+            "name": "DreamPark_PortalSurfaceWrap.cs",
+            "sha256": "17a0766bb51ead74d6fb5fecf11a025b17981556f9e6eae761a4572e2e638c33"
+        },
+        {
             "name": "DreamPark_PropTemplateWrap.cs",
             "sha256": "c22cc84d57c8d1e21ab1f6ca9792fc6c8872ed0a5f2cc7517bd2ccc497f94aee"
+        },
+        {
+            "name": "DreamPark_RemoteNameTagWrap.cs",
+            "sha256": "3775b8fc8a46bd5561d0b2b55969b3497e83ec4976ce72bcda0f6628f6c2bcfd"
+        },
+        {
+            "name": "EasyAnimationWrap.cs",
+            "sha256": "c488daa804fd5509c9aa3295d039cf86f36b97f07b7004ea15f22b6a4c1f3e56"
+        },
+        {
+            "name": "EasyAudioWrap.cs",
+            "sha256": "dd8bb09321e398ed47aceeeee8277a8f976dd6cc049c7efb47256bcafef4a598"
+        },
+        {
+            "name": "EasyBroadcastWrap.cs",
+            "sha256": "b587769da99b45d4961a361937eac3322691eba5ce1dd5dd69165d405e3c7316"
+        },
+        {
+            "name": "EasyCollisionWrap.cs",
+            "sha256": "5526dc32dc67edf02237ff02177c052ed7a17ec29cc8b4d0f75d36b0b0fbf072"
+        },
+        {
+            "name": "EasyCounterWrap.cs",
+            "sha256": "ce9cbc066ee683d68ad0ee194a9c13103687ac1534ab7f3fc18ef0ccca50e6fb"
+        },
+        {
+            "name": "EasyDelayWrap.cs",
+            "sha256": "8aa10b11cd0392b7757eadf05b736007240046ee57b1c33b34817d45731ee0b2"
+        },
+        {
+            "name": "EasyEventWrap.cs",
+            "sha256": "7ad078ace55b7fef0a5fdb5724043d2723e42fe60271e7aec606e4fb02415bc4"
+        },
+        {
+            "name": "EasyForceWrap.cs",
+            "sha256": "4c6b299bd7fbc2bbe9f9d3530df823549b3e900e9e3b9954d9343bd7272f2b6e"
+        },
+        {
+            "name": "EasyInteractionWrap.cs",
+            "sha256": "b2e2384cc3283b4b26eb23dd9dc8d8796659cc6d9d08a031426bc12e31d07f62"
+        },
+        {
+            "name": "EasyLayerWrap.cs",
+            "sha256": "92a216a53386d1110da90d5868358b21f97aa86857247a911b54a0c6fcb67a60"
         },
         {
             "name": "EasyLuaWrap.cs",
             "sha256": "e36e33f017967a5900dfa55a43b800099c6b37ee6b6ce77e90324848ace823df"
         },
         {
+            "name": "EasyReceiverWrap.cs",
+            "sha256": "530d686221e18fe79530c7949e0ecf7a1bdf065bdced22a6da3bc1f2d87fd696"
+        },
+        {
+            "name": "EasyRouterWrap.cs",
+            "sha256": "d9beecd437b6ddf2d6b146463477023ac3e9c803128dd3a727cf05ee9eb5179c"
+        },
+        {
+            "name": "EasyScaleWrap.cs",
+            "sha256": "c8a1ad66126e6f6b18f4d212fcbe65e48c906bfe04d979a95391fa8f535c6e28"
+        },
+        {
+            "name": "EasyUnparentWrap.cs",
+            "sha256": "c9b1ed97e3536f4974f56b4d67bcc12f71ffc9e6616806afca07b7872eae1f90"
+        },
+        {
+            "name": "EasyVarsWrap.cs",
+            "sha256": "2b3ac68f259228e7fabbcc6bf66998e0bfbcbb759c774c2f2f95d333621dcb20"
+        },
+        {
+            "name": "EasyVoiceWrap.cs",
+            "sha256": "e99b98dbc85b9af02229cbe40290b99444352a78946526b051f5e6c614af0500"
+        },
+        {
             "name": "EnumWrap.cs",
-            "sha256": "3983d818f2b6700cf214057ed29348bb9e5600003efabae518f7f99ade751e2e"
+            "sha256": "e6410fb23f2546fdc379fa9737db65005cf59ab275da2a09282a5caf95989f1c"
         },
         {
             "name": "HandTrackerWrap.cs",
@@ -96,6 +220,10 @@
         {
             "name": "LuaBehaviourWrap.cs",
             "sha256": "2f643f8412d8e038ae922eda1d061b0d56d197ac152010c39628d9f3841c75c0"
+        },
+        {
+            "name": "LuaLateUpdateRelayWrap.cs",
+            "sha256": "55223080100e63c92c47ade039e84a8df596561cd108b23a5ecf02bd090af900"
         },
         {
             "name": "PackUnpack.cs",
@@ -130,6 +258,10 @@
             "sha256": "1e182cbb61aab260a6b5822f282f5e5c64b9b3125b2c131593fe34ce00687bd4"
         },
         {
+            "name": "UnityEngine_AI_NavMeshQueryFilterWrap.cs",
+            "sha256": "a12b5787d67030cd2094f578ceb45e62514df3d561c101be244553ba25625fcb"
+        },
+        {
             "name": "UnityEngine_AI_NavMeshWrap.cs",
             "sha256": "720f19e044b62890413f0fc1bd38038daf78594a04038cd0ba65c7e4b993fbd6"
         },
@@ -143,7 +275,7 @@
         },
         {
             "name": "UnityEngine_AnimatorWrap.cs",
-            "sha256": "2d633a9888ab51e06c6bc56ac96546c1848477ed643ed762cfc9d79cdbda694c"
+            "sha256": "bbeeae9295ac9e66c7f147dd2f37a5e1c34ad380a7b4437a3422e8b26d4e0344"
         },
         {
             "name": "UnityEngine_ApplicationWrap.cs",
@@ -214,6 +346,10 @@
             "sha256": "29c6036a6834977606af4e07ee2d8d73eb83cb1ecea30f9b3b42f5a445243776"
         },
         {
+            "name": "UnityEngine_CombineInstanceWrap.cs",
+            "sha256": "c4237fb798fbf81ea0e16ead3f841e9b60b196dcfe470d1e86367661773cde4d"
+        },
+        {
             "name": "UnityEngine_ComponentWrap.cs",
             "sha256": "0194b218b198d6fd1b3f6f2398184476d57d442dca6a85b9c7a825a5da100dc1"
         },
@@ -242,6 +378,10 @@
             "sha256": "11ff55c38976f37a4702b99d953895764ed9a3148977e7abc7565153c7c535c5"
         },
         {
+            "name": "UnityEngine_InputWrap.cs",
+            "sha256": "b4e2b9d1cc48feafb8066675c3c3b4389e9e8e638e6abe5353960a4123fe338e"
+        },
+        {
             "name": "UnityEngine_JointWrap.cs",
             "sha256": "52ca584a03bcf871451c887d1988ddeec2a2e3df827a88169fe3b6f54b2d0809"
         },
@@ -259,7 +399,7 @@
         },
         {
             "name": "UnityEngine_LineRendererWrap.cs",
-            "sha256": "7c0dfcb2373bb80df5d52067bb80fe9688891c8341b43d7d815e1285febd497d"
+            "sha256": "785cab49714b0c36f43096fea8255671607378876c6ceb993e4c122bf1362e70"
         },
         {
             "name": "UnityEngine_MaterialPropertyBlockWrap.cs",
@@ -403,7 +543,7 @@
         },
         {
             "name": "UnityEngine_TrailRendererWrap.cs",
-            "sha256": "821a65d9caba2575e49cc71bc82bf8741fe9949e047e49ea9c10158aa11723fd"
+            "sha256": "acc12693cd71f2ba1d775c034f80ac426d70cb6352254271cb36f380da8cbdc9"
         },
         {
             "name": "UnityEngine_TransformWrap.cs",
@@ -455,15 +595,15 @@
         },
         {
             "name": "WrapPusher.cs",
-            "sha256": "c6a7f3b0f109734252a03c5ce4154ff6d498732367db97d813a1c1a557aaa0bd"
+            "sha256": "cc7733bc2a409d9ef9021750ef70a90b37af4321736da0c347f32d67f6a1f810"
         },
         {
             "name": "XLuaGenAutoRegister.cs",
-            "sha256": "e35e60d59d51fa21b889de10eb1f761f4c7e1d39b21c4a4ea601396864df3c66"
+            "sha256": "7bdb6db6a1adcfc21655900471a5400a04b217ec0ff015047289966ff3f101e7"
         },
         {
             "name": "link.xml",
-            "sha256": "201650ecdffd3d4619ee2785e85160a28ff8f006cb0ec3bd8443c1f3c3fc1ac7"
+            "sha256": "af35f272d5567a958b85a479a68dfc5c0d9a91a60a75c4b4bb00a67585fb4c9f"
         }
     ]
 }
