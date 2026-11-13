@@ -1,0 +1,973 @@
+{
+ "about": "Engine classes title content uses (Tools/agent/content_engine_classes.py). Each must be preserved by Assets/link.xml: core strips engine code, and a bundle component whose class is stripped never loads on device.",
+ "repos": [
+  "Dropbox/2025/superadventureland",
+  "Dropbox/2025/wizardsway",
+  "Dropbox/2025/crashcourse",
+  "Dropbox/2025/lasertagadventure",
+  "Dropbox/2025/robowreckers",
+  "Dropbox/2025/wandduel-park",
+  "Dropbox/2026/arcadeland",
+  "Dropbox/2026/DreamSports",
+  "Dropbox/2026/creaturez",
+  "Dropbox/2026/zombiez",
+  "Dropbox/2026/Handphase",
+  "Dropbox/2026/DreamTeam/teams/game-studio/projects/alien-invasion",
+  "Dropbox/2026/DreamTeam/teams/game-studio/projects/coin-collector",
+  "Dropbox/2026/DreamTeam/teams/game-studio/projects/coin-collector-v2",
+  "Dropbox/2026/DreamTeam/teams/game-studio/projects/coin-collector-v3",
+  "Dropbox/2026/DreamTeam/teams/game-studio/projects/coin-collector-v4",
+  "Dropbox/2026/DreamTeam/teams/game-studio/projects/coin-collector-v5",
+  "Dropbox/2026/DreamTeam/teams/game-studio/projects/coin-collector-v6",
+  "Dropbox/2026/DreamTeam/teams/game-studio/projects/coin-collector-v7",
+  "Dropbox/2026/DreamTeam/teams/game-studio/projects/rpg-quest",
+  "Dropbox/2026/DreamTeam/teams/game-studio/projects/wizard-trials"
+ ],
+ "titles": [
+  "SuperAdventureLand (Dropbox/2025/superadventureland)",
+  "WizardsWay (Dropbox/2025/wizardsway)",
+  "CrashCourse (Dropbox/2025/crashcourse)",
+  "LaserTagAdventure (Dropbox/2025/lasertagadventure)",
+  "RoboWreckers (Dropbox/2025/robowreckers)",
+  "PumpkinJack (Dropbox/2025/wandduel-park)",
+  "WandDuel (Dropbox/2025/wandduel-park)",
+  "ArcadeLand (Dropbox/2026/arcadeland)",
+  "DreamSports (Dropbox/2026/DreamSports)",
+  "Birthday (Dropbox/2026/creaturez)",
+  "BirthdayBash (Dropbox/2026/creaturez)",
+  "Blorp (Dropbox/2026/creaturez)",
+  "ColorRush (Dropbox/2026/creaturez)",
+  "Creaturez (Dropbox/2026/creaturez)",
+  "Critters (Dropbox/2026/creaturez)",
+  "LaserTag (Dropbox/2026/creaturez)",
+  "MiniGolf (Dropbox/2026/creaturez)",
+  "MultiplayerLand (Dropbox/2026/creaturez)",
+  "Shrimps (Dropbox/2026/creaturez)",
+  "Zombiez (Dropbox/2026/creaturez)",
+  "Zombiez (Dropbox/2026/zombiez)",
+  "Handphase (Dropbox/2026/Handphase)",
+  "AlienInvasion (Dropbox/2026/DreamTeam/teams/game-studio/projects/alien-invasion)",
+  "CoinCollector (Dropbox/2026/DreamTeam/teams/game-studio/projects/coin-collector)",
+  "CoinCollectorV2 (Dropbox/2026/DreamTeam/teams/game-studio/projects/coin-collector-v2)",
+  "CoinCollectorV3 (Dropbox/2026/DreamTeam/teams/game-studio/projects/coin-collector-v3)",
+  "CoinCollectorV4 (Dropbox/2026/DreamTeam/teams/game-studio/projects/coin-collector-v4)",
+  "CoinCollectorV5 (Dropbox/2026/DreamTeam/teams/game-studio/projects/coin-collector-v5)",
+  "CoinCollectorV6 (Dropbox/2026/DreamTeam/teams/game-studio/projects/coin-collector-v6)",
+  "CoinCollectorV7 (Dropbox/2026/DreamTeam/teams/game-studio/projects/coin-collector-v7)",
+  "RpgQuest (Dropbox/2026/DreamTeam/teams/game-studio/projects/rpg-quest)",
+  "WizardTrials (Dropbox/2026/DreamTeam/teams/game-studio/projects/wizard-trials)"
+ ],
+ "classes": [
+  {
+   "name": "Animation",
+   "type": "UnityEngine.Animation",
+   "classId": 111,
+   "assembly": "UnityEngine.AnimationModule",
+   "titles": {
+    "CrashCourse": 6,
+    "LaserTagAdventure": 1
+   }
+  },
+  {
+   "name": "AnimationClip",
+   "type": "UnityEngine.AnimationClip",
+   "classId": 74,
+   "assembly": "UnityEngine.AnimationModule",
+   "titles": {
+    "CrashCourse": 13,
+    "Critters": 25,
+    "LaserTagAdventure": 4,
+    "SuperAdventureLand": 54,
+    "Zombiez": 31
+   }
+  },
+  {
+   "name": "Animator",
+   "type": "UnityEngine.Animator",
+   "classId": 95,
+   "assembly": "UnityEngine.AnimationModule",
+   "titles": {
+    "ArcadeLand": 2,
+    "Birthday": 1,
+    "CrashCourse": 231,
+    "Critters": 24,
+    "LaserTag": 2,
+    "LaserTagAdventure": 30,
+    "SuperAdventureLand": 55,
+    "WizardsWay": 97,
+    "Zombiez": 6
+   }
+  },
+  {
+   "name": "AnimatorOverrideController",
+   "type": "UnityEngine.AnimatorOverrideController",
+   "classId": 221,
+   "assembly": "UnityEngine.AnimationModule",
+   "titles": {
+    "Critters": 24
+   }
+  },
+  {
+   "name": "AudioListener",
+   "type": "UnityEngine.AudioListener",
+   "classId": 81,
+   "assembly": "UnityEngine.AudioModule",
+   "titles": {
+    "ArcadeLand": 16,
+    "Birthday": 15,
+    "BirthdayBash": 1,
+    "CrashCourse": 83,
+    "Creaturez": 2,
+    "LaserTag": 6,
+    "LaserTagAdventure": 15,
+    "MiniGolf": 1,
+    "MultiplayerLand": 1,
+    "SuperAdventureLand": 39,
+    "WizardsWay": 11,
+    "Zombiez": 1
+   }
+  },
+  {
+   "name": "AudioReverbFilter",
+   "type": "UnityEngine.AudioReverbFilter",
+   "classId": 164,
+   "assembly": "UnityEngine.AudioModule",
+   "titles": {
+    "SuperAdventureLand": 7
+   }
+  },
+  {
+   "name": "AudioSource",
+   "type": "UnityEngine.AudioSource",
+   "classId": 82,
+   "assembly": "UnityEngine.AudioModule",
+   "titles": {
+    "ArcadeLand": 42,
+    "BirthdayBash": 23,
+    "ColorRush": 1,
+    "CrashCourse": 187,
+    "Critters": 69,
+    "DreamSports": 62,
+    "Handphase": 1,
+    "LaserTag": 7,
+    "LaserTagAdventure": 3,
+    "MiniGolf": 7,
+    "SuperAdventureLand": 74,
+    "WizardsWay": 56,
+    "Zombiez": 137
+   }
+  },
+  {
+   "name": "Avatar",
+   "type": "UnityEngine.Avatar",
+   "classId": 90,
+   "assembly": "UnityEngine.AnimationModule",
+   "titles": {
+    "SuperAdventureLand": 1
+   }
+  },
+  {
+   "name": "AvatarMask",
+   "type": "UnityEngine.AvatarMask",
+   "classId": 319,
+   "assembly": "UnityEngine.AnimationModule",
+   "titles": {
+    "LaserTag": 1,
+    "SuperAdventureLand": 2
+   }
+  },
+  {
+   "name": "Behaviour",
+   "type": "UnityEngine.Behaviour",
+   "classId": 124,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "Birthday": 13,
+    "CrashCourse": 35,
+    "LaserTagAdventure": 9,
+    "SuperAdventureLand": 11,
+    "WizardsWay": 1
+   }
+  },
+  {
+   "name": "BoxCollider",
+   "type": "UnityEngine.BoxCollider",
+   "classId": 65,
+   "assembly": "UnityEngine.PhysicsModule",
+   "titles": {
+    "ArcadeLand": 13,
+    "Birthday": 20,
+    "BirthdayBash": 20,
+    "Blorp": 7,
+    "ColorRush": 110,
+    "CrashCourse": 772,
+    "Critters": 195,
+    "DreamSports": 29,
+    "LaserTag": 1383,
+    "LaserTagAdventure": 12,
+    "MiniGolf": 1,
+    "MultiplayerLand": 14,
+    "SuperAdventureLand": 561,
+    "WizardsWay": 58,
+    "Zombiez": 477
+   }
+  },
+  {
+   "name": "Camera",
+   "type": "UnityEngine.Camera",
+   "classId": 20,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "ArcadeLand": 40,
+    "Birthday": 15,
+    "BirthdayBash": 3,
+    "CrashCourse": 161,
+    "Creaturez": 4,
+    "Critters": 1,
+    "DreamSports": 1,
+    "LaserTag": 8,
+    "LaserTagAdventure": 17,
+    "MiniGolf": 3,
+    "MultiplayerLand": 1,
+    "SuperAdventureLand": 80,
+    "WizardsWay": 40,
+    "Zombiez": 3
+   }
+  },
+  {
+   "name": "Canvas",
+   "type": "UnityEngine.Canvas",
+   "classId": 223,
+   "assembly": "UnityEngine.UIModule",
+   "titles": {
+    "ArcadeLand": 6,
+    "Birthday": 11,
+    "BirthdayBash": 1,
+    "CrashCourse": 31,
+    "LaserTagAdventure": 1,
+    "SuperAdventureLand": 16
+   }
+  },
+  {
+   "name": "CanvasGroup",
+   "type": "UnityEngine.CanvasGroup",
+   "classId": 225,
+   "assembly": "UnityEngine.UIModule",
+   "titles": {
+    "BirthdayBash": 2,
+    "CrashCourse": 11
+   }
+  },
+  {
+   "name": "CanvasRenderer",
+   "type": "UnityEngine.CanvasRenderer",
+   "classId": 222,
+   "assembly": "UnityEngine.UIModule",
+   "titles": {
+    "ArcadeLand": 8,
+    "Birthday": 33,
+    "BirthdayBash": 79,
+    "CrashCourse": 239,
+    "LaserTagAdventure": 24,
+    "SuperAdventureLand": 154
+   }
+  },
+  {
+   "name": "CapsuleCollider",
+   "type": "UnityEngine.CapsuleCollider",
+   "classId": 136,
+   "assembly": "UnityEngine.PhysicsModule",
+   "titles": {
+    "BirthdayBash": 6,
+    "Blorp": 3,
+    "CrashCourse": 196,
+    "Creaturez": 164,
+    "Critters": 78,
+    "DreamSports": 3,
+    "LaserTag": 26,
+    "LaserTagAdventure": 9,
+    "MiniGolf": 3,
+    "MultiplayerLand": 1,
+    "SuperAdventureLand": 84,
+    "WizardsWay": 35,
+    "Zombiez": 66
+   }
+  },
+  {
+   "name": "CharacterController",
+   "type": "UnityEngine.CharacterController",
+   "classId": 143,
+   "assembly": "UnityEngine.PhysicsModule",
+   "titles": {
+    "ArcadeLand": 1
+   }
+  },
+  {
+   "name": "CharacterJoint",
+   "type": "UnityEngine.CharacterJoint",
+   "classId": 144,
+   "assembly": "UnityEngine.PhysicsModule",
+   "titles": {
+    "Critters": 48,
+    "LaserTag": 20,
+    "LaserTagAdventure": 10,
+    "SuperAdventureLand": 76,
+    "Zombiez": 50
+   }
+  },
+  {
+   "name": "ConfigurableJoint",
+   "type": "UnityEngine.ConfigurableJoint",
+   "classId": 153,
+   "assembly": "UnityEngine.PhysicsModule",
+   "titles": {
+    "CrashCourse": 266,
+    "SuperAdventureLand": 99,
+    "WizardsWay": 1
+   }
+  },
+  {
+   "name": "Cubemap",
+   "type": "UnityEngine.Cubemap",
+   "classId": 89,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "WizardsWay": 2
+   }
+  },
+  {
+   "name": "FixedJoint",
+   "type": "UnityEngine.FixedJoint",
+   "classId": 138,
+   "assembly": "UnityEngine.PhysicsModule",
+   "titles": {
+    "ArcadeLand": 1,
+    "Birthday": 1,
+    "BirthdayBash": 2,
+    "Blorp": 1,
+    "ColorRush": 1,
+    "CrashCourse": 18,
+    "Critters": 2,
+    "LaserTag": 1,
+    "LaserTagAdventure": 2,
+    "MultiplayerLand": 1,
+    "SuperAdventureLand": 5,
+    "WizardsWay": 3,
+    "Zombiez": 1
+   }
+  },
+  {
+   "name": "GameObject",
+   "type": "UnityEngine.GameObject",
+   "classId": 1,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "ArcadeLand": 8171,
+    "Birthday": 1116,
+    "BirthdayBash": 819,
+    "Blorp": 500,
+    "ColorRush": 191,
+    "CrashCourse": 39430,
+    "Creaturez": 493,
+    "Critters": 10077,
+    "DreamSports": 4998,
+    "Handphase": 950,
+    "LaserTag": 6501,
+    "LaserTagAdventure": 2803,
+    "MiniGolf": 309,
+    "MultiplayerLand": 186,
+    "SuperAdventureLand": 12058,
+    "WizardsWay": 16701,
+    "Zombiez": 8428
+   }
+  },
+  {
+   "name": "HingeJoint",
+   "type": "UnityEngine.HingeJoint",
+   "classId": 59,
+   "assembly": "UnityEngine.PhysicsModule",
+   "titles": {
+    "CrashCourse": 39
+   }
+  },
+  {
+   "name": "LODGroup",
+   "type": "UnityEngine.LODGroup",
+   "classId": 205,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "CrashCourse": 25
+   }
+  },
+  {
+   "name": "Light",
+   "type": "UnityEngine.Light",
+   "classId": 108,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "ArcadeLand": 17,
+    "Birthday": 42,
+    "BirthdayBash": 1,
+    "CrashCourse": 376,
+    "Creaturez": 2,
+    "LaserTag": 6,
+    "LaserTagAdventure": 140,
+    "MiniGolf": 1,
+    "MultiplayerLand": 1,
+    "SuperAdventureLand": 263,
+    "WizardsWay": 377,
+    "Zombiez": 1
+   }
+  },
+  {
+   "name": "LightProbeGroup",
+   "type": "UnityEngine.LightProbeGroup",
+   "classId": 220,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "LaserTagAdventure": 1
+   }
+  },
+  {
+   "name": "LightingSettings",
+   "type": "UnityEngine.LightingSettings",
+   "classId": 850595691,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "Birthday": 3,
+    "CrashCourse": 34,
+    "LaserTagAdventure": 3,
+    "SuperAdventureLand": 1,
+    "WizardsWay": 1
+   }
+  },
+  {
+   "name": "LightmapSettings",
+   "type": "UnityEngine.LightmapSettings",
+   "classId": 157,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "ArcadeLand": 15,
+    "Birthday": 15,
+    "BirthdayBash": 1,
+    "CrashCourse": 86,
+    "Creaturez": 3,
+    "LaserTag": 6,
+    "LaserTagAdventure": 15,
+    "MiniGolf": 1,
+    "MultiplayerLand": 1,
+    "SuperAdventureLand": 42,
+    "WizardsWay": 11,
+    "Zombiez": 1
+   }
+  },
+  {
+   "name": "LineRenderer",
+   "type": "UnityEngine.LineRenderer",
+   "classId": 120,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "ArcadeLand": 3,
+    "BirthdayBash": 6,
+    "CrashCourse": 8,
+    "Critters": 3,
+    "DreamSports": 5,
+    "Handphase": 515,
+    "LaserTag": 2,
+    "MiniGolf": 2,
+    "SuperAdventureLand": 23,
+    "WizardsWay": 28,
+    "Zombiez": 3
+   }
+  },
+  {
+   "name": "Material",
+   "type": "UnityEngine.Material",
+   "classId": 21,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "ArcadeLand": 319,
+    "Birthday": 69,
+    "BirthdayBash": 91,
+    "Blorp": 34,
+    "ColorRush": 3,
+    "CrashCourse": 1453,
+    "Creaturez": 53,
+    "Critters": 1349,
+    "DreamSports": 679,
+    "Handphase": 28,
+    "LaserTag": 506,
+    "LaserTagAdventure": 315,
+    "MiniGolf": 57,
+    "MultiplayerLand": 6,
+    "SuperAdventureLand": 815,
+    "WizardsWay": 1127,
+    "Zombiez": 668
+   }
+  },
+  {
+   "name": "Mesh",
+   "type": "UnityEngine.Mesh",
+   "classId": 43,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "ArcadeLand": 594,
+    "BirthdayBash": 35,
+    "CrashCourse": 2056,
+    "Critters": 236,
+    "DreamSports": 1760,
+    "LaserTag": 1950,
+    "LaserTagAdventure": 15,
+    "MiniGolf": 23,
+    "SuperAdventureLand": 357,
+    "WizardsWay": 444,
+    "Zombiez": 1851
+   }
+  },
+  {
+   "name": "MeshCollider",
+   "type": "UnityEngine.MeshCollider",
+   "classId": 64,
+   "assembly": "UnityEngine.PhysicsModule",
+   "titles": {
+    "ArcadeLand": 33,
+    "Birthday": 160,
+    "CrashCourse": 307,
+    "Critters": 22,
+    "LaserTagAdventure": 8,
+    "SuperAdventureLand": 380
+   }
+  },
+  {
+   "name": "MeshFilter",
+   "type": "UnityEngine.MeshFilter",
+   "classId": 33,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "ArcadeLand": 2479,
+    "Birthday": 141,
+    "BirthdayBash": 209,
+    "Blorp": 363,
+    "ColorRush": 175,
+    "CrashCourse": 8244,
+    "Creaturez": 357,
+    "Critters": 3784,
+    "DreamSports": 3094,
+    "Handphase": 168,
+    "LaserTag": 1932,
+    "LaserTagAdventure": 761,
+    "MiniGolf": 112,
+    "MultiplayerLand": 70,
+    "SuperAdventureLand": 1568,
+    "WizardsWay": 3879,
+    "Zombiez": 3471
+   }
+  },
+  {
+   "name": "MeshRenderer",
+   "type": "UnityEngine.MeshRenderer",
+   "classId": 23,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "ArcadeLand": 2553,
+    "Birthday": 141,
+    "BirthdayBash": 212,
+    "Blorp": 366,
+    "ColorRush": 181,
+    "CrashCourse": 7335,
+    "Creaturez": 357,
+    "Critters": 3907,
+    "DreamSports": 3192,
+    "Handphase": 181,
+    "LaserTag": 2077,
+    "LaserTagAdventure": 764,
+    "MiniGolf": 120,
+    "MultiplayerLand": 135,
+    "SuperAdventureLand": 1578,
+    "WizardsWay": 3869,
+    "Zombiez": 3636
+   }
+  },
+  {
+   "name": "MonoBehaviour",
+   "type": "UnityEngine.MonoBehaviour",
+   "classId": 114,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "ArcadeLand": 2494,
+    "Birthday": 224,
+    "BirthdayBash": 287,
+    "Blorp": 88,
+    "ColorRush": 115,
+    "CrashCourse": 8187,
+    "Creaturez": 66,
+    "Critters": 2709,
+    "DreamSports": 1040,
+    "Handphase": 65,
+    "LaserTag": 3694,
+    "LaserTagAdventure": 813,
+    "MiniGolf": 143,
+    "MultiplayerLand": 152,
+    "SuperAdventureLand": 5414,
+    "WizardsWay": 2878,
+    "Zombiez": 4201
+   }
+  },
+  {
+   "name": "NavMeshAgent",
+   "type": "UnityEngine.AI.NavMeshAgent",
+   "classId": 195,
+   "assembly": "UnityEngine.AIModule",
+   "titles": {
+    "LaserTag": 45,
+    "SuperAdventureLand": 5,
+    "Zombiez": 5
+   }
+  },
+  {
+   "name": "NavMeshObstacle",
+   "type": "UnityEngine.AI.NavMeshObstacle",
+   "classId": 208,
+   "assembly": "UnityEngine.AIModule",
+   "titles": {
+    "LaserTag": 764,
+    "SuperAdventureLand": 15,
+    "Zombiez": 175
+   }
+  },
+  {
+   "name": "ParticleSystem",
+   "type": "UnityEngine.ParticleSystem",
+   "classId": 198,
+   "assembly": "UnityEngine.ParticleSystemModule",
+   "titles": {
+    "ArcadeLand": 1053,
+    "Birthday": 645,
+    "BirthdayBash": 118,
+    "Blorp": 10,
+    "CrashCourse": 5311,
+    "Critters": 851,
+    "DreamSports": 360,
+    "Handphase": 19,
+    "LaserTag": 251,
+    "LaserTagAdventure": 843,
+    "MiniGolf": 15,
+    "MultiplayerLand": 3,
+    "SuperAdventureLand": 5157,
+    "WizardsWay": 2380,
+    "Zombiez": 370
+   }
+  },
+  {
+   "name": "ParticleSystemForceField",
+   "type": "UnityEngine.ParticleSystemForceField",
+   "classId": 330,
+   "assembly": "UnityEngine.ParticleSystemModule",
+   "titles": {
+    "ArcadeLand": 1
+   }
+  },
+  {
+   "name": "ParticleSystemRenderer",
+   "type": "UnityEngine.ParticleSystemRenderer",
+   "classId": 199,
+   "assembly": "UnityEngine.ParticleSystemModule",
+   "titles": {
+    "ArcadeLand": 1053,
+    "Birthday": 645,
+    "BirthdayBash": 118,
+    "Blorp": 10,
+    "CrashCourse": 5306,
+    "Critters": 851,
+    "DreamSports": 360,
+    "Handphase": 19,
+    "LaserTag": 251,
+    "LaserTagAdventure": 825,
+    "MiniGolf": 15,
+    "MultiplayerLand": 3,
+    "SuperAdventureLand": 5147,
+    "WizardsWay": 2380,
+    "Zombiez": 370
+   }
+  },
+  {
+   "name": "PhysicsMaterial",
+   "type": "UnityEngine.PhysicsMaterial",
+   "classId": 134,
+   "assembly": "UnityEngine.PhysicsModule",
+   "titles": {
+    "ArcadeLand": 1,
+    "Birthday": 4,
+    "CrashCourse": 2,
+    "Critters": 1,
+    "WizardsWay": 11
+   }
+  },
+  {
+   "name": "PlayableDirector",
+   "type": "UnityEngine.Playables.PlayableDirector",
+   "classId": 320,
+   "assembly": "UnityEngine.DirectorModule",
+   "titles": {
+    "ArcadeLand": 1
+   }
+  },
+  {
+   "name": "PositionConstraint",
+   "type": "UnityEngine.Animations.PositionConstraint",
+   "classId": 1818360608,
+   "assembly": "UnityEngine.AnimationModule",
+   "titles": {
+    "CrashCourse": 6
+   }
+  },
+  {
+   "name": "RectTransform",
+   "type": "UnityEngine.RectTransform",
+   "classId": 224,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "ArcadeLand": 86,
+    "Birthday": 47,
+    "BirthdayBash": 115,
+    "Blorp": 3,
+    "ColorRush": 6,
+    "CrashCourse": 772,
+    "Critters": 123,
+    "DreamSports": 165,
+    "Handphase": 13,
+    "LaserTag": 145,
+    "LaserTagAdventure": 29,
+    "MiniGolf": 8,
+    "MultiplayerLand": 65,
+    "SuperAdventureLand": 195,
+    "WizardsWay": 52,
+    "Zombiez": 165
+   }
+  },
+  {
+   "name": "ReflectionProbe",
+   "type": "UnityEngine.ReflectionProbe",
+   "classId": 215,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "Birthday": 4,
+    "WizardsWay": 2
+   }
+  },
+  {
+   "name": "RenderSettings",
+   "type": "UnityEngine.RenderSettings",
+   "classId": 104,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "ArcadeLand": 15,
+    "Birthday": 15,
+    "BirthdayBash": 1,
+    "CrashCourse": 86,
+    "Creaturez": 3,
+    "LaserTag": 6,
+    "LaserTagAdventure": 15,
+    "MiniGolf": 1,
+    "MultiplayerLand": 1,
+    "SuperAdventureLand": 42,
+    "WizardsWay": 11,
+    "Zombiez": 1
+   }
+  },
+  {
+   "name": "RenderTexture",
+   "type": "UnityEngine.RenderTexture",
+   "classId": 84,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "Critters": 1,
+    "DreamSports": 3
+   }
+  },
+  {
+   "name": "Rigidbody",
+   "type": "UnityEngine.Rigidbody",
+   "classId": 54,
+   "assembly": "UnityEngine.PhysicsModule",
+   "titles": {
+    "ArcadeLand": 26,
+    "Birthday": 3,
+    "BirthdayBash": 33,
+    "Blorp": 14,
+    "ColorRush": 3,
+    "CrashCourse": 536,
+    "Creaturez": 2,
+    "Critters": 218,
+    "DreamSports": 3,
+    "LaserTag": 30,
+    "LaserTagAdventure": 32,
+    "MiniGolf": 5,
+    "MultiplayerLand": 4,
+    "SuperAdventureLand": 707,
+    "WizardsWay": 29,
+    "Zombiez": 235
+   }
+  },
+  {
+   "name": "SkinnedMeshRenderer",
+   "type": "UnityEngine.SkinnedMeshRenderer",
+   "classId": 137,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "ArcadeLand": 27,
+    "BirthdayBash": 2,
+    "CrashCourse": 781,
+    "Creaturez": 2,
+    "Critters": 172,
+    "DreamSports": 6,
+    "LaserTag": 5,
+    "LaserTagAdventure": 28,
+    "MiniGolf": 2,
+    "SuperAdventureLand": 301,
+    "WizardsWay": 70,
+    "Zombiez": 5
+   }
+  },
+  {
+   "name": "SortingGroup",
+   "type": "UnityEngine.Rendering.SortingGroup",
+   "classId": 210,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "CrashCourse": 12
+   }
+  },
+  {
+   "name": "SphereCollider",
+   "type": "UnityEngine.SphereCollider",
+   "classId": 135,
+   "assembly": "UnityEngine.PhysicsModule",
+   "titles": {
+    "ArcadeLand": 1,
+    "Birthday": 20,
+    "BirthdayBash": 36,
+    "Blorp": 22,
+    "ColorRush": 2,
+    "CrashCourse": 89,
+    "Creaturez": 193,
+    "Critters": 1307,
+    "DreamSports": 12,
+    "LaserTag": 56,
+    "LaserTagAdventure": 18,
+    "MultiplayerLand": 5,
+    "SuperAdventureLand": 118,
+    "WizardsWay": 67,
+    "Zombiez": 69
+   }
+  },
+  {
+   "name": "SpringJoint",
+   "type": "UnityEngine.SpringJoint",
+   "classId": 145,
+   "assembly": "UnityEngine.PhysicsModule",
+   "titles": {
+    "SuperAdventureLand": 27
+   }
+  },
+  {
+   "name": "SpriteRenderer",
+   "type": "UnityEngine.SpriteRenderer",
+   "classId": 212,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "CrashCourse": 27
+   }
+  },
+  {
+   "name": "TextMesh",
+   "type": "UnityEngine.TextMesh",
+   "classId": 102,
+   "assembly": "UnityEngine.TextRenderingModule",
+   "titles": {
+    "CrashCourse": 36,
+    "LaserTagAdventure": 1,
+    "SuperAdventureLand": 1
+   }
+  },
+  {
+   "name": "Texture2D",
+   "type": "UnityEngine.Texture2D",
+   "classId": 28,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "BirthdayBash": 1,
+    "CrashCourse": 10,
+    "Critters": 4,
+    "Handphase": 2,
+    "LaserTagAdventure": 1,
+    "SuperAdventureLand": 31,
+    "WizardsWay": 3,
+    "Zombiez": 2
+   }
+  },
+  {
+   "name": "TrailRenderer",
+   "type": "UnityEngine.TrailRenderer",
+   "classId": 96,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "BirthdayBash": 40,
+    "CrashCourse": 48,
+    "Critters": 4,
+    "DreamSports": 22,
+    "LaserTag": 1,
+    "MiniGolf": 5,
+    "SuperAdventureLand": 4,
+    "Zombiez": 4
+   }
+  },
+  {
+   "name": "Transform",
+   "type": "UnityEngine.Transform",
+   "classId": 4,
+   "assembly": "UnityEngine.CoreModule",
+   "titles": {
+    "ArcadeLand": 9521,
+    "Birthday": 1199,
+    "BirthdayBash": 825,
+    "Blorp": 515,
+    "ColorRush": 185,
+    "CrashCourse": 41965,
+    "Creaturez": 503,
+    "Critters": 10246,
+    "DreamSports": 5304,
+    "Handphase": 945,
+    "LaserTag": 9062,
+    "LaserTagAdventure": 3992,
+    "MiniGolf": 311,
+    "MultiplayerLand": 121,
+    "SuperAdventureLand": 14773,
+    "WizardsWay": 17327,
+    "Zombiez": 9927
+   }
+  },
+  {
+   "name": "VFXRenderer",
+   "type": "UnityEngine.VFX.VFXRenderer",
+   "classId": 73398921,
+   "assembly": "UnityEngine.VFXModule",
+   "titles": {
+    "ArcadeLand": 11,
+    "CrashCourse": 1,
+    "SuperAdventureLand": 1
+   }
+  },
+  {
+   "name": "VisualEffect",
+   "type": "UnityEngine.VFX.VisualEffect",
+   "classId": 2083052967,
+   "assembly": "UnityEngine.VFXModule",
+   "titles": {
+    "ArcadeLand": 11,
+    "CrashCourse": 1,
+    "SuperAdventureLand": 1
+   }
+  }
+ ]
+}

@@ -379,9 +379,13 @@ public sealed class AttractionLayoutFrameTests
         Assert.That(left.transform.localPosition.x, Is.EqualTo(0f).Within(0.0001f));
         Vector3 smallBorderScale = border.localScale;
         Vector3 smallBorderPosition = border.localPosition;
-        Assert.That(smallBorderScale.x, Is.LessThan(0.6f));
+        // Never scaled to fit (Aidan, Oct 19 2026): the follower keeps its authored size and only moves.
+        Assert.That(smallBorderScale.x, Is.EqualTo(0.6096f).Within(0.0001f));
+        // The runtime footprint is the declared size, or the layout's true ground where that is larger (the border
+        // follower keeps its authored 6.1 m: never scaled to fit).
         Assert.That(attraction.RuntimeFootprintMeters,
-            Is.EqualTo(Vector2.Scale(small.Bake.AuthoredFootprintMeters, smallShrink)));
+            Is.EqualTo(Vector2.Max(Vector2.Scale(small.Bake.AuthoredFootprintMeters, smallShrink),
+                AttractionTemplate.GroundAtScale(small.Bake, smallShrink))));
 
         Assert.That(attraction.ApplyLayout("fbig00001", Vector2.one), Is.True);
         Assert.That(right.gameObject.activeSelf, Is.True);
@@ -1278,6 +1282,36 @@ public sealed class AttractionLayoutFrameTests
             widthFeet, lengthFeet, overrides);
         frame.kind = AttractionLayoutFrameKind.Minimum;
         return frame;
+    }
+
+    /// WE NEVER SCALE OUR ASSETS TO FIT (Aidan, Oct 19 2026): a frame that rescales an object is reported (the pre-upload
+    /// check FrameScaleOverridesCheck blocks it); hiding / moving is fine, and so is a scale override equal to Base's.
+    [Test]
+    public void FrameScaleOverrides_AreReportedHideAndMoveAreNot()
+    {
+        CreateAttraction();
+        PropTemplate left = CreateProp("Left", -1f);
+        PropTemplate right = CreateProp("Right", 1f);
+        var attraction = _root.GetComponent<AttractionTemplate>();
+        var shrinkRight = new AttractionLayoutOverride
+        {
+            path = AttractionPackingBaker.PathFrom(_root.transform, right.transform), target = right.transform,
+            setScale = true, localScale = new Vector3(0.5f, 0.5f, 0.5f),
+        };
+        var sameScale = new AttractionLayoutOverride
+        {
+            path = AttractionPackingBaker.PathFrom(_root.transform, left.transform), target = left.transform,
+            setScale = true, localScale = Vector3.one,
+        };
+        attraction.SetLayoutFrames(new List<AttractionLayoutFrame>
+        {
+            Frame("fcompact1", "Compact", 10f, 10f, shrinkRight, sameScale),
+            Frame("fhide0001", "Hide", 12f, 12f, Hide(left.transform)),
+        });
+        List<string> found = AttractionPackingBaker.GetFrameScaleOverrides(attraction);
+        Assert.That(found.Count, Is.EqualTo(1), string.Join("\n", found));
+        StringAssert.Contains("Compact", found[0]);
+        StringAssert.Contains("Right", found[0]);
     }
 
     private AttractionLayoutOverride Hide(Transform target) => new AttractionLayoutOverride

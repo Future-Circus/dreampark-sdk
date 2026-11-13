@@ -94,10 +94,185 @@ namespace DreamPark.Editor
                 CopySequencePackingMetadata(sourceContentId, manifest.sequence);
                 ValidateSequenceOrder(sourceContentId, manifest.sequence);
             }
+            // Additive (Docs/PLAYLISTS.md): a title with no playlists file gets
+            // playlistsSchemaVersion 0 and empty lists, nothing else changes.
+            CompilePlaylists(sourceContentId, targetContentId, manifest,
+                playerAddress, phonePlayerAddress, managerAddress);
+            // Ways to play (ways-to-play contract §3): the director scripts + headers the headset runs (runtime handoff §1).
+            manifest.runners = DreamPark.WaysToPlay.RunnerCatalog.BuildManifestRunners(root);
+            // …and the levels only a runner loads (runner-only prefabs + the Sequence's Start / Game Over levels).
+            manifest.runnerLevels = CompileRunnerLevels(sourceContentId, targetContentId);
             manifest.packageRevision = ComputePackageRevision(manifest);
             EditorUtility.SetDirty(manifest);
             AssetDatabase.SaveAssets();
             return manifest;
+        }
+
+        /// <summary>
+        /// Ships the title's VALID playlists (ContentPlaylistValidator) in the
+        /// manifest. A playlist with errors is left out with a warning, never
+        /// shipped half-made, and never fails the rest of the upload.
+        /// </summary>
+        internal static void CompilePlaylists(string sourceContentId, string targetContentId,
+            DreamParkPackageManifest manifest, string playerAddress, string phonePlayerAddress,
+            string managerAddress)
+        {
+            manifest.playlistsSchemaVersion = 0;
+            manifest.playlistsLayout = "";
+            manifest.playlistGoalsJson = "";
+            manifest.playlistKinds = new List<PlaylistKind>();
+            manifest.playlists = new List<PackagePlaylist>();
+            manifest.playlist = null;
+
+            ContentPlaylistStore.Data data;
+            try { data = ContentPlaylistStore.Load(sourceContentId); }
+            catch (Exception e)
+            {
+                // An error, not a warning (json-escape, repair Oct 20 2026): an unreadable file ships the title with NO playlists.
+                Debug.LogError("[DreamParkPackageCompiler] The playlists file could not be read, so this upload has NO playlists ("
+                    + ContentPlaylistStore.AssetPath(sourceContentId) + "): " + e.Message);
+                return;
+            }
+            if (data == null) return;
+            Func<string, IReadOnlyList<PlaylistAttractionRef>> resolve =
+                ContentPlaylistValidator.AssetResolver(sourceContentId);
+            List<PlaylistIssue> issues = ContentPlaylistValidator.Validate(data, sourceContentId, resolve);
+            foreach (PlaylistIssue issue in issues.Where(i => i.isError))
+                Debug.LogWarning("[DreamParkPackageCompiler] Playlist " + issue);
+            List<PackagePlaylist> valid = data.playlists
+                .Where(p => ContentPlaylistValidator.IsValid(p.id, issues)).ToList();
+            int skipped = data.playlists.Count - valid.Count;
+            if (skipped > 0)
+                Debug.LogWarning($"[DreamParkPackageCompiler] {skipped} playlist(s) have errors and are not included (Content Uploader → Playlists).");
+            if (valid.Count == 0) return;
+            if (string.IsNullOrEmpty(playerAddress))
+            {
+                Debug.LogWarning("[DreamParkPackageCompiler] Playlists need a PlayerRig prefab; not included.");
+                return;
+            }
+
+            var recipe = new PackageRecipe
+            {
+                kind = "playlist",
+                playerAddress = playerAddress,
+                phonePlayerAddress = phonePlayerAddress,
+                gameManagerAddress = managerAddress,
+            };
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            PlaylistAttractionRef Resolve(string reference) => resolve(reference)[0];
+            string OccurrenceFor(PlaylistAttractionRef attraction)
+            {
+                string id = "playlist-" + attraction.guid;
+                if (!ids.Contains(id))
+                    AddOccurrence(recipe, ids, id, attraction.guid, "stage", null,
+                        sourceContentId, targetContentId, false);
+                return id;
+            }
+
+            // One stop's compiled addresses (an arc stop or a pool attraction): resourceAddress / resourceName / attractionId /
+            // its recipe occurrence, the designed displayName, alternates.
+            void FillStop(PlaylistStop stop)
+            {
+                if (PlaylistBookends.IsPlatformStop(stop.contentId, stop.attraction))
+                {
+                    // A platform bookend (PLAYLISTS.md § 11.2): built by the app, never in the
+                    // title's recipe. Its address is also its resourceName.
+                    string platformId = PlaylistBookends.IdOf(stop.attraction);
+                    stop.attraction = platformId;
+                    stop.contentId = PlaylistBookends.ContentId;
+                    stop.resourceAddress = stop.resourceName = PlaylistBookends.AddressFor(platformId);
+                    stop.attractionId = platformId;
+                    stop.occurrenceId = "";
+                    stop.alternates = new List<string>();
+                    stop.alternateAttractionIds = new List<string>();
+                    stop.alternateAddresses = new List<string>();
+                    stop.alternateResourceNames = new List<string>();
+                    stop.alternateOccurrenceIds = new List<string>();
+                    return;
+                }
+                PlaylistAttractionRef main = Resolve(stop.attraction);
+                stop.contentId = targetContentId;
+                stop.resourceAddress = main.AddressFor(targetContentId);
+                stop.resourceName = main.resourceName;
+                stop.attractionId = DreamPark.API.GameStorageAPI.Slugify(main.resourceName);
+                stop.alternateAttractionIds = new List<string>();
+                stop.occurrenceId = OccurrenceFor(main);
+                // The card / Dreamie name: the prefab's own AttractionTemplate.displayName (the designed
+                // name, the same one the catalog push uploads) wins; the playlist's displayName is the fallback.
+                string prefabName = PrefabDisplayName(main.guid);
+                if (!string.IsNullOrEmpty(prefabName)) stop.displayName = prefabName;
+                stop.alternateAddresses = new List<string>();
+                stop.alternateResourceNames = new List<string>();
+                stop.alternateOccurrenceIds = new List<string>();
+                foreach (string alternate in stop.alternates)
+                {
+                    PlaylistAttractionRef alt = Resolve(alternate);
+                    stop.alternateAddresses.Add(alt.AddressFor(targetContentId));
+                    stop.alternateResourceNames.Add(alt.resourceName);
+                    stop.alternateAttractionIds.Add(DreamPark.API.GameStorageAPI.Slugify(alt.resourceName));
+                    stop.alternateOccurrenceIds.Add(OccurrenceFor(alt));
+                }
+            }
+
+            foreach (PackagePlaylist playlist in valid)
+            {
+                playlist.totalMinutes = playlist.arc.Sum(leg => leg.minutes);
+                // A title playlist belongs to the UPLOAD id (Beta included), like recipes.
+                playlist.owner = "title";
+                playlist.titleId = targetContentId;
+                // pl-sets: a sets record's pool attractions compile exactly like arc stops (the device spawns a streamed /
+                // added one by its address).
+                foreach (PlaylistStop stop in playlist.pool ?? new List<PlaylistStop>()) FillStop(stop);
+                foreach (PlaylistLeg leg in playlist.arc)
+                {
+                    leg.titles = new List<string> { targetContentId };
+                    leg.mixed = false;
+                    foreach (PlaylistStop stop in leg.stops) FillStop(stop);
+                    PlaylistObjective objective = leg.objective;
+                    if (string.IsNullOrEmpty(objective.target) && objective.type == "defeat_boss")
+                    {
+                        PlaylistStop boss = leg.stops.FirstOrDefault(s => s.role == "boss")
+                            ?? leg.stops.FirstOrDefault(s => s.role == "miniboss");
+                        objective.target = boss?.attraction;
+                    }
+                    objective.targetAddress = string.IsNullOrEmpty(objective.target) ? ""
+                        : PlaylistBookends.IsKnown(objective.target) ? PlaylistBookends.AddressFor(objective.target)
+                        : Resolve(objective.target).AddressFor(targetContentId);
+                }
+            }
+            if (recipe.occurrences.Count > 2000)
+            {
+                Debug.LogWarning("[DreamParkPackageCompiler] Playlists exceed package limits; not included.");
+                return;
+            }
+            manifest.playlistsSchemaVersion = PackagePlaylist.CurrentSchemaVersion;
+            manifest.playlistKinds = ContentPlaylistStore.KindsOrDefault(data);
+            manifest.playlists = valid;
+            manifest.playlistCampaignsJson = data.campaignsJson ?? "";
+            manifest.playlistFlagsJson = data.flagsJson ?? "";
+            // repair-oct20 (CONTRACT § 2): the title's default goal blocks ship in the manifest (offline); the backend copy wins online.
+            try
+            {
+                var raw = ContentPlaylistStore.SourceObjects(sourceContentId);
+                foreach (PackagePlaylist p in valid) if (p != null && raw.TryGetValue(p.id ?? "", out string src)) p.sourceJson = src;
+            }
+            catch (Exception e) { Debug.LogWarning("[DreamParkPackageCompiler] playlist pass-through copy skipped: " + e.Message); }
+            try { manifest.playlistGoalsJson = ContentPlaylistStore.GoalsJson(sourceContentId); }
+            catch (Exception e) { manifest.playlistGoalsJson = ""; Debug.LogWarning("[DreamParkPackageCompiler] goal blocks not included: " + e.Message); }
+            manifest.playlistsLayout = string.Equals(data.layout, "club", StringComparison.OrdinalIgnoreCase) ? "club" : "";
+            manifest.playlist = recipe;
+        }
+
+        /// The prefab's AttractionTemplate.displayName (trimmed), or null.
+        static string PrefabDisplayName(string guid)
+        {
+            if (string.IsNullOrEmpty(guid)) return null;
+            string path = AssetDatabase.GUIDToAssetPath(guid);
+            if (string.IsNullOrEmpty(path)) return null;
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+            var at = prefab != null ? prefab.GetComponent<AttractionTemplate>() : null;
+            string n = at != null ? (at.displayName ?? "").Trim() : "";
+            return n.Length > 0 ? n : null;
         }
 
         internal static PackageRecipe CompileArenaRecipe(string sourceContentId,
@@ -108,6 +283,7 @@ namespace DreamPark.Editor
                 .Select(guid => new { guid, path = AssetDatabase.GUIDToAssetPath(guid) })
                 .Where(item => !string.IsNullOrEmpty(item.path)
                     && item.path.IndexOf("/ThirdPartyLocal/", StringComparison.OrdinalIgnoreCase) < 0
+                    && !DreamPark.WaysToPlay.RunnerIds.IsRunnerOnlyAsset(item.path)
                     && !DreamSequenceGenerator.IsSpecialLevelPath(sourceContentId, item.path))
                 .Select(item => new
                 {
@@ -191,6 +367,7 @@ namespace DreamPark.Editor
                     StringComparison.OrdinalIgnoreCase) < 0)
                 .Where(g => !DreamSequenceGenerator.IsSpecialLevelPath(sourceContentId,
                     AssetDatabase.GUIDToAssetPath(g)))
+                .Where(g => !DreamPark.WaysToPlay.RunnerIds.IsRunnerOnlyAsset(AssetDatabase.GUIDToAssetPath(g)))
                 .Where(g => IsPlacementPrefab(AssetDatabase.GUIDToAssetPath(g)))
                 .ToList();
             var attractions = available.Where(g =>
@@ -370,6 +547,46 @@ namespace DreamPark.Editor
             recipe.occurrences.Add(occurrence);
         }
 
+        /// WAYS TO PLAY (Oct 26 2026): levels a runner may load that no package ships — every AttractionTemplate prefab under
+        /// Content/&lt;Title&gt;/Runners/ (address RunnerIds.LevelAddress) plus the Sequence's Start Level / Game Over Level.
+        /// ADDITIVE manifest list: today's app never reads it; RunnerLevelsFromManifest appends it after the packages.
+        internal static List<PackageOccurrence> CompileRunnerLevels(string sourceContentId, string targetContentId)
+        {
+            var list = new List<PackageOccurrence>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            void Add(string path, string address, string role)
+            {
+                var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                var at = prefab != null ? prefab.GetComponent<AttractionTemplate>() : null;
+                if (at == null || !seen.Add(address)) return;
+                var o = new PackageOccurrence
+                {
+                    occurrenceId = "runner:" + Path.GetFileNameWithoutExtension(path),
+                    resourceAddress = address,
+                    role = role,
+                    order = list.Count,
+                };
+                CopyPackingMetadata(o, at, null);
+                list.Add(o);
+            }
+            string root = $"Assets/Content/{sourceContentId}";
+            string runnersRoot = root + "/" + DreamPark.WaysToPlay.RunnerIds.FolderName;
+            if (AssetDatabase.IsValidFolder(runnersRoot))
+                foreach (string path in AssetDatabase.FindAssets("t:Prefab", new[] { runnersRoot })
+                    .Select(AssetDatabase.GUIDToAssetPath).Where(p => !string.IsNullOrEmpty(p)).OrderBy(p => p, StringComparer.Ordinal))
+                    Add(path, DreamPark.WaysToPlay.RunnerIds.LevelAddress(targetContentId, Path.GetFileNameWithoutExtension(path)), "stage");
+            foreach (var (path, role) in new[] { (DreamSequenceGenerator.StartLevelPath(sourceContentId), "start"),
+                                                  (DreamSequenceGenerator.GameOverLevelPath(sourceContentId), "end") })
+            {
+                if (string.IsNullOrEmpty(path)) continue;
+                var at = AssetDatabase.LoadAssetAtPath<GameObject>(path)?.GetComponent<AttractionTemplate>();
+                if (at == null) continue;
+                Add(path, $"{targetContentId}/Levels/{at.size}/{Path.GetFileNameWithoutExtension(path)}", role);
+            }
+            if (list.Count > 0) Debug.Log($"[DreamParkPackageCompiler] {list.Count} runner-only level(s): {string.Join(", ", list.Select(o => o.resourceAddress))}");
+            return list;
+        }
+
         private static void CopyPackingMetadata(PackageOccurrence occurrence,
             AttractionTemplate attraction, PropTemplate prop)
         {
@@ -395,6 +612,8 @@ namespace DreamPark.Editor
                     occurrence.growScale = bake.GrowScale;
                     occurrence.essentialShrinkScale = bake.EssentialShrinkScale;
                     occurrence.hasEssentialProps = bake.HasEssentialProps;
+                    occurrence.groundFootprintMeters = bake.GroundFootprintMeters;
+                    occurrence.groundShrinkFootprintMeters = bake.GroundShrinkFootprintMeters;
                 }
                 occurrence.hasPackingMetadata = authored.x > 0f && authored.y > 0f;
                 // Schema 4: the legacy fields above stay the Base envelope (with the
@@ -402,6 +621,8 @@ namespace DreamPark.Editor
                 occurrence.frames = attraction.HasLayoutFrames
                     ? FrameEnvelopesFor(attraction)
                     : new List<PackageFrameEnvelope>();
+                occurrence.portals = PortalsOf(attraction, AttractionTemplate.BaseFrameId);
+                occurrence.hasPortals = true;
                 return;
             }
 
@@ -434,9 +655,22 @@ namespace DreamPark.Editor
                     growFootprintMeters = envelope.growMeters,
                     shrinkScale = envelope.shrinkScale,
                     growScale = envelope.growScale,
+                    groundFootprintMeters = envelope.groundMeters,
+                    groundShrinkFootprintMeters = envelope.groundShrinkMeters,
+                    portals = PortalsOf(attraction, envelope.frameId),
                 });
             }
             return frames;
+        }
+
+        /// <summary>A layout's effective entries / exits (AttractionTemplate.GetPortals) for the manifest.</summary>
+        internal static List<PackagePortal> PortalsOf(AttractionTemplate attraction, string frameId)
+        {
+            var list = new List<PackagePortal>();
+            if (attraction == null) return list;
+            foreach (AttractionPortal p in attraction.GetPortals(frameId))
+                if (p != null) list.Add(new PackagePortal { kind = (int)p.kind, position = AttractionPortalGeometry.Wrap(p.position) });
+            return list;
         }
 
         private static void CopySequencePackingMetadata(string sourceContentId,

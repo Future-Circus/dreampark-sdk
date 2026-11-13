@@ -44,6 +44,21 @@
  * If the column runs out of the image before proving anything, the surface counts as grounded
  * (when unsure, keep the obstacle).
  *
+ * FLOOR BAND (Oct 15 2026, Brent session #1 — Super Adventure Land's floor art flickered / was
+ * eaten when the park sat a few cm low; Aidan: "we cant have the floor graphics flickering even
+ * if its off by a few centimeters"). Real depth whose point is FLOOR — within _FloorBandHeight
+ * of the floor height, or facing up and no higher than _FloorBandMaxRise — is written as if that
+ * surface were _FloorBandSink metres LOWER, measured straight down along the same ray. So the
+ * real floor never hides virtual content in the slab [floor - sink, floor + height]: floor art a
+ * few cm under the measured floor (park pose error, depth noise) draws steadily. Everything
+ * else is untouched: legs, furniture and walls above the slab occlude as before (content behind
+ * them along a downward ray is lower than they are, and they are not floor), content deeper
+ * than the sink below the real floor stays hidden, tracked hands keep their true depth, and
+ * rays at or above the horizon are never touched. It runs only where the safety pass left the
+ * texel as measured (a phantom it dropped or an obstacle it punched stays that way). The
+ * matrices are the CURRENT depth frame's (_SkyInvReprojection / _SkyReprojection, refreshed in
+ * DepthMaskCeiling.OnRawDepth), so fast head pitch does not misplace the floor.
+ *
  * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
@@ -161,9 +176,10 @@ Shader "DreamPark/EnvironmentDepth/DepthMaskSanitize"
             float _SkyHandCount;               // 0..4 capsules valid this frame
 
             // Safety + grounded classification (set by DepthMaskCeiling).
-            float4x4 _EnvironmentDepthReprojectionMatrices[2]; // world -> depth clip (Meta global)
+            float4x4 _SkyReprojection[2];      // world -> depth clip, per eye (inverse of _SkyInvReprojection)
             float4 _EnvironmentDepthTexture_TexelSize;
             float _SafeOn;
+            float _SafePunchOn;                // Oct 15 2026: OFF by default (indoor playtest)
             float4 _SafeEye;                   // world eye position
             float _SafeFloorY;                 // world floor height
             float _SafeRadius;                 // m, horizontal: grounded obstacles punch through
@@ -171,6 +187,14 @@ Shader "DreamPark/EnvironmentDepth/DepthMaskSanitize"
             float _SafeFloorClearance;         // m above the floor that still counts as floor
             float _SafeFloorNormalY;           // |normal.y| above this = floor-like surface
             float _SafePunchMeters;            // depth written for punch-through pixels
+
+            // Floor band (set by DepthMaskCeiling; the math is DepthMaskCeiling.FloorBand*).
+            float _FloorBandOn;
+            float _FloorBandY;                 // world floor height
+            float _FloorBandHeight;            // m above the floor that is still floor
+            float _FloorBandMaxRise;           // up-facing surfaces count as floor only up to here
+            float _FloorBandNormalY;           // |normal.y| above this = faces up
+            float _FloorBandSink;              // m: floor depth is written this much lower
 
             struct Attributes
             {
@@ -251,33 +275,39 @@ Shader "DreamPark/EnvironmentDepth/DepthMaskSanitize"
 
             float2 ProjectUV(const float3 p, const uint slice, out bool ok)
             {
-                const float4 c = mul(_EnvironmentDepthReprojectionMatrices[slice], float4(p, 1.0f));
+                const float4 c = mul(_SkyReprojection[slice], float4(p, 1.0f));
                 ok = c.w > 1e-4f;
                 return (c.xy / max(c.w, 1e-4f) + 1.0f) * 0.5f;
             }
 
             // Surface normal from p and two neighbours at offsets a, b; true if it faces up.
-            bool FacesUp(const float2 uv, const uint slice, const float3 p, const float2 a, const float2 b)
+            bool FacesUp(const float2 uv, const uint slice, const float3 p, const float2 a, const float2 b,
+                         const float minNormalY)
             {
                 const float da = SampleSanitized(uv + a, slice);
                 const float db = SampleSanitized(uv + b, slice);
                 if (da >= 1.0f || db >= 1.0f) return false;
                 const float3 n = cross(WorldPoint(uv + a, slice, da) - p, WorldPoint(uv + b, slice, db) - p);
                 const float len = length(n);
-                return len > 1e-8f && abs(n.y / len) >= _SafeFloorNormalY;
+                return len > 1e-8f && abs(n.y / len) >= minNormalY;
             }
 
-            // Floor = near the floor height, or a surface facing up (lawn, slopes). Tried in
-            // four quadrants: next to a person or a phantom one neighbour pair lands on the
-            // other surface, but at least one stays on the ground.
+            // Tried in four quadrants: next to a person or a phantom one neighbour pair lands on
+            // the other surface, but at least one stays on the ground.
+            bool FacesUpAround(const float2 uv, const uint slice, const float3 p, const float minNormalY)
+            {
+                const float2 t = _EnvironmentDepthTexture_TexelSize.xy * 2.0f;
+                return FacesUp(uv, slice, p, float2(t.x, 0), float2(0, t.y), minNormalY) ||
+                       FacesUp(uv, slice, p, float2(-t.x, 0), float2(0, -t.y), minNormalY) ||
+                       FacesUp(uv, slice, p, float2(t.x, 0), float2(0, -t.y), minNormalY) ||
+                       FacesUp(uv, slice, p, float2(-t.x, 0), float2(0, t.y), minNormalY);
+            }
+
+            // Floor = near the floor height, or a surface facing up (lawn, slopes).
             bool IsFloorLike(const float2 uv, const uint slice, const float3 p)
             {
                 if (p.y <= _SafeFloorY + _SafeFloorClearance) return true;
-                const float2 t = _EnvironmentDepthTexture_TexelSize.xy * 2.0f;
-                return FacesUp(uv, slice, p, float2(t.x, 0), float2(0, t.y)) ||
-                       FacesUp(uv, slice, p, float2(-t.x, 0), float2(0, -t.y)) ||
-                       FacesUp(uv, slice, p, float2(t.x, 0), float2(0, -t.y)) ||
-                       FacesUp(uv, slice, p, float2(-t.x, 0), float2(0, t.y));
+                return FacesUpAround(uv, slice, p, _SafeFloorNormalY);
             }
 
             // Walk down the image column under p (world-down projected into the depth view).
@@ -312,6 +342,35 @@ Shader "DreamPark/EnvironmentDepth/DepthMaskSanitize"
                 return ndcDepth * 0.5f + 0.5f;
             }
 
+            float ToLinear(const float d)
+            {
+                return 1.0f / ((d * 2.0f - 1.0f) + _EnvironmentDepthZBufferParams.y) * _EnvironmentDepthZBufferParams.x;
+            }
+
+            // FLOOR BAND: the depth to write for this texel. Unchanged unless its point is floor;
+            // then the same ray's depth where it reaches _FloorBandSink below that point. Mirrors
+            // DepthMaskCeiling.FloorBandIsFloor / FloorBandSunkLinear (Tools/floor-band-offline).
+            float FloorBandDepth(const float2 uv, const uint slice, const float envDepth)
+            {
+                const float3 p = WorldPoint(uv, slice, envDepth);
+                const float3 a = WorldPoint(uv, slice, 0.0f);          // same ray at the near plane
+                const float3 ray = p - a;
+                const float len = length(ray);
+                if (len < 1e-4f) return envDepth;
+                const float dirY = ray.y / len;
+                if (dirY > -0.02f) return envDepth;                     // level or upward ray: never floor
+                if (p.y > _FloorBandY + _FloorBandHeight &&
+                    (p.y > _FloorBandY + _FloorBandMaxRise || !FacesUpAround(uv, slice, p, _FloorBandNormalY)))
+                    return envDepth;                                    // not floor: true depth
+                const float lp = ToLinear(envDepth);
+                const float ln = ToLinear(0.0f);                        // near-plane linear depth
+                if (lp <= ln + 1e-4f) return envDepth;
+                // Linear depth is proportional to distance along the ray from the camera centre,
+                // which is len / (1 - ln / lp) for p; sinking adds sink / -dirY to it.
+                const float lq = lp * (1.0f + (_FloorBandSink / -dirY) * (1.0f - ln / lp) / len);
+                return max(envDepth, ToNonLinear(lq));
+            }
+
             float4 frag(const Varyings input) : SV_Target
             {
                 float3 uv = float3(input.uv, input.depthSlice);
@@ -338,6 +397,7 @@ Shader "DreamPark/EnvironmentDepth/DepthMaskSanitize"
                     if (frames >= 1.5f) envDepth = max(envDepth, _SkyHistory2.SampleLevel(sky_point_clamp_sampler, uv, 0));
                 }
 
+                const float measured = envDepth;
                 if (_SafeOn > 0.5f && _SkyFilterOn > 0.5f && elevation < _SkyFullDeg && envDepth < 1.0f &&
                     _EnvironmentDepthZBufferParams.x != 0.0f)
                 {
@@ -347,10 +407,22 @@ Shader "DreamPark/EnvironmentDepth/DepthMaskSanitize"
                     {
                         if (IsFloating(input.uv, input.depthSlice, p, dist))
                             envDepth = 1.0f;                                    // phantom: never occludes
-                        else if (length(p.xz - _SafeEye.xz) <= _SafeRadius && !IsFloorLike(input.uv, input.depthSlice, p))
+                        // Oct 15 2026: punch-through is OFF by default. Indoors every table, shelf
+                        // and wall within the radius is a "grounded obstacle", and punching them
+                        // through all content shredded the game (clutter cut holes in virtual
+                        // objects standing in front of it). Real things occlude only what is
+                        // actually behind them again; the floating-phantom drop above stays.
+                        else if (_SafePunchOn > 0.5f && length(p.xz - _SafeEye.xz) <= _SafeRadius &&
+                                 !IsFloorLike(input.uv, input.depthSlice, p))
                             envDepth = min(envDepth, ToNonLinear(_SafePunchMeters)); // obstacle: show through
                     }
                 }
+
+                // Floor band: only where safety left the measurement alone; never a tracked hand.
+                if (_FloorBandOn > 0.5f && envDepth == measured && envDepth < 1.0f &&
+                    _EnvironmentDepthZBufferParams.x != 0.0f &&
+                    !InsideHand(input.uv, input.depthSlice, envDepth))
+                    envDepth = FloorBandDepth(input.uv, input.depthSlice, envDepth);
 
                 const float depth = (maskDepth < envDepth) ? 1.0f : envDepth;
                 return float4(depth, 0, 0, 0);

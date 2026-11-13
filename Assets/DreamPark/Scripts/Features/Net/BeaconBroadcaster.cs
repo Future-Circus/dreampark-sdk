@@ -101,7 +101,7 @@ namespace DreamPark
             if (now >= _nextIpRefreshTime)
             {
                 _nextIpRefreshTime = now + IpRefreshSeconds;
-                var ip = NetPlatform.GetLocalIPv4();
+                var ip = NetPlatform.PeekLocalIPv4(IpRefreshSeconds * 0.9f);   // Nov 2: off-main-thread refresh
                 if (!string.IsNullOrEmpty(ip) && ip != AdvertisedHost)
                 {
                     // Clients already connected keep their socket; only joiners

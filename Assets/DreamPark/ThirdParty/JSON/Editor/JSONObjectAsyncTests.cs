@@ -273,8 +273,6 @@ namespace Defective.JSON.Tests {
 		[TestCase("")]
 		[TestCase("æ")]
 		[TestCase("ø")]
-		[TestCase("\\u00e6")]
-		[TestCase("\\u00f8")]
 		public void EncodeAndParseString(string value) {
 			var jsonText = string.Format(TestStrings.JsonFormatString, value);
 			ValidateJsonString(jsonText, jsonText);

@@ -75,6 +75,14 @@ namespace DreamPark
     //    rk {q,p}         request(kind, payload) to the leader
     //    lv {}            I no longer hold this state
     //
+    //  SPECTATORS (Oct 23 2026, platform-rig — DreamParkParticipation.cs): on a
+    //  GAMEPLAY table (one with a title; or marked with MarkGameplay), a phone
+    //  that does not wear the title's rig is never the writer, its own writes /
+    //  requests / merge cells are dropped at the source, and the writer refuses
+    //  its "ws" / "rk" — except the keys / kinds the table allow-lists
+    //  (AllowSpectator: the What's Next picks, the start circle, Dreamie) and a
+    //  deliberate action ("sa":1 — a phone tap, dp.spectator_action).
+    //
     //  Internal engine service, not a component. Lua: dp.shared_state(name[, go]).
     // ─────────────────────────────────────────────────────────────────────
     public sealed class SharedState
@@ -115,6 +123,59 @@ namespace DreamPark
         /// <summary>(kind, payload JSON, fromId) — fired on the LEADER only.</summary>
         public event Action<string, string, string> Requested;
 
+        // ── Spectators (Oct 23 2026, platform-rig; see the file header) ──
+        bool? _gameplay;
+        readonly HashSet<string> _spectatorOk = new HashSet<string>(StringComparer.Ordinal);
+        readonly List<string> _spectatorPrefixes = new List<string>();
+        readonly HashSet<string> _refusedFrom = new HashSet<string>(StringComparer.Ordinal);
+        bool _warnedSpectator;
+
+        /// <summary>The participation gate applies (a title's table, or <see cref="MarkGameplay"/>).</summary>
+        public bool Gameplay => _gameplay ?? !string.IsNullOrEmpty(Title);
+        /// <summary>Gate (or ungate) this table even without a title — e.g. the playlist scoreboard.</summary>
+        public void MarkGameplay(bool on = true) { _gameplay = on; }
+
+        /// <summary>
+        /// Keys (writes) and request kinds a SPECTATOR may still send on this table — the platform's own phone actions
+        /// (What's Next picks, the start circle, Dreamie). "c.*" = a prefix. Every device opens the table with the same
+        /// list, so the writer agrees with the sender.
+        /// </summary>
+        public void AllowSpectator(params string[] keysOrKinds)
+        {
+            if (keysOrKinds == null) return;
+            foreach (var k in keysOrKinds)
+            {
+                if (string.IsNullOrEmpty(k)) continue;
+                if (k.EndsWith("*", StringComparison.Ordinal)) { string pre = k.Substring(0, k.Length - 1); if (!_spectatorPrefixes.Contains(pre)) _spectatorPrefixes.Add(pre); }
+                else _spectatorOk.Add(k);
+            }
+        }
+
+        bool SpectatorOk(string keyOrKind)
+        {
+            if (keyOrKind == null) return false;
+            if (_spectatorOk.Contains(keyOrKind)) return true;
+            for (int i = 0; i < _spectatorPrefixes.Count; i++)
+                if (keyOrKind.StartsWith(_spectatorPrefixes[i], StringComparison.Ordinal)) return true;
+            return false;
+        }
+
+        /// <summary>This device is a spectator of this table's title (a phone without its rig).</summary>
+        public bool LocalSpectator => Gameplay && Engine.IsSpectator(LocalId, Title);
+
+        /// <summary>A spectator's own write / request of <paramref name="keyOrKind"/> stops here (logged once).</summary>
+        bool SpectatorBlocks(string keyOrKind)
+        {
+            if (!LocalSpectator || DreamParkParticipation.InSpectatorAction || SpectatorOk(keyOrKind)) return false;
+            if (!_warnedSpectator)
+            {
+                _warnedSpectator = true;
+                NetLog.V($"[SharedState] '{Name}' ({Title ?? "no title"}): this device is a spectator (no rig) — '{keyOrKind}' and its other gameplay writes are not sent");
+            }
+            DreamParkParticipation.NoteBlocked("shared state '" + Name + "'", Title, null);
+            return true;
+        }
+
         readonly SortedDictionary<string, string> _values = new SortedDictionary<string, string>(StringComparer.Ordinal);
 
         sealed class Member { public double heard; public bool synced; }
@@ -146,6 +207,8 @@ namespace DreamPark
 
         // Runtime binding (null for detached/test states).
         GameObject _busObject;
+        /// The object this table is bound to (an attraction's part, a Game Manager), or null — playlist auto-detection.
+        internal GameObject BusObject => _busObject;
         bool _hadBusObject;
         string _titleKey;
         int _openFrame;
@@ -246,6 +309,13 @@ namespace DreamPark
         static readonly Dictionary<int, SharedState> _byHandle = new Dictionary<int, SharedState>();
 
         internal static void ResetRegistry() { _registry.Clear(); _byHandle.Clear(); }
+        /// Every open table (playlist auto-detection seeds its "previous value" cache from them).
+        internal static List<SharedState> OpenStates()
+        {
+            var l = new List<SharedState>(_registry.Count);
+            foreach (var s in _registry.Values) if (s != null && !s.Disposed) l.Add(s);
+            return l;
+        }
 
         /// <summary>
         /// Oct 15 2026 (game master RESTART): the host's per-title RUN suffix for bus keys
@@ -576,6 +646,7 @@ namespace DreamPark
             }
             string canon = Canonical(json, key);
             if (canon == Invalid) return false;
+            if (SpectatorBlocks(key)) return false;
             var batch = new List<KeyValuePair<string, string>>(1) { new KeyValuePair<string, string>(key, canon) };
             Write(batch);
             return true;
@@ -645,6 +716,8 @@ namespace DreamPark
                 Warn("[SharedState] request payload contains a 'netId' field, which the relay reserves.");
                 return;
             }
+            if (SpectatorBlocks(kind)) return;
+            PlaylistAutoTaps.RaiseStateRequested(this, kind, p);   // playlist auto-detection (PLAYLISTS.md § 13)
             if (!Synced) { if (_queuedRequests.Count < 64) _queuedRequests.Add((kind, p)); return; }
             if (IsLeader) RaiseRequested(kind, p, LocalId);
             else SendRequestKind(kind, p);
@@ -685,6 +758,7 @@ namespace DreamPark
             string v = GetJson(key);
             try { Changed?.Invoke(key, v); }
             catch (Exception e) { Warn($"[SharedState] '{Name}' change handler threw: {e.Message}"); }
+            PlaylistAutoTaps.RaiseStateChanged(this, key, v);   // playlist auto-detection (PLAYLISTS.md § 13)
         }
 
         // ── Merge cells: shared without a leader round trip ──────────
@@ -751,6 +825,7 @@ namespace DreamPark
         /// <summary>Grow this device's part of a counter by <paramref name="n"/> (≥ 0). Returns this device's part.</summary>
         public double Add(string key, double n)
         {
+            if (n > 0 && SpectatorBlocks(key)) return 0;
             var c = CellFor(key, 'c', true);
             if (c == null) return 0;
             double mine = c.v.TryGetValue(LocalId, out var j) ? ParseNum(j) : 0;
@@ -781,6 +856,7 @@ namespace DreamPark
         /// <summary>Add items to a grow-only set. Returns true if anything was new.</summary>
         public bool Union(string key, IEnumerable<string> items)
         {
+            if (SpectatorBlocks(key)) return false;
             var c = CellFor(key, 'u', true);
             if (c == null || items == null) return false;
             bool any = false;
@@ -809,6 +885,7 @@ namespace DreamPark
         /// <summary>Set THIS device's value in an owner cell (any JSON fragment). Newest wins per device.</summary>
         public bool SetMine(string key, string json)
         {
+            if (SpectatorBlocks(key)) return false;
             var c = CellFor(key, 'o', true);
             if (c == null) return false;
             string canon = Canonical(json, key);
@@ -828,6 +905,7 @@ namespace DreamPark
         /// <summary>Offer a value to a max cell. Returns the merged maximum.</summary>
         public double Max(string key, double value)
         {
+            if (SpectatorBlocks(key)) { var mc = CellFor(key, 'm', false); return mc != null && mc.v.TryGetValue("v", out var mj) ? ParseNum(mj) : value; }
             var c = CellFor(key, 'm', true);
             if (c == null) return 0;
             bool has = c.v.TryGetValue("v", out var j);
@@ -1041,15 +1119,19 @@ namespace DreamPark
             get
             {
                 // Holding a solo table while the merge settles: still our own game.
-                if (Holding) return LocalId;
+                // A spectator (Oct 23 2026, platform-rig) is never a candidate — not even for its own solo table.
+                bool gate = Gameplay;
+                bool selfOut = gate && Engine.IsSpectator(LocalId, Title);
+                if (Holding) return selfOut ? "" : LocalId;
                 _cands.Clear();
-                _cands.Add(new SessionEngine.Candidate(LocalId, Engine.IsPhoneSelf, Synced, Engine.JoinedAt));
+                if (!selfOut) _cands.Add(new SessionEngine.Candidate(LocalId, Engine.IsPhoneSelf, Synced, Engine.JoinedAt));
                 double now = Engine.LocalTime;
                 bool connected = Engine.Link != null && Engine.Link.Connected;
                 if (connected)
                     foreach (var kv in _members)
                     {
                         if (now - kv.Value.heard > MemberTimeout || !Engine.IsLive(kv.Key)) continue;
+                        if (gate && Engine.IsSpectator(kv.Key, Title)) continue;
                         _cands.Add(new SessionEngine.Candidate(kv.Key, Engine.IsPhone(kv.Key), kv.Value.synced, Engine.JoinedAtOf(kv.Key)));
                     }
                 return SessionEngine.PickLeader(_cands);
@@ -1192,7 +1274,7 @@ namespace DreamPark
             if (_answerAt >= 0 && now >= _answerAt)
             {
                 _answerAt = -1;
-                if (Synced && Rev > _answerFor) SendSnapshot();
+                if (Synced && (Rev > _answerFor || (Rev == _answerFor && LocalSpectator))) SendSnapshot();
             }
 
             if (_dirty && connected && now - _lastSn >= FlushInterval) SendSnapshot();
@@ -1327,6 +1409,7 @@ namespace DreamPark
                 sb.Append('"').Append(JsonEscape(dels[i])).Append('"');
             }
             sb.Append(']');
+            if (DreamParkParticipation.InSpectatorAction && LocalSpectator) sb.Append(",\"sa\":1");   // a deliberate spectator action
             if (!Engine.Budget.TryTake(1, critical: true))
                 Warn($"[SharedState] '{Name}': send budget exhausted; write request sent anyway (it must arrive).");
             Send("ws", sb.ToString());
@@ -1335,7 +1418,8 @@ namespace DreamPark
         void SendRequestKind(string kind, string payload)
         {
             Engine.Budget.TryTake(1, critical: true);
-            Send("rk", ",\"q\":\"" + JsonEscape(kind) + "\",\"p\":" + payload);
+            string sa = DreamParkParticipation.InSpectatorAction && LocalSpectator ? ",\"sa\":1" : "";
+            Send("rk", ",\"q\":\"" + JsonEscape(kind) + "\",\"p\":" + payload + sa);
         }
 
         internal void SendLeave()
@@ -1370,7 +1454,9 @@ namespace DreamPark
                     if (!Synced) return;
                     int r = (int)SessionEngine.Num(p, "r");
                     if (IsLeader) SendSnapshot();
-                    else if (Rev > r && _answerAt < 0)
+                    // A synced SPECTATOR (Oct 23 2026) also answers an equal rev: it can never write, so a newcomer
+                    // that saw it synced would otherwise wait for a snapshot nobody sends.
+                    else if ((Rev > r || (Rev == r && LocalSpectator)) && _answerAt < 0)
                     {
                         // Redundant custody: answer only if the leader has not
                         // within a staggered delay (it may have just left).
@@ -1413,6 +1499,16 @@ namespace DreamPark
 
         bool Newer(int r, string w) => r > Rev || (r == Rev && string.CompareOrdinal(w ?? "", Writer ?? "") > 0);
 
+        /// <summary>The writer refuses a spectator's gameplay writes (Oct 23 2026, platform-rig): logged once per sender.</summary>
+        bool RefuseFrom(string from, JSONObject p, string keyOrKind)
+        {
+            if (!Gameplay || from == LocalId || !Engine.IsSpectator(from, Title)) return false;
+            if (SessionEngine.Num(p, "sa") >= 1 || SpectatorOk(keyOrKind)) return false;
+            if (_refusedFrom.Add(from))
+                Warn($"[SharedState] '{Name}' ({Title ?? "no title"}): refused '{keyOrKind}' from spectator {from} (a phone without the rig takes no part in the game); its later gameplay writes are dropped silently");
+            return true;
+        }
+
         void HandleLeaderMessage(string from, JSONObject p)
         {
             string kind = p.GetField("k")?.stringValue;
@@ -1424,21 +1520,21 @@ namespace DreamPark
                     for (int i = 0; i < kv.keys.Count; i++)
                     {
                         string k = kv.keys[i];
-                        if (!ValidKey(k)) continue;
+                        if (!ValidKey(k) || RefuseFrom(from, p, k)) continue;
                         var v = kv.list[i];
                         batch.Add(new KeyValuePair<string, string>(k, v == null || v.type == JSONObject.Type.Null ? null : v.Print()));
                     }
                 var x = p.GetField("x");
                 if (x != null && x.type == JSONObject.Type.Array && x.list != null)
                     foreach (var d in x.list)
-                        if (d != null && d.type == JSONObject.Type.String && ValidKey(d.stringValue))
+                        if (d != null && d.type == JSONObject.Type.String && ValidKey(d.stringValue) && !RefuseFrom(from, p, d.stringValue))
                             batch.Add(new KeyValuePair<string, string>(d.stringValue, null));
                 if (batch.Count > 0) ApplyWrites(batch, from);
             }
             else if (kind == "rk")
             {
                 string q = p.GetField("q")?.stringValue;
-                if (string.IsNullOrEmpty(q)) return;
+                if (string.IsNullOrEmpty(q) || RefuseFrom(from, p, q)) return;
                 var pl = p.GetField("p");
                 RaiseRequested(q, pl != null ? pl.Print() : "{}", from);
             }

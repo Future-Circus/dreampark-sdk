@@ -21,7 +21,7 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(DreamPark.LevelTemplate);
-			Utils.BeginObjectRegister(type, L, translator, 0, 8, 22, 18);
+			Utils.BeginObjectRegister(type, L, translator, 0, 8, 23, 18);
 			
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "RegenerateCeiling", _m_RegenerateCeiling);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "RegenerateFloor", _m_RegenerateFloor);
@@ -33,7 +33,8 @@ namespace XLua.CSObjectWrap
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "TestRealWorldCalibration", _m_TestRealWorldCalibration);
 			
 			
-			Utils.RegisterFunc(L, Utils.GETTER_IDX, "Size", _g_get_Size);
+			Utils.RegisterFunc(L, Utils.GETTER_IDX, "GeneratedFloorIsStale", _g_get_GeneratedFloorIsStale);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "Size", _g_get_Size);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "RuntimeFootprintMeters", _g_get_RuntimeFootprintMeters);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "DimensionsInFeet", _g_get_DimensionsInFeet);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "isBuildMode", _g_get_isBuildMode);
@@ -365,6 +366,20 @@ namespace XLua.CSObjectWrap
         
         
         
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_GeneratedFloorIsStale(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                DreamPark.LevelTemplate gen_to_be_invoked = (DreamPark.LevelTemplate)translator.FastGetCSObj(L, 1);
+                LuaAPI.lua_pushboolean(L, gen_to_be_invoked.GeneratedFloorIsStale);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
         static int _g_get_Size(RealStatePtr L)

@@ -1324,7 +1324,11 @@ namespace DreamPark {
                     if (prefab == null) continue;
                     var levelTemplate = prefab.GetComponent<LevelTemplate>();
                     var propTemplate = prefab.GetComponent<PropTemplate>();
-                    if (levelTemplate != null) {
+                    if (levelTemplate != null && DreamPark.WaysToPlay.RunnerIds.IsRunnerOnlyAsset(assetPath)) {
+                        // Ways to play: a runner-only level (start area, map, fork) stays OUT of "{gameId}/Levels/" so the
+                        // live catalog sync never lists it as a placeable attraction on today's app.
+                        desiredAddress = DreamPark.WaysToPlay.RunnerIds.LevelAddress(targetGameId, Path.GetFileNameWithoutExtension(assetPath));
+                    } else if (levelTemplate != null) {
                         desiredAddress = $"{targetGameId}/Levels/{levelTemplate.size.ToString()}/{Path.GetFileNameWithoutExtension(assetPath)}";
                         string filePreview = $"Assets/Content/{sourceGameId}/Previews/{Path.GetFileNameWithoutExtension(assetPath)}.png";
                         // if (!File.Exists(filePreview)) {
@@ -1335,6 +1339,11 @@ namespace DreamPark {
                     } else {
                         desiredAddress = $"{targetGameId}/{Path.GetFileNameWithoutExtension(assetPath)}";
                     }
+                } else if (typeFolder == "Data" && Path.GetFileName(Path.GetDirectoryName(assetPath) ?? "") == DreamPark.WaysToPlay.RunnerIds.FolderName
+                           && assetPath.EndsWith(DreamPark.WaysToPlay.RunnerIds.FileSuffix, StringComparison.OrdinalIgnoreCase)) {
+                    // (only the Runners/ folder's own files are ways to play; Lua a runner-only level carries keeps its plain address)
+                    // Ways to play: a runner script keeps a stable address the headset can also load by id.
+                    desiredAddress = DreamPark.WaysToPlay.RunnerIds.Address(targetGameId, DreamPark.WaysToPlay.RunnerIds.FromFileName(assetPath));
                 } else if (typeFolder == "Textures" && assetPath.Contains("Previews")) {
                     desiredAddress =  $"{targetGameId}/Previews/{Path.GetFileNameWithoutExtension(assetPath)}";
                 } else if (!string.IsNullOrEmpty(typeFolder)) {
@@ -2321,9 +2330,23 @@ namespace DreamPark {
                     assetPaths = assetPaths.Concat(new[] { linkXmlPath }).ToArray();
                 }
 
-                // Export to a temporary location
-                string tempPath = Path.Combine(Application.dataPath, $"../{targetContentId}.unitypackage");
+                // Export to a temporary location we control: an ABSOLUTE path in this project's own Temp/. The old
+                // "Application.dataPath/../<id>.unitypackage" broke in a symlink clone (Assets → a worktree elsewhere):
+                // Unity resolved ".." through the symlink and wrote the file next to the WORKTREE, while File.Copy looked
+                // in the clone root and threw ("Unity package build failed"). Release round, Oct 26 2026.
+                string tempDir = Path.Combine(projectRoot, "Temp", "DreamParkUnityPackage");
+                Directory.CreateDirectory(tempDir);
+                string tempPath = Path.Combine(tempDir, $"{targetContentId}.unitypackage");
+                if (File.Exists(tempPath)) File.Delete(tempPath);
                 AssetDatabase.ExportPackage(assetPaths, tempPath, ExportPackageOptions.Default);
+                if (!File.Exists(tempPath))
+                {
+                    // belt and braces: wherever an older Unity / a relative resolution put it
+                    string alt = Path.Combine(Application.dataPath, "..", $"{targetContentId}.unitypackage");
+                    if (File.Exists(alt)) tempPath = Path.GetFullPath(alt);
+                }
+                if (!File.Exists(tempPath))
+                    throw new FileNotFoundException("ExportPackage wrote no file (looked in " + tempDir + ")", tempPath);
 
                 // Ensure the "ServerData" and "Unity" directories exist
                 string serverDataPath = Path.Combine(projectRoot, "ServerData");

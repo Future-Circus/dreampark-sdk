@@ -1,7 +1,9 @@
 namespace DreamPark
 {
     using UnityEngine;
+    using System;
     using System.Collections;
+    using System.Collections.Generic;
 #if UNITY_EDITOR
     using UnityEditor;
 #endif
@@ -55,8 +57,31 @@ namespace DreamPark
         // public AudioSource AudioSource => audioSource;
         private Coroutine duckCoroutine;
         [HideInInspector] public bool isFocused = false;
+
+        // ── Every live music area (the phone director's candidates, MusicAreaPhone) ──
+        static readonly List<MusicArea> s_all = new List<MusicArea>();
+        /// Every MusicArea that has woken and not been destroyed (with or without a track).
+        public static IReadOnlyList<MusicArea> All => s_all;
+        /// It made its emitter (it had a track at Awake).
+        public bool HasEmitter => audioSource != null;
+        /// Its emitter is sounding: playing, unmuted, above a whisper.
+        public bool EmitterSounding => audioSource != null && audioSource.isActiveAndEnabled && audioSource.isPlaying
+                                       && !audioSource.mute && audioSource.volume >= 0.02f;
+        /// Its footprint's half extents (what the presence test uses), also for an area without a track.
+        public Vector3 FootprintHalfExtents()
+        {
+            var lt = levelTemplate != null ? levelTemplate : GetComponent<LevelTemplate>();
+            if (lt != null)
+            {
+                Vector2 b = lt.RuntimeFootprintMeters;
+                return new Vector3(b.x / 2f, 50f, b.y / 2f);
+            }
+            return transform.localScale * 0.5f;
+        }
+
         public virtual void Awake()
         {
+            if (Application.isPlaying && !s_all.Contains(this)) s_all.Add(this);   // phone candidates (MusicAreaPhone)
             if (!musicTrack)
             {
                 enabled = false;
@@ -116,6 +141,22 @@ namespace DreamPark
             // itself: the repair below (audioSource.enabled = true) runs before any
             // presence test, so a MusicArea whose AudioSource was disabled by the
             // optimizer would re-enable it and Enter() on the following frame.
+            // A PHONE (Oct 23 2026, phone-music): no head walks into an area there — the platform picks the one area the
+            // phone plays (MusicAreaPhone: the camera's area in AR, the diorama's focus in the diorama), build-parked or not.
+            if (MusicAreaPhone.Active)
+            {
+                // Never let the music path take the app down (Oct 23 crash hunt): any fault turns the phone path off for
+                // the session (MusicAreaPhone.Fault) and the area stands down quietly.
+                try { PhoneUpdate(); }
+                catch (Exception e) { MusicAreaPhone.Fault("MusicArea.PhoneUpdate " + name, e); StandDown(); }
+                return;
+            }
+            if (_phoneDriven)
+            {
+                // The host stopped driving the phone: hand back to the ordinary rule from silence.
+                _phoneDriven = false;
+                StandDown();
+            }
             if (ParkBuilder.LevelObjectManager.BuildModeParked)
             {
                 if (isPlaying || isActive)
@@ -136,10 +177,9 @@ namespace DreamPark
             }
             if (Camera.main)
             {
-                var camPos = Camera.main.transform.position;
-#if UNITY_EDITOR
-                camPos = SceneView.lastActiveSceneView.camera.transform.position;
-#endif
+                // (Oct 20: the Editor-only SceneView.lastActiveSceneView.camera read that stood here was unused and threw a
+                // NullReferenceException every frame in an Editor with no Scene view open — batch harnesses — so the
+                // presence test below never ran and no music area ever entered there.)
                 if (IsPointWithinBounds(Camera.main.transform.position, transform, halfExtents))
                 {
                     if (!isActive)
@@ -166,6 +206,64 @@ namespace DreamPark
                 }
             }
         }
+        // ── The phone path (MusicAreaPhone) ─────────────────────────────
+        /// Fade in / out time on the phone (the app's title theme crossfades against it over about the same).
+        public const float PhoneFadeSeconds = 1.25f;
+        bool _phoneDriven;
+        float _phoneLevel, _phoneWritten = -1f;
+
+        void PhoneUpdate()
+        {
+            _phoneDriven = true;
+            MusicAreaPhone.Step();
+            if (audioSource == null || audioSource.clip == null) return;
+            bool want = MusicAreaPhone.Pick == this;
+            if (want != isActive)
+            {
+                activeMusicAreas += want ? 1 : -1;
+                isActive = want;
+            }
+            if (want)
+            {
+                MusicArea cur = currentMusicArea;
+                if (cur != this)
+                {
+                    // The same track in the next area carries on where it is (the headset's adopt rule).
+                    if (cur != null && cur.audioSource != null && cur.audioSource.clip == audioSource.clip && cur.audioSource.isPlaying)
+                    {
+                        AdoptPlaybackFrom(cur);
+                        _phoneLevel = cur._phoneLevel;
+                        cur._phoneLevel = 0f;
+                        cur.isPlaying = false;
+                    }
+                    currentMusicArea = this;   // the old area fades itself out on its own Update
+                }
+                if (!audioSource.enabled) audioSource.enabled = true;   // a parked emitter (build / scan parking)
+                if (!audioSource.isPlaying)
+                {
+                    if (_phoneLevel <= 0.001f) { audioSource.volume = 0f; _phoneWritten = 0f; }
+                    if (audioSource.time > 0f) audioSource.UnPause();
+                    if (!audioSource.isPlaying) audioSource.Play();
+                }
+                isPlaying = true;
+            }
+            if (!isPlaying && _phoneLevel <= 0f) return;
+            float target = want ? volume * MusicAreaPhone.Gain : 0f;
+            _phoneLevel = Mathf.MoveTowards(_phoneLevel, target, Time.unscaledDeltaTime * Mathf.Max(volume, 0.05f) / PhoneFadeSeconds);
+            // Write only when the level moved: the voice ducker multiplies on top of what we wrote and re-reads it then.
+            if (!Mathf.Approximately(_phoneLevel, _phoneWritten))
+            {
+                audioSource.volume = _phoneLevel;
+                _phoneWritten = _phoneLevel;
+            }
+            if (!want && _phoneLevel <= 0.0001f)
+            {
+                if (audioSource.isPlaying) audioSource.Pause();
+                if (currentMusicArea == this) currentMusicArea = null;
+                isPlaying = false;
+            }
+        }
+
         public virtual void Enter()
         {
             if (currentMusicArea)
@@ -229,6 +327,8 @@ namespace DreamPark
         /// </remarks>
         private void StandDown()
         {
+            _phoneLevel = 0f;
+            _phoneWritten = -1f;
             if (isActive)
             {
                 activeMusicAreas--;
@@ -317,6 +417,7 @@ namespace DreamPark
         }
         void OnDestroy()
         {
+            s_all.Remove(this);
             if (currentMusicArea == this)
             {
                 currentMusicArea = null;
@@ -329,6 +430,96 @@ namespace DreamPark
         public void SetPitch(float pitch)
         {
             audioSource.pitch = pitch;
+        }
+
+        // ── Ducking under Dreamie's voice (Oct 20, take 3: "hard to tell how Dreamie dialog etc will be compatible with
+        //    the music"). The host app sets VoiceDuckUntil (unscaled time) every frame she speaks with audio. Oct 20
+        //    (meadow-host): the 09:22 take measured her voice NOT clearly above the bed in 12 of 43 lines — stage music fading
+        //    in as a stop starts, the King Jubbo stinger, Results — so the duck is no longer this area's alone: EVERY playing
+        //    AudioSource (a title's Lua stinger, a bookend sting, the round change) eases down under her voice
+        //    (<see cref="VoiceDucker"/>). A multiplier on top of whatever the source's own fades write: the un-ducked level
+        //    is re-read whenever something else set the volume, so a fade-in ramps UNDER the duck instead of overwriting it.
+        /// Duck while Time.unscaledTime is before this (the speaker refreshes it every frame; it lapses on its own).
+        public static float VoiceDuckUntil
+        {
+            get => s_voiceDuckUntil;
+            set { s_voiceDuckUntil = value; if (VoiceDucking) VoiceDucker.Ensure(); }
+        }
+        static float s_voiceDuckUntil = -1f;
+        /// Music under her voice (× its own volume): music areas, loops, stingers / jingles (clips ≥ 2.5 s). −14 dB — the
+        /// beatcheck target is her voice ≥ 6 dB over the bed in every line.
+        public static float VoiceDuckGain = 0.2f;   // 0.25 left the King Jubbo boss-clear pile-up (stinger + fanfare + jingle) at +5.9 dB
+        /// Every other playing sound (gameplay SFX) under her voice: −10.5 dB. Measured (meadow-host, Oct 20): at 0.6 her stop
+        /// how-to lines over a kick fight / the hunt's start burst sat at +0.7 / +2.7 dB; at 0.35 the hunt start was +5.4.
+        public static float VoiceDuckSfxGain = 0.3f;
+        /// Ease time (s) down / back up.
+        public static float VoiceDuckEaseS = 0.2f;
+        /// A host's own voice sources (never ducked). Sources on an object with a DreamieActor are always exempt.
+        public static Func<AudioSource, bool> VoiceDuckExempt;
+        public static bool VoiceDucking => Time.unscaledTime < s_voiceDuckUntil;
+
+        /// The one ducker: every playing, non-exempt AudioSource eases to its gain while she speaks and back after.
+        sealed class VoiceDucker : MonoBehaviour
+        {
+            sealed class Row { public float duck = 1f, baseVol = -1f, applied = -1f; public bool music; }
+            static VoiceDucker s_on;
+            static readonly HashSet<string> s_told = new HashSet<string>();
+            readonly Dictionary<AudioSource, Row> _rows = new Dictionary<AudioSource, Row>();
+            readonly List<AudioSource> _gone = new List<AudioSource>();
+
+            public static void Ensure()
+            {
+                if (s_on != null || !Application.isPlaying) return;
+                var go = new GameObject("[VoiceDucker]") { hideFlags = HideFlags.HideInHierarchy };
+                DontDestroyOnLoad(go);
+                s_on = go.AddComponent<VoiceDucker>();
+            }
+
+            static bool Exempt(AudioSource a)
+            {
+                if (a.mute || a.GetComponent("DreamieActor") != null) return true;
+                try { return VoiceDuckExempt != null && VoiceDuckExempt(a); } catch (Exception) { return false; }
+            }
+
+            // Music-class: loops, long clips, music areas, and clip-less PlayOneShot sources (bookend / UI stings: the Results
+            // room's entrance sting under "King Jubbo is stuffed!" kept that line at +5 dB as an SFX).
+            static bool IsMusic(AudioSource a) =>
+                a.loop || a.clip == null || a.clip.length >= 2.5f || a.GetComponentInParent<MusicArea>() != null;
+
+            void Scan()
+            {
+                foreach (var a in FindObjectsByType<AudioSource>(FindObjectsInactive.Exclude, FindObjectsSortMode.None))
+                {
+                    if (a == null || !a.isActiveAndEnabled || !a.isPlaying || _rows.ContainsKey(a) || Exempt(a)) continue;
+                    // A sound that STARTS under her voice starts ducked (a short tick or kick would be over before an ease).
+                    var r = new Row { music = IsMusic(a) };
+                    if (a.time < 0.3f) r.duck = r.music ? VoiceDuckGain : VoiceDuckSfxGain;   // already playing: eases down
+                    _rows[a] = r;
+                    string what = (a.clip != null ? a.clip.name : "one-shot") + " on " + a.gameObject.name;
+                    if (s_told.Count < 200 && s_told.Add(what)) Debug.Log($"[VoiceDuck] {(r.music ? "music" : "sfx")} {what}");
+                }
+            }
+
+            void LateUpdate()
+            {
+                bool ducking = VoiceDucking;
+                if (ducking) Scan();   // every frame while she speaks (only then): new one-shots are caught on their first frame
+                if (_rows.Count == 0) return;
+                float step = Time.unscaledDeltaTime / Mathf.Max(0.01f, VoiceDuckEaseS);
+                _gone.Clear();
+                foreach (var kv in _rows)
+                {
+                    var a = kv.Key; var r = kv.Value;
+                    if (a == null) { _gone.Add(a); continue; }
+                    if (r.baseVol < 0f || !Mathf.Approximately(a.volume, r.applied)) r.baseVol = a.volume;   // someone else set it
+                    float target = ducking ? (r.music ? VoiceDuckGain : VoiceDuckSfxGain) : 1f;
+                    r.duck = Mathf.MoveTowards(r.duck, target, step);
+                    if (!ducking && Mathf.Approximately(r.duck, 1f)) { a.volume = r.baseVol; _gone.Add(a); continue; }
+                    r.applied = Mathf.Clamp01(r.baseVol * r.duck);
+                    a.volume = r.applied;
+                }
+                foreach (var a in _gone) _rows.Remove(a);
+            }
         }
         public void Duck(float duckDuration, float fadeInDuration = 0.25f, float fadeOutDuration = 0.25f, float duckVolume = 0.2f)
         {

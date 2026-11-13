@@ -110,16 +110,20 @@ namespace XLua.CSObjectWrap
 			Utils.EndObjectRegister(type, L, translator, null, null,
 			    null, null, null);
 
-		    Utils.BeginClassRegister(type, L, __CreateInstance, 5, 0, 0);
-			Utils.RegisterFunc(L, Utils.CLS_IDX, "IsValidFrameId", _m_IsValidFrameId_xlua_st_);
+		    Utils.BeginClassRegister(type, L, __CreateInstance, 7, 1, 1);
+			Utils.RegisterFunc(L, Utils.CLS_IDX, "GroundAtScale", _m_GroundAtScale_xlua_st_);
+            Utils.RegisterFunc(L, Utils.CLS_IDX, "RebuildJoint", _m_RebuildJoint_xlua_st_);
+            Utils.RegisterFunc(L, Utils.CLS_IDX, "IsValidFrameId", _m_IsValidFrameId_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "AnchorToSide", _m_AnchorToSide_xlua_st_);
             
 			
             Utils.RegisterObject(L, translator, Utils.CLS_IDX, "BaseFrameId", DreamPark.AttractionTemplate.BaseFrameId);
             Utils.RegisterObject(L, translator, Utils.CLS_IDX, "MinimumFrameId", DreamPark.AttractionTemplate.MinimumFrameId);
             
-			
-			
+			Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "RebuildJointsOnLayout", _g_get_RebuildJointsOnLayout);
+            
+			Utils.RegisterFunc(L, Utils.CLS_SETTER_IDX, "RebuildJointsOnLayout", _s_set_RebuildJointsOnLayout);
+            
 			
 			Utils.EndClassRegister(type, L, translator);
         }
@@ -171,6 +175,34 @@ namespace XLua.CSObjectWrap
                     bool _essentialOnly = LuaAPI.lua_toboolean(L, 3);
                     
                         var gen_ret = gen_to_be_invoked.GetPackingFootprintMeters( _packingScale, _essentialOnly );
+                        translator.PushUnityEngineVector2(L, gen_ret);
+                    
+                    
+                    
+                    return 1;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_GroundAtScale_xlua_st_(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+            
+                
+                {
+                    DreamPark.AttractionPackingBake _bake = (DreamPark.AttractionPackingBake)translator.GetObject(L, 1, typeof(DreamPark.AttractionPackingBake));
+                    UnityEngine.Vector2 _scale;translator.Get(L, 2, out _scale);
+                    
+                        var gen_ret = DreamPark.AttractionTemplate.GroundAtScale( _bake, _scale );
                         translator.PushUnityEngineVector2(L, gen_ret);
                     
                     
@@ -254,6 +286,47 @@ namespace XLua.CSObjectWrap
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_RebuildJoint_xlua_st_(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+            
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 2&& translator.Assignable<UnityEngine.Joint>(L, 1)&& translator.Assignable<System.Nullable<UnityEngine.Matrix4x4>>(L, 2)) 
+                {
+                    UnityEngine.Joint _j = (UnityEngine.Joint)translator.GetObject(L, 1, typeof(UnityEngine.Joint));
+                    System.Nullable<UnityEngine.Matrix4x4> _bodyBefore;translator.Get(L, 2, out _bodyBefore);
+                    
+                    DreamPark.AttractionTemplate.RebuildJoint( _j, _bodyBefore );
+                    
+                    
+                    
+                    return 0;
+                }
+                if(gen_param_count == 1&& translator.Assignable<UnityEngine.Joint>(L, 1)) 
+                {
+                    UnityEngine.Joint _j = (UnityEngine.Joint)translator.GetObject(L, 1, typeof(UnityEngine.Joint));
+                    
+                    DreamPark.AttractionTemplate.RebuildJoint( _j );
+                    
+                    
+                    
+                    return 0;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to DreamPark.AttractionTemplate.RebuildJoint!");
             
         }
         
@@ -1694,6 +1767,18 @@ namespace XLua.CSObjectWrap
             return 1;
         }
         
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_RebuildJointsOnLayout(RealStatePtr L)
+        {
+		    try {
+            
+			    LuaAPI.lua_pushboolean(L, DreamPark.AttractionTemplate.RebuildJointsOnLayout);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
         
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
@@ -1840,6 +1925,19 @@ namespace XLua.CSObjectWrap
 			
                 DreamPark.AttractionTemplate gen_to_be_invoked = (DreamPark.AttractionTemplate)translator.FastGetCSObj(L, 1);
                 gen_to_be_invoked.growAlignmentToleranceMeters = (float)LuaAPI.lua_tonumber(L, 2);
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_RebuildJointsOnLayout(RealStatePtr L)
+        {
+		    try {
+                
+			    DreamPark.AttractionTemplate.RebuildJointsOnLayout = LuaAPI.lua_toboolean(L, 1);
             
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);

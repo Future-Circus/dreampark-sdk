@@ -30,6 +30,8 @@ namespace DreamPark
         static string TitleOfGo(GameObject go) => Title(go) ?? "";
         static string LeaderFor(string title) => DreamParkSession.LeaderFor(string.IsNullOrEmpty(title) ? null : title);
         static int Rank(string id, string title) => DreamParkSession.Rank(id, string.IsNullOrEmpty(title) ? null : title);
+        static bool RunsWorld(string title) => DreamParkSession.RunsWorld(string.IsNullOrEmpty(title) ? null : title);
+        static void SpectatorScope(bool on) { if (on) DreamParkParticipation.EnterSpectatorAction(); else DreamParkParticipation.ExitSpectatorAction(); }
         static double Clock() => DreamParkSession.Now;
         static bool ClockSynced() => DreamParkSession.ClockSynced;
         static double Random(string key, int salt) => DreamParkSession.Random01(key ?? "", salt);
@@ -244,6 +246,9 @@ namespace DreamPark
             env.Global.Set("dp_title_of",        new Func<GameObject, string>(TitleOfGo));
             env.Global.Set("dp_leader_for",      new Func<string, string>(LeaderFor));
             env.Global.Set("dp_rank",            new Func<string, string, int>(Rank));
+            env.Global.Set("dp_participating",   new Func<object, bool>(DreamParkParticipation.Participating));
+            env.Global.Set("dp_spectator_scope", new Action<bool>(SpectatorScope));
+            env.Global.Set("dp_runs_world",      new Func<string, bool>(RunsWorld));
             env.Global.Set("dp_clock",           new Func<double>(Clock));
             env.Global.Set("dp_clock_synced",    new Func<bool>(ClockSynced));
             env.Global.Set("dp_random",          new Func<string, int, double>(Random));
@@ -367,6 +372,38 @@ dp.rank         = function(id, go)
     local r = dp_rank(id or dp_me(), __dpn_title(go))
     if r == nil or r == 0 then return nil end
     return r
+end
+-- ── Participation: the rig is the gate (Oct 23 2026; DreamParkParticipation.cs) ──
+--   dp.participating([go|title]) -> true on a headset; on a phone only while it
+--                         WEARS the title's rig (its Phone Player, worn in
+--                         full-screen AR). false = a spectator: it watches live,
+--                         and the platform drops its gameplay writes (shared
+--                         state, net_send except asks, dp.set_state, events).
+--                         Scripts that run on every device skip gameplay work
+--                         (claims, reports, restarts, level advances, saves)
+--                         when it is false. Inside a script: this script's title.
+--   dp.spectator_action(fn, ...) -> runs fn as a DELIBERATE action of this device
+--                         (a person tapped / chose it): the gates let it through
+--                         (a start circle's countdown ending after a tap). Phone
+--                         taps already run this way.
+--   dp.runs_world([go|title]) -> does THIS device run the title's WORLD (creature
+--                         patrols, boss idles, platforms, ambient life)? The
+--                         leader while anyone takes part; with NO participant
+--                         here (a phone alone) a spectator runs it locally (its
+--                         sends stay blocked). Gameplay still asks dp.is_leader()
+--                         / dp.participating(); world simulation asks this.
+dp.participating = function(x) return dp_participating(x) end
+dp.runs_world = function(x)
+    local t = type(x) == 'string' and x or __dpn_title(x)
+    return dp_runs_world(t)
+end
+dp.spectator_action = function(fn, ...)
+    if fn == nil then return nil end
+    dp_spectator_scope(true)
+    local r = table.pack(pcall(fn, ...))
+    dp_spectator_scope(false)
+    if not r[1] then error(r[2], 2) end
+    return table.unpack(r, 2, r.n)
 end
 dp.clock        = function() return dp_clock() end
 dp.clock_synced = function() return dp_clock_synced() end

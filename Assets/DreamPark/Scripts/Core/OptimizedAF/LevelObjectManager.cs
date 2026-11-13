@@ -743,6 +743,8 @@ namespace DreamPark.ParkBuilder {
                 GamePause.ClearDeferred(this);
                 if (this.enabled) GamePause.Thaw(this);
             }
+            // A scoped hold (one attraction's playlist intro) is thawed before the optimizer parks it.
+            else if (!enabled && this.enabled && GamePause.IsScopeHeld(this) && GamePause.Thaw(this)) { }
 
             if (this.enabled == enabled) {
                 return;
@@ -846,6 +848,8 @@ namespace DreamPark.ParkBuilder {
             } finally {
                 LuaBehaviour.OptimizerToggleDepth--;
             }
+            // Woken under a held root (a playlist's future round): it stays frozen.
+            if (enabled) GamePause.NoteEnabled(this);
         }
 
         public void Enable(OptimizationSettings settings) {

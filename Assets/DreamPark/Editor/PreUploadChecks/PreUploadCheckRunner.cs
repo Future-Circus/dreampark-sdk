@@ -30,6 +30,7 @@ namespace DreamPark.PreUploadChecks
                     new Checks.PackageReferencesCheck(),
                     new Checks.DreamSequenceRequiredCheck(),
                     new Checks.DuplicateNamesCheck(),
+                    new Checks.FrameScaleOverridesCheck(),
                     new Checks.SunLightCheck(),
                     new Checks.MetaOcclusionCheck(),
 
@@ -86,6 +87,24 @@ namespace DreamPark.PreUploadChecks
                     // "<id>Beta", so the literal points at the release title on a
                     // Beta headset (LaserTag roster, CrashCourse races, Oct 2026).
                     new Checks.LiteralTitleIdCheck(),
+
+                    // Warning. An engine component class this title's content
+                    // uses that core's player may strip (not in core's preserved
+                    // ContentEngineClasses.json): it never loads on device
+                    // (SAL's ConfigurableJoint daisies, Oct 2026).
+                    new Checks.EngineClassStripCheck(),
+
+                    // Blocking/Warning. Ways to play: runner headers read, exactly one
+                    // default, Edge Sockets have Open looks for every edge that can open,
+                    // 2/4-tile levels fit a 1-tile board (Docs/RUNNERS.md).
+                    new Checks.WaysToPlayCheck(),
+
+                    // Warning. More than 8 hidden-at-load copies of one thing under
+                    // one parent of an attraction: a pre-placed pool. ATTRACTIONS.md
+                    // § The attraction prefab: author the stage and one of every
+                    // actor, instantiate the crowd (Nov 2026; Toad Road had 77
+                    // hidden trucks, 66 cars, 47 wagons).
+                    new Checks.HiddenPoolsCheck(),
                 };
             }
         }

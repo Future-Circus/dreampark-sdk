@@ -320,6 +320,13 @@ namespace DreamPark
         {
             var package = Package(go);
             if (package == null) return false;
+            // The central playlist guard (§ 14.7): refused, with the CALLER's stop for LevelRefused (a refused
+            // "next stage" from inside a live stop is that stop's reach_exit for auto-objectives).
+            if (PlaylistRunner.OwnsNavigation(package))
+            {
+                PlaylistRunner.NoteRefused(package, package.CurrentLevelIndex, slot, go);
+                return false;
+            }
             int resolved = string.IsNullOrEmpty(groupId) ? slot
                 : package.ResolveGroupSlot(slot, groupId);
             return resolved > 0 && package.LoadLevel(resolved);
@@ -461,6 +468,11 @@ dp = setmetatable({
     off_level_failed = function(fn) return dp_off_level_failed(self.gameObject, fn) end,
     -- Oct 11 2026: this package's occurrences only; drops with this script.
     on_occurrence_removed = function(fn, owner) return base.on_occurrence_removed and base.on_occurrence_removed(fn, owner or self, self.gameObject) end,
+    -- Props at runtime (DreamParkLuaProps.cs): this script's attraction owns them; handlers drop with this script.
+    spawn_prop = function(name, opts) return base.spawn_prop and base.spawn_prop(name, opts, self.gameObject) end,
+    preload_prop = function(name) return base.preload_prop and base.preload_prop(name, self.gameObject) end,
+    on_prop_loaded = function(fn, owner) return base.on_prop_loaded and base.on_prop_loaded(fn, owner or self, self.gameObject) end,
+    on_prop_failed = function(fn, owner) return base.on_prop_failed and base.on_prop_failed(fn, owner or self, self.gameObject) end,
     -- Gesture handlers registered from a script drop with that script.
     on_tap = function(fn, owner) return base.on_tap and base.on_tap(fn, owner or self) end,
     on_touch = function(fn, owner) return base.on_touch and base.on_touch(fn, owner or self) end,
@@ -468,9 +480,15 @@ dp = setmetatable({
     on_pinch = function(fn, owner) return base.on_pinch and base.on_pinch(fn, owner or self) end,
     -- Leader / rank are scoped to this script's title.
     leader = function() return base.leader and base.leader(self.gameObject) end,
+    -- The rig is the gate (Oct 23 2026): does THIS device take part in this script's title? (DreamParkParticipation.cs)
+    participating = function(x) return base.participating == nil or base.participating(x or self.gameObject) end,
+    -- The world runs with nobody playing (Oct 23 2026): this device simulates this title's world (DreamParkSession.RunsWorld).
+    runs_world = function(x) if base.runs_world == nil then return nil end return base.runs_world(x or self.gameObject) end,
     is_leader = function() return base.is_leader and base.is_leader(self.gameObject) end,
     rank = function(id) return base.rank and base.rank(id, self.gameObject) end,
     on_leader_changed = function(fn, owner) return base.on_leader_changed and base.on_leader_changed(fn, owner or self, self.gameObject) end,
+    -- dp.lobby: onEnd handlers drop with this script.
+    lobby = setmetatable({ onEnd = function(fn, owner) return base.lobby and base.lobby.onEnd(fn, owner or self.gameObject) end }, {__index = base.lobby}),
     to_attraction = function(v, go) return base.to_attraction and base.to_attraction(v, go or self.gameObject) end,
     from_attraction = function(v, go) return base.from_attraction and base.from_attraction(v, go or self.gameObject) end,
     to_attraction_dir = function(v, go) return base.to_attraction_dir and base.to_attraction_dir(v, go or self.gameObject) end,
@@ -514,6 +532,17 @@ dp = setmetatable({
     neighbors = function(go) return base.neighbors and base.neighbors(go or self.gameObject) end,
     rect = function(go) return base.rect and base.rect(go or self.gameObject) end,
     route_plan = function(name, go) return base.route_plan and base.route_plan(name, go or self.gameObject, self.gameObject) end,
+    -- Playlists (Docs/PLAYLISTS.md § 7): this script's stop / package by default.
+    playlist = base.playlist and base.playlist.__bind and base.playlist.__bind(self.gameObject, self) or nil,
+    -- Dreamie (repair-oct20 CONTRACT § 4): this script's object / stop by default.
+    dreamie = base.dreamie and base.dreamie.__bind and base.dreamie.__bind(self.gameObject) or nil,
+    -- Title events (CONTRACT § 1): dp.event(name, data[, stop]) — the stop defaults to this script's own.
+    event = function(name, data, stop) return base.event and base.event(name, data, stop, self.gameObject) end,
+    -- Announcements (PLAYLIST-PLAN § 4.2): dp.announce(kind, {item, holds, from}) / dp.announce_done({by}) for this object.
+    announce = function(kind, opts) return base.announce and base.announce(kind, opts, self.gameObject) end,
+    announce_done = function(opts) return base.announce_done and base.announce_done(opts, self.gameObject) end,
+    -- The map (PlaylistMap.cs): dp.map.mark / unmark / clear / show / hide — this script's attraction by default.
+    map = base.map and base.map.__bind and base.map.__bind(self.gameObject) or nil,
     overlay_auto_visibility = function(enabled) dp_overlay_auto_visibility(self.gameObject, enabled) end,
     next_level = function()
         local c = dp_container(self.gameObject)
@@ -748,7 +777,8 @@ dp = setmetatable({
             var pp = PlayerPresence.Instance;
             if (pp == null) return arr;
             _peerSort.Clear();
-            foreach (var kv in pp.Peers) if (kv.Value != null) _peerSort.Add(kv.Value);
+            // A live camera (Nov 13 2026) is nobody's player: no game sees it as a peer (aiming, rosters, AI targets).
+            foreach (var kv in pp.Peers) if (kv.Value != null && !kv.Value.IsCamera) _peerSort.Add(kv.Value);
             _peerSort.Sort(ByJoin);
             for (int i = 0; i < _peerSort.Count; i++) arr.Set(i + 1, _peerSort[i].LuaView(env));
             _peerSort.Clear();
@@ -765,11 +795,13 @@ dp = setmetatable({
         {
             var pp = PlayerPresence.Instance;
             var p = pp != null ? pp.GetPeer(id) : null;
-            return p != null ? p.LuaView(LuaBehaviour.GetLuaEnv()) : null;
+            return p != null && !p.IsCamera ? p.LuaView(LuaBehaviour.GetLuaEnv()) : null;
         }
 
         public static void SetState(string json)
         {
+            // A spectator (a phone without the title's rig, Oct 23 2026) has no player to publish.
+            if (!DreamParkParticipation.MaySetState()) return;
             var pp = PlayerPresence.Instance;
             if (pp != null) pp.SetStateJson(json);
         }
@@ -1172,6 +1204,10 @@ dp = setmetatable({
                 env.Global.Set("dp_is_phone",         new Func<bool>(IsPhoneDevice));
                 env.Global.Set("dp_is_headset",       new Func<bool>(IsHeadsetDevice));
                 env.Global.Set("dp_device_of",        new Func<string, string>(DeviceOf));
+                // Phone music (Oct 23 2026, phone-music; MusicAreaPhone): a title's own music director on a phone.
+                env.Global.Set("dp_music_focus",      new Func<GameObject>(MusicAreaPhone.FocusObject));
+                env.Global.Set("dp_music_gain",       new Func<float>(MusicAreaPhone.LuaGain));
+                env.Global.Set("dp_music_playing",    new Action<bool>(MusicAreaPhone.ReportTitleMusic));
                 env.Global.Set("dp_gesture_event_count", new Func<int>(GestureEventCount));
                 env.Global.Set("dp_gesture_events",   new Func<LuaTable>(GestureEvents));
                 env.Global.Set("dp_rect_openings",    new Func<GameObject, LuaTable>(RectOpenings));
@@ -1592,6 +1628,8 @@ dp.__unpackv = function(v, frame) return __dp_unpack_value(v, 0, frame) end
 --                        head/hands parked 10 km below the park, so skip
 --                        them for aiming, hits and proximity
 --   dp.peer(id)      -> one of the above, or nil (you are not your own peer)
+--                       A live camera headset is nobody's player: it is in
+--                       neither (players see its camera tag; Nov 13 2026).
 --   dp.set_state(t)  -> publish a small table to everyone (colour, team,
 --                        score). Resent to late joiners; keep it small.
 --   dp.on_peer_join(fn(id, peer), owner)  fires for everyone already here,
@@ -1719,6 +1757,18 @@ dp.is_phone   = function()   return dp_is_phone() end
 dp.is_headset = function()   return dp_is_headset() end
 dp.device_of  = function(id) if id == nil then return nil end return dp_device_of(id) end
 
+-- ── Phone music (a title's own music director; MusicArea plays itself) ──
+--   dp.music_focus()     -> the level root (GameObject) a phone's music follows: the
+--                           camera's level in AR, the diorama's focus (tour stop,
+--                           headsets) in the diorama; nil on a headset (use zones there)
+--   dp.music_gain()      -> multiply your music's level by this (1 on a headset;
+--                           lower in the diorama and under the scan's shimmer)
+--   dp.music_playing(on) -> say your bed is sounding (call every frame while it is;
+--                           it lapses after 1 s) so the app hands its title theme off
+dp.music_focus   = function()   return dp_music_focus() end
+dp.music_gain    = function()   return dp_music_gain() end
+dp.music_playing = function(on) dp_music_playing(on == true) end
+
 __dp_gesture_fns = __dp_gesture_fns or { tap = {}, touch = {}, drag = {}, pinch = {} }
 
 local function __dp_gesture_on(kind)
@@ -1763,8 +1813,12 @@ function __dp_pump_gestures()
             -- Snapshot: a handler may off() itself or register another.
             local snap = {}
             for j = 1, #list do snap[j] = list[j] end
+            -- A phone TAP is a deliberate action: it runs as a spectator action (Oct 23 2026, platform-rig).
+            local tap = e.kind == 'tap' and dp_spectator_scope ~= nil
             for j = 1, #snap do
+                if tap then dp_spectator_scope(true) end
                 local ok, err = pcall(snap[j].fn, e)
+                if tap then dp_spectator_scope(false) end
                 if not ok then print('[dp.on_' .. tostring(e.kind) .. '] handler threw: ' .. tostring(err)) end
             end
         end
@@ -1825,6 +1879,10 @@ function __dp_pump_globals()
     if __dp_pump_net ~= nil then
         ok, err = pcall(__dp_pump_net)
         if not ok then __dp_pump_warn('pump_net', err) end
+    end
+    if __dp_pump_playlist ~= nil then
+        ok, err = pcall(__dp_pump_playlist)
+        if not ok then __dp_pump_warn('pump_playlist', err) end
     end
     if #__dp_global_waiters == 0 then return end
     local still = {}
@@ -1954,6 +2012,22 @@ end
                 // The room's real light (dp.light.ambient / direction / confidence / live) —
                 // standalone, DreamParkLuaLight.cs.
                 DreamParkLuaLight.Register(env);
+                // The estimated kicking foot (dp.feet.state / on_kick / target / strike) —
+                // standalone, DreamParkLuaFeet.cs; contract Features/Player/FEET.md.
+                DreamParkLuaFeet.Register(env);
+                // Playlists (dp.playlist: the objective hook, state, challenges) —
+                // after LuaNet, whose JSON → Lua conversion it reuses. DreamParkLuaPlaylist.cs.
+                DreamParkLuaPlaylist.Register(env);
+                // Dreamie (dp.dreamie: moments / say → the director's DreamieMoments queue). DreamParkLuaDreamie.cs.
+                DreamParkLuaDreamie.Register(env);
+                // Announcements (dp.announce / dp.announce_done → the attraction's live list). DreamParkLuaAnnounce.cs.
+                DreamParkLuaAnnounce.Register(env);
+                DreamParkLuaMap.Register(env);   // dp.map (DreamParkLuaMap.cs)
+                // Props at runtime (dp.spawn_prop / preload_prop / despawn_prop / on_prop_*). DreamParkLuaProps.cs.
+                DreamParkLuaProps.Register(env);
+                DreamParkLobby.Register(env);    // dp.lobby (DreamParkLuaLobby.cs)
+                // Ways to play (dp.level.complete for gameplay Lua + the director bridges). Runners/RunnerLua.cs.
+                RunnerLua.RegisterGlobal(env);
             }
             catch (Exception e)
             {

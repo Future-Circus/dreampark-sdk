@@ -1,0 +1,24 @@
+-- Sample way to play (Docs/RUNNERS.md): a lobby that pairs with the platform's "Waiting for players" wait.
+-- The players stand in the lobby while the card counts down, then the first real level comes in.
+-- With no wait left, there is no lobby. onEnd sits at the top level so a new leader has it too if the leader leaves mid-wait.
+DreamPark.runner {
+  name = "Lobby",
+  blurb = "A place to gather until the wait ends, then the first room.",
+}
+
+local LOBBY, FIRST = "Garden", "Workshop"
+
+function onSessionStart(board)
+  if dp.lobby and dp.lobby.left() > 0 then
+    dp.flow.state.inLobby = true
+    dp.flow.load(LOBBY, { span = "all" })
+  else
+    dp.flow.load(FIRST, { span = "all" })   -- no wait, or an older app
+  end
+end
+
+if dp.lobby then
+  dp.lobby.onEnd(function()
+    if dp.flow.state.inLobby then dp.flow.load(FIRST, { span = "all", nextUp = true }) end
+  end)
+end

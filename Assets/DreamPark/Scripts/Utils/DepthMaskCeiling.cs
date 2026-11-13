@@ -81,17 +81,57 @@ namespace DreamPark
     /// you could walk into or trip on must show through the game even if not depth-accurate.
     /// Floor (faces up, or within safetyFloorClearance of the floor) never punches.
     ///
+    /// OCT 15 2026 — FLOOR BAND (Brent session #1: Super Adventure Land's floor art flickered / was
+    /// eaten by the real floor when the park sat a few cm low). Real depth that is FLOOR — within
+    /// floorBandHeight of the floor, or facing up and no higher than floorBandMaxRise — is written
+    /// floorBandSink lower along its own ray (DepthMaskSanitize FloorBandDepth). The real floor then
+    /// never hides content in the slab [floor - sink, floor + height]; legs, furniture and walls
+    /// above it, tracked hands, and content buried deeper than the sink are unchanged. For every
+    /// title, no content change. Math: FloorBandIsFloor / FloorBandSunkLinear below, checked offline
+    /// by Tools/floor-band-offline. Device: DepthMaskAudit's F-probes (floor discs 3/8/30 cm under
+    /// the floor). The combine now uses THIS depth frame's matrices (TryDepthFrameMatrices), not
+    /// the previous frame's, for the sky, safety and band tests alike.
+    ///
+    /// OCT 28 2026 — INDOOR (LBE playtests Oct 22–23: "I can't see his arm", people show through with
+    /// virtual static over them; Main.unity stays on HARD occlusion, Aidan's preference; your own legs covered in virtual pixels; hand occlusion
+    /// lagging). Three of the outdoor rules misfire on people indoors, so they now run only with
+    /// outdoorFilters (off by default; tune file / DepthMaskAudit turn it on for an outdoor park):
+    ///   - the floating-phantom drop (safety): another player's arm, the gap between legs or the edge
+    ///     of a body has farther floor/wall below it in the depth image, so it read as a phantom and
+    ///     stopped occluding, flipping texel by texel frame to frame (the static);
+    ///   - the 5–15° time filter: farthest of three depth frames, so anything moving there (a raised
+    ///     hand, a head) occluded up to two depth frames late and lost its edges;
+    ///   - the floor band's up-facing extension (floorBandMaxRise): noisy normals on legs seen from
+    ///     above read as facing up, so shins and knees were written as floor.
+    /// Indoors stays: invalid-depth drop, the dome (ceilings never occlude), the above-skyFullDeg hand
+    /// gate, and the floor band within floorBandHeight of the floor. The floor itself is now the
+    /// CONTENT floor under the player (ContentFloorY, published by core's floor audit) when known,
+    /// not the guardian floor: on boundaryless LBE headsets the guardian floor sat ~34 cm above the
+    /// QR-placed content floor (22A/21A [Floor] lines), which put shins inside the "floor" slab.
+    ///
     /// LIVE TUNING: {persistentDataPath}/depthmask-tune.txt, key=value per line (any public
-    /// field below: skyFilter, skyStartDeg, skyFullDeg, skyHistoryFrames, handGate, handRadius,
+    /// field below: outdoorFilters, skyFilter, skyStartDeg, skyFullDeg, skyHistoryFrames, handGate, handRadius,
     /// forearmLength, forearmRadius, safety, safetyRadius, safetyNearKeep,
     /// safetyFloorClearance, safetyFloorNormalY, safetyPunchMeters, dropInvalidDepth, invalidDepthMeters, maskBias, domeRadius,
-    /// heightAboveHead). Re-read every 2 s;
+    /// heightAboveHead, floorBand, floorBandHeight, floorBandSink, floorBandMaxRise). Re-read every 2 s;
     /// adb push it while the headset is on.
     ///
     /// DEVICE CHECK (debugMaskCheck, ForceMaskCheck, or the flag file
     /// {persistentDataPath}/depthmask-check): heightAboveHead 0.1 + bias 0.9. If overhead
     /// content is STILL occluded with that, the mask is not applied at all
     /// (provider/registration), not mis-tuned.
+    ///
+    /// NOV 2 2026 — BEHIND A PARK FLAG (flags-perf-nov2; Aidan approved). The default on the headset is
+    /// STOCK Meta environment-depth occlusion (Main.unity's EnvironmentDepthManager, Hard, no mask meshes:
+    /// Meta then never builds its mask and hands the raw depth texture straight to the shaders). Everything
+    /// above — the dome, DepthMaskDistance (DepthMask.IsRigMask), the MaskBias write, the sanitize shader
+    /// swap, the raw-depth hook, the sky/hand/floor rules and core's content-floor publish — runs only
+    /// with the park flag `custom_occlusion` (CustomOcclusion). Decided from the cached flags when the rig
+    /// enables, before the first depth frame; a change while running switches live (the same teardown
+    /// OnDisable does, plus Meta's own shader and MaskBias put back). The tracked-hand capsules for UI
+    /// panels (_DPHandA/_DPHandB/_DPHandCount, DreamParkHandOcclusion.hlsl) are published in BOTH modes:
+    /// pose only, and the panels read Meta's _EnvironmentDepthTexture, which stock Meta binds raw.
+    /// The tune file and the device-check flag file are honoured only with the `dev_overlays` flag.
     /// </summary>
     [DisallowMultipleComponent]
     public class DepthMaskCeiling : MonoBehaviour
@@ -135,6 +175,73 @@ namespace DreamPark
         /// </summary>
         public static bool AllowTemplateCeilings = false;
 
+        // ------------------------------------------------------------------ custom_occlusion park flag
+
+        private static bool s_customHooked, s_custom;
+
+        /// <summary>
+        /// True = DreamPark's depth pipeline (this dome, DepthMaskDistance, sanitize shader, sky / hand /
+        /// floor rules). False = stock Meta occlusion. Core: the park flag `custom_occlusion` (HeadsetFlags,
+        /// cached offline). Without core (the SDK) it is always true, as before.
+        /// </summary>
+        public static bool CustomOcclusion
+        {
+            get
+            {
+                if (!s_customHooked)
+                {
+                    s_customHooked = true;
+#if DREAMPARKCORE
+                    s_custom = global::HeadsetFlags.Has(global::HeadsetFlags.CustomOcclusion);
+                    global::HeadsetFlags.Changed -= OnHeadsetFlagsChanged;
+                    global::HeadsetFlags.Changed += OnHeadsetFlagsChanged;
+                    Debug.Log("[DepthMaskCeiling] occlusion: " + (s_custom
+                        ? "CUSTOM (custom_occlusion flag) — DreamPark dome + sky/hand/floor depth rules"
+                        : "stock Meta occlusion (no custom_occlusion flag)"));
+#else
+                    s_custom = true;
+#endif
+                }
+                return s_custom;
+            }
+        }
+
+        /// <summary>Raised (main thread) when CustomOcclusion flips while running.</summary>
+        public static event System.Action CustomOcclusionChanged;
+
+#if DREAMPARKCORE
+        private static void OnHeadsetFlagsChanged()
+        {
+            bool on = global::HeadsetFlags.Has(global::HeadsetFlags.CustomOcclusion);
+            if (on == s_custom) return;
+            s_custom = on;
+            Debug.Log("[DepthMaskCeiling] occlusion switched live: " + (on
+                ? "CUSTOM (custom_occlusion flag on)"
+                : "stock Meta occlusion (custom_occlusion flag off)"));
+            CustomOcclusionChanged?.Invoke();
+        }
+#endif
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetCustomOcclusion() { s_customHooked = false; CustomOcclusionChanged = null; }
+
+        /// <summary>depthmask-tune.txt / depthmask-check are read only with the dev_overlays park flag
+        /// (core). Without core (the SDK editor) they stay as before.</summary>
+        private static bool FileSwitchesAllowed
+        {
+            get
+            {
+#if DREAMPARKCORE
+                return global::HeadsetFlags.Has(global::HeadsetFlags.DevOverlays);
+#else
+                return true;
+#endif
+            }
+        }
+
+        /// <summary>This instance is running the custom pipeline (follows CustomOcclusion).</summary>
+        private bool _custom;
+
         [Tooltip("Metres above the player's EYE, not above the floor. LOWER IS STRONGER: " +
                  "it lowers the distance at which real geometry stops occluding. Must stay " +
                  "comfortably below the real ceiling, or the exemption no longer reaches it.")]
@@ -166,6 +273,23 @@ namespace DreamPark
         private Material _maskMaterial;
         private Shader _metaMaskShader, _sanitizeShader;
         private bool _sanitizeFailedLogged;
+
+        [Tooltip("OUTDOOR rules (Oct 28 2026: off by default, they misfire on people indoors): the floating-" +
+                 "phantom drop (safety), the 5–15° time filter, and the floor band's up-facing extension " +
+                 "(floorBandMaxRise). Indoors the dome, the invalid-depth drop, the hand gate and the plain " +
+                 "floor band stay on.")]
+        public bool outdoorFilters = false;
+
+        /// <summary>World height of the CONTENT floor under the player (the park's attraction floor /
+        /// rect / story), published by core's floor audit; NaN = unknown, use the guardian floor. Read
+        /// only while fresh (ContentFloorMaxAge), so a stale park never steers the depth floor.</summary>
+        public static float ContentFloorY = float.NaN;
+        /// <summary>Time.unscaledTime when ContentFloorY was last published.</summary>
+        public static float ContentFloorStamp = -1000f;
+        public const float ContentFloorMaxAge = 3f;
+
+        /// <summary>Where the floor height the depth rules used last came from ("content" / "guardian" / "eye-1.6").</summary>
+        public string FloorSource { get; private set; } = "none";
 
         [Tooltip("Sky filter: in depth texels looking above the horizon, real depth only occludes if " +
                  "it persisted over the last skyHistoryFrames depth frames. A hand persists; sky " +
@@ -202,6 +326,12 @@ namespace DreamPark
                  "within safetyRadius punch through all virtual content.")]
         public bool safety = true;
 
+        [Tooltip("Grounded obstacles within safetyRadius show through ALL virtual content, even content " +
+                 "in front of them. OFF (Oct 15 2026 indoor playtest): indoors every table, shelf and " +
+                 "wall within the radius punched holes in the game. Phantom (floating) drop stays on " +
+                 "under `safety`.")]
+        public bool safetyPunch = false;
+
         [Tooltip("Horizontal radius (m) around you inside which grounded people/objects show through " +
                  "virtual content even when it is in front of them.")]
         public float safetyRadius = 2.0f;
@@ -219,8 +349,26 @@ namespace DreamPark
         [Tooltip("Depth (m) written for punch-through pixels: virtual content farther than this is hidden there.")]
         public float safetyPunchMeters = 0.2f;
 
+        [Tooltip("FLOOR BAND: the real floor is written floorBandSink lower, so floor art a few cm under " +
+                 "the measured floor (park pose error, depth noise) never flickers or vanishes. Real objects " +
+                 "above floorBandHeight still occlude.")]
+        public bool floorBand = true;
+
+        [Tooltip("Height (m) above the floor that is still floor for the band. Real things lower than this " +
+                 "(the bottom of a shoe) do not hide floor art. Covers floor depth noise and the floor estimate.")]
+        public float floorBandHeight = 0.08f;
+
+        [Tooltip("How much lower (m) floor depth is written. Floor art this far under the measured floor still " +
+                 "draws (minus soft occlusion's ~4% fade); content buried deeper stays hidden.")]
+        public float floorBandSink = 0.15f;
+
+        [Tooltip("Up-facing real surfaces also count as floor (slopes, a floor estimate that is off), but only " +
+                 "up to this height (m) above the floor, so table tops keep their true depth.")]
+        public float floorBandMaxRise = 0.5f;
+
         public const string TuneFileName = "depthmask-tune.txt";
         private static readonly int SafeOnId = Shader.PropertyToID("_SafeOn");
+        private static readonly int SafePunchOnId = Shader.PropertyToID("_SafePunchOn");
         private static readonly int SafeEyeId = Shader.PropertyToID("_SafeEye");
         private static readonly int SafeFloorYId = Shader.PropertyToID("_SafeFloorY");
         private static readonly int SafeRadiusId = Shader.PropertyToID("_SafeRadius");
@@ -228,13 +376,36 @@ namespace DreamPark
         private static readonly int SafeFloorClearanceId = Shader.PropertyToID("_SafeFloorClearance");
         private static readonly int SafeFloorNormalYId = Shader.PropertyToID("_SafeFloorNormalY");
         private static readonly int SafePunchId = Shader.PropertyToID("_SafePunchMeters");
+        private static readonly int FloorBandOnId = Shader.PropertyToID("_FloorBandOn");
+        private static readonly int FloorBandYId = Shader.PropertyToID("_FloorBandY");
+        private static readonly int FloorBandHeightId = Shader.PropertyToID("_FloorBandHeight");
+        private static readonly int FloorBandMaxRiseId = Shader.PropertyToID("_FloorBandMaxRise");
+        private static readonly int FloorBandNormalYId = Shader.PropertyToID("_FloorBandNormalY");
+        private static readonly int FloorBandSinkId = Shader.PropertyToID("_FloorBandSink");
+
+        /// <summary>True when the last depth frame's combine ran the floor band.</summary>
+        public bool FloorBandActive { get; private set; }
+
+        /// <summary>World floor height the band used last (NaN until the first frame).</summary>
+        public float FloorBandFloorY { get; private set; } = float.NaN;
+
+        /// <summary>True when the last combine got THIS depth frame's matrices (false = Meta's
+        /// global from the previous depth frame, the pre-Oct-15 behaviour).</summary>
+        public bool FreshReprojection { get; private set; }
+#if !UNITY_IOS || UNITY_EDITOR
         private OVRCameraRig _rig;
+#endif
         private static readonly int SkyHandAId = Shader.PropertyToID("_SkyHandA");
         private static readonly int SkyHandBId = Shader.PropertyToID("_SkyHandB");
         private static readonly int SkyHandCountId = Shader.PropertyToID("_SkyHandCount");
+        private static readonly int PanelHandAId = Shader.PropertyToID("_DPHandA");
+        private static readonly int PanelHandBId = Shader.PropertyToID("_DPHandB");
+        private static readonly int PanelHandCountId = Shader.PropertyToID("_DPHandCount");
         private readonly Vector4[] _handA = new Vector4[4];
         private readonly Vector4[] _handB = new Vector4[4];
+#if !UNITY_IOS || UNITY_EDITOR
         private OVRSkeleton[] _skeletons = System.Array.Empty<OVRSkeleton>();
+#endif
         private float _nextSkeletonSearch;
 
         /// <summary>Hand capsules sent to the depth shader this frame (0 = none tracked / gate off).</summary>
@@ -243,6 +414,7 @@ namespace DreamPark
         private static readonly int SkyHistory1Id = Shader.PropertyToID("_SkyHistory1");
         private static readonly int SkyHistory2Id = Shader.PropertyToID("_SkyHistory2");
         private static readonly int SkyInvId = Shader.PropertyToID("_SkyInvReprojection");
+        private static readonly int SkyFwdId = Shader.PropertyToID("_SkyReprojection");
         private static readonly int SkyOnId = Shader.PropertyToID("_SkyFilterOn");
         private static readonly int SkyStartId = Shader.PropertyToID("_SkyStartDeg");
         private static readonly int SkyFullId = Shader.PropertyToID("_SkyFullDeg");
@@ -250,12 +422,15 @@ namespace DreamPark
         private static readonly int SkySourceId = Shader.PropertyToID("_SkySource");
         private System.Reflection.FieldInfo _fDepthEvent;
         private System.Action<RenderTexture> _onRawDepth;
+#if !UNITY_IOS || UNITY_EDITOR
         private Meta.XR.EnvironmentDepth.EnvironmentDepthManager _hookedManager;
+#endif
         private readonly RenderTexture[] _skyRing = new RenderTexture[3];
         private int _skyNewest;
         private int _skyValid;
         private Material _skyCopyMaterial;
         private readonly Matrix4x4[] _skyInv = new Matrix4x4[2];
+        private readonly Matrix4x4[] _skyFwd = new Matrix4x4[2];
         private string _tunePath;
         private System.DateTime _tuneStamp;
 
@@ -307,7 +482,9 @@ namespace DreamPark
         private float _builtHeight = float.NaN, _builtRadius = float.NaN, _builtOuter = float.NaN;
         private int _builtSegments, _builtRings;
 
+#if !UNITY_IOS || UNITY_EDITOR
         private Meta.XR.EnvironmentDepth.EnvironmentDepthManager _depthManager;
+#endif
         private float _nextManagerSearch;
         private bool _loggedRegistration;
         private bool _lastCheck;
@@ -327,6 +504,16 @@ namespace DreamPark
         private void OnEnable()
         {
             _instance = this;
+            _custom = CustomOcclusion;
+            if (_custom) EnterCustom();
+            else Debug.Log("[DepthMaskCeiling] stock Meta occlusion (no custom_occlusion flag): no dome, no MaskBias, " +
+                           "no shader swap, no depth hook — UI-panel hand capsules only.");
+        }
+
+        /// <summary>Start the custom pipeline (OnEnable with the flag, or the flag turning on live).
+        /// The rest (registration, MaskBias, sanitize swap, hook) follows in LateUpdate, as at boot.</summary>
+        private void EnterCustom()
+        {
             try
             {
                 _flagPath = System.IO.Path.Combine(Application.persistentDataPath, CheckFlagFileName);
@@ -341,15 +528,51 @@ namespace DreamPark
                       (CheckActive ? " [DEVICE CHECK ON]" : "") + ". Per-template ceilings are off.");
         }
 
-        private void OnDisable()
+        /// <summary>
+        /// Undo everything the custom pipeline put on Meta's manager: the dome registration, the raw-depth
+        /// hook, and (Nov 2 2026 fix — OnDisable used to leave it) the sanitize shader on Meta's mask
+        /// material. <paramref name="flagOff"/> (the custom_occlusion flag turning off, not OnDisable /
+        /// DepthMaskAudit's DOME OFF, which keep today's state) also puts Meta's own MaskBias back and
+        /// clears the readouts.
+        /// </summary>
+        private void LeaveCustom(bool flagOff)
         {
-            if (_instance == this) _instance = null;
             // A dome left frozen at its last pose would exempt the wrong region.
+#if !UNITY_IOS || UNITY_EDITOR
             if (_depthManager != null && _meshFilter != null && _depthManager.MaskMeshFilters != null)
                 _depthManager.MaskMeshFilters.Remove(_meshFilter);
+            RestoreMetaMaskShader();
+            if (flagOff && _depthManager != null && _metaBiasCaptured) _depthManager.MaskBias = _metaBias;
+#endif
             _loggedRegistration = false;
             UnhookRawDepth();
             _skyValid = 0;
+            if (!flagOff) return;
+            SkyFramesInUse = 0;
+            FloorBandActive = false;
+            FloorBandFloorY = float.NaN;
+            _flagFilePresent = false;
+        }
+
+        private void OnDisable()
+        {
+            if (_instance == this) _instance = null;
+            if (_custom) LeaveCustom(flagOff: false);
+            HandCapsulesInUse = 0;
+            Shader.SetGlobalFloat(PanelHandCountId, 0f);   // no stale capsules covering UI panels
+        }
+
+        /// <summary>Follow CustomOcclusion; a live flip switches the pipeline on/off here (main thread,
+        /// between frames — the same steps as OnEnable / OnDisable, which DepthMaskAudit's DOME OFF already
+        /// toggles live).</summary>
+        private bool SyncMode()
+        {
+            bool want = CustomOcclusion;
+            if (want == _custom) return _custom;
+            _custom = want;
+            if (want) EnterCustom();
+            else LeaveCustom(flagOff: true);
+            return _custom;
         }
 
         private void OnDestroy()
@@ -363,6 +586,14 @@ namespace DreamPark
 
         private void LateUpdate()
         {
+            if (!SyncMode())
+            {
+                // Stock Meta occlusion: nothing on Meta's manager, only the UI-panel hand capsules.
+#if !UNITY_IOS || UNITY_EDITOR
+                UpdateHandCapsules();
+#endif
+                return;
+            }
             PollFlagFile(force: false);
             bool check = CheckActive;
             if (check != _lastCheck)
@@ -383,6 +614,12 @@ namespace DreamPark
         /// </summary>
         private void OwnMaskBias()
         {
+#if UNITY_IOS && !UNITY_EDITOR
+            // Meta environment depth is Quest-only and the iOS player is built without the
+            // Meta assemblies (Assets/Editor/IosQuestAssemblyFilter.cs). Main-iOS.unity has no
+            // EnvironmentDepthManager, so on iOS this always stopped at the search below.
+            return;
+#else
             if (_depthManager == null)
             {
                 if (Time.unscaledTime < _nextManagerSearch) return;
@@ -391,11 +628,13 @@ namespace DreamPark
                 if (_depthManager == null) return;
             }
 
+            if (!_metaBiasCaptured) { _metaBias = _depthManager.MaskBias; _metaBiasCaptured = true; }
             _depthManager.MaskBias = EffectiveBias;
             SanitizeInvalidDepth();
             if (_hookedManager != _depthManager) HookRawDepth();
             UpdateHandCapsules();
             UpdateSafety();
+            UpdateFloorBand();
 
             if (_meshFilter != null && _meshFilter.sharedMesh != null)
             {
@@ -416,6 +655,21 @@ namespace DreamPark
                           $"MaskBias {EffectiveBias}, occlusion {_depthManager.OcclusionShadersMode}, " +
                           $"removeHands {_depthManager.RemoveHands}");
             }
+#endif
+        }
+
+#if UNITY_IOS && !UNITY_EDITOR
+        private void UnhookRawDepth() { }
+#else
+        private float _metaBias;
+        private bool _metaBiasCaptured;
+
+        /// <summary>Put Meta's own shader back on its mask material (the custom pipeline stopping).</summary>
+        private void RestoreMetaMaskShader()
+        {
+            if (_maskMaterial == null || _metaMaskShader == null || _maskMaterial.shader == _metaMaskShader) return;
+            _maskMaterial.shader = _metaMaskShader;
+            Debug.Log($"[DepthMaskCeiling] mask material -> {_metaMaskShader.name} (Meta's own, restored)");
         }
 
         /// <summary>
@@ -489,33 +743,38 @@ namespace DreamPark
                 _maskMaterial.shader != _sanitizeShader)
                 return;
 
-            bool on = skyFilter && raw.dimension == UnityEngine.Rendering.TextureDimension.Tex2DArray;
-            Matrix4x4[] reproj = null;
-            if (on)
+            bool array = raw.dimension == UnityEngine.Rendering.TextureDimension.Tex2DArray;
+            // World <-> depth clip for THIS depth frame (Oct 15; was Meta's global, published
+            // after the combine and so one depth frame stale). Sky, safety and floor band share it.
+            bool matrices = array && (skyFilter || floorBand) && TryDepthFrameMatrices(_skyFwd);
+            if (matrices)
             {
-                // World -> depth clip as of the previous frame (Meta publishes it after the
-                // combine); one depth frame stale, well inside the 5-20 degree ramp.
-                try { reproj = Shader.GetGlobalMatrixArray(ReprojectionId); } catch { reproj = null; }
-                if (reproj == null || reproj.Length < 2 || reproj[0] == Matrix4x4.zero) on = false;
-            }
-
-            if (on)
-            {
-                _skyInv[0] = reproj[0].inverse;
-                _skyInv[1] = reproj[1].inverse;
+                _skyInv[0] = _skyFwd[0].inverse;
+                _skyInv[1] = _skyFwd[1].inverse;
                 _maskMaterial.SetMatrixArray(SkyInvId, _skyInv);
+                _maskMaterial.SetMatrixArray(SkyFwdId, _skyFwd);
+            }
+            FloorBandActive = floorBand && matrices;
+            _maskMaterial.SetFloat(FloorBandOnId, FloorBandActive ? 1f : 0f);
+
+            bool on = skyFilter && matrices;
+            if (on)
+            {
                 if (_skyValid > 0)
                 {
                     _maskMaterial.SetTexture(SkyHistory1Id, _skyRing[_skyNewest]);
                     _maskMaterial.SetTexture(SkyHistory2Id, _skyRing[_skyValid > 1 ? (_skyNewest + 2) % 3 : _skyNewest]);
                 }
             }
-            SkyFramesInUse = on ? Mathf.Min(skyHistoryFrames, _skyValid) : 0;
+            // The time filter is an outdoor rule (Oct 28); indoors _SkyFilterOn still drives the
+            // above-skyFullDeg hand gate, with no history and no history copy pass.
+            int wantFrames = outdoorFilters ? skyHistoryFrames : 0;
+            SkyFramesInUse = on ? Mathf.Min(wantFrames, _skyValid) : 0;
             _maskMaterial.SetFloat(SkyOnId, on ? 1f : 0f);
             _maskMaterial.SetFloat(SkyCountId, SkyFramesInUse);
             _maskMaterial.SetFloat(SkyStartId, skyStartDeg);
             _maskMaterial.SetFloat(SkyFullId, skyFullDeg);
-            if (!on || skyHistoryFrames <= 0) { _skyValid = 0; return; }
+            if (!on || wantFrames <= 0) { _skyValid = 0; return; }
 
             // Write this frame into the oldest slot — never one the combine is about to read.
             int slot = (_skyNewest + 1) % 3;
@@ -532,20 +791,90 @@ namespace DreamPark
             _skyValid = Mathf.Min(_skyValid + 1, 2);
         }
 
+        private System.Reflection.FieldInfo _fFrameDescs;
+        private System.Reflection.MethodInfo _mReprojection, _mTrackingWorldToLocal;
+        private readonly object[] _reprojArg = new object[1];
+        private bool _freshFailedLogged;
+
+        /// <summary>
+        /// World -> depth clip per eye for the depth frame Meta just fetched — exactly what Meta
+        /// computes after the combine (CalculateReprojection(frameDescriptors[i]) *
+        /// trackingSpaceWorldToLocal), computed here before it. Internal Meta members, hence the
+        /// reflection; if a future SDK renames them this falls back to Meta's global (the previous
+        /// depth frame's, the pre-Oct-15 behaviour) and logs once.
+        /// </summary>
+        private bool TryDepthFrameMatrices(Matrix4x4[] into)
+        {
+            FreshReprojection = false;
+            try
+            {
+                const System.Reflection.BindingFlags inst = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                const System.Reflection.BindingFlags stat = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
+                var mgrType = typeof(Meta.XR.EnvironmentDepth.EnvironmentDepthManager);
+                _fFrameDescs ??= mgrType.GetField("frameDescriptors", inst);
+                _mTrackingWorldToLocal ??= mgrType.GetMethod("GetTrackingSpaceWorldToLocalMatrix", inst);
+                _mReprojection ??= mgrType.Assembly.GetType("Meta.XR.EnvironmentDepth.EnvironmentDepthUtils")
+                    ?.GetMethod("CalculateReprojection", stat);
+                var descs = _fFrameDescs?.GetValue(_depthManager) as System.Array;
+                if (descs != null && descs.Length >= 2 && _mReprojection != null && _mTrackingWorldToLocal != null)
+                {
+                    var worldToLocal = (Matrix4x4)_mTrackingWorldToLocal.Invoke(_depthManager, null);
+                    for (int i = 0; i < 2; i++)
+                    {
+                        _reprojArg[0] = descs.GetValue(i);
+                        into[i] = (Matrix4x4)_mReprojection.Invoke(null, _reprojArg) * worldToLocal;
+                    }
+                    if (into[0] != Matrix4x4.zero && into[0].determinant != 0f && into[1].determinant != 0f)
+                    {
+                        FreshReprojection = true;
+                        return true;
+                    }
+                }
+            }
+            catch (System.Exception e)
+            {
+                if (!_freshFailedLogged) Debug.LogWarning($"[DepthMaskCeiling] depth-frame matrices: {e.Message}");
+                _freshFailedLogged = true;
+            }
+            if (!_freshFailedLogged)
+            {
+                _freshFailedLogged = true;
+                Debug.LogWarning("[DepthMaskCeiling] depth-frame matrices unavailable; using Meta's global (one depth frame stale).");
+            }
+
+            Matrix4x4[] g;
+            try { g = Shader.GetGlobalMatrixArray(ReprojectionId); } catch { g = null; }
+            if (g == null || g.Length < 2 || g[0] == Matrix4x4.zero) return false;
+            into[0] = g[0];
+            into[1] = g[1];
+            return true;
+        }
+
+        private static bool SkeletonDestroyed(OVRSkeleton[] skeletons)
+        {
+            for (int i = 0; i < skeletons.Length; i++) if (skeletons[i] == null) return true;
+            return false;
+        }
+
         /// <summary>
         /// Rough capsules around each tracked hand (wrist -> middle fingertip) and a forearm stub
         /// back from the wrist, in world space, for the depth shader's hand gate. Pose data only:
         /// nothing is rendered, and nothing here occludes by itself.
+        /// Nov 2 2026: also the UI-panel publisher in stock mode (no custom_occlusion flag), where it is
+        /// the only thing this component does: always on, nothing goes to Meta's mask material.
         /// </summary>
         private void UpdateHandCapsules()
         {
             int n = 0;
-            if (handGate && SanitizeActive)
+            if (!_custom || (handGate && SanitizeActive))
             {
-                if (Time.unscaledTime >= _nextSkeletonSearch)
+                // CACHED (Nov 2 2026, flags-perf-nov2 — Quest main thread): a scene-wide FindObjectsByType every
+                // second (MagicPress did the same) for components that live as long as the rig. Re-searched every
+                // 5 s, at once when a cached skeleton was destroyed (rig rebuilt), every 1 s while none is found.
+                if (Time.unscaledTime >= _nextSkeletonSearch || SkeletonDestroyed(_skeletons))
                 {
-                    _nextSkeletonSearch = Time.unscaledTime + 1f;
                     _skeletons = FindObjectsByType<OVRSkeleton>(FindObjectsSortMode.None);
+                    _nextSkeletonSearch = Time.unscaledTime + (_skeletons.Length > 0 ? 5f : 1f);
                 }
                 foreach (var sk in _skeletons)
                 {
@@ -582,7 +911,12 @@ namespace DreamPark
                 }
             }
             HandCapsulesInUse = n;
-            if (_maskMaterial == null) return;
+            // The same capsules, global, for UI panels drawn on top: only the real hand inside them covers a panel
+            // (ui-on-top, Oct 22 2026; DreamParkHandOcclusion.hlsl). Pose data only, nothing renders a hand.
+            Shader.SetGlobalVectorArray(PanelHandAId, _handA);
+            Shader.SetGlobalVectorArray(PanelHandBId, _handB);
+            Shader.SetGlobalFloat(PanelHandCountId, n);
+            if (!_custom || _maskMaterial == null) return;
             _maskMaterial.SetVectorArray(SkyHandAId, _handA);
             _maskMaterial.SetVectorArray(SkyHandBId, _handB);
             _maskMaterial.SetFloat(SkyHandCountId, n);
@@ -593,19 +927,12 @@ namespace DreamPark
         {
             if (_maskMaterial == null) return;
             Transform eye = ResolveHead();
-            bool on = safety && SanitizeActive && eye != null;
+            bool on = safety && outdoorFilters && SanitizeActive && eye != null;
             _maskMaterial.SetFloat(SafeOnId, on ? 1f : 0f);
+            _maskMaterial.SetFloat(SafePunchOnId, on && safetyPunch ? 1f : 0f);
             if (!on) return;
 
-            // Floor-level tracking origin: the tracking space's origin IS the floor. Without a
-            // rig, assume a standing eye height.
-            if (_rig == null) _rig = FindFirstObjectByType<OVRCameraRig>();
-            float floorY = _rig != null && _rig.trackingSpace != null &&
-                           OVRManager.instance != null &&
-                           OVRManager.instance.trackingOriginType != OVRManager.TrackingOrigin.EyeLevel
-                ? _rig.trackingSpace.position.y
-                : eye.position.y - 1.6f;
-
+            float floorY = ResolveFloorY(eye);
             Vector3 e = eye.position;
             _maskMaterial.SetVector(SafeEyeId, new Vector4(e.x, e.y, e.z, 0f));
             _maskMaterial.SetFloat(SafeFloorYId, floorY);
@@ -614,6 +941,74 @@ namespace DreamPark
             _maskMaterial.SetFloat(SafeFloorClearanceId, safetyFloorClearance);
             _maskMaterial.SetFloat(SafeFloorNormalYId, safetyFloorNormalY);
             _maskMaterial.SetFloat(SafePunchId, Mathf.Max(safetyPunchMeters, invalidDepthMeters + 0.01f));
+        }
+
+        /// <summary>Floor and thresholds for the depth shader's floor band (on/off is set per depth
+        /// frame in OnRawDepth, which owns the matrices it needs).</summary>
+        private void UpdateFloorBand()
+        {
+            if (_maskMaterial == null) return;
+            Transform eye = ResolveHead();
+            if (eye == null) return;
+            // Same floor as the safety test. Up-facing surfaces above the band (floorBandMaxRise)
+            // count as floor only with outdoorFilters: slopes outdoors; indoors they were legs.
+            float floorY = ResolveFloorY(eye);
+            FloorBandFloorY = floorY;
+            _maskMaterial.SetFloat(FloorBandYId, floorY);
+            _maskMaterial.SetFloat(FloorBandHeightId, Mathf.Max(0f, floorBandHeight));
+            _maskMaterial.SetFloat(FloorBandMaxRiseId, outdoorFilters ? Mathf.Max(floorBandHeight, floorBandMaxRise) : Mathf.Max(0f, floorBandHeight));
+            _maskMaterial.SetFloat(FloorBandNormalYId, Mathf.Clamp01(safetyFloorNormalY));
+            _maskMaterial.SetFloat(FloorBandSinkId, Mathf.Max(0f, floorBandSink));
+        }
+
+        /// <summary>World floor height for the depth rules: the content floor under the player while
+        /// core publishes it (fresh), else the floor-level tracking origin (the guardian floor), else a
+        /// standing eye height.</summary>
+        private float ResolveFloorY(Transform eye)
+        {
+            if (!float.IsNaN(ContentFloorY) && Time.unscaledTime - ContentFloorStamp <= ContentFloorMaxAge)
+            {
+                FloorSource = "content";
+                return ContentFloorY;
+            }
+            if (_rig == null) _rig = FindFirstObjectByType<OVRCameraRig>();
+            if (_rig != null && _rig.trackingSpace != null && OVRManager.instance != null &&
+                OVRManager.instance.trackingOriginType != OVRManager.TrackingOrigin.EyeLevel)
+            {
+                FloorSource = "guardian";
+                return _rig.trackingSpace.position.y;
+            }
+            FloorSource = "eye-1.6";
+            return eye.position.y - 1.6f;
+        }
+#endif
+
+        // ------------------------------------------------------------------ floor band math
+        // C# twin of DepthMaskSanitize's FloorBandDepth, for Tools/floor-band-offline. Keep both in step.
+
+        /// <summary>Is a real depth point floor for the band? Low enough, or facing up and not
+        /// higher than maxRise. Rays level with or above the horizon (dirY > -0.02) never are.</summary>
+        public static bool FloorBandIsFloor(float pointY, float floorY, float bandHeight, float maxRise,
+                                            bool facesUp, float rayDirY)
+        {
+            if (rayDirY > -0.02f) return false;
+            if (pointY <= floorY + bandHeight) return true;
+            return facesUp && pointY <= floorY + Mathf.Max(bandHeight, maxRise);
+        }
+
+        /// <summary>
+        /// Linear depth written for a floor texel: the same ray, sink metres further down.
+        /// linearDepth = the texel's, nearLinear = the depth camera's near plane, nearToPoint =
+        /// distance from the ray's near-plane point to the real point, rayDirY = the ray's unit
+        /// direction y (negative = downward). Linear depth is proportional to distance along the
+        /// ray from the camera centre, which is nearToPoint / (1 - nearLinear / linearDepth).
+        /// </summary>
+        public static float FloorBandSunkLinear(float linearDepth, float nearLinear, float nearToPoint,
+                                                float rayDirY, float sink)
+        {
+            if (rayDirY > -0.02f || nearToPoint < 1e-4f || linearDepth <= nearLinear + 1e-4f || sink <= 0f)
+                return linearDepth;
+            return linearDepth * (1f + (sink / -rayDirY) * (1f - nearLinear / linearDepth) / nearToPoint);
         }
 
         private bool EnsureSkyRing(RenderTexture raw)
@@ -689,7 +1084,8 @@ namespace DreamPark
         {
             if (!force && Time.unscaledTime < _nextFlagPoll) return;
             _nextFlagPoll = Time.unscaledTime + 2f;
-            if (string.IsNullOrEmpty(_flagPath)) { _flagFilePresent = false; return; }
+            // Nov 2 2026: files on the headset are a developer switch — only with the dev_overlays flag.
+            if (string.IsNullOrEmpty(_flagPath) || !FileSwitchesAllowed) { _flagFilePresent = false; return; }
             try { _flagFilePresent = System.IO.File.Exists(_flagPath); }
             catch { _flagFilePresent = false; }
             PollTuneFile();

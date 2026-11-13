@@ -36,7 +36,10 @@ namespace DreamPark
 
         // The docs a creator or agent in a GAME project needs. Paths are repo-relative
         // and keep their folders. Deliberately NOT shipped: SDK-maintainer material
-        // (release, review and plan notes) and READMEs for Tools/ that are not in the package.
+        // (release, review and plan notes, SDK_MAINTAINERS.md, CREATOR_ONBOARDING.md,
+        // CHANGELOG-agent-guide.md) and READMEs for Tools/ that are not in the package.
+        // Reference docs that LIVE in Assets/DreamPark/Docs (LUA_API.md, SHADERS.md, …) are
+        // not listed here: they ship with the package as they are, with committed .metas.
         public static readonly string[] ShippedDocs =
         {
             "CLAUDE.md",                     // the agent/creator guide; imported by the game's CLAUDE.md
@@ -46,6 +49,7 @@ namespace DreamPark
             "PIPELINE.md",                   // end-to-end shipping checklist
             "LAYOUT_FRAMES_SPEC.md",         // referenced by CLAUDE.md
             "WALL_LAYERS_SPEC.md",           // referenced by CLAUDE.md
+            "RECT_EDGES_SPEC.md",            // referenced by CLAUDE.md / Docs/ATTRACTIONS.md (wall layers, rect openings)
             "PACKAGE_RUNTIME_SPEC.md",       // referenced by CLAUDE.md / PACKAGES.md
             "HANDHELD.md",                   // hand-held objects: device wrist frame, Grip/Muzzle convention, archetypes, dp.hold, HandheldKit
             "ROUTES.md",                     // dp.ports / dp.neighbors / dp.route / dp.tour (Routes phase 1, Oct 2026)

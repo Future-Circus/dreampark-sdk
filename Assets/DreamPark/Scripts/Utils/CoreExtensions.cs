@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Cysharp.Threading.Tasks;
@@ -256,29 +257,85 @@ public static class CoreExtensions
         #endif
     }
 
+    // ── PlaySFX voices (Nov 11 2026, pt-perf; Arcadeland playtest M43) ──────
+    // Every call used to make a "TempAudio" GameObject at the scene ROOT + an AudioSource + a RealisticRolloff (whose Awake
+    // built a new AnimationCurve), destroyed after the clip: ArcadeLand made 1817 of them in 15 min (~2/s), and each new
+    // root is another pass of the core's runtime-object scan. Now the voice GameObjects are pooled under one holder and the
+    // rolloff curve is shared per distance range (RealisticRolloff.Apply). The holder has hideFlags (no title's runtime
+    // object: a title retire never takes the pool with it) and lives in the active scene (a scene load ends its sounds, as
+    // it ended the TempAudio roots). The AudioSource itself is still one per sound and is destroyed when the clip ends,
+    // exactly when the TempAudio was: a caller that kept the returned source (EasyAudio's Stop + Destroy of its gameObject,
+    // Lua) finds it null afterwards, never a later sound's source, and no clip stays referenced. Audibly identical:
+    // position, volume, pitch, spatial blend 1, maxDistance from volume, the same custom rolloff / spread / doppler, no
+    // mixer group, same lifetime. Looping sounds on a parent stay caller-owned GameObjects as before.
+    // dreampark-sdk carries the same file: keep the two copies identical.
+    const int MaxPlaySfxVoices = 64;
+    static readonly List<GameObject> s_sfxVoices = new List<GameObject>();
+    static Transform s_sfxHolder;
+
+    /// Diagnostics / play checks: pooled voice GameObjects (busy or free).
+    public static int PlaySfxVoiceCount => s_sfxVoices.Count;
+
+    /// A free pooled voice (its last sound's AudioSource is gone), else a new one; pooled = it stays for the next sound.
+    static GameObject TakeSfxVoice(out bool pooled)
+    {
+        if (s_sfxHolder == null)
+        {
+            s_sfxVoices.Clear();
+            var holder = new GameObject("PlaySFX voices") { hideFlags = HideFlags.NotEditable };
+            s_sfxHolder = holder.transform;
+        }
+        for (int i = s_sfxVoices.Count - 1; i >= 0; i--)
+        {
+            GameObject v = s_sfxVoices[i];
+            if (v == null) { s_sfxVoices.RemoveAt(i); continue; }   // a caller destroyed it (EasyAudio): forget it
+            if (v.TryGetComponent(out AudioSource _)) continue;   // still playing its sound
+            if (v.transform.parent != s_sfxHolder) v.transform.SetParent(s_sfxHolder, false);
+            if (!v.activeSelf) v.SetActive(true);
+            pooled = true;
+            return v;
+        }
+        var voice = new GameObject("TempAudio");
+        voice.transform.SetParent(s_sfxHolder, false);
+        pooled = s_sfxVoices.Count < MaxPlaySfxVoices;
+        if (pooled) s_sfxVoices.Add(voice);
+        return voice;
+    }
+
     public static AudioSource PlaySFX(this AudioClip clip, Vector3 position, float volume = 1f, float pitch = 1f, Transform parent = null)
     {
-        GameObject tempGO = new GameObject("TempAudio");
-        tempGO.transform.position = position;
-        AudioSource audioSource = tempGO.AddComponent<AudioSource>();
+        GameObject voice;
+        bool pooled = false;
+        if (parent != null) voice = new GameObject("TempAudio");   // caller-owned loop (EasyAudio / EasyVoice destroy it)
+        else
+        {
+            _ = clip.length;   // a null clip throws here, as it always did (now before anything is made)
+            voice = TakeSfxVoice(out pooled);
+        }
+        voice.transform.SetPositionAndRotation(position, Quaternion.identity);
+        AudioSource audioSource = voice.AddComponent<AudioSource>();
         audioSource.clip = clip;
         audioSource.volume = Mathf.Clamp01(volume);
         audioSource.spatialBlend = 1;
         audioSource.maxDistance = 10 + ((volume-1f) * 10f);
         audioSource.pitch = pitch;
-        tempGO.AddComponent<RealisticRolloff>();
+        RealisticRolloff.Apply(audioSource);
         audioSource.Play();
 
         if (parent != null)
         {
-            tempGO.transform.SetParent(parent,true);
-            tempGO.transform.localPosition = Vector3.zero;
-            tempGO.transform.localRotation = Quaternion.identity;
+            voice.transform.SetParent(parent,true);
+            voice.transform.localPosition = Vector3.zero;
+            voice.transform.localRotation = Quaternion.identity;
             audioSource.loop = true;
+        }
+        else if (pooled)
+        {
+            UnityEngine.Object.Destroy(audioSource, clip.length);   // the voice stays for the next sound
         }
         else
         {
-            UnityEngine.Object.Destroy(tempGO, clip.length);
+            UnityEngine.Object.Destroy(voice, clip.length);   // over the pool cap: gone with its sound, as before
         }
 
         return audioSource;

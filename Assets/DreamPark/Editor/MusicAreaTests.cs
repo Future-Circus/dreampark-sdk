@@ -42,4 +42,59 @@ public sealed class MusicAreaTests
         Assert.That(source.loop, Is.True);
         Assert.That(source.clip, Is.SameAs(_clip));
     }
+
+    // ── Phone music (Oct 23 2026, phone-music): which area a phone plays (MusicAreaPhoneRules; the full table runs in
+    //    Tools/phone-music-offline). A phone has no head walking into areas: full-screen AR follows its camera, the map
+    //    view (diorama) its focus (tour stop / headsets), else what plays, else the park's main area.
+    static MusicCandidate Cand(int id, float x, float z, float w, float d, int priority = 0, bool track = true) =>
+        new MusicCandidate
+        {
+            id = id, center = new Vector3(x, 0f, z), right = Vector3.right, up = Vector3.up, forward = Vector3.forward,
+            halfExtents = new Vector3(w / 2f, 50f, d / 2f), priority = priority, hasTrack = track,
+        };
+
+    [Test]
+    public void PhoneInFullScreenArPlaysTheAreaItsCameraIsIn()
+    {
+        var a = new[] { Cand(0, 0, 0, 4, 4), Cand(1, 10, 0, 4, 4) };
+        Assert.That(MusicAreaPhoneRules.Pick(MusicView.Ar, a, new Vector3(10, 1.5f, 1), null, -1, true), Is.EqualTo(1));
+        Assert.That(MusicAreaPhoneRules.Pick(MusicView.Ar, a, new Vector3(3, 1.5f, 0), null, -1, true), Is.EqualTo(0),
+            "a doorway 1 m off A hears A");
+        Assert.That(MusicAreaPhoneRules.Pick(MusicView.Ar, a, new Vector3(5, 1.5f, 20), null, -1, true), Is.EqualTo(-1),
+            "far from every area: none, the app's theme covers");
+    }
+
+    [Test]
+    public void PhoneMapViewFollowsItsFocusElseKeepsMusic()
+    {
+        var a = new[] { Cand(0, 0, 0, 4, 4), Cand(1, 10, 0, 8, 8) };
+        Vector3 far = new Vector3(100, 1.5f, 100);
+        Assert.That(MusicAreaPhoneRules.Pick(MusicView.Diorama, a, far, new[] { new Vector3(0, 1.5f, 0) }, -1, true), Is.EqualTo(0),
+            "the tour stop / headsets");
+        Assert.That(MusicAreaPhoneRules.Pick(MusicView.Diorama, a, far, new Vector3[0], 0, true), Is.EqualTo(0), "keeps what plays");
+        Assert.That(MusicAreaPhoneRules.Pick(MusicView.Diorama, a, far, new Vector3[0], -1, true), Is.EqualTo(1),
+            "the main area (biggest)");
+        Assert.That(MusicAreaPhoneRules.GainFor(MusicView.Diorama, false), Is.EqualTo(0.5f).Within(1e-4f));
+        Assert.That(MusicAreaPhoneRules.GainFor(MusicView.Ar, true), Is.EqualTo(1f).Within(1e-4f),
+            "the shimmer never lowers the music (it ducks under it)");
+    }
+
+    [Test]
+    public void PhonePathIsOffOnAHeadset()
+    {
+        MusicAreaPhone.ResetForTests();
+        try
+        {
+            MusicAreaPhone.Source = () => new MusicListen { view = MusicView.Ar, gain = 1f };
+            DreamParkDevice.Set(DreamParkDeviceKind.Headset);
+            Assert.That(MusicAreaPhone.Active, Is.False, "a headset keeps the head-in-area rule");
+            Assert.That(MusicAreaPhone.FocusObject(), Is.Null);
+            Assert.That(MusicAreaPhone.LuaGain(), Is.EqualTo(1f));
+        }
+        finally
+        {
+            DreamParkDevice.ResetToDefault();
+            MusicAreaPhone.ResetForTests();
+        }
+    }
 }

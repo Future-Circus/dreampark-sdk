@@ -68,6 +68,22 @@ namespace XLua.CSObjectWrap
             
 			    int gen_param_count = LuaAPI.lua_gettop(L);
             
+                if(gen_param_count == 7&& (LuaAPI.lua_isnil(L, 1) || LuaAPI.lua_type(L, 1) == LuaTypes.LUA_TSTRING)&& (LuaAPI.lua_isnil(L, 2) || LuaAPI.lua_type(L, 2) == LuaTypes.LUA_TSTRING)&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 3)&& (LuaAPI.lua_isnil(L, 4) || LuaAPI.lua_type(L, 4) == LuaTypes.LUA_TSTRING)&& translator.Assignable<DreamPark.API.ScoreDirection>(L, 5)&& translator.Assignable<System.Action<bool, DreamPark.API.ScoreSubmitResult>>(L, 6)&& (LuaAPI.lua_isnil(L, 7) || LuaAPI.lua_type(L, 7) == LuaTypes.LUA_TSTRING)) 
+                {
+                    string _contentId = LuaAPI.lua_tostring(L, 1);
+                    string _metric = LuaAPI.lua_tostring(L, 2);
+                    double _value = LuaAPI.lua_tonumber(L, 3);
+                    string _attraction = LuaAPI.lua_tostring(L, 4);
+                    DreamPark.API.ScoreDirection _direction;translator.Get(L, 5, out _direction);
+                    System.Action<bool, DreamPark.API.ScoreSubmitResult> _done = translator.GetDelegate<System.Action<bool, DreamPark.API.ScoreSubmitResult>>(L, 6);
+                    string _runnerId = LuaAPI.lua_tostring(L, 7);
+                    
+                    DreamPark.API.ScoreAPI.SubmitScore( _contentId, _metric, _value, _attraction, _direction, _done, _runnerId );
+                    
+                    
+                    
+                    return 0;
+                }
                 if(gen_param_count == 6&& (LuaAPI.lua_isnil(L, 1) || LuaAPI.lua_type(L, 1) == LuaTypes.LUA_TSTRING)&& (LuaAPI.lua_isnil(L, 2) || LuaAPI.lua_type(L, 2) == LuaTypes.LUA_TSTRING)&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 3)&& (LuaAPI.lua_isnil(L, 4) || LuaAPI.lua_type(L, 4) == LuaTypes.LUA_TSTRING)&& translator.Assignable<DreamPark.API.ScoreDirection>(L, 5)&& translator.Assignable<System.Action<bool, DreamPark.API.ScoreSubmitResult>>(L, 6)) 
                 {
                     string _contentId = LuaAPI.lua_tostring(L, 1);
@@ -142,6 +158,22 @@ namespace XLua.CSObjectWrap
             
 			    int gen_param_count = LuaAPI.lua_gettop(L);
             
+                if(gen_param_count == 7&& (LuaAPI.lua_isnil(L, 1) || LuaAPI.lua_type(L, 1) == LuaTypes.LUA_TSTRING)&& (LuaAPI.lua_isnil(L, 2) || LuaAPI.lua_type(L, 2) == LuaTypes.LUA_TSTRING)&& (LuaAPI.lua_isnil(L, 3) || LuaAPI.lua_type(L, 3) == LuaTypes.LUA_TSTRING)&& LuaTypes.LUA_TBOOLEAN == LuaAPI.lua_type(L, 4)&& translator.Assignable<DreamPark.API.LeaderboardWindow>(L, 5)&& translator.Assignable<System.Action<bool, DreamPark.API.MyScoreResult>>(L, 6)&& (LuaAPI.lua_isnil(L, 7) || LuaAPI.lua_type(L, 7) == LuaTypes.LUA_TSTRING)) 
+                {
+                    string _contentId = LuaAPI.lua_tostring(L, 1);
+                    string _metric = LuaAPI.lua_tostring(L, 2);
+                    string _attraction = LuaAPI.lua_tostring(L, 3);
+                    bool _thisParkOnly = LuaAPI.lua_toboolean(L, 4);
+                    DreamPark.API.LeaderboardWindow _window;translator.Get(L, 5, out _window);
+                    System.Action<bool, DreamPark.API.MyScoreResult> _done = translator.GetDelegate<System.Action<bool, DreamPark.API.MyScoreResult>>(L, 6);
+                    string _runnerId = LuaAPI.lua_tostring(L, 7);
+                    
+                    DreamPark.API.ScoreAPI.FetchMyScore( _contentId, _metric, _attraction, _thisParkOnly, _window, _done, _runnerId );
+                    
+                    
+                    
+                    return 0;
+                }
                 if(gen_param_count == 6&& (LuaAPI.lua_isnil(L, 1) || LuaAPI.lua_type(L, 1) == LuaTypes.LUA_TSTRING)&& (LuaAPI.lua_isnil(L, 2) || LuaAPI.lua_type(L, 2) == LuaTypes.LUA_TSTRING)&& (LuaAPI.lua_isnil(L, 3) || LuaAPI.lua_type(L, 3) == LuaTypes.LUA_TSTRING)&& LuaTypes.LUA_TBOOLEAN == LuaAPI.lua_type(L, 4)&& translator.Assignable<DreamPark.API.LeaderboardWindow>(L, 5)&& translator.Assignable<System.Action<bool, DreamPark.API.MyScoreResult>>(L, 6)) 
                 {
                     string _contentId = LuaAPI.lua_tostring(L, 1);
@@ -227,6 +259,26 @@ namespace XLua.CSObjectWrap
             
 			    int gen_param_count = LuaAPI.lua_gettop(L);
             
+                if(gen_param_count == 11&& (LuaAPI.lua_isnil(L, 1) || LuaAPI.lua_type(L, 1) == LuaTypes.LUA_TSTRING)&& (LuaAPI.lua_isnil(L, 2) || LuaAPI.lua_type(L, 2) == LuaTypes.LUA_TSTRING)&& (LuaAPI.lua_isnil(L, 3) || LuaAPI.lua_type(L, 3) == LuaTypes.LUA_TSTRING)&& LuaTypes.LUA_TBOOLEAN == LuaAPI.lua_type(L, 4)&& LuaTypes.LUA_TBOOLEAN == LuaAPI.lua_type(L, 5)&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 6)&& (LuaAPI.lua_isnil(L, 7) || LuaAPI.lua_type(L, 7) == LuaTypes.LUA_TSTRING)&& LuaTypes.LUA_TBOOLEAN == LuaAPI.lua_type(L, 8)&& translator.Assignable<DreamPark.API.LeaderboardWindow>(L, 9)&& translator.Assignable<System.Action<bool, DreamPark.API.LeaderboardResult>>(L, 10)&& (LuaAPI.lua_isnil(L, 11) || LuaAPI.lua_type(L, 11) == LuaTypes.LUA_TSTRING)) 
+                {
+                    string _contentId = LuaAPI.lua_tostring(L, 1);
+                    string _metric = LuaAPI.lua_tostring(L, 2);
+                    string _attraction = LuaAPI.lua_tostring(L, 3);
+                    bool _thisParkOnly = LuaAPI.lua_toboolean(L, 4);
+                    bool _friendsOnly = LuaAPI.lua_toboolean(L, 5);
+                    int _limit = LuaAPI.xlua_tointeger(L, 6);
+                    string _cursor = LuaAPI.lua_tostring(L, 7);
+                    bool _includeMe = LuaAPI.lua_toboolean(L, 8);
+                    DreamPark.API.LeaderboardWindow _window;translator.Get(L, 9, out _window);
+                    System.Action<bool, DreamPark.API.LeaderboardResult> _done = translator.GetDelegate<System.Action<bool, DreamPark.API.LeaderboardResult>>(L, 10);
+                    string _runnerId = LuaAPI.lua_tostring(L, 11);
+                    
+                    DreamPark.API.ScoreAPI.FetchLeaderboard( _contentId, _metric, _attraction, _thisParkOnly, _friendsOnly, _limit, _cursor, _includeMe, _window, _done, _runnerId );
+                    
+                    
+                    
+                    return 0;
+                }
                 if(gen_param_count == 10&& (LuaAPI.lua_isnil(L, 1) || LuaAPI.lua_type(L, 1) == LuaTypes.LUA_TSTRING)&& (LuaAPI.lua_isnil(L, 2) || LuaAPI.lua_type(L, 2) == LuaTypes.LUA_TSTRING)&& (LuaAPI.lua_isnil(L, 3) || LuaAPI.lua_type(L, 3) == LuaTypes.LUA_TSTRING)&& LuaTypes.LUA_TBOOLEAN == LuaAPI.lua_type(L, 4)&& LuaTypes.LUA_TBOOLEAN == LuaAPI.lua_type(L, 5)&& LuaTypes.LUA_TNUMBER == LuaAPI.lua_type(L, 6)&& (LuaAPI.lua_isnil(L, 7) || LuaAPI.lua_type(L, 7) == LuaTypes.LUA_TSTRING)&& LuaTypes.LUA_TBOOLEAN == LuaAPI.lua_type(L, 8)&& translator.Assignable<DreamPark.API.LeaderboardWindow>(L, 9)&& translator.Assignable<System.Action<bool, DreamPark.API.LeaderboardResult>>(L, 10)) 
                 {
                     string _contentId = LuaAPI.lua_tostring(L, 1);

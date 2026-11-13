@@ -1,0 +1,292 @@
+-- ─────────────────────────────────────────────────────────────────────
+--  goal-test-harness — a FAKE playlist runtime for testing goal blocks
+--  (CONTRACT.md § 2) in the real XLua VM, with no scene: Playlist Studio
+--  "Test" (PlaylistGoalTest.cs, XLua LuaEnv) and Tools/agent/goaltest.py
+--  (the lualint VM) both load this file.
+--
+--  H.run{ block = <lua source>, kind = 'collect', stop = {id, attraction, options},
+--         census = {jubbo = 3}, steps = {…} | nil (nil = H.scenario(kind)), until_sec = 900 }
+--  → JSON text: { ok, error?, result = {status, fields, at}, log = [{at, what, …}], counts }
+--
+--  A step: { at = s, source = 'signal'|'event'|'progress'|'enemy'|'gone'|'zone'|…, name = …,
+--            data = {…}, player = 'p1' }  — delivered to matching stop.on handlers;
+--          { at = s, census = {script = n} } — changes what stop.census answers;
+--          { at = s, platform = 'crossing_fail' | 'crossing_done' | 'jump_hop' | 'jump_fail' | 'jump_done' | 'reach',
+--            player =, why =, cause = } — what the wearer's device emits for stop.crossing / stop.jump{pads} /
+--            stop.reach (CONTRACT Changes, Oct 20: crossing_fail{why, cause, fails} → crossing_done → done{player, fails};
+--            jump_hop / jump_fail → jump_done → done{player, fails}; reach_done → done{player}).
+--            ('jump_reset' / 'jump_cross' still map to crossing_fail / crossing_done for older scenarios.)
+--  The block runs in a sandbox with ONLY the allow-listed globals (server playlistLuaCheck).
+-- ─────────────────────────────────────────────────────────────────────
+local H = {}
+
+local function json(v, depth)
+  depth = depth or 0
+  local t = type(v)
+  if t == 'nil' then return 'null' end
+  if t == 'boolean' then return tostring(v) end
+  if t == 'number' then
+    if v ~= v or v == math.huge or v == -math.huge then return '0' end
+    if math.type and math.type(v) == 'integer' then return tostring(v) end
+    if v == math.floor(v) and math.abs(v) < 1e15 then return string.format('%d', v) end
+    return string.format('%.4g', v)
+  end
+  if t == 'string' then
+    return '"' .. v:gsub('[%c"\\]', function(c)
+      if c == '"' then return '\\"' elseif c == '\\' then return '\\\\' elseif c == '\n' then return '\\n' end
+      return string.format('\\u%04x', string.byte(c))
+    end) .. '"'
+  end
+  if t == 'table' then
+    if depth > 8 then return '"…"' end
+    local n = #v
+    local isArray = n > 0 or next(v) == nil
+    if isArray then
+      for k in pairs(v) do if type(k) ~= 'number' then isArray = false break end end
+    end
+    local out = {}
+    if isArray then
+      for i = 1, n do out[i] = json(v[i], depth + 1) end
+      return '[' .. table.concat(out, ',') .. ']'
+    end
+    local keys = {}
+    for k in pairs(v) do keys[#keys + 1] = tostring(k) end
+    table.sort(keys)
+    for _, k in ipairs(keys) do
+      local val = v[k]; if val == nil then val = v[tonumber(k)] end
+      out[#out + 1] = json(k) .. ':' .. json(val, depth + 1)
+    end
+    return '{' .. table.concat(out, ',') .. '}'
+  end
+  return '"<' .. t .. '>"'
+end
+H.json = json
+
+-- default fake events per kind: the minimum a title sends for that challenge
+function H.scenario(kind)
+  local S = {
+    collect = {
+      { at = 1, source = 'progress', name = 'progress', data = { n = 0, of = 5, unit = 'coins' } },
+      { at = 3, source = 'progress', name = 'progress', data = { n = 2, of = 5, unit = 'coins' }, player = 'p1' },
+      { at = 5, source = 'progress', name = 'progress', data = { n = 4, of = 6, unit = 'coins' }, player = 'p2' },
+      { at = 7, source = 'progress', name = 'progress', data = { n = 6, of = 6, unit = 'coins' }, player = 'p1' },
+    },
+    clear = {
+      { at = 0, census = { ['*'] = 3 } },
+      { at = 2, census = { ['*'] = 2 } }, { at = 2.1, source = 'event', name = 'defeated', data = { how = 'kick' }, player = 'p1' },
+      { at = 5, census = { ['*'] = 1 } }, { at = 5.1, source = 'event', name = 'defeated', data = { how = 'out' }, player = 'p2' },
+      { at = 9, census = { ['*'] = 0 } }, { at = 9.1, source = 'event', name = 'defeated', data = { how = 'lava' }, player = 'p1' },
+    },
+    boss = {
+      { at = 3, source = 'event', name = 'boss_hit', data = { hp = 2, of = 3 }, player = 'p1' },
+      { at = 6, source = 'event', name = 'boss_phase', data = { n = 2 } },
+      { at = 8, source = 'event', name = 'boss_hit', data = { hp = 1, of = 3 }, player = 'p2' },
+      { at = 12, source = 'signal', name = 'boss_defeated', data = {}, player = 'p1' },
+    },
+    reach_end = {
+      { at = 4, source = 'event', name = 'hit', data = { cause = 'lava' }, player = 'p1' },
+      { at = 9, source = 'signal', name = 'exit_reached', data = {}, player = 'p2' },
+      { at = 10, platform = 'reach', player = 'p2' },
+    },
+    crossing = {
+      { at = 3, platform = 'crossing_fail', player = 'p1', why = 'hazard', cause = 'Lava' },
+      { at = 6, platform = 'crossing_fail', player = 'p1', why = 'hit', cause = 'egg' },
+      { at = 11, platform = 'crossing_done', player = 'p1' },
+    },
+    jump = {
+      { at = 2, platform = 'jump_hop', player = 'p1', from = 0, to = 1 },
+      { at = 4, platform = 'jump_fail', player = 'p1', why = 'window' },
+      { at = 7, platform = 'jump_hop', player = 'p1', from = 1, to = 2 },
+      { at = 7.1, platform = 'jump_done', player = 'p1' },
+    },
+    survive = { { at = 5, source = 'event', name = 'hit', data = { cause = 'zombie' }, player = 'p1' } },
+    score = {
+      { at = 2, source = 'event', name = 'score', data = { score = 400 }, player = 'p1' },
+      { at = 4, source = 'event', name = 'score', data = { score = 300 }, player = 'p2' },
+      { at = 8, source = 'event', name = 'score', data = { score = 900 }, player = 'p1' },
+      { at = 20, source = 'event', name = 'game_end', data = {} },
+    },
+    race = {
+      { at = 30, source = 'event', name = 'finish', data = { place = 1 }, player = 'p2' },
+      { at = 34, source = 'event', name = 'finish', data = { place = 2 }, player = 'p1' },
+      { at = 40, source = 'event', name = 'results', data = {} },
+    },
+    versus = { { at = 60, source = 'event', name = 'game_end', data = { winner = 'p1', score = 3 } } },
+    catch = {
+      { at = 1, source = 'progress', name = 'progress', data = { n = 0, of = 3, unit = 'critters' } },
+      { at = 5, source = 'progress', name = 'progress', data = { n = 1, of = 3, unit = 'critters' }, player = 'p1' },
+      { at = 9, source = 'progress', name = 'progress', data = { n = 3, of = 3, unit = 'critters' }, player = 'p2' },
+    },
+    find = {
+      { at = 4, source = 'event', name = 'found', data = { item = 'medal' }, player = 'p1' },
+      { at = 9, source = 'event', name = 'found_all', data = {}, player = 'p1' },
+    },
+    solve = {
+      { at = 5, source = 'event', name = 'puzzle_step', data = { id = 'lever', n = 1, of = 2 }, player = 'p1' },
+      { at = 15, source = 'event', name = 'puzzle_step', data = { id = 'lever', n = 2, of = 2 }, player = 'p2' },
+    },
+    protect = {
+      { at = 6, source = 'event', name = 'delivered', data = { n = 1, of = 2 }, player = 'p1' },
+      { at = 14, source = 'event', name = 'delivered', data = { n = 2, of = 2 }, player = 'p2' },
+    },
+    moment = { { at = 8, source = 'signal', name = 'intro_done', data = {} } },
+  }
+  return S[kind] or {}
+end
+
+local function matches(filter, e)
+  for k, want in pairs(filter or {}) do
+    local have
+    if k == 'name' then have = e.name elseif k == 'player' then have = e.player else have = (e.data or {})[k] end
+    if type(want) == 'table' then
+      local any = false
+      for _, w in ipairs(want) do if w == have then any = true end end
+      if not any then return false end
+    elseif want ~= have then return false end
+  end
+  return true
+end
+
+function H.run(args)
+  local log, handlers, timers = {}, {}, {}
+  local now, seq, result = 0, 0, nil
+  local census = {}
+  for k, v in pairs(args.census or {}) do census[k] = v end
+  local move = nil   -- the platform's crossing / jump pads / reach bookkeeping: { kind, spec, fails }
+  local function add(what, t) t = t or {}; t.at = now; t.what = what; log[#log + 1] = t end
+  local st = args.stop or {}
+  local stop = { id = st.id or 'stop-1', attraction = st.attraction or 'A_Test', kind = args.kind or st.kind or '',
+                 options = st.options or {}, state = {} }
+  local function settle(status, fields)
+    if result then add('after_result', { status = status }); return end
+    result = { status = status, fields = fields or {}, at = now }
+    add(status, { fields = fields })
+  end
+  local function schedule(sec, fn, every)
+    seq = seq + 1
+    timers[#timers + 1] = { at = now + (tonumber(sec) or 0), fn = fn, every = every and (tonumber(sec) or 1) or nil, seq = seq }
+  end
+  function stop.on(source, filter, fn) handlers[#handlers + 1] = { source = source, filter = filter or {}, fn = fn } end
+  function stop.census(q)
+    q = q or {}
+    local scripts = q.script
+    if type(scripts) ~= 'table' then scripts = { scripts } end
+    local n = 0
+    for _, s in ipairs(scripts) do n = n + (census[s or '*'] or census['*'] or 0) end
+    if #scripts > 1 and census['*'] then n = census['*'] end
+    add('census', { q = q, n = n })
+    return n
+  end
+  function stop.progress(n, of, unit) add('progress', { n = n, of = of, unit = unit }) end
+  function stop.done(fields) settle('done', fields) end
+  function stop.failed(fields) settle('failed', fields) end
+  function stop.timed_out() settle('timed_out') end
+  function stop.skip(fields) settle('skip', fields) end
+  function stop.timer(sec, fn) schedule(sec, fn, false) end
+  function stop.every(sec, fn) schedule(sec, fn, true) end
+  function stop.mark(m) add('mark', { mark = m }) end
+  function stop.edge(which) add('edge', { which = which }); return { x = 0, y = 0, z = which == 'far' and 2.5 or -2.5 } end
+  function stop.crossing(j) move = { kind = 'crossing', spec = j, fails = 0 }; add('crossing', { spec = j }) end
+  function stop.jump(j)
+    j = j or {}
+    if type(j.pads) ~= 'table' or #j.pads < 2 then add('print', { text = 'stop.jump without pads runs as stop.crossing' }); return stop.crossing(j) end
+    move = { kind = 'jump', spec = j, fails = 0 }; add('jump', { spec = j })
+  end
+  function stop.reach(j)
+    j = j or {}
+    j.at = j.at or stop.edge('far')
+    move = { kind = 'reach', spec = j, fails = 0 }; add('reach', { spec = j })
+    stop.mark({ at = j.at, icon = 'target' })
+  end
+  function stop.crossing_reset(player, why) add('crossing_reset', { player = player, why = why }) end
+  stop.jump_reset = stop.crossing_reset
+  function stop.request(tbl, key, value) add('request', { table = tbl, key = key, value = value }) end
+  local dp = {
+    dreamie = {
+      moment = function(name, data, opts) add('dreamie.moment', { name = name, data = data, opts = opts }) end,
+      say = function(text, opts) add('dreamie.say', { text = text }) end,
+      busy = function() return false end,
+      title_speaking = function(b) add('dreamie.title_speaking', { on = b }) end,
+    },
+    event = function(name, data) add('dp.event', { name = name, data = data }) end,
+  }
+  local function emit(e)
+    e.at = now; e.data = e.data or {}
+    local hit = 0
+    for _, h in ipairs(handlers) do
+      if h.source == e.source and matches(h.filter, e) then
+        hit = hit + 1
+        local ok, err = pcall(h.fn, e)
+        if not ok then add('error', { in_handler = e.name, message = tostring(err) }) end
+      end
+    end
+    add('event', { source = e.source, name = e.name, data = e.data, player = e.player, handlers = hit })
+  end
+  local env = { stop = stop, dp = dp, math = math, string = string, table = table, ipairs = ipairs, pairs = pairs,
+                next = next, type = type, tostring = tostring, tonumber = tonumber, select = select, error = error,
+                assert = assert, pcall = pcall, print = function(...) add('print', { text = table.concat({ ... }, ' ') }) end }
+  local chunk, cerr = load(args.block or '', '=goal', 't', env)
+  if not chunk then return json({ ok = false, error = 'compile: ' .. tostring(cerr), log = log }) end
+  local ok, fn = pcall(chunk)
+  if not ok then return json({ ok = false, error = 'load: ' .. tostring(fn), log = log }) end
+  if type(fn) ~= 'function' then return json({ ok = false, error = 'the block must return function(stop)', log = log }) end
+  local steps = args.steps or H.scenario(stop.kind)
+  table.sort(steps, function(a, b) return (a.at or 0) < (b.at or 0) end)
+  -- what stands in the stop when it goes live: census steps at t <= 0 apply before the block starts
+  local si = 1
+  while steps[si] and (steps[si].at or 0) <= 0 and steps[si].census do
+    for k, v in pairs(steps[si].census) do census[k] = v end
+    add('census_set', { census = steps[si].census }); si = si + 1
+  end
+  local ok2, err2 = pcall(fn, stop)
+  if not ok2 then return json({ ok = false, error = 'start: ' .. tostring(err2), log = log }) end
+  local untilSec = tonumber(args.until_sec) or 900
+  local guard = 0
+  while not result and now <= untilSec and guard < 100000 do
+    guard = guard + 1
+    -- next thing to happen: a step or a timer
+    local nextStep = steps[si]
+    local tBest, tIdx = nil, nil
+    for i, t in ipairs(timers) do
+      if (not tBest) or t.at < tBest.at or (t.at == tBest.at and t.seq < tBest.seq) then tBest, tIdx = t, i end
+    end
+    local stepAt = nextStep and (nextStep.at or 0) or nil
+    if not stepAt and not tBest then break end
+    if stepAt and (not tBest or stepAt <= tBest.at) then
+      now = math.max(now, stepAt); si = si + 1
+      if nextStep.census then for k, v in pairs(nextStep.census) do census[k] = v end; add('census_set', { census = nextStep.census })
+      elseif nextStep.platform then
+        local p = nextStep.platform
+        if p == 'jump_reset' then p = 'crossing_fail' elseif p == 'jump_cross' then p = 'crossing_done' end
+        local want = (p == 'crossing_fail' or p == 'crossing_done') and 'crossing' or (p == 'reach' and 'reach' or 'jump')
+        if not move or move.kind ~= want then
+          add('error', { message = p .. ' without stop.' .. want })
+        else
+          if p == 'crossing_fail' or p == 'jump_fail' then
+            move.fails = move.fails + 1
+            emit({ source = 'event', name = p, data = { why = nextStep.why or 'out', cause = nextStep.cause, fails = move.fails }, player = nextStep.player })
+          elseif p == 'jump_hop' then
+            emit({ source = 'event', name = 'jump_hop', data = { from = nextStep.from or 0, to = nextStep.to or 1, fails = move.fails }, player = nextStep.player })
+          elseif p == 'crossing_done' or p == 'jump_done' then
+            emit({ source = 'event', name = p, data = { fails = move.fails }, player = nextStep.player })
+            settle('done', { player = nextStep.player, fails = move.fails })
+          elseif p == 'reach' then
+            emit({ source = 'event', name = 'reach_done', data = {}, player = nextStep.player })
+            settle('done', { player = nextStep.player })
+          end
+        end
+      else emit({ source = nextStep.source or 'event', name = nextStep.name, data = nextStep.data, player = nextStep.player }) end
+    else
+      now = math.max(now, tBest.at)
+      if tBest.every then tBest.at = tBest.at + tBest.every else table.remove(timers, tIdx) end
+      local okT, errT = pcall(tBest.fn)
+      if not okT then add('error', { in_timer = true, message = tostring(errT) }); if not tBest.every then end end
+    end
+  end
+  local counts = {}
+  for _, e in ipairs(log) do counts[e.what] = (counts[e.what] or 0) + 1 end
+  local errors = counts.error or 0
+  return json({ ok = errors == 0, result = result, log = log, counts = counts, handlers = #handlers, timers = #timers })
+end
+
+return H

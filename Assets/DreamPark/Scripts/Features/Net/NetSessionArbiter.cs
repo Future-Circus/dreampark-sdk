@@ -177,7 +177,8 @@ namespace DreamPark
         public static void NotifyNetworkChanged(string reason)
         {
             var a = Instance;
-            if (a == null) return;
+            if (a == null || a._heldForLan) return;   // held: nothing learned yet, the release reads the address
+            NetPlatform.InvalidateLocalIPv4();        // a real change signal: re-read now, not from cache
             a._lastLocalIp = NetPlatform.GetLocalIPv4();
             a._nextIpCheckAt = Time.unscaledTime + IpWatchSeconds;
             a.OnNetworkChanged(reason);
@@ -340,10 +341,27 @@ namespace DreamPark
             Instance = this;
             _client.OnGlobalEvent += OnGlobalEvent;
             SessionContext.OnSessionPaired += OnSessionPaired;
+            _pausedOutOfHosting = false;
+            // Oct 29 2026: the host app holds the LAN (NetPlatform.LanHold — the portal app until
+            // Join). Stay Idle — no discovery socket, no LAN-address read — and start on the first
+            // Update after the release, exactly as here.
+            if (NetPlatform.LanHeld)
+            {
+                _heldForLan = true;
+                Debug.Log("[Arbiter] LAN held by the host app — not searching until it is released.");
+                return;
+            }
+            StartSearchingFromEnable();
+        }
+
+        // Oct 29 2026: an enabled arbiter waiting for the host app's LAN hold to lift (Idle meanwhile).
+        bool _heldForLan;
+
+        void StartSearchingFromEnable()
+        {
             _enabledAt = Time.unscaledTime;
             _lastLocalIp = NetPlatform.GetLocalIPv4();
             _nextIpCheckAt = Time.unscaledTime + IpWatchSeconds;
-            _pausedOutOfHosting = false;
             BeginSearching();
         }
 
@@ -351,6 +369,7 @@ namespace DreamPark
         {
             ArbiterActive = false;
             if (Instance == this) Instance = null;
+            _heldForLan = false;
             _client.OnGlobalEvent -= OnGlobalEvent;
             SessionContext.OnSessionPaired -= OnSessionPaired;
             StopDiscovery();
@@ -435,6 +454,16 @@ namespace DreamPark
 
         void Update()
         {
+            // Oct 29 2026: held by the host app (NetPlatform.LanHold) — nothing until it lifts,
+            // then start as OnEnable would have.
+            if (_heldForLan)
+            {
+                if (NetPlatform.LanHeld) return;
+                _heldForLan = false;
+                Debug.Log("[Arbiter] LAN hold released — searching.");
+                StartSearchingFromEnable();
+            }
+
             // Running Update means we are not paused, whatever callbacks we missed.
             if (_pausedOutOfHosting) OnResumed("update");
 
@@ -1002,7 +1031,9 @@ namespace DreamPark
 
             if (now < _nextIpCheckAt) return;
             _nextIpCheckAt = now + IpWatchSeconds;
-            string ip = NetPlatform.GetLocalIPv4();
+            // Nov 2 2026 (flags-perf-nov2): last cached pick, refreshed on a worker
+            // thread — the interface walk no longer runs on the main thread every 2 s.
+            string ip = NetPlatform.PeekLocalIPv4(IpWatchSeconds * 0.9f);
             if (ip == _lastLocalIp) return;
             string was = _lastLocalIp;
             _lastLocalIp = ip;

@@ -217,6 +217,8 @@ MonoBehaviour:
     layoutIssue: 
     requestedFootprintMeters: {x: 4.2672, y: 4.8768}
     requestedGrowScale: {x: 1.25, y: 1.25}
+    groundFootprintMeters: {x: 0, y: 0}
+    groundShrinkFootprintMeters: {x: 0, y: 0}
   packingPreviewScale: {x: 1, y: 1}
   packingPreviewEssentialOnly: 0
   showPackingGizmos: 1

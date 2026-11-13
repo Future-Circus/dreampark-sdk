@@ -248,6 +248,24 @@ namespace DreamPark.Editor
             }
         }
 
+        /// The bake hook: when `level` IS a content's Sequence Game Over level (by its prefab path), re-apply the empty
+        /// end card's 0.1 m shrink after a generic bake. No-op for every other attraction.
+        internal static void KeepEmptyGameOverShrink(AttractionTemplate level)
+        {
+            if (level == null) return;
+            string path = AssetDatabase.GetAssetPath(level.gameObject);
+            if (string.IsNullOrEmpty(path))
+            {
+                var stage = UnityEditor.SceneManagement.PrefabStageUtility.GetCurrentPrefabStage();
+                if (stage != null && stage.prefabContentsRoot == level.gameObject) path = stage.assetPath;
+            }
+            if (string.IsNullOrEmpty(path) || !path.StartsWith("Assets/Content/", StringComparison.OrdinalIgnoreCase)) return;
+            string[] parts = path.Split('/');
+            if (parts.Length < 4) return;
+            if (!string.Equals(path, GameOverLevelPath(parts[2]), StringComparison.OrdinalIgnoreCase)) return;
+            AllowEmptySpecialLevelShrink(level);
+        }
+
         private static void AllowEmptySpecialLevelShrink(AttractionTemplate level)
         {
             // A blank Game Over level has no blockers. The generic baker uses its

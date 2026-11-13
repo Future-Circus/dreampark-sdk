@@ -213,6 +213,14 @@ namespace DreamPark
         /// </summary>
         public bool LoadLevel(int slot)
         {
+            // Playlists (PLAYLISTS.md § 14.7): while a playlist leg runs here the GameMaster queue owns navigation.
+            // Every title already handles a refused load; dp.load_level raises PlaylistRunner.LevelRefused first.
+            if (PlaylistRunner.OwnsNavigation(this))
+            {
+                lastLevelError = PlaylistRunner.RefusedReason;
+                PlaylistRunner.NoteRefused(this, currentLevelIndex, slot, null);
+                return false;
+            }
             if (slot < 1 || slot > LevelCount || !isActiveAndEnabled)
             {
                 lastLevelError = "invalid-or-inactive-slot";
@@ -548,8 +556,25 @@ namespace DreamPark
             Vector2 applied = template.GetFrameFootprintMeters(frameId, frameScale);
             if (applied.x > oriented.x + RoomFitToleranceMeters || applied.y > oriented.y + RoomFitToleranceMeters)
             {
-                Debug.LogError($"[DreamParkPackage] {level.name} cannot fit calibrated room {room}; layout frame '{frameId}' needs {applied}.", level);
-                return false;
+                // GetFrameFootprintMeters = max(GROUND footprint, declared). The frame was CHOSEN on its declared shrink
+                // (TryChooseFrame, like the runner / Arena packers), and the bake explicitly allows content that
+                // overhangs its frame. So a frame whose declared footprint fits plays, with a warning, instead of the
+                // level change failing outright (Crash Course: off-track markers past a 12 x 18 ft frame refused every
+                // track in a 12 x 18 room). Release round Oct 26 2026 — the live 1.05.22 app still refuses.
+                // DREAMPARKCORE only (the new headset app). The SDK's Park Simulator keeps the LIVE app's rule (refuse), so a
+                // title's legacy-path check in the simulator still tells the truth about today's app.
+#if DREAMPARKCORE
+                Vector2 declared = template.TryGetFrameEnvelope(frameId, out AttractionFrameEnvelope env)
+                    ? Vector2.Scale(env.authoredMeters, frameScale) : applied;
+#else
+                Vector2 declared = applied;
+#endif
+                if (declared.x > oriented.x + RoomFitToleranceMeters || declared.y > oriented.y + RoomFitToleranceMeters)
+                {
+                    Debug.LogError($"[DreamParkPackage] {level.name} cannot fit calibrated room {room}; layout frame '{frameId}' needs {applied}.", level);
+                    return false;
+                }
+                Debug.LogWarning($"[DreamParkPackage] {level.name}: layout frame '{frameId}' declares {declared} (fits room {room}) but its ground reaches {applied} — overhang allowed, playing it.", level);
             }
             if (stage)
             {

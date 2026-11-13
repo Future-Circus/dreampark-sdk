@@ -1005,6 +1005,8 @@ MonoBehaviour:
     layoutIssue: 
     requestedFootprintMeters: {x: 4.2672, y: 4.8768}
     requestedGrowScale: {x: 1.25, y: 1.25}
+    groundFootprintMeters: {x: 0, y: 0}
+    groundShrinkFootprintMeters: {x: 0, y: 0}
   packingPreviewScale: {x: 1, y: 1}
   packingPreviewEssentialOnly: 0
   showPackingGizmos: 1
@@ -1199,6 +1201,8 @@ MonoBehaviour:
       layoutIssue: 
       requestedFootprintMeters: {x: 3.3528001, y: 4.2672}
       requestedGrowScale: {x: 1.25, y: 1.25}
+      groundFootprintMeters: {x: 0, y: 0}
+      groundShrinkFootprintMeters: {x: 0, y: 0}
   - id: minimum
     name: "Example 8 \xD7 12 ft (Minimum)"
     kind: 1
@@ -1341,6 +1345,8 @@ MonoBehaviour:
       layoutIssue: 
       requestedFootprintMeters: {x: 2.4384, y: 3.6576}
       requestedGrowScale: {x: 1.25, y: 1.25}
+      groundFootprintMeters: {x: 0, y: 0}
+      groundShrinkFootprintMeters: {x: 0, y: 0}
   layoutBaseStates:
   - path: EXAMPLE Play Area Rug
     target: {fileID: 1449822573720184103}

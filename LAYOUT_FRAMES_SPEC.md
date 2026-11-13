@@ -2,6 +2,10 @@
 
 Status: implemented (Sept 2026) in the SDK, the DreamPark app, the backend and the phone app.
 
+**Legacy (Nov 2026).** New and reworked attractions are authored as one 12 × 18 ft layout with no frames
+(`Assets/DreamPark/Docs/ATTRACTIONS.md` § One attraction, one size). The frame system stays so existing framed content
+keeps loading; this spec describes it for that content. Don't add frames to new work.
+
 ## 1. Why
 
 Flexible packing today gives an attraction one authored layout plus an automatic

@@ -44,6 +44,9 @@ namespace DreamPark.Editor
             "com.unity.openxr.feature.input.handinteractionposes",
             "com.meta.openxr.feature.foveation",
             "com.meta.openxr.feature.subsampledLayout",
+            // Unity's foveation feature: the one that applies under the SRP Foveation API (see
+            // DreamParkQuestPerformanceSettings below).
+            DreamParkQuestPerformanceSettings.UnityFoveationFeatureId,
         };
 
         private static readonly HashSet<string> StandaloneRequiredFeatureIds = new(StringComparer.Ordinal)
@@ -115,6 +118,8 @@ namespace DreamPark.Editor
                 Validate(group);
             }
 
+            changed |= DreamParkQuestPerformanceSettings.Apply();
+
             if (changed)
                 AssetDatabase.SaveAssets();
 
@@ -140,15 +145,7 @@ namespace DreamPark.Editor
                 changed = true;
             }
 
-            var settings = OpenXRSettings.GetSettingsForBuildTargetGroup(BuildTargetGroup.Android);
-            if (settings != null &&
-                settings.latencyOptimization != OpenXRSettings.LatencyOptimization.PrioritizeInputPolling)
-            {
-                settings.latencyOptimization = OpenXRSettings.LatencyOptimization.PrioritizeInputPolling;
-                EditorUtility.SetDirty(settings);
-                changed = true;
-            }
-
+            // Latency mode lives in DreamParkQuestPerformanceSettings (Prioritize Rendering, Nov 11 2026).
             return changed;
         }
 
@@ -316,6 +313,195 @@ namespace DreamPark.Editor
         public void OnPostprocessBuild(BuildReport report)
         {
             DreamParkOpenXRSetup.ScrubMetaDevAgentSettings();
+        }
+    }
+}
+#endif
+
+#if UNITY_EDITOR && (DREAMPARK_SDK_PACKAGES_READY || DREAMPARKCORE)
+namespace DreamPark.Editor
+{
+    using System.Linq;
+    using UnityEditor;
+    using UnityEditor.Build;
+    using UnityEditor.Build.Reporting;
+    using UnityEditor.XR.OpenXR.Features;
+    using UnityEngine;
+    using UnityEngine.XR.OpenXR;
+    using UnityEngine.XR.OpenXR.Features;
+
+    /// <summary>
+    /// Quest GPU/CPU settings under OpenXR (Nov 11 2026, the director: "lets get as many of those
+    /// optimizations in as possible"). The Oculus XR plugin's OculusSettings had symmetric projection,
+    /// buffer discards, subsampled layout, fixed foveation, depth submission and late latching on; the
+    /// Sept 14 move to OpenXR dropped most of them. This puts back every one OpenXR offers, on Android only,
+    /// before every Android build and from DreamParkOpenXRSetup (SDK projects). Compiles in core too
+    /// (DREAMPARKCORE), where DreamParkOpenXRSetup itself is compiled out.
+    /// Fields are set through SerializedObject so internal MetaQuestFeature settings can be reached and the
+    /// asset values are what the build reads (MetaQuestFeature's build hook copies its symmetric-projection and
+    /// buffer-discard values over OpenXRSettings, so both are set).
+    /// </summary>
+    public sealed class DreamParkQuestPerformanceSettings : IPreprocessBuildWithReport
+    {
+        internal const string MetaQuestFeatureId = "com.unity.openxr.feature.metaquest";
+        internal const string UnityFoveationFeatureId = "com.unity.openxr.feature.foveatedrendering";
+
+        // OpenXRSettings enum values, as serialized.
+        private const int PrioritizeRendering = 0;   // LatencyOptimization.PrioritizeRendering
+        private const int Depth24Bit = 2;            // DepthSubmissionMode.Depth24Bit
+        private const int SrpFoveationApi = 1;       // BackendFovationApi.SRPFoveation
+
+        public int callbackOrder => -999;
+
+        public void OnPreprocessBuild(BuildReport report)
+        {
+            if (report.summary.platform != BuildTarget.Android)
+                return;
+            if (Apply())
+                Debug.Log("[DreamPark] Quest performance settings re-applied before the Android build.");
+        }
+
+        [MenuItem("DreamPark/Configuration/Apply Quest Performance Settings")]
+        public static void ApplyFromMenu()
+        {
+            Debug.Log(Apply()
+                ? "[DreamPark] Quest performance settings applied."
+                : "[DreamPark] Quest performance settings already applied.");
+        }
+
+        /// <summary>Idempotent. Returns true when anything changed (and saved it).</summary>
+        public static bool Apply()
+        {
+            // Feature toggles can't change while OpenXR runs (Link play mode); the next build re-applies.
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
+                return false;
+
+            var settings = OpenXRSettings.GetSettingsForBuildTargetGroup(BuildTargetGroup.Android);
+            if (settings == null)
+                return false;
+
+            var features = settings.GetFeatures<OpenXRFeature>();
+            var changed = false;
+
+            // Unity's Foveated Rendering feature drives the SRP Foveation API (URP foveates its own passes,
+            // intermediate textures included). It was off while the API was set to SRP Foveation, so the old
+            // OVRManager.foveatedRenderingLevel call (the Legacy/Meta path) had nothing to act on. Fixed foveation
+            // only: no eye tracking (no eye-tracking permission in the manifest). The level is set at runtime
+            // (OptimizedAF.Start: XRDisplaySubsystem.foveatedRenderingLevel).
+            var foveation = features.FirstOrDefault(f => FeatureId(f) == UnityFoveationFeatureId);
+            if (foveation != null)
+            {
+                if (!foveation.enabled)
+                {
+                    foveation.enabled = true;
+                    changed = true;
+                }
+                var so = new SerializedObject(foveation);
+                var c = SetBool(so, "enableSubsampledLayout", true);
+                c |= SetBool(so, "useEyeTracking", false);
+                if (c)
+                {
+                    so.ApplyModifiedPropertiesWithoutUndo();
+                    EditorUtility.SetDirty(foveation);
+                    changed = true;
+                }
+            }
+
+            var quest = features.FirstOrDefault(f => FeatureId(f) == MetaQuestFeatureId);
+            if (quest != null)
+            {
+                var so = new SerializedObject(quest);
+                var c = SetBool(so, "m_symmetricProjection", true);
+                c |= SetBool(so, "m_optimizeBufferDiscards", true);
+                // Late latching (Vulkan, experimental under OpenXR). Same as the old OculusSettings: the runtime
+                // support is on; OVRManager.LateLatching (the transforms it applies to) stays as the scene has it.
+                c |= SetBool(so, "lateLatchingMode", true);
+                c |= SetBool(so, "lateLatchingDebug", false);
+                // Symmetric projection is a build error with Quest 1 in the target devices; Quest 1 isn't supported
+                // by Meta XR SDK 205's OpenXR runtime anyway.
+                c |= DisableTargetDevice(so, "quest");
+                if (c)
+                {
+                    so.ApplyModifiedPropertiesWithoutUndo();
+                    EditorUtility.SetDirty(quest);
+                    changed = true;
+                }
+            }
+
+            var s = new SerializedObject(settings);
+            var sc = SetInt(s, "m_latencyOptimization", PrioritizeRendering);
+            sc |= SetInt(s, "m_depthSubmissionMode", Depth24Bit);
+            sc |= SetInt(s, "m_foveatedRenderingApi", SrpFoveationApi);
+            sc |= SetBool(s, "m_symmetricProjection", true);
+            sc |= SetBool(s, "m_optimizeBufferDiscards", true);
+            if (sc)
+            {
+                s.ApplyModifiedPropertiesWithoutUndo();
+                changed = true;
+            }
+
+            if (changed)
+            {
+                EditorUtility.SetDirty(settings);
+                AssetDatabase.SaveAssetIfDirty(settings);
+            }
+            return changed;
+        }
+
+        private static bool DisableTargetDevice(SerializedObject so, string manifestName)
+        {
+            var devices = so.FindProperty("targetDevices");
+            if (devices == null || !devices.isArray)
+                return false;
+            for (var i = 0; i < devices.arraySize; i++)
+            {
+                var device = devices.GetArrayElementAtIndex(i);
+                if (device.FindPropertyRelative("manifestName")?.stringValue != manifestName)
+                    continue;
+                var enabled = device.FindPropertyRelative("enabled");
+                if (enabled == null || !enabled.boolValue)
+                    return false;
+                enabled.boolValue = false;
+                return true;
+            }
+            return false;
+        }
+
+        private static bool SetBool(SerializedObject so, string name, bool value)
+        {
+            var p = so.FindProperty(name);
+            if (p == null)
+            {
+                Debug.LogWarning($"[DreamPark] Quest performance settings: '{name}' not found on {so.targetObject.GetType().Name}.");
+                return false;
+            }
+            if (p.boolValue == value)
+                return false;
+            p.boolValue = value;
+            return true;
+        }
+
+        private static bool SetInt(SerializedObject so, string name, int value)
+        {
+            var p = so.FindProperty(name);
+            if (p == null)
+            {
+                Debug.LogWarning($"[DreamPark] Quest performance settings: '{name}' not found on {so.targetObject.GetType().Name}.");
+                return false;
+            }
+            if (p.intValue == value)
+                return false;
+            p.intValue = value;
+            return true;
+        }
+
+        private static string FeatureId(OpenXRFeature feature)
+        {
+            return feature.GetType()
+                .GetCustomAttributes(typeof(OpenXRFeatureAttribute), inherit: true)
+                .OfType<OpenXRFeatureAttribute>()
+                .FirstOrDefault()
+                ?.FeatureId;
         }
     }
 }

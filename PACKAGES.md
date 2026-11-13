@@ -70,30 +70,37 @@ Attractions without a packing bake are baked on the way. You never edit those tw
 
 ---
 
-## Layout frames: one attraction, many sizes
+## One attraction, one size: 12 × 18 ft
 
-> **Rule: one attraction per piece of content, never one per size.** Two attractions should differ in what they *are* —
-> theme, look, feel, gameplay — not in how big they are. If your arena needs to work from a 6 × 10 ft closet to a
-> basketball court, that is ONE attraction with a Minimum frame, a few custom frames and grow limits; not
-> `Arena_Small` + `Arena_Medium` + `Arena_Large`. Size variants as separate attractions split revenue history and
-> previews, put duplicates in the Arena, and multiply every fix.
+> **Rule: one attraction, one size: 12 × 18 ft.** Author every attraction as a single layout for a 12 × 18 ft room: the
+> prefab's Base, with no layout frames. The shrink/grow bake covers the rooms around that size automatically: it fits
+> the same layout into somewhat smaller rooms and spreads it out in bigger ones, within its baked range. Don't author
+> frames, a Minimum frame, or hidden content for other room sizes. Rooms larger than the grow range play the 12 × 18
+> layout at its largest; rooms smaller than the shrink range don't get the attraction. Separate attractions still
+> differ in content, never in size. The frame system stays in the SDK so older content keeps loading, but new and
+> reworked attractions don't use it.
 
-Shrinking isn't right for every game. Breakout with squashed bricks is a worse game; Breakout with
-**fewer** bricks is the same game in a smaller room. A **layout frame** is a hand-authored arrangement
-of your attraction at a specific **width × length**: turn objects off, move or rescale them, or switch on
-extras that only make sense in a big room. Each frame gets its own automatic shrink/grow range, and the
-app picks the **largest frame that fits** the space it was given, then shrinks or grows *within that
-frame*. Frames never blend into each other — players never watch an attraction resize.
+**Never one attraction per size.** Two attractions should differ in what they *are* — theme, look, feel, gameplay —
+not in how big they are: not `Arena_Small` + `Arena_Medium` + `Arena_Large`. Size variants as separate attractions
+split revenue history and previews, put duplicates in the Arena, and multiply every fix.
 
-- **Where:** the Attraction's inspector → **Layout Frames**. *Add Frame*, set its size in feet, click
+### Layout frames (legacy: existing content)
+
+**Legacy.** New and reworked attractions don't use layout frames. This describes the system so attractions that already
+have frames keep working and can be maintained; don't add frames to new work.
+
+A **layout frame** is a hand-authored arrangement of an attraction at a specific **width × length**: objects turned
+off, moved, or switched on. Each frame gets its own automatic shrink/grow range, and the app picks the **largest frame
+that fits** the space it was given, then shrinks or grows *within that frame*. Frames never blend into each other —
+players never watch an attraction resize.
+
+- **Where:** the Attraction's inspector → **Layout Frames**. To change an existing frame, click
   **Edit**, change the objects in the Scene or Prefab Mode, **Save Frame**. Only what you changed is
   stored; the prefab itself (the **Base** frame) is never modified. Objects you *add* while editing a
   frame exist only in that frame.
-- **The Minimum frame** is the smallest version of the attraction that still works — it can be a single
-  prop. Make one for every attraction: without it, your attraction can never be smaller than its Base
-  shrink. It replaces the old *Essential Props* list (existing lists are converted automatically).
-- **The coverage chart** in the inspector shows every frame's range against the standard 12 × 18 ft
-  Sequence room, so gaps are obvious.
+- **The Minimum frame** (id `minimum`) is an existing attraction's smallest version; it replaced the old
+  *Essential Props* list (existing lists are converted automatically). Don't make new ones.
+- **The coverage chart** in the inspector shows an existing attraction's frames against the standard 12 × 18 ft room.
 - **Previews:** every frame gets its own HD preview. In the Content Uploader an attraction with frames
   shows as a **stack** — expand it to see each size.
 
@@ -131,8 +138,8 @@ on it. Nothing the game needs may live in a wall layer.
 **What it is.** An instant package that works in any space. Every Attraction and Prop is
 automatically sorted into a **size bucket** — its smallest (baked shrink) footprint, rounded down to
 whole feet and rotation-normalized to *short side × long side*. An attraction with
-[layout frames](#layout-frames-one-attraction-many-sizes) appears **once per frame**, each in the size
-its frame shrinks to, with that frame's preview — so one attraction can cover many sizes. The size
+[layout frames](#layout-frames-legacy-existing-content) (legacy) appears **once per frame**, each in the size
+its frame shrinks to, with that frame's preview. The size
 category is authoritative: an entry in the 5 × 10 ft size is placed in a 5 × 10 ft space even if its
 exact footprint is 5.4 × 10.1 ft. When the app builds an Arena, it walks
 the scanned floor rectangle by rectangle; for each one it takes the **largest bucket that fits** and
@@ -219,8 +226,8 @@ Sequence levels are addressed by **1-based slot**:
 ### Which attractions can play
 
 An Attraction plays in the Sequence if **its authored size, or the baked shrink footprint of any of its
-layout frames, fits 12 × 18 ft in either orientation**. In a given room the largest frame that fits is
-used. Incompatible items stay visible (dimmed) in the organizer and are
+legacy layout frames, fits 12 × 18 ft in either orientation** — an attraction authored for 12 × 18 ft always
+does. For legacy framed content, the largest frame that fits a given room is used. Incompatible items stay visible (dimmed) in the organizer and are
 skipped at compile — unless the Attraction has **Game Requires Attraction** ticked, in which case the
 upload is blocked until you shrink/rebake it or clear the flag. **Props never play as Sequence levels**
 (a Group containing props is fine; its props are skipped).
@@ -228,8 +235,8 @@ upload is blocked until you shrink/rebake it or clear the flag. **Props never pl
 ### How the room is sized
 
 - The Sequence's **minimum room** is the largest *shrink* footprint among everything it contains —
-  Start, Overlay and Game Over included — using each level's smallest fitting layout frame, so a
-  Minimum frame lets the whole game fit a smaller room. Its **maximum** is the largest *grow* footprint. One big,
+  Start, Overlay and Game Over included (for legacy content with layout frames, each level's smallest
+  fitting frame). Its **maximum** is the largest *grow* footprint. One big,
   unshrinkable object on your Start Level pins the whole game to a bigger room.
 - In a given room each level is packed between its own shrink and grow limits and **never stretched**
   past its grow limit — spare floor is left empty rather than distorting meshes and colliders.

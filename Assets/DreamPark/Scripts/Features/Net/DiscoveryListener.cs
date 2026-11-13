@@ -95,6 +95,15 @@ public class DiscoveryListener : IDisposable
         if (_running) return;
         if (_udp != null) Stop();   // a loop that died on a socket error: close it before rebinding
 
+        // Oct 29 2026: the host app holds the LAN (NetPlatform.LanHold — the portal app until
+        // Join). Binding + receiving beacons is what raises iOS's Local Network alert, so a held
+        // listener never binds; it reports not-running and callers retry as for a failed bind.
+        if (global::DreamPark.NetPlatform.LanHeld)
+        {
+            LastError = "LAN held by the host app";
+            return;
+        }
+
         // Android/Quest drops broadcast packets at the Wi-Fi driver unless a
         // MulticastLock is held (loopback bypasses this, which is why localhost
         // testing worked). No-op on other platforms. Requires

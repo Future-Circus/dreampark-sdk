@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 using XLua;
 
@@ -47,8 +48,35 @@ namespace DreamPark
         /// <summary>Their avatar URL (ProfileAPI.AvatarUrl on their headset), or "" until it arrives, or forever if they have none — content decides what "no avatar" looks like.</summary>
         public string avatarUrl = "";
 
-        /// <summary>"phone" / "headset" from their presence stream, or "" until known (older clients never send it).</summary>
+        /// <summary>"phone" / "headset" / "camera" from their presence stream, or "" until known (older clients never send it).</summary>
         public string device = "";
+
+        /// <summary>LIVE CAMERA (Nov 13 2026): this peer is a portal's live camera headset — a non-player. It has no rig,
+        /// stays out of dp.peers(), and wears the camera tag (RemoteNameTag) instead of a nameplate.</summary>
+        public bool IsCamera => device == DreamParkDevice.CameraWire;
+        /// <summary>A camera's presence "cm" bits (<see cref="CameraPresence"/>: LIVE 1, REC 2); 0 for everyone else.</summary>
+        public int cameraState;
+        /// <summary>The camera is streaming (LIVE).</summary>
+        public bool CameraLive => IsCamera && (cameraState & CameraPresence.LiveBit) != 0;
+        /// <summary>The camera is recording (REC).</summary>
+        public bool CameraRecording => IsCamera && (cameraState & CameraPresence.RecBit) != 0;
+
+        /// <summary>Their pinned badges (presence "bd", ≤ 5, pin order) for the nameplate, or empty: none pinned, a guest,
+        /// or an older client that never sends them.</summary>
+        public readonly List<NameplateBadge> pinnedBadges = new List<NameplateBadge>();
+        /// <summary>Changes whenever <see cref="pinnedBadges"/> does (the nameplate rebuilds its badge row on a change).</summary>
+        public string pinnedBadgesKey = "";
+
+        /// <summary>Record their pinned badges (presence "bd"). Null = the field was absent (an older client): no change.</summary>
+        public void SetBadges(List<NameplateBadge> badges)
+        {
+            if (badges == null) return;
+            string key = NameplateRules.Key(badges);
+            if (key == pinnedBadgesKey) return;
+            pinnedBadges.Clear();
+            pinnedBadges.AddRange(badges);
+            pinnedBadgesKey = key;
+        }
 
         /// <summary>The clone of this player's RemoteRig, or null while no local rig exists for their game (or their prefab has no RemoteRig).</summary>
         public GameObject rig;
@@ -149,7 +177,8 @@ namespace DreamPark
             if (rightPos.HasValue) { _rp = rightPos.Value; _rq = rightRot ?? _rq; rightTracked = true; } else rightTracked = false;
             if (!string.IsNullOrEmpty(active)) activeHand = active;
             if (!string.IsNullOrEmpty(name)) displayName = name;
-            if (!string.IsNullOrEmpty(avatar)) avatarUrl = avatar;
+            // "" = they have no picture now (a guest who signed in to an account without one); absent = not in this message.
+            if (avatar != null) avatarUrl = avatar;
             if (state != null && state != stateJson) stateJson = state;
         }
 

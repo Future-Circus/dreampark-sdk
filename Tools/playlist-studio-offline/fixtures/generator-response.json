@@ -1,0 +1,866 @@
+{
+ "success": true,
+ "model": "claude-opus-5-5",
+ "kinds": [
+  {
+   "id": "quest",
+   "singular": "Quest",
+   "plural": "Quests"
+  },
+  {
+   "id": "adventure",
+   "singular": "Adventure",
+   "plural": "Adventures"
+  }
+ ],
+ "playlists": [
+  {
+   "id": "frost-quest",
+   "owner": "title",
+   "titleId": "T",
+   "kind": "quest",
+   "name": "Frost Quest",
+   "pitch": "A fine run through Frost Quest.",
+   "tags": [
+    "test"
+   ],
+   "badges": [
+    "t_champ"
+   ],
+   "fit": {
+    "minRooms": 1,
+    "minAreaM2": 12,
+    "indoor": true,
+    "outdoor": true
+   },
+   "arc": [
+    {
+     "id": "in",
+     "name": "Into the Frost",
+     "beat": "opening",
+     "minutes": 4,
+     "next": "walk_on",
+     "objective": {
+      "type": "reach_exit"
+     },
+     "stops": [
+      {
+       "attraction": "A_Gate",
+       "role": "start",
+       "alternates": [],
+       "placement": {
+        "prefer": "entrance"
+       }
+      },
+      {
+       "attraction": "A_IcyAmbush",
+       "role": "stage",
+       "alternates": [],
+       "placement": {
+        "prefer": "any"
+       },
+       "challenge": "clear"
+      }
+     ]
+    },
+    {
+     "id": "tower",
+     "name": "Jump Tower",
+     "beat": "rising",
+     "minutes": 3,
+     "next": "walk_on",
+     "objective": {
+      "type": "reach_exit"
+     },
+     "stops": [
+      {
+       "attraction": "A_JumpTower",
+       "role": "stage",
+       "alternates": [],
+       "placement": {
+        "prefer": "any"
+       },
+       "challenge": "reach_end",
+       "bonus": [
+        "no_hit"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "boss",
+     "name": "FINAL BOSS: King Jubbo",
+     "beat": "climax",
+     "minutes": 6,
+     "next": "walk_on",
+     "objective": {
+      "type": "defeat_boss",
+      "target": "A_KingJubbo"
+     },
+     "stops": [
+      {
+       "attraction": "A_KingJubbo",
+       "role": "boss",
+       "alternates": [],
+       "placement": {
+        "prefer": "biggest"
+       }
+      }
+     ]
+    }
+   ],
+   "designNotes": "headline"
+  },
+  {
+   "id": "jubbo-redux",
+   "owner": "title",
+   "titleId": "T",
+   "kind": "adventure",
+   "name": "Jubbo Redux",
+   "pitch": "A fine run through Jubbo Redux.",
+   "tags": [
+    "test"
+   ],
+   "badges": [
+    "t_champ"
+   ],
+   "fit": {
+    "minRooms": 1,
+    "minAreaM2": 12,
+    "indoor": true,
+    "outdoor": true
+   },
+   "arc": [
+    {
+     "id": "a",
+     "name": "Coins",
+     "beat": "opening",
+     "minutes": 4,
+     "next": "walk_on",
+     "objective": {
+      "type": "collect",
+      "count": 7
+     },
+     "stops": [
+      {
+       "attraction": "A_Gate",
+       "role": "start",
+       "alternates": [],
+       "placement": {
+        "prefer": "entrance"
+       }
+      },
+      {
+       "attraction": "A_CoinGarden",
+       "role": "stage",
+       "alternates": [],
+       "placement": {
+        "prefer": "any"
+       }
+      }
+     ]
+    },
+    {
+     "id": "b",
+     "name": "Ice",
+     "beat": "rising",
+     "minutes": 4,
+     "next": "walk_on",
+     "objective": {
+      "type": "reach_exit"
+     },
+     "stops": [
+      {
+       "attraction": "A_IcyAmbush",
+       "role": "stage",
+       "alternates": [],
+       "placement": {
+        "prefer": "any"
+       }
+      }
+     ]
+    },
+    {
+     "id": "boss",
+     "name": "FINAL BOSS: King Jubbo",
+     "beat": "climax",
+     "minutes": 6,
+     "next": "walk_on",
+     "objective": {
+      "type": "defeat_boss",
+      "target": "A_KingJubbo"
+     },
+     "stops": [
+      {
+       "attraction": "A_KingJubbo",
+       "role": "boss",
+       "alternates": [],
+       "placement": {
+        "prefer": "biggest"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "frost-quest-again",
+   "owner": "title",
+   "titleId": "T",
+   "kind": "quest",
+   "name": "Frost Quest Again",
+   "pitch": "A fine run through Frost Quest Again.",
+   "tags": [
+    "test"
+   ],
+   "badges": [
+    "t_champ"
+   ],
+   "fit": {
+    "minRooms": 1,
+    "minAreaM2": 12,
+    "indoor": true,
+    "outdoor": true
+   },
+   "arc": [
+    {
+     "id": "in",
+     "name": "Into the Frost",
+     "beat": "opening",
+     "minutes": 4,
+     "next": "walk_on",
+     "objective": {
+      "type": "reach_exit"
+     },
+     "stops": [
+      {
+       "attraction": "A_Gate",
+       "role": "start",
+       "alternates": [],
+       "placement": {
+        "prefer": "entrance"
+       }
+      },
+      {
+       "attraction": "A_IcyAmbush",
+       "role": "stage",
+       "alternates": [],
+       "placement": {
+        "prefer": "any"
+       }
+      }
+     ]
+    },
+    {
+     "id": "tower",
+     "name": "Jump Tower",
+     "beat": "rising",
+     "minutes": 3,
+     "next": "walk_on",
+     "objective": {
+      "type": "reach_exit"
+     },
+     "stops": [
+      {
+       "attraction": "A_JumpTower",
+       "role": "stage",
+       "alternates": [],
+       "placement": {
+        "prefer": "any"
+       }
+      }
+     ]
+    },
+    {
+     "id": "boss",
+     "name": "FINAL BOSS: King Jubbo",
+     "beat": "climax",
+     "minutes": 6,
+     "next": "walk_on",
+     "objective": {
+      "type": "defeat_boss",
+      "target": "A_KingJubbo"
+     },
+     "stops": [
+      {
+       "attraction": "A_KingJubbo",
+       "role": "boss",
+       "alternates": [],
+       "placement": {
+        "prefer": "biggest"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "jubbo-run",
+   "owner": "title",
+   "titleId": "T",
+   "kind": "adventure",
+   "name": "Coin Climb",
+   "pitch": "A fine run through Coin Climb.",
+   "tags": [
+    "test"
+   ],
+   "badges": [
+    "t_champ"
+   ],
+   "fit": {
+    "minRooms": 1,
+    "minAreaM2": 12,
+    "indoor": true,
+    "outdoor": true
+   },
+   "arc": [
+    {
+     "id": "a",
+     "name": "Coins",
+     "beat": "opening",
+     "minutes": 4,
+     "next": "walk_on",
+     "objective": {
+      "type": "collect",
+      "count": 7
+     },
+     "stops": [
+      {
+       "attraction": "A_CoinGarden",
+       "role": "start",
+       "alternates": [],
+       "placement": {
+        "prefer": "entrance"
+       }
+      }
+     ]
+    },
+    {
+     "id": "b",
+     "name": "Tower",
+     "beat": "rising",
+     "minutes": 3,
+     "next": "walk_on",
+     "objective": {
+      "type": "reach_exit"
+     },
+     "stops": [
+      {
+       "attraction": "A_JumpTower",
+       "role": "stage",
+       "alternates": [],
+       "placement": {
+        "prefer": "any"
+       }
+      }
+     ]
+    },
+    {
+     "id": "boss",
+     "name": "FINAL BOSS: King Jubbo",
+     "beat": "climax",
+     "minutes": 6,
+     "next": "walk_on",
+     "objective": {
+      "type": "defeat_boss",
+      "target": "A_KingJubbo"
+     },
+     "stops": [
+      {
+       "attraction": "A_KingJubbo",
+       "role": "boss",
+       "alternates": [],
+       "placement": {
+        "prefer": "biggest"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "dragon-den",
+   "owner": "title",
+   "titleId": "T",
+   "kind": "adventure",
+   "name": "Dragon Den",
+   "pitch": "A fine run through Dragon Den.",
+   "tags": [
+    "test"
+   ],
+   "badges": [
+    "t_champ"
+   ],
+   "fit": {
+    "minRooms": 1,
+    "minAreaM2": 12,
+    "indoor": true,
+    "outdoor": true
+   },
+   "arc": [
+    {
+     "id": "a",
+     "name": "Gate",
+     "beat": "opening",
+     "minutes": 2,
+     "next": "walk_on",
+     "objective": {
+      "type": "reach_exit"
+     },
+     "stops": [
+      {
+       "attraction": "A_Gate",
+       "role": "start",
+       "alternates": [],
+       "placement": {
+        "prefer": "entrance"
+       }
+      }
+     ]
+    },
+    {
+     "id": "d",
+     "name": "The Dragon",
+     "beat": "climax",
+     "minutes": 6,
+     "next": "walk_on",
+     "objective": {
+      "type": "defeat_boss"
+     },
+     "stops": [
+      {
+       "attraction": "A_DragonDen",
+       "role": "boss",
+       "alternates": [],
+       "placement": {
+        "prefer": "biggest"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "the-very-long-named-playlist",
+   "owner": "title",
+   "titleId": "T",
+   "kind": "saga",
+   "name": "The Very Long Named Playlist About Ice Towers And A Rather Grumpy King",
+   "pitch": "A fine run through The Very Long Named Playlist About Ice Towers And A Rather Grumpy King.",
+   "tags": [
+    "test"
+   ],
+   "badges": [
+    "t_champ"
+   ],
+   "fit": {
+    "minRooms": 1,
+    "minAreaM2": 12,
+    "indoor": true,
+    "outdoor": true
+   },
+   "arc": [
+    {
+     "id": "a",
+     "name": "Gate",
+     "beat": "opening",
+     "minutes": 2,
+     "next": "walk_on",
+     "objective": {
+      "type": "reach_exit"
+     },
+     "stops": [
+      {
+       "attraction": "A_Gate",
+       "role": "start",
+       "alternates": [],
+       "placement": {
+        "prefer": "entrance"
+       }
+      }
+     ]
+    },
+    {
+     "id": "c",
+     "name": "Ice and King",
+     "beat": "climax",
+     "minutes": 8,
+     "next": "walk_on",
+     "objective": {
+      "type": "defeat_boss"
+     },
+     "stops": [
+      {
+       "attraction": "A_IcyAmbush",
+       "role": "stage",
+       "alternates": [],
+       "placement": {
+        "prefer": "any"
+       }
+      },
+      {
+       "attraction": "A_KingJubbo",
+       "role": "boss",
+       "alternates": [],
+       "placement": {
+        "prefer": "biggest"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "party-night",
+   "owner": "title",
+   "titleId": "T",
+   "kind": "adventure",
+   "name": "Party Night",
+   "pitch": "A fine run through Party Night.",
+   "tags": [
+    "test"
+   ],
+   "badges": [
+    "t_coins",
+    "bogus_badge"
+   ],
+   "fit": {
+    "minRooms": 1,
+    "minAreaM2": 12,
+    "indoor": true,
+    "outdoor": true
+   },
+   "arc": [
+    {
+     "id": "lobby",
+     "name": "Party Lobby",
+     "beat": "opening",
+     "minutes": 1,
+     "next": "walk_on",
+     "objective": {
+      "type": "reach_exit",
+      "target": "start-lobby"
+     },
+     "stops": [
+      {
+       "attraction": "start-lobby",
+       "role": "start",
+       "alternates": [],
+       "placement": {
+        "prefer": "players"
+       }
+      }
+     ]
+    },
+    {
+     "id": "coins",
+     "name": "Coin Rush",
+     "beat": "opening",
+     "minutes": 3,
+     "next": "walk_on",
+     "objective": {
+      "type": "collect",
+      "count": 7
+     },
+     "stops": [
+      {
+       "attraction": "A_CoinGarden",
+       "role": "stage",
+       "alternates": [],
+       "placement": {
+        "prefer": "any"
+       }
+      }
+     ]
+    },
+    {
+     "id": "boss",
+     "name": "FINAL BOSS: King Jubbo",
+     "beat": "climax",
+     "minutes": 6,
+     "next": "walk_on",
+     "objective": {
+      "type": "defeat_boss",
+      "target": "A_KingJubbo"
+     },
+     "stops": [
+      {
+       "attraction": "A_KingJubbo",
+       "role": "boss",
+       "alternates": [],
+       "placement": {
+        "prefer": "biggest"
+       }
+      }
+     ]
+    },
+    {
+     "id": "results",
+     "name": "Results Room",
+     "beat": "finale",
+     "minutes": 2,
+     "next": "walk_on",
+     "objective": {
+      "type": "time",
+      "seconds": 90
+     },
+     "stops": [
+      {
+       "attraction": "results-room",
+       "role": "end",
+       "alternates": [],
+       "placement": {
+        "prefer": "players"
+       },
+       "contentId": "DreamParkBookends"
+      }
+     ],
+     "titles": [
+      "DreamParkBookends"
+     ]
+    }
+   ],
+   "rules": {
+    "timerSec": 0,
+    "scoring": "sum",
+    "lives": 0,
+    "advance": "on_complete"
+   }
+  },
+  {
+   "id": "ice-sprint",
+   "owner": "title",
+   "titleId": "T",
+   "kind": "adventure",
+   "name": "Ice Sprint",
+   "pitch": "A fine run through Ice Sprint.",
+   "tags": [
+    "test"
+   ],
+   "badges": [
+    "t_champ"
+   ],
+   "fit": {
+    "minRooms": 1,
+    "minAreaM2": 12,
+    "indoor": true,
+    "outdoor": true
+   },
+   "arc": [
+    {
+     "id": "a",
+     "name": "Ice Run",
+     "beat": "opening",
+     "minutes": 4,
+     "next": "walk_on",
+     "objective": {
+      "type": "reach_exit"
+     },
+     "stops": [
+      {
+       "attraction": "A_IcyAmbush",
+       "role": "stage",
+       "alternates": [],
+       "placement": {
+        "prefer": "entrance"
+       }
+      },
+      {
+       "attraction": "A_CoinGarden",
+       "role": "stage",
+       "alternates": [
+        "A_JumpTower",
+        "A_Nope"
+       ],
+       "placement": {
+        "prefer": "any"
+       }
+      }
+     ]
+    },
+    {
+     "id": "boss",
+     "name": "FINAL BOSS: King Jubbo",
+     "beat": "climax",
+     "minutes": 6,
+     "next": "walk_on",
+     "objective": {
+      "type": "defeat_boss",
+      "target": "A_KingJubbo"
+     },
+     "stops": [
+      {
+       "attraction": "A_KingJubbo",
+       "role": "boss",
+       "alternates": [],
+       "placement": {
+        "prefer": "biggest"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "giant-stomp",
+   "owner": "title",
+   "titleId": "T",
+   "kind": "adventure",
+   "name": "Giant Stomp",
+   "pitch": "A fine run through Giant Stomp.",
+   "tags": [
+    "test"
+   ],
+   "badges": [
+    "t_champ"
+   ],
+   "fit": {
+    "minRooms": 1,
+    "minAreaM2": 12,
+    "indoor": true,
+    "outdoor": true
+   },
+   "arc": [
+    {
+     "id": "a",
+     "name": "Gate",
+     "beat": "opening",
+     "minutes": 2,
+     "next": "walk_on",
+     "objective": {
+      "type": "reach_exit"
+     },
+     "stops": [
+      {
+       "attraction": "A_Gate",
+       "role": "start",
+       "alternates": [],
+       "placement": {
+        "prefer": "entrance"
+       }
+      }
+     ]
+    },
+    {
+     "id": "g",
+     "name": "The Giant",
+     "beat": "rising",
+     "minutes": 4,
+     "next": "walk_on",
+     "objective": {
+      "type": "reach_exit"
+     },
+     "stops": [
+      {
+       "attraction": "A_Giant",
+       "role": "stage",
+       "alternates": [],
+       "placement": {
+        "prefer": "any"
+       }
+      }
+     ]
+    },
+    {
+     "id": "boss",
+     "name": "FINAL BOSS: King Jubbo",
+     "beat": "climax",
+     "minutes": 6,
+     "next": "walk_on",
+     "objective": {
+      "type": "defeat_boss",
+      "target": "A_KingJubbo"
+     },
+     "stops": [
+      {
+       "attraction": "A_KingJubbo",
+       "role": "boss",
+       "alternates": [],
+       "placement": {
+        "prefer": "biggest"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "giant-park",
+   "owner": "title",
+   "titleId": "T",
+   "kind": "adventure",
+   "name": "Giant in the Park",
+   "pitch": "A fine run through Giant in the Park.",
+   "tags": [
+    "test"
+   ],
+   "badges": [
+    "t_champ"
+   ],
+   "fit": {
+    "minRooms": 1,
+    "minAreaM2": 300,
+    "indoor": true,
+    "outdoor": true
+   },
+   "arc": [
+    {
+     "id": "g",
+     "name": "The Giant",
+     "beat": "opening",
+     "minutes": 4,
+     "next": "walk_on",
+     "objective": {
+      "type": "reach_exit"
+     },
+     "stops": [
+      {
+       "attraction": "A_Giant",
+       "role": "start",
+       "alternates": [],
+       "placement": {
+        "prefer": "outdoor"
+       }
+      }
+     ]
+    },
+    {
+     "id": "boss",
+     "name": "FINAL BOSS: King Jubbo",
+     "beat": "climax",
+     "minutes": 6,
+     "next": "walk_on",
+     "objective": {
+      "type": "defeat_boss",
+      "target": "A_KingJubbo"
+     },
+     "stops": [
+      {
+       "attraction": "A_KingJubbo",
+       "role": "boss",
+       "alternates": [],
+       "placement": {
+        "prefer": "biggest"
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "notes": [
+  "fixture"
+ ],
+ "warnings": [
+  {
+   "playlistId": "dragon-den",
+   "message": "stop A_DragonDen is not an attraction of T"
+  }
+ ],
+ "usage": {
+  "inputTokens": 3000,
+  "outputTokens": 9000,
+  "cacheReadTokens": 12000,
+  "cacheWriteTokens": 0
+ }
+}

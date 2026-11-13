@@ -23,7 +23,7 @@
         },
         {
             "name": "DreamPark_API_ScoreAPIWrap.cs",
-            "sha256": "16a34272ee0f4c4c128971c3febac0c14ee66aa2a368b4724b5003db6a2b1669"
+            "sha256": "16a258b25d3f949c0898eb033cd0cb7f1b426ad88844d0946241c1f6446d55a0"
         },
         {
             "name": "DreamPark_AttractionPortalGeometryWrap.cs",
@@ -35,7 +35,7 @@
         },
         {
             "name": "DreamPark_AttractionTemplateWrap.cs",
-            "sha256": "e8d045f6c6630f5cfe92b953166fb1c97ba6b0dd9e36f9bb6bc47305f02108d8"
+            "sha256": "6a6d83fcf029f11b97735a0850b24a0fa18dd45f06ff09bf808479875fc743b5"
         },
         {
             "name": "DreamPark_DreamParkGestureWrap.cs",
@@ -99,11 +99,11 @@
         },
         {
             "name": "DreamPark_LevelTemplateWrap.cs",
-            "sha256": "b4b920f859d11db02eb5e3accdf28d4e79bccba9ee7f68d6a4a710276626da30"
+            "sha256": "05554ebd3d693e5c51f6b24bc08b5968e2891cb46615756c95d54e8457854b2a"
         },
         {
             "name": "DreamPark_MusicAreaWrap.cs",
-            "sha256": "531c8851cc57cdb703983eddae97c607c30b806032387a4b99169fa2676dca08"
+            "sha256": "ea91db4541ab01d3c16aa5fcd803df74fa1bd59426a03d434a8c7514f4870d56"
         },
         {
             "name": "DreamPark_NetScopeWrap.cs",
@@ -115,7 +115,7 @@
         },
         {
             "name": "DreamPark_PlayerRigWrap.cs",
-            "sha256": "0360dad506eb4f8395c6509b9f2eb04cabe9362a414cc00d433489bc932d6e16"
+            "sha256": "81585d59d53eda62566318718a9f4d25bea01174c904eaf5cc272f5998e93442"
         },
         {
             "name": "DreamPark_PortalRendererWrap.cs",
@@ -139,7 +139,7 @@
         },
         {
             "name": "DreamPark_RemoteNameTagWrap.cs",
-            "sha256": "3775b8fc8a46bd5561d0b2b55969b3497e83ec4976ce72bcda0f6628f6c2bcfd"
+            "sha256": "d58e3a47310314ae43de5954776673ca65009d0dc94f31887412bf9700175530"
         },
         {
             "name": "EasyAnimationWrap.cs",
@@ -215,7 +215,7 @@
         },
         {
             "name": "HandTrackerWrap.cs",
-            "sha256": "44e5cefc0655bdaa80c406765162184a03dcbf0bd8964b66c47089488b29ba78"
+            "sha256": "7e079a6ab187acfceaba244ebcf6281538decec5343092e7993adb569612540e"
         },
         {
             "name": "LuaBehaviourWrap.cs",

@@ -1057,6 +1057,115 @@ return s.total('dmg'), s.get('dmg'), #s.items('got'), s.has('got', 'hat'), seat.
         Assert.That(y.engine.LeaderFor("BirthdayBash"), Is.EqualTo("x"), "unknown = eligible, the senior one leads");
     }
 
+    // ── Spectators: the rig is the gate (Oct 23 2026, platform-rig; DreamParkParticipation.cs) ──
+
+    [Test]
+    public void APhoneWithoutTheRigNeverLeadsRanksOrWritesTheTitle()
+    {
+        var t = new[] { "SAL" };
+        var sim = new Sim();
+        var p = sim.Add("a-phone", phone: true, titles: t, worn: new string[0]);   // lowest id, first in
+        sim.Run(1);
+        var h = sim.Add("h", titles: t, worn: new string[0]);                       // a headset between zones
+        var sp = SharedState.CreateDetached(p.engine, "o:7", "fight", null, "SAL");
+        var sh = SharedState.CreateDetached(h.engine, "o:7", "fight", null, "SAL");
+        sim.Run(4);
+        foreach (var d in sim.devices)
+        {
+            Assert.That(d.engine.LeaderFor("SAL"), Is.EqualTo("h"), d.id + ": a phone without the rig never leads, even with no wearer");
+            Assert.That(d.engine.Rank("a-phone", "SAL"), Is.EqualTo(0), d.id + ": nor ranks");
+        }
+        Assert.That(sh.IsLeader && sp.LeaderId == "h", Is.True, "the headset writes the title's table");
+        Assert.That(sp.Set("e", "9"), Is.False, "the spectator's own write is dropped at the source");
+        sh.SetNumber("e", 1);
+        sim.Run(0.3);
+        Assert.That(sp.GetNumber("e"), Is.EqualTo(1), "it still watches");
+        // A raw request on the wire (an older build that does not gate itself): the writer refuses it.
+        p.Publish(SessionEngine.TypeState, "{\"b\":\"o:7\",\"n\":\"fight\",\"k\":\"ws\",\"u\":\"a-phone\",\"sy\":1,\"kv\":{\"e\":2},\"x\":[]}");
+        sim.Run(0.3);
+        Assert.That(sh.GetNumber("e"), Is.EqualTo(1), "the writer refuses a spectator's write request");
+        h.Leave(clean: true);
+        sim.Run(5);
+        Assert.That(p.engine.LeaderFor("SAL"), Is.EqualTo(""), "alone without the rig: nobody leads the title");
+        Assert.That(sp.LeaderId, Is.EqualTo(""), "and nobody writes its table");
+    }
+
+    [Test]
+    public void ThePhoneRigToggleHandsRolesOffAtOnce()
+    {
+        var t = new[] { "SAL" };
+        var sim = new Sim();
+        var p = sim.Add("p", phone: true, titles: t, worn: t);   // full-screen AR, wearing its Phone Player
+        var sp = SharedState.CreateDetached(p.engine, "o:8", "round", null, "SAL");
+        sim.Run(12);
+        Assert.That(sp.IsLeader && p.engine.LeaderFor("SAL") == "p", Is.True, "wearing its rig alone: it plays and writes");
+        sp.SetNumber("n", 3);
+        p.worn = new string[0]; p.engine.RescanWorn();             // the sheet came up / the diorama / another tab
+        Assert.That(sp.IsLeader || p.engine.LeaderFor("SAL") == "p", Is.False, "rig off: no role held, the same frame");
+        Assert.That(sp.Set("n", "4"), Is.False, "and no effect on the game");
+        var h = sim.Add("h", titles: t, worn: t);
+        var sh = SharedState.CreateDetached(h.engine, "o:8", "round", null, "SAL");
+        sim.Run(4);
+        Assert.That(sh.IsLeader && sh.GetNumber("n") == 3, Is.True, "a headset takes over from the spectator's copy (round 3)");
+        p.worn = t; p.engine.RescanWorn();
+        sim.Run(1.5);
+        sp.SetNumber("bonus", 1);
+        sim.Run(0.3);
+        Assert.That(sh.GetNumber("bonus"), Is.EqualTo(1), "rig on again: a player, its writes count");
+    }
+
+    [Test]
+    public void ASpectatorPhoneKeepsThePlaylistsAllowList()
+    {
+        var t = new[] { "SAL" };
+        var sim = new Sim();
+        var h = sim.Add("h", titles: t, worn: t);
+        var p = sim.Add("p", phone: true, titles: t, worn: new string[0]);
+        var sh = SharedState.CreateDetached(h.engine, "o:9", "dp.playlist.hold", null, "SAL");
+        var sp = SharedState.CreateDetached(p.engine, "o:9", "dp.playlist.hold", null, "SAL");
+        foreach (var s in new[] { sh, sp }) s.AllowSpectator("c.*", "final", "next", "begin");
+        var asked = new List<string>();
+        sh.Requested += (k, j, from) => asked.Add(k + "<" + from);
+        sim.Run(4);
+        sp.SetString("final", "next");
+        sp.SetString("board", "x");
+        sp.Request("begin", "{}");
+        sp.Request("restart", "{}");
+        using (DreamParkParticipation.SpectatorAction()) sp.Request("hunt", "{}");
+        sim.Run(0.3);
+        Assert.That(sh.GetString("final"), Is.EqualTo("next"), "What's Next: the phone's final pick reaches the headset");
+        Assert.That(sh.Has("board"), Is.False, "but not the board");
+        Assert.That(asked, Is.EquivalentTo(new[] { "begin<p", "hunt<p" }), "the start circle and a tapped action reach the writer; a restart does not");
+    }
+
+    [Test]
+    public void ParticipatingResolvesTheBetaTitleFromAGameManager()
+    {
+        // ww-mp-fixes (Oct 23): WizardsWay passes its Game Manager on purpose (nil = any title's rig). The manager sits
+        // under the package scope "pkg|WizardsWayBeta|manager|…"; the phone's rig is authored as "WizardsWay".
+        var rigGo = new GameObject("Phone Player"); var mgr = new GameObject("Game Manager");
+        var prevRig = PlayerRig.Instance; bool prevPhone = DreamParkDevice.SimulatePhone;
+        try
+        {
+            var rig = rigGo.AddComponent<PlayerRig>(); rig.gameId = "WizardsWay";
+            mgr.AddComponent<NetScope>().scopeKey = "pkg|WizardsWayBeta|manager|inst-1";
+            PlayerRig.Instance = rig;
+            DreamParkDevice.SimulatePhone = true;
+            Assert.That(DreamParkParticipation.Participating(mgr), Is.True, "the Game Manager's Beta id matches the worn rig");
+            Assert.That(DreamParkParticipation.Participating("WizardsWayBeta") && DreamParkParticipation.Participating("WizardsWay"), Is.True);
+            Assert.That(DreamParkParticipation.Participating("SuperAdventureLandBeta"), Is.False, "another title's id does not");
+            rigGo.SetActive(false);
+            Assert.That(DreamParkParticipation.Participating(mgr), Is.False, "rig off: a spectator");
+            DreamParkDevice.SimulatePhone = false;
+            Assert.That(DreamParkParticipation.Participating(mgr), Is.True, "a headset always takes part");
+        }
+        finally
+        {
+            DreamParkDevice.SimulatePhone = prevPhone; PlayerRig.Instance = prevRig;
+            Object.DestroyImmediate(rigGo); Object.DestroyImmediate(mgr);
+        }
+    }
+
     [Test]
     public void AHostAloneInItsRoomSyncsAtOnce()
     {

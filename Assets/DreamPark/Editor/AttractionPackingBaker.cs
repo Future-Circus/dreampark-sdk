@@ -119,6 +119,12 @@ internal static class AttractionPackingBaker
                 ? CollectLayoutBaseStates(attraction)
                 : new List<AttractionLayoutBaseState>());
             if (walls) LogWallCombinationIssues(attraction);
+            BakeGroundFootprints(attraction);
+#if !DREAMPARKCORE
+            // A blank Sequence Game Over level keeps the 0.1 m shrink the wizard gave it (an empty end card must never pin
+            // the Sequence to 12 x 18 ft). Every publish's bake used to reset it to the authored size (LaserTag v24).
+            global::DreamPark.Editor.DreamSequenceGenerator.KeepEmptyGameOverShrink(attraction);
+#endif
             EditorUtility.SetDirty(attraction);
             PrefabUtility.RecordPrefabInstancePropertyModifications(attraction);
             return true;
@@ -154,8 +160,101 @@ internal static class AttractionPackingBaker
         attraction.SetPackingBake(mirrored);
         attraction.SetLayoutBaseStates(CollectLayoutBaseStates(attraction));
         if (attraction.HasWallLayers) LogWallCombinationIssues(attraction);
+        BakeGroundFootprints(attraction);
         EditorUtility.SetDirty(attraction);
         PrefabUtility.RecordPrefabInstancePropertyModifications(attraction);
+        return true;
+    }
+
+    /// Renderers whose bottom is at most this high above the attraction's floor are ground content.
+    internal const float GroundMaxHeightMeters = 0.5f;
+
+    /// <summary>
+    /// TRUE ground bounds per layout (Oct 19 2026). The declared footprint is what the creator asked for, but
+    /// floor content may overhang it (a lava pool's rim, a mole field's mounds) — and the planner reserving only
+    /// the declared box put a neighbour on top of it. For Base and every baked frame, at 1× and at its shrink,
+    /// a throwaway copy (under an inactive holder: no Awake/OnEnable, the asset is never touched) gets
+    /// ApplyLayout exactly as the runtime does, then every visible renderer active in that layout whose bottom is
+    /// ≤ GroundMaxHeightMeters is measured from its mesh/sprite data, followers included. The result is stored
+    /// as a centred box (the planner centres every reservation on the attraction origin) in the bake's ground
+    /// fields; the planner reserves max(declared, ground). Airborne content may still overhang on purpose.
+    /// </summary>
+    internal static void BakeGroundFootprints(AttractionTemplate attraction)
+    {
+        if (attraction == null) return;
+        var layouts = new List<(string id, AttractionPackingBake bake)>();
+        if (attraction.PackingBake != null) layouts.Add((AttractionTemplate.BaseFrameId, attraction.PackingBake));
+        if (attraction.HasLayoutFrames)
+            foreach (AttractionLayoutFrame frame in attraction.LayoutFrames)
+                if (frame != null && attraction.FrameHasValidBake(frame))
+                    layouts.Add((frame.kind == AttractionLayoutFrameKind.Minimum
+                        ? AttractionTemplate.MinimumFrameId : frame.id, frame.Bake));
+        if (layouts.Count == 0) return;
+
+        var holder = new GameObject("GroundBake [nopack]") { hideFlags = HideFlags.HideAndDontSave };
+        holder.SetActive(false);
+        try
+        {
+            var copy = (GameObject)UnityEngine.Object.Instantiate(attraction.gameObject, holder.transform);
+            copy.hideFlags = HideFlags.HideAndDontSave;
+            AttractionTemplate live = copy.GetComponent<AttractionTemplate>();
+            if (live == null) return;
+            foreach ((string id, AttractionPackingBake bake) in layouts)
+            {
+                Vector2 atAuthored = MeasureGround(live, id, Vector2.one);
+                Vector2 atShrink = MeasureGround(live, id, bake.ShrinkScale);
+                bake.SetGroundFootprints(atAuthored, atShrink);
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[AttractionPacking] ground bounds for '{attraction.name}' not measured: {e.Message}");
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(holder);
+        }
+    }
+
+    /// The centred X/Z box (prefab-local metres) of the ground content in one layout; zero when there is none.
+    private static Vector2 MeasureGround(AttractionTemplate live, string frameId, Vector2 scale)
+    {
+        live.ApplyLayout(frameId, scale);
+        Transform root = live.transform;
+        Matrix4x4 toRoot = root.worldToLocalMatrix;
+        float hx = 0f, hz = 0f;
+        bool any = false;
+        foreach (Renderer r in live.GetComponentsInChildren<Renderer>(true))
+        {
+            if (r == null || !r.enabled || !IsActiveUnder(r.transform, root)) continue;
+            if (r is LineRenderer || r is ParticleSystemRenderer || r is TrailRenderer) continue;
+            if (r.shadowCastingMode == UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly) continue;
+            if (r.CompareTag("EditorOnly") || IsHiddenPackingGeometry(r.transform, root)) continue;
+            if (!TryRendererLocalBounds(r, toRoot, out Vector3 lo, out Vector3 hi)) continue;
+            if (lo.y > GroundMaxHeightMeters) continue;
+            hx = Mathf.Max(hx, Mathf.Abs(lo.x), Mathf.Abs(hi.x));
+            hz = Mathf.Max(hz, Mathf.Abs(lo.z), Mathf.Abs(hi.z));
+            any = true;
+        }
+        return any ? new Vector2(hx * 2f, hz * 2f) : Vector2.zero;
+    }
+
+    /// A renderer's bounds in the root's space from its mesh / sprite data (valid under an inactive holder, where
+    /// Renderer.bounds is empty).
+    private static bool TryRendererLocalBounds(Renderer r, Matrix4x4 toRoot, out Vector3 lo, out Vector3 hi)
+    {
+        lo = Vector3.positiveInfinity; hi = Vector3.negativeInfinity;
+        Bounds b; Matrix4x4 m;
+        if (r is SkinnedMeshRenderer sk) { b = sk.localBounds; m = (sk.rootBone != null ? sk.rootBone : sk.transform).localToWorldMatrix; }
+        else if (r is MeshRenderer) { var mf = r.GetComponent<MeshFilter>(); if (mf == null || mf.sharedMesh == null) return false; b = mf.sharedMesh.bounds; m = r.transform.localToWorldMatrix; }
+        else if (r is SpriteRenderer sr) { if (sr.sprite == null) return false; b = sr.sprite.bounds; m = r.transform.localToWorldMatrix; }
+        else return false;
+        for (int i = 0; i < 8; i++)
+        {
+            var c = new Vector3((i & 1) == 0 ? b.min.x : b.max.x, (i & 2) == 0 ? b.min.y : b.max.y, (i & 4) == 0 ? b.min.z : b.max.z);
+            Vector3 p = toRoot.MultiplyPoint3x4(m.MultiplyPoint3x4(c));
+            lo = Vector3.Min(lo, p); hi = Vector3.Max(hi, p);
+        }
         return true;
     }
 
@@ -596,6 +695,46 @@ internal static class AttractionPackingBaker
     /// Inspector warnings for an attraction's layout frames. Reads serialized data
     /// only (it never applies a frame), so it is cheap enough to call per repaint.
     /// </summary>
+    /// <summary>
+    /// WE NEVER SCALE OUR ASSETS TO FIT (Aidan, Oct 19 2026: layouts "only compact/remove/add"; scaling is "an artistic
+    /// decision, not a decision for smaller layouts"). Every layout-frame override that changes an object's scale from
+    /// its Base scale, as "frame 'name': path base→frame". Empty = clean. The pre-upload check
+    /// FrameScaleOverridesCheck blocks the upload on any of these.
+    /// </summary>
+    internal static List<string> GetFrameScaleOverrides(AttractionTemplate attraction)
+    {
+        var list = new List<string>();
+        if (attraction == null || !attraction.HasLayoutFrames) return list;
+        Transform root = attraction.transform;
+        var baseScale = new Dictionary<Transform, Vector3>();
+        foreach (AttractionLayoutBaseState st in attraction.LayoutBaseStates)
+        {
+            Transform t = st?.Resolve(root);
+            if (t != null) baseScale[t] = st.localScale;
+        }
+        foreach (AttractionLayoutFrame frame in attraction.LayoutFrames)
+        {
+            if (frame?.overrides == null) continue;
+            foreach (AttractionLayoutOverride change in frame.overrides)
+            {
+                if (change == null || !change.setScale) continue;
+                Transform t = change.Resolve(root);
+                Vector3 from = t != null && baseScale.TryGetValue(t, out Vector3 b) ? b : t != null ? t.localScale : Vector3.one;
+                if ((change.localScale - from).sqrMagnitude <= 1e-8f) continue;
+                string path = t != null ? PathUnder(t, root) : change.path;
+                list.Add($"frame '{(string.IsNullOrEmpty(frame.name) ? frame.id : frame.name)}': {path} {from}→{change.localScale}");
+            }
+        }
+        return list;
+    }
+
+    private static string PathUnder(Transform t, Transform root)
+    {
+        string s = t.name;
+        for (Transform c = t.parent; c != null && c != root; c = c.parent) s = c.name + "/" + s;
+        return s;
+    }
+
     internal static List<string> GetFrameWarnings(AttractionTemplate attraction)
     {
         var warnings = new List<string>();

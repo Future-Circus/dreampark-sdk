@@ -25,6 +25,15 @@ public class HandTracker : MonoBehaviour
     }
 
     public HandPreference handPreference = HandPreference.Both;
+    // OVRHand is Quest-only. The iOS player is built without the Meta assemblies
+    // (Assets/Editor/IosQuestAssemblyFilter.cs) and Main-iOS.unity never had an
+    // OVRHand: leftHand / rightHand / ActiveHand do not exist there and this tracker
+    // answers exactly what it did with all three null (isActiveAndTracking false).
+    // SERIALIZED ON EVERY PLATFORM, on purpose. An iOS bundle's layout comes from the Editor, where these two fields
+    // exist, but its data came from the iOS player compile. When the fields were #if'd out of iOS, the layout promised
+    // 24 bytes the data didn't have, and Unity's loader died reading past the end (a fatal CachedReader::OutOfBoundsError,
+    // Oct 31 2026, Arcade Land v23's Player on the phone). Never put a serialized field behind a platform #if here.
+    // On iOS the type below is an empty stand-in, and both are always null, as they always were.
     public OVRHand leftHand, rightHand;
     public bool flipVisual = false;
     [ShowIf("flipVisual")]
@@ -32,7 +41,9 @@ public class HandTracker : MonoBehaviour
     [ShowIf("flipVisual")]
     public Vector3 flipVisualPosition = new Vector3(0, 0, 0);
     private Transform activeHandAnchor;
+#if !UNITY_IOS || UNITY_EDITOR
     private OVRHand activeHand;
+#endif
     Transform leftAnchor;
     Transform rightAnchor;
     private Rigidbody rb;
@@ -85,14 +96,24 @@ public class HandTracker : MonoBehaviour
     private const float DriftMeters = 0.25f;
     private const float DriftSeconds = 0.25f;
 
+#if !UNITY_IOS || UNITY_EDITOR
     public OVRHand ActiveHand
     {
         get { return activeHand; }
     }
+#else
+    // iOS player stub (see leftHand / rightHand above): no hand is ever active on iOS.
+    // (The private activeHand field has no stub: nothing outside this class can name it.)
+    public OVRHand ActiveHand
+    {
+        get { return null; }
+    }
+#endif
 
     void Awake()
     {
         CaptureJointSeats();
+#if !UNITY_IOS || UNITY_EDITOR
         if (leftHand == null && rightHand == null)
         {
             OVRHand[] hands = FindObjectsByType<OVRHand>(FindObjectsSortMode.InstanceID);
@@ -108,6 +129,7 @@ public class HandTracker : MonoBehaviour
                 }
             }
         }
+#endif
     }
 
     private void Start()
@@ -224,6 +246,7 @@ public class HandTracker : MonoBehaviour
         // Bind by GetHand(), never by InstanceID order — that assignment
         // swapped left/right whenever the right hand happened to sort first,
         // and in the editor this method runs every frame.
+#if !UNITY_IOS || UNITY_EDITOR
         if (leftHand == null || rightHand == null)
         {
             OVRHand[] hands = FindObjectsByType<OVRHand>(FindObjectsSortMode.None);
@@ -234,11 +257,13 @@ public class HandTracker : MonoBehaviour
                 else if (hand.GetHand() == OVRPlugin.Hand.HandRight) rightHand = hand;
             }
         }
+#endif
         ChooseHand();
     }
 
     void ChooseHand()
     {
+#if !UNITY_IOS || UNITY_EDITOR
         switch (handPreference)
         {
             case HandPreference.Left:
@@ -299,6 +324,7 @@ public class HandTracker : MonoBehaviour
                 }
                 break;
         }
+#endif
     }
 
     void UpdateStep()
@@ -404,19 +430,31 @@ public class HandTracker : MonoBehaviour
 
     public bool isActiveAndTracking {
         get {
+#if UNITY_IOS && !UNITY_EDITOR
+            return false;
+#else
             return activeHand != null && activeHand.IsTracked;
+#endif
         }
     }
 
     public bool isUsingLeftHand {
         get {
+#if UNITY_IOS && !UNITY_EDITOR
+            return true; // activeHand == leftHand with both null — what it always answered on iOS
+#else
             return activeHand == leftHand;
+#endif
         }
     }
 
     public bool isUsingRightHand {
         get {
+#if UNITY_IOS && !UNITY_EDITOR
+            return true; // activeHand == rightHand with both null — what it always answered on iOS
+#else
             return activeHand == rightHand;
+#endif
         }
     }
 
@@ -552,3 +590,9 @@ public class HandTracker : MonoBehaviour
     }
 #endif
 }
+
+#if UNITY_IOS && !UNITY_EDITOR
+// The iOS player has no Meta assemblies (Assets/Editor/IosQuestAssemblyFilter.cs). This empty stand-in keeps
+// HandTracker's serialized layout the same as the Editor's, so iOS bundles are readable. See leftHand / rightHand.
+public class OVRHand : MonoBehaviour { }
+#endif

@@ -94,6 +94,13 @@
 //      dp.score.submit(storage.gameId, "high_score", finalScore, storage.attraction)
 //      dp.score.fetchLeaderboard(storage.gameId, "high_score",
 //          { thisParkOnly = true }, function(ok, board) ... end)
+//
+//  WAY TO PLAY (Nov 2026, Docs/RESULTS.md): every submit / read also sends
+//  `runnerId`, the way to play this device is running for that content
+//  (RunnerHost), so Zombiez Waves and Zombiez Campaign keep separate boards.
+//  The game never passes it; `opts.go = self.gameObject` resolves it from the
+//  script's own load, `opts.runnerId` overrides it ('' = no way to play):
+//      dp.score.submit(storage.gameId, "high_score", s, storage.attraction, nil, nil, { go = self.gameObject })
 // ─────────────────────────────────────────────────────────────────────────
 
 using System;
@@ -202,7 +209,7 @@ namespace DreamPark.API
 
         struct PendingSubmit
         {
-            public string contentId, metric, attraction, parkId, shardId;
+            public string contentId, metric, attraction, parkId, shardId, runnerId;
             public double value;
             public ScoreDirection direction;
             public Action<bool, ScoreSubmitResult> done;
@@ -238,7 +245,7 @@ namespace DreamPark.API
                     try { p.done?.Invoke(false, null); } catch (Exception e) { Debug.LogWarning(e); }
                     continue;
                 }
-                SubmitScoreNow(p.contentId, p.metric, p.value, p.attraction, p.direction, p.parkId, p.shardId, p.done);
+                SubmitScoreNow(p.contentId, p.metric, p.value, p.attraction, p.direction, p.parkId, p.shardId, p.done, runnerId: p.runnerId);
             }
         }
 
@@ -265,14 +272,20 @@ namespace DreamPark.API
         /// order locks there. A later call disagreeing is rejected by the
         /// server (not silently reinterpreted), so pick it correctly the
         /// first time — Descending (higher wins) for most scores, Ascending
-        /// for anything timed (lap times, speedruns).</summary>
+        /// for anything timed (lap times, speedruns).
+        ///
+        /// `runnerId` (Nov 2026, results contract §4): the way to play the board
+        /// belongs to. Null = automatic (the way to play this device is running
+        /// for `contentId`, else ""); "" = explicitly no way to play. The server
+        /// keys the board per way to play when it is non-empty.</summary>
         public static void SubmitScore(
             string contentId,
             string metric,
             double value,
             string attraction = null,
             ScoreDirection direction = ScoreDirection.Descending,
-            Action<bool, ScoreSubmitResult> done = null)
+            Action<bool, ScoreSubmitResult> done = null,
+            string runnerId = null)
         {
             if (string.IsNullOrEmpty(contentId)) { Debug.LogWarning("[ScoreAPI] SubmitScore requires a contentId."); done?.Invoke(false, null); return; }
             if (string.IsNullOrEmpty(metric) || !GameStorageAPI.KeyRe.IsMatch(metric))
@@ -289,6 +302,8 @@ namespace DreamPark.API
             }
 
             HookIdentity();
+            // Captured at the call, like park/attraction (the board may stop before the identity lands).
+            runnerId = ResolveRunnerId(contentId, runnerId);
 
             if (!ProfileAPI.IsBound)
             {
@@ -298,7 +313,7 @@ namespace DreamPark.API
                 string guestId = ProfileAPI.GuestWriteId;
                 if (guestId != null)
                 {
-                    SubmitScoreNow(contentId, metric, value, attraction, direction, ProfileAPI.CallingParkId(), ProfileAPI.ShardContext, done, guestId);
+                    SubmitScoreNow(contentId, metric, value, attraction, direction, ProfileAPI.CallingParkId(), ProfileAPI.ShardContext, done, guestId, runnerId);
                     return;
                 }
                 if (_pending.Count >= MaxPendingSubmits)
@@ -318,6 +333,7 @@ namespace DreamPark.API
                     direction = direction,
                     parkId = ProfileAPI.CallingParkId(),
                     shardId = ProfileAPI.ShardContext,
+                    runnerId = runnerId,
                     done = done,
                     atSec = Time.realtimeSinceStartup,
                 });
@@ -325,13 +341,22 @@ namespace DreamPark.API
                 return;
             }
 
-            SubmitScoreNow(contentId, metric, value, attraction, direction, ProfileAPI.CallingParkId(), ProfileAPI.ShardContext, done);
+            SubmitScoreNow(contentId, metric, value, attraction, direction, ProfileAPI.CallingParkId(), ProfileAPI.ShardContext, done, runnerId: runnerId);
+        }
+
+        /// <summary>The way to play a score call belongs to: the explicit value when given ("" = none),
+        /// else the way to play this device runs for `contentId` (from `go` when the caller knows it).</summary>
+        static string ResolveRunnerId(string contentId, string explicitRunnerId, GameObject go = null)
+        {
+            if (explicitRunnerId != null) return explicitRunnerId.Trim();
+            try { return ResultsAPI.RunnerIdFor(go, contentId) ?? ""; }
+            catch (Exception) { return ""; }
         }
 
         static void SubmitScoreNow(
             string contentId, string metric, double value, string attraction,
             ScoreDirection direction, string parkId, string shardId,
-            Action<bool, ScoreSubmitResult> done, string guestId = null)
+            Action<bool, ScoreSubmitResult> done, string guestId = null, string runnerId = null)
         {
             var body = new JSONObject(JSONObject.Type.Object);
             body.AddField("metric", metric);
@@ -347,6 +372,8 @@ namespace DreamPark.API
             // used to omit it and were refused). A guest write also names the guest.
             body.AddField("headsetId", SystemInfo.deviceUniqueIdentifier);
             if (guestId != null) body.AddField("guestId", guestId);
+            // The way to play ("" = none): the server keys the board {attraction}__{metric}__w_{runnerId}.
+            body.AddField("runnerId", runnerId ?? "");
 
             var url = "/app/profile/scores/" + Uri.EscapeDataString(contentId);
             ProfileAPI.GatedPost(url, ProfileAPI.AuthHeader(), body, (ok, resp) =>
@@ -368,13 +395,15 @@ namespace DreamPark.API
             string attraction = null,
             bool thisParkOnly = false,
             LeaderboardWindow window = LeaderboardWindow.All,
-            Action<bool, MyScoreResult> done = null)
+            Action<bool, MyScoreResult> done = null,
+            string runnerId = null)
         {
             if (!ValidateReadArgs(contentId, metric, thisParkOnly, "FetchMyScore")) { done?.Invoke(false, null); return; }
+            runnerId = ResolveRunnerId(contentId, runnerId);
             string guestId = ProfileAPI.GuestWriteId;
             if (!ProfileAPI.IsBound && guestId == null) { Debug.LogWarning("[ScoreAPI] FetchMyScore with no identity bound."); done?.Invoke(false, null); return; }
 
-            var qs = BuildQuery(metric, attraction, thisParkOnly, friendsOnly: false, window, limit: null, cursor: null, includeMe: false) + GuestQuery(guestId);
+            var qs = BuildQuery(metric, attraction, thisParkOnly, friendsOnly: false, window, limit: null, cursor: null, includeMe: false, runnerId) + GuestQuery(guestId);
             var url = $"/app/profile/scores/{Uri.EscapeDataString(contentId)}/me{qs}";
             DreamParkAPI.GET(url, ProfileAPI.AuthHeader(), (ok, resp) =>
             {
@@ -402,9 +431,11 @@ namespace DreamPark.API
             string cursor = null,
             bool includeMe = true,
             LeaderboardWindow window = LeaderboardWindow.All,
-            Action<bool, LeaderboardResult> done = null)
+            Action<bool, LeaderboardResult> done = null,
+            string runnerId = null)
         {
             if (!ValidateReadArgs(contentId, metric, thisParkOnly, "FetchLeaderboard")) { done?.Invoke(false, null); return; }
+            runnerId = ResolveRunnerId(contentId, runnerId);
             string guestId = ProfileAPI.GuestWriteId;
             if (!ProfileAPI.IsBound && guestId == null) { Debug.LogWarning("[ScoreAPI] FetchLeaderboard with no identity bound."); done?.Invoke(false, null); return; }
             if (friendsOnly && string.IsNullOrEmpty(ProfileAPI.BoundUserId))
@@ -420,7 +451,7 @@ namespace DreamPark.API
             // friends fetch merges multiple chunked queries in memory) — the
             // server rejects a mismatched one rather than silently paging
             // wrong, so we don't try to detect that mismatch here.
-            var qs = BuildQuery(metric, attraction, thisParkOnly, friendsOnly, window, limit, cursor, includeMe) + GuestQuery(guestId);
+            var qs = BuildQuery(metric, attraction, thisParkOnly, friendsOnly, window, limit, cursor, includeMe, runnerId) + GuestQuery(guestId);
             var url = $"/app/profile/scores/{Uri.EscapeDataString(contentId)}/leaderboard{qs}";
             DreamParkAPI.GET(url, ProfileAPI.AuthHeader(), (ok, resp) =>
             {
@@ -446,7 +477,7 @@ namespace DreamPark.API
         }
 
         static string BuildQuery(string metric, string attraction, bool thisParkOnly, bool friendsOnly,
-            LeaderboardWindow window, int? limit, string cursor, bool includeMe)
+            LeaderboardWindow window, int? limit, string cursor, bool includeMe, string runnerId = null)
         {
             var sb = new StringBuilder();
             void Add(string k, string v)
@@ -475,6 +506,7 @@ namespace DreamPark.API
             if (limit.HasValue) Add("limit", limit.Value.ToString());
             if (!string.IsNullOrEmpty(cursor)) Add("cursor", cursor);
             if (includeMe) Add("includeMe", "true");
+            Add("runnerId", runnerId);   // absent = no way to play (the old board)
             return sb.ToString();
         }
 
@@ -644,8 +676,10 @@ namespace DreamPark.API
                 var env = LuaBehaviour.GetLuaEnv();
                 if (env == null) return;
 
-                env.Global.Set("dp_score_submit", new Action<string, string, double, string, string, Action<bool, LuaTable>>(
-                    (contentId, metric, value, attraction, direction, cb) =>
+                // runnerId: nil = automatic (from go when given, else this device's way to play for the content),
+                // '' = none, else that way to play (results contract §4).
+                env.Global.Set("dp_score_submit", new Action<string, string, double, string, string, Action<bool, LuaTable>, string, GameObject>(
+                    (contentId, metric, value, attraction, direction, cb, runnerId, go) =>
                 {
                     var dir = direction == "asc" ? ScoreDirection.Ascending : ScoreDirection.Descending;
                     SubmitScore(contentId, metric, value, attraction, dir, (ok, result) =>
@@ -653,46 +687,50 @@ namespace DreamPark.API
                         if (cb == null) return;
                         try { cb.Invoke(ok, SubmitResultToLuaTable(env, result)); }
                         catch (Exception e) { Debug.LogWarning($"[ScoreAPI] submit callback threw: {e}"); }
-                    });
+                    }, ResolveRunnerId(contentId, runnerId, go));
                 }));
 
-                env.Global.Set("dp_score_fetch_mine", new Action<string, string, string, bool, string, Action<bool, LuaTable>>(
-                    (contentId, metric, attraction, thisParkOnly, window, cb) =>
+                env.Global.Set("dp_score_fetch_mine", new Action<string, string, string, bool, string, Action<bool, LuaTable>, string, GameObject>(
+                    (contentId, metric, attraction, thisParkOnly, window, cb, runnerId, go) =>
                 {
                     FetchMyScore(contentId, metric, attraction, thisParkOnly, WindowFromWire(window), (ok, result) =>
                     {
                         try { cb?.Invoke(ok, MyScoreToLuaTable(env, result)); }
                         catch (Exception e) { Debug.LogWarning($"[ScoreAPI] fetchMine callback threw: {e}"); }
-                    });
+                    }, ResolveRunnerId(contentId, runnerId, go));
                 }));
 
-                env.Global.Set("dp_score_fetch_leaderboard", new Action<string, string, string, bool, bool, int, string, bool, string, Action<bool, LuaTable>>(
-                    (contentId, metric, attraction, thisParkOnly, friendsOnly, limit, cursor, includeMe, window, cb) =>
+                env.Global.Set("dp_score_fetch_leaderboard", new Action<string, string, string, bool, bool, int, string, bool, string, Action<bool, LuaTable>, string, GameObject>(
+                    (contentId, metric, attraction, thisParkOnly, friendsOnly, limit, cursor, includeMe, window, cb, runnerId, go) =>
                 {
                     FetchLeaderboard(contentId, metric, attraction, thisParkOnly, friendsOnly, limit, cursor, includeMe,
                         WindowFromWire(window), (ok, result) =>
                     {
                         try { cb?.Invoke(ok, LeaderboardResultToLuaTable(env, result)); }
                         catch (Exception e) { Debug.LogWarning($"[ScoreAPI] fetchLeaderboard callback threw: {e}"); }
-                    });
+                    }, ResolveRunnerId(contentId, runnerId, go));
                 }));
 
                 env.DoString(@"
                     dp = dp or {}
+                    -- opts.runnerId: nil = the way to play this device runs for the content (from opts.go when
+                    -- given), '' = no way to play. Every board is keyed by game AND way to play (Docs/RESULTS.md).
+                    local function __go(o) local g = type(o) == 'table' and o.go or nil if g == nil then return nil end local ok, r = pcall(function() return g.gameObject end) if ok then return r end return nil end   -- a destroyed Component's .gameObject throws: nil, never an error in the caller
                     dp.score = {
-                        submit = function(contentId, metric, value, attraction, direction, cb)
-                            dp_score_submit(contentId, metric, value, attraction, direction or 'desc', cb)
+                        submit = function(contentId, metric, value, attraction, direction, cb, opts)
+                            opts = opts or {}
+                            dp_score_submit(contentId, metric, value, attraction, direction or 'desc', cb, opts.runnerId, __go(opts))
                         end,
                         fetchMine = function(contentId, metric, opts, cb)
                             opts = opts or {}
                             dp_score_fetch_mine(contentId, metric, opts.attraction, opts.thisParkOnly or false,
-                                opts.window or 'all', cb)
+                                opts.window or 'all', cb, opts.runnerId, __go(opts))
                         end,
                         fetchLeaderboard = function(contentId, metric, opts, cb)
                             opts = opts or {}
                             dp_score_fetch_leaderboard(contentId, metric, opts.attraction, opts.thisParkOnly or false,
                                 opts.friendsOnly or false, opts.limit or 25, opts.cursor, opts.includeMe ~= false,
-                                opts.window or 'all', cb)
+                                opts.window or 'all', cb, opts.runnerId, __go(opts))
                         end,
                     }
                 ", "dp.score.bootstrap");

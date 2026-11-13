@@ -292,6 +292,38 @@ public class DreamBoxClient : MonoBehaviour
 
     void Start()
     {
+        // Oct 29 2026: the host app holds the LAN (NetPlatform.LanHold — the portal app until
+        // Join). The LiteNetLib socket (it joins IPv6 multicast) and discovery are what raise
+        // iOS's Local Network alert, so a held client opens nothing; Update starts it the first
+        // frame the hold lifts, exactly as here.
+        _started = true;
+        if (global::DreamPark.NetPlatform.LanHeld)
+        {
+            _lanHeld = true;
+            Debug.Log("[DreamBox] LAN held by the host app — no socket, discovery or connect until it is released.");
+            return;
+        }
+        if (_lanHeld) ReleaseLanHold();   // an ask before Start was held and the hold has already lifted
+        else StartNetworking();
+    }
+
+    // Oct 29 2026: waiting for the host app's LAN hold to lift, and what was asked meanwhile.
+    private bool _lanHeld;
+    private bool _started;
+    private bool _heldDiscovery;
+    private bool _heldConnect;
+    private string _heldIp, _heldKey;
+    private int _heldPort;
+
+    // Held now? Also true for an ask that lands before Start while the host holds the LAN.
+    private bool LanHeldNow()
+    {
+        if (!_lanHeld && !_started && global::DreamPark.NetPlatform.LanHeld) _lanHeld = true;
+        return _lanHeld;
+    }
+
+    private void StartNetworking()
+    {
         InitNetManager();
         SessionContext.OnSessionPaired += OnSessionPaired;
 
@@ -337,6 +369,13 @@ public class DreamBoxClient : MonoBehaviour
     /// </summary>
     public void Connect(string ip, int port, string key = null)
     {
+        if (LanHeldNow())
+        {
+            // Held (see Start): remember the newest ask; it runs when the hold lifts.
+            _heldConnect = true; _heldIp = ip; _heldPort = port; _heldKey = key;
+            Debug.Log($"[DreamBox] LAN held — connect to {ip}:{port} deferred until it is released.");
+            return;
+        }
         if (ConnectionState == State.Connected || ConnectionState == State.Connecting)
         {
             if (ip == serverIP && port == serverPort)
@@ -368,6 +407,7 @@ public class DreamBoxClient : MonoBehaviour
     /// </summary>
     public void Disconnect()
     {
+        _heldConnect = false;   // a connect deferred by the LAN hold is withdrawn too
         _intentionalDisconnect = true;
         _server?.Disconnect();
         _server = null;
@@ -385,6 +425,7 @@ public class DreamBoxClient : MonoBehaviour
     /// </summary>
     public void StartDiscovery()
     {
+        if (LanHeldNow()) { _heldDiscovery = true; return; }   // held (see Start): runs when the hold lifts
         if (_discovery != null && _discovery.IsRunning) return;
 
         _discovery = new DiscoveryListener();
@@ -397,6 +438,7 @@ public class DreamBoxClient : MonoBehaviour
     /// </summary>
     public void StopDiscovery()
     {
+        _heldDiscovery = false;
         if (_discovery == null) return;
         _discovery.OnRelayDiscovered -= OnRelayDiscovered;
         _discovery.Stop();
@@ -478,6 +520,12 @@ public class DreamBoxClient : MonoBehaviour
 
     void Update()
     {
+        if (_lanHeld)
+        {
+            if (global::DreamPark.NetPlatform.LanHeld) return;
+            ReleaseLanHold();
+        }
+
         _client?.PollEvents();
 
         // Spend leftover budget on anything queued while we were disconnected.
@@ -563,6 +611,20 @@ public class DreamBoxClient : MonoBehaviour
             }
         }
 #endif
+    }
+
+    /// Oct 29 2026: the host app's LAN hold lifted — start as Start would have, then replay
+    /// what was asked while held (discovery, then the newest connect).
+    private void ReleaseLanHold()
+    {
+        _lanHeld = false;
+        Debug.Log("[DreamBox] LAN hold released — starting networking.");
+        bool discovery = _heldDiscovery;
+        bool connect = _heldConnect;
+        _heldDiscovery = false; _heldConnect = false;
+        StartNetworking();
+        if (discovery) StartDiscovery();
+        if (connect) Connect(_heldIp, _heldPort, _heldKey);
     }
 
     void OnDestroy()

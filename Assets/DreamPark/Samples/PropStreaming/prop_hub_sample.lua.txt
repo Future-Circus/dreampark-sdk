@@ -1,0 +1,104 @@
+-- prop_hub_sample.lua.txt
+-- A hub attraction that streams two props into two slots at runtime (dp.spawn_prop).
+--
+-- Setup (README.md next to this file): put this LuaBehaviour on your hub attraction
+-- (an A_* prefab with AttractionTemplate). Give it two empty child slots, each with an
+-- authored stand-in (a closed frame, a plinth) so the preview never shows an empty room,
+-- and name two props: P_* prefabs with PropTemplate in your content folder.
+--
+-- The hub cycles through four phases (openSeconds each): A open, A + B open, B open, both
+-- closed. Phases come from dp.clock(), the shared clock, so every headset opens the same
+-- slot with the same prop and key at the same moment, and the props' NetIds match everywhere.
+--
+-- @var slotA gameobject
+-- @var slotB gameobject
+-- @var propA string "P_SampleCrystal"
+-- @var propB string "P_SampleLantern"
+-- @var openSeconds float 6
+-- @var seat bool true
+
+local UE = CS.UnityEngine
+local Time = UE.Time
+
+-- ── State ─────────────────────────────────────────────────────────
+local slots = {}        -- name -> { slot = GameObject, prop = string, key = string, handle = h|nil }
+local phase = -1
+local forced = false    -- set_phase() holds a phase until set_phase(nil)
+local log = {}
+
+-- ── Helpers ───────────────────────────────────────────────────────
+local function note(s)
+    log[#log + 1] = s
+    if #log > 12 then table.remove(log, 1) end
+    print('[prop_hub_sample] ' .. s)
+end
+
+local function now()
+    if dp.clock and dp.clock_synced and dp.clock_synced() then return dp.clock() end
+    return Time.time
+end
+
+local function open(s)
+    if s.handle ~= nil and s.handle.state() ~= 'despawned' and s.handle.state() ~= 'failed' then return end
+    -- Same name + key on every headset: spawning is local, like authored content.
+    s.handle = dp.spawn_prop(s.prop, { parent = s.slot, key = s.key, seat = seat ~= false })
+    note('open ' .. s.key .. ' (' .. s.prop .. ')')
+end
+
+local function close(s)
+    if s.handle == nil then return end
+    s.handle.despawn()
+    s.handle = nil
+    note('close ' .. s.key)
+end
+
+local function apply(p)
+    local a, b = slots.a, slots.b
+    if a then if p == 0 or p == 1 then open(a) else close(a) end end
+    if b then if p == 1 or p == 2 then open(b) else close(b) end end
+end
+
+-- ── Public API (lua_eval / other scripts) ──────────────────────────
+function status()
+    local parts = { 'phase=' .. tostring(phase) }
+    for _, k in ipairs({ 'a', 'b' }) do
+        local s = slots[k]
+        if s then
+            local h = s.handle
+            parts[#parts + 1] = s.key .. '=' .. (h and (h.state() .. (h.error() and (':' .. h.error()) or '')) or 'closed')
+        end
+    end
+    return table.concat(parts, ' ') .. ' | ' .. table.concat(log, '; ')
+end
+
+function set_phase(p)       -- testing: hold a phase (0..3); nil resumes the clock
+    forced = p ~= nil
+    if p == nil then phase = -1 return end
+    phase = p
+    apply(p)
+end
+
+-- ── Lifecycle ─────────────────────────────────────────────────────
+function onready()
+    if not dp.spawn_prop then
+        note('this app has no dp.spawn_prop: the slots keep their stand-ins')
+        return
+    end
+    if slotA then slots.a = { slot = slotA, prop = propA or 'P_SampleCrystal', key = 'slot:a' } end
+    if slotB then slots.b = { slot = slotB, prop = propB or 'P_SampleLantern', key = 'slot:b' } end
+    -- Fetch both closures early so opening a slot costs an Instantiate, not a download.
+    for _, s in pairs(slots) do dp.preload_prop(s.prop) end
+    dp.on_prop_loaded(function(h) note('loaded ' .. tostring(h.key) .. ' -> ' .. tostring(h.address)) end)
+    dp.on_prop_failed(function(h, err) note('failed ' .. tostring(h.key or h.request) .. ': ' .. tostring(err)) end)
+end
+
+function update()
+    if forced or not dp.spawn_prop or next(slots) == nil then return end
+    local period = openSeconds or 6
+    if period <= 0 then return end
+    local p = math.floor(now() / period) % 4
+    if p ~= phase then
+        phase = p
+        apply(p)
+    end
+end

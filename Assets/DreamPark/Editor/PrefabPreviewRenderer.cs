@@ -33,7 +33,13 @@ namespace DreamPark
     // photograph the same pose the creator picked in the Preview Editor.
     public static class PrefabPreviewRenderer
     {
-        private static readonly Vector3 kIsolatedPosition = new Vector3(10000, 10000, 10000);
+        // Far above the scene (the preview camera's far plane is only tens of
+        // metres, so open-scene content never reaches the frame) but at world
+        // x/z = 0, where attractions sit in the game. World-space procedural
+        // shaders hash and tile on world x/z: at x/z = 10000 (the old spot) float
+        // precision broke them (SAL's lava crust Voronoi turned into a square
+        // grid). Oct 23 2026, preview-lava.
+        private static readonly Vector3 kIsolatedPosition = new Vector3(0, 1000, 0);
 
         // The default camera orbit (30° elevation, 45° azimuth) now lives on
         // PreviewSettings.Default — it's supplied per render so the Preview
@@ -127,6 +133,16 @@ namespace DreamPark
                 // instance at all — this is a no-op for every prefab that
                 // predates the animation controls.
                 poseScope = PreviewAnimationSampler.ApplyPoses(instance, settings);
+
+                // Hand Lua-fed materials the inputs their script gives them in
+                // the game (SAL lava pits draw nothing without them).
+                ApplyLuaShaderFeeds(instance);
+
+                // TextMesh Pro builds its mesh lazily, on an update that never
+                // comes for this hidden instance, so every scoreboard and sign
+                // rendered blank. Build it now, before bounds, so text also
+                // counts toward the framing.
+                BuildTextMeshes(instance);
 
                 BeforeBoundsHookForTests?.Invoke(instance);
 
@@ -285,6 +301,155 @@ namespace DreamPark
                     if (change.setActive && target.gameObject.activeSelf != change.active)
                         target.gameObject.SetActive(change.active);
                 }
+            }
+            return true;
+        }
+
+        // Builds the mesh of every active TextMesh Pro text under root. Inactive
+        // text doesn't render here, so it is left alone. World-space UI canvases
+        // don't draw in the preview camera at all (UI text or not), so this only
+        // changes 3D TextMeshPro. Returns the number of texts found.
+        internal static int BuildTextMeshes(GameObject root)
+        {
+            var texts = root.GetComponentsInChildren<TMPro.TMP_Text>(false);
+            foreach (var text in texts)
+                if (text.isActiveAndEnabled) text.ForceMeshUpdate(true, true);
+            return texts.Length;
+        }
+
+        // ── Lua-fed shader inputs ───────────────────────────────────────
+        // Some materials draw nothing until their Lua feeds them at runtime. SAL's
+        // lava pits (sal-lava) clip every pixel until the script hands the shader
+        // the pit's outline SDF (`pitSdf` → _PitSDF), its mapping (`pitSdfST` →
+        // _PitSDF_ST2) and depth (`pitDepth` → _PitDepth) on a property block.
+        // Lua never runs on the hidden preview instance, so those pits were
+        // missing from every preview. This does the same hand-off from the
+        // script's Inspector injections.
+        //
+        // A renderer counts as Lua-fed only when one of its materials leaves a
+        // texture slot EMPTY and a LuaBehaviour on it or on a parent (or one that
+        // injects its GameObject) has a texture injection of that name. Names
+        // compare without case or underscores, and the shader's name may add a
+        // version digit: pitSdf = _PitSDF, pitSdfST = _PitSDF_ST2. Only for those
+        // renderers are the script's other same-named numbers fed too (floats,
+        // ints, colours, Vector3s, and "a,b[,c[,d]]" strings as vectors). Every
+        // other renderer is untouched. Returns the number of renderers fed.
+        internal static int ApplyLuaShaderFeeds(GameObject root)
+        {
+            int fedRenderers = 0;
+            foreach (LuaBehaviour script in root.GetComponentsInChildren<LuaBehaviour>(true))
+            {
+                if (script == null || script.textureInjections == null || script.textureInjections.Length == 0)
+                    continue;
+
+                var renderers = new System.Collections.Generic.HashSet<Renderer>(
+                    script.GetComponentsInChildren<Renderer>(true));
+                if (script.injections != null)
+                    foreach (Injection inj in script.injections)
+                        if (inj != null && inj.value != null)
+                            renderers.UnionWith(inj.value.GetComponentsInChildren<Renderer>(true));
+
+                foreach (Renderer r in renderers)
+                {
+                    // only the hidden instance's own renderers, never an injected prefab asset (an fx prefab)
+                    if (r == null || !r.transform.IsChildOf(root.transform)) continue;
+                    MaterialPropertyBlock block = null;
+                    foreach (Material m in r.sharedMaterials)
+                    {
+                        if (m == null || m.shader == null) continue;
+                        Shader shader = m.shader;
+                        int count = shader.GetPropertyCount();
+
+                        bool fed = false;
+                        for (int i = 0; i < count; i++)
+                        {
+                            if (shader.GetPropertyType(i) != UnityEngine.Rendering.ShaderPropertyType.Texture) continue;
+                            string prop = shader.GetPropertyName(i);
+                            if (m.GetTexture(prop) != null) continue;
+                            foreach (TextureInjection t in script.textureInjections)
+                            {
+                                if (t == null || t.value == null || !FeedNameMatches(prop, t.name)) continue;
+                                if (block == null) { block = new MaterialPropertyBlock(); r.GetPropertyBlock(block); }
+                                block.SetTexture(prop, t.value);
+                                fed = true;
+                                break;
+                            }
+                        }
+                        if (!fed) continue;
+
+                        for (int i = 0; i < count; i++)
+                            FeedNumber(block, script, shader.GetPropertyName(i), shader.GetPropertyType(i));
+                    }
+                    if (block != null) { r.SetPropertyBlock(block); fedRenderers++; }
+                }
+            }
+            return fedRenderers;
+        }
+
+        // One numeric shader property from the script's first same-named injection.
+        private static void FeedNumber(MaterialPropertyBlock block, LuaBehaviour script, string prop,
+            UnityEngine.Rendering.ShaderPropertyType type)
+        {
+            switch (type)
+            {
+                case UnityEngine.Rendering.ShaderPropertyType.Float:
+                case UnityEngine.Rendering.ShaderPropertyType.Range:
+                    if (script.floatInjections != null)
+                        foreach (FloatInjection x in script.floatInjections)
+                            if (x != null && FeedNameMatches(prop, x.name)) { block.SetFloat(prop, x.value); return; }
+                    if (script.intInjections != null)
+                        foreach (IntInjection x in script.intInjections)
+                            if (x != null && FeedNameMatches(prop, x.name)) { block.SetFloat(prop, x.value); return; }
+                    return;
+                case UnityEngine.Rendering.ShaderPropertyType.Vector:
+                    if (script.stringInjections != null)
+                        foreach (StringInjection x in script.stringInjections)
+                            if (x != null && FeedNameMatches(prop, x.name) && TryParseFeedVector(x.value, out Vector4 v))
+                            { block.SetVector(prop, v); return; }
+                    if (script.vector3Injections != null)
+                        foreach (Vector3Injection x in script.vector3Injections)
+                            if (x != null && FeedNameMatches(prop, x.name)) { block.SetVector(prop, x.value); return; }
+                    return;
+                case UnityEngine.Rendering.ShaderPropertyType.Color:
+                    if (script.colorInjections != null)
+                        foreach (ColorInjection x in script.colorInjections)
+                            if (x != null && FeedNameMatches(prop, x.name)) { block.SetColor(prop, x.value); return; }
+                    return;
+            }
+        }
+
+        // pitSdf = _PitSDF; pitSdfST = _PitSDF_ST2 (case and underscores ignored,
+        // the shader name may end in extra digits).
+        internal static bool FeedNameMatches(string shaderProperty, string injectionName)
+        {
+            string p = FeedNameKey(shaderProperty), n = FeedNameKey(injectionName);
+            if (n.Length == 0 || !p.StartsWith(n, System.StringComparison.Ordinal)) return false;
+            for (int i = n.Length; i < p.Length; i++)
+                if (!char.IsDigit(p[i])) return false;
+            return true;
+        }
+
+        private static string FeedNameKey(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return string.Empty;
+            var b = new System.Text.StringBuilder(s.Length);
+            foreach (char c in s)
+                if (char.IsLetterOrDigit(c)) b.Append(char.ToLowerInvariant(c));
+            return b.ToString();
+        }
+
+        private static bool TryParseFeedVector(string s, out Vector4 v)
+        {
+            v = Vector4.zero;
+            if (string.IsNullOrEmpty(s)) return false;
+            string[] parts = s.Split(',');
+            if (parts.Length < 2 || parts.Length > 4) return false;
+            for (int i = 0; i < parts.Length; i++)
+            {
+                if (!float.TryParse(parts[i].Trim(), System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out float x))
+                    return false;
+                v[i] = x;
             }
             return true;
         }

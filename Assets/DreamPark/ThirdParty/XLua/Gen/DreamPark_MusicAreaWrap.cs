@@ -21,8 +21,9 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(DreamPark.MusicArea);
-			Utils.BeginObjectRegister(type, L, translator, 0, 8, 5, 5);
+			Utils.BeginObjectRegister(type, L, translator, 0, 9, 7, 5);
 			
+			Utils.RegisterFunc(L, Utils.METHOD_IDX, "FootprintHalfExtents", _m_FootprintHalfExtents);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "Awake", _m_Awake);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "ComputeBounds", _m_ComputeBounds);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "Enter", _m_Enter);
@@ -33,7 +34,9 @@ namespace XLua.CSObjectWrap
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "Duck", _m_Duck);
 			
 			
-			Utils.RegisterFunc(L, Utils.GETTER_IDX, "musicTrack", _g_get_musicTrack);
+			Utils.RegisterFunc(L, Utils.GETTER_IDX, "HasEmitter", _g_get_HasEmitter);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "EmitterSounding", _g_get_EmitterSounding);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "musicTrack", _g_get_musicTrack);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "volume", _g_get_volume);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "priority", _g_get_priority);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "isPlaying", _g_get_isPlaying);
@@ -49,15 +52,28 @@ namespace XLua.CSObjectWrap
 			Utils.EndObjectRegister(type, L, translator, null, null,
 			    null, null, null);
 
-		    Utils.BeginClassRegister(type, L, __CreateInstance, 1, 2, 2);
+		    Utils.BeginClassRegister(type, L, __CreateInstance, 2, 9, 7);
 			
 			
+            Utils.RegisterObject(L, translator, Utils.CLS_IDX, "PhoneFadeSeconds", DreamPark.MusicArea.PhoneFadeSeconds);
             
 			Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "_priority", _g_get__priority);
             Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "currentMusicArea", _g_get_currentMusicArea);
+            Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "All", _g_get_All);
+            Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "VoiceDuckUntil", _g_get_VoiceDuckUntil);
+            Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "VoiceDucking", _g_get_VoiceDucking);
+            Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "VoiceDuckGain", _g_get_VoiceDuckGain);
+            Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "VoiceDuckSfxGain", _g_get_VoiceDuckSfxGain);
+            Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "VoiceDuckEaseS", _g_get_VoiceDuckEaseS);
+            Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "VoiceDuckExempt", _g_get_VoiceDuckExempt);
             
 			Utils.RegisterFunc(L, Utils.CLS_SETTER_IDX, "_priority", _s_set__priority);
             Utils.RegisterFunc(L, Utils.CLS_SETTER_IDX, "currentMusicArea", _s_set_currentMusicArea);
+            Utils.RegisterFunc(L, Utils.CLS_SETTER_IDX, "VoiceDuckUntil", _s_set_VoiceDuckUntil);
+            Utils.RegisterFunc(L, Utils.CLS_SETTER_IDX, "VoiceDuckGain", _s_set_VoiceDuckGain);
+            Utils.RegisterFunc(L, Utils.CLS_SETTER_IDX, "VoiceDuckSfxGain", _s_set_VoiceDuckSfxGain);
+            Utils.RegisterFunc(L, Utils.CLS_SETTER_IDX, "VoiceDuckEaseS", _s_set_VoiceDuckEaseS);
+            Utils.RegisterFunc(L, Utils.CLS_SETTER_IDX, "VoiceDuckExempt", _s_set_VoiceDuckExempt);
             
 			
 			Utils.EndClassRegister(type, L, translator);
@@ -92,6 +108,34 @@ namespace XLua.CSObjectWrap
         
         
         
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_FootprintHalfExtents(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+                DreamPark.MusicArea gen_to_be_invoked = (DreamPark.MusicArea)translator.FastGetCSObj(L, 1);
+            
+            
+                
+                {
+                    
+                        var gen_ret = gen_to_be_invoked.FootprintHalfExtents(  );
+                        translator.PushUnityEngineVector3(L, gen_ret);
+                    
+                    
+                    
+                    return 1;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
         static int _m_Awake(RealStatePtr L)
@@ -396,6 +440,70 @@ namespace XLua.CSObjectWrap
         }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_All(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			    translator.PushAny(L, DreamPark.MusicArea.All);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_HasEmitter(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                DreamPark.MusicArea gen_to_be_invoked = (DreamPark.MusicArea)translator.FastGetCSObj(L, 1);
+                LuaAPI.lua_pushboolean(L, gen_to_be_invoked.HasEmitter);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_EmitterSounding(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                DreamPark.MusicArea gen_to_be_invoked = (DreamPark.MusicArea)translator.FastGetCSObj(L, 1);
+                LuaAPI.lua_pushboolean(L, gen_to_be_invoked.EmitterSounding);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_VoiceDuckUntil(RealStatePtr L)
+        {
+		    try {
+            
+			    LuaAPI.lua_pushnumber(L, DreamPark.MusicArea.VoiceDuckUntil);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_VoiceDucking(RealStatePtr L)
+        {
+		    try {
+            
+			    LuaAPI.lua_pushboolean(L, DreamPark.MusicArea.VoiceDucking);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
         static int _g_get_musicTrack(RealStatePtr L)
         {
 		    try {
@@ -465,6 +573,54 @@ namespace XLua.CSObjectWrap
             return 1;
         }
         
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_VoiceDuckGain(RealStatePtr L)
+        {
+		    try {
+            
+			    LuaAPI.lua_pushnumber(L, DreamPark.MusicArea.VoiceDuckGain);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_VoiceDuckSfxGain(RealStatePtr L)
+        {
+		    try {
+            
+			    LuaAPI.lua_pushnumber(L, DreamPark.MusicArea.VoiceDuckSfxGain);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_VoiceDuckEaseS(RealStatePtr L)
+        {
+		    try {
+            
+			    LuaAPI.lua_pushnumber(L, DreamPark.MusicArea.VoiceDuckEaseS);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_VoiceDuckExempt(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			    translator.Push(L, DreamPark.MusicArea.VoiceDuckExempt);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
         
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
@@ -487,6 +643,19 @@ namespace XLua.CSObjectWrap
 		    try {
                 ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			    DreamPark.MusicArea.currentMusicArea = (DreamPark.MusicArea)translator.GetObject(L, 1, typeof(DreamPark.MusicArea));
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_VoiceDuckUntil(RealStatePtr L)
+        {
+		    try {
+                
+			    DreamPark.MusicArea.VoiceDuckUntil = (float)LuaAPI.lua_tonumber(L, 1);
             
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
@@ -562,6 +731,58 @@ namespace XLua.CSObjectWrap
 			
                 DreamPark.MusicArea gen_to_be_invoked = (DreamPark.MusicArea)translator.FastGetCSObj(L, 1);
                 gen_to_be_invoked.isFocused = LuaAPI.lua_toboolean(L, 2);
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_VoiceDuckGain(RealStatePtr L)
+        {
+		    try {
+                
+			    DreamPark.MusicArea.VoiceDuckGain = (float)LuaAPI.lua_tonumber(L, 1);
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_VoiceDuckSfxGain(RealStatePtr L)
+        {
+		    try {
+                
+			    DreamPark.MusicArea.VoiceDuckSfxGain = (float)LuaAPI.lua_tonumber(L, 1);
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_VoiceDuckEaseS(RealStatePtr L)
+        {
+		    try {
+                
+			    DreamPark.MusicArea.VoiceDuckEaseS = (float)LuaAPI.lua_tonumber(L, 1);
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_VoiceDuckExempt(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			    DreamPark.MusicArea.VoiceDuckExempt = translator.GetDelegate<System.Func<UnityEngine.AudioSource, bool>>(L, 1);
             
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);

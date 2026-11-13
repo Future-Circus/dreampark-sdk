@@ -89,7 +89,7 @@ namespace DreamPark.ParkSim
         public string name;
         public string id;                       // 8 hex; null = derived from rank + name
         public SimPeerRank rank = SimPeerRank.High;
-        public string device = "headset";       // "headset" | "phone"
+        public string device = "headset";       // "headset" | "phone" | "camera" (a live camera headset: a non-player)
         public string gameId;                   // null = the local rig's gameId
         public Vector3? at;                     // park-local head position
         public string near;                     // "local" or an object path; overrides at
@@ -129,6 +129,16 @@ namespace DreamPark.ParkSim
         public bool Sway;
         public string StateJson = "{}";
         bool _stateDirty = true;
+        /// A live camera's presence "cm" bits (CameraPresence: LIVE 1, REC 2). Only sent while Device is "camera".
+        public int CameraBits { get; private set; }
+        public bool IsCamera => Device == DreamParkDevice.CameraWire;
+        public void SetCamera(bool live, bool rec)
+        {
+            int bits = (live ? CameraPresence.LiveBit : 0) | (rec ? CameraPresence.RecBit : 0);
+            if (bits == CameraBits) return;
+            CameraBits = bits;
+            _stateDirty = true;
+        }
 
         // Walking.
         Vector3? _walkTo;
@@ -167,12 +177,12 @@ namespace DreamPark.ParkSim
             _swayPhase = (Fnv(id) % 1000) / 159.0;
             if (platform)
                 Engine = new SessionEngine(Id, new SimSessionLink(this), () => Time.realtimeSinceStartupAsDouble,
-                    () => Device == "phone", Titles, Worn);
+                    () => Device == "phone", Titles, Worn, () => IsCamera);
         }
 
         /// The rig this peer wears, as a headset's session beat says ("w"): its game's
         /// Player — the same title its presence ("g") names. dp.leader() is scoped by it.
-        IEnumerable<string> Worn() => string.IsNullOrEmpty(GameId) ? Array.Empty<string>() : new[] { GameId };
+        IEnumerable<string> Worn() => string.IsNullOrEmpty(GameId) || IsCamera ? Array.Empty<string>() : new[] { GameId };
 
         /// The titles this peer announces: the Editor's own (it plays the same game) or its explicit one.
         IEnumerable<string> Titles()
@@ -416,17 +426,20 @@ namespace DreamPark.ParkSim
 
             _seq++;
             var sb = new StringBuilder(320);
-            sb.Append("{\"i\":\"").Append(Id).Append("\",\"g\":\"").Append(Esc(GameId)).Append("\",\"n\":").Append(_seq);
+            // A live camera (Nov 13 2026) sends what PlayerPresence sends for one: no title, no hands, dv "camera", "cm".
+            bool cam = IsCamera;
+            sb.Append("{\"i\":\"").Append(Id).Append("\",\"g\":\"").Append(cam ? "" : Esc(GameId)).Append("\",\"n\":").Append(_seq);
             Pose(sb, "h", HeadPos, hq);
             var handQ = Quaternion.Euler(0, Yaw, 0);
-            if (LeftTracked) Pose(sb, "l", lp, handQ);
-            if (RightTracked) Pose(sb, "r", rp, handQ);
+            if (LeftTracked && !cam) Pose(sb, "l", lp, handQ);
+            if (RightTracked && !cam) Pose(sb, "r", rp, handQ);
             sb.Append(",\"a\":\"").Append(ActiveHand).Append('"');
             if (stateDue)
             {
                 sb.Append(",\"nm\":\"").Append(Esc(DisplayName)).Append('"');
                 sb.Append(",\"av\":\"\"");
                 sb.Append(",\"dv\":\"").Append(Device).Append('"');
+                if (cam) sb.Append(",\"cm\":").Append(CameraBits.ToString(CultureInfo.InvariantCulture));
                 sb.Append(",\"s\":").Append(StateJson);
                 _stateDirty = false;
                 _lastStateSent = now;

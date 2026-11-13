@@ -23,6 +23,40 @@ namespace DreamPark
     {
         static int _lockRefCount;
 
+        // ------------------------------------------------------------------
+        // LAN hold (Oct 29 2026, the DreamPark Portal iPhone app)
+        // ------------------------------------------------------------------
+        /// <summary>
+        /// A host-app switch that keeps this stack off the local network until the host
+        /// releases it: no beacon discovery bind/receive (DiscoveryListener), no LiteNetLib
+        /// client socket or relay connect (DreamBoxClient), no arbiter search (NetSessionArbiter).
+        /// iOS shows its Local Network permission alert on the first local-network operation, so
+        /// an app that wants the alert only after a user action (the portal app: after Join)
+        /// holds the LAN until then.
+        ///
+        /// Null (the default: SDK projects, the main iOS app, Quest) = never held, nothing changes.
+        /// A host installs it before the scene loads (RuntimeInitializeOnLoadMethod BeforeSceneLoad)
+        /// so the arbiter's OnEnable and DreamBoxClient.Start already see it. Held components poll
+        /// <see cref="LanHeld"/> each frame; the first frame it reads false they start exactly as
+        /// they would have at boot. A hold that throws reads as not held (today's behaviour).
+        /// </summary>
+        public static Func<bool> LanHold;
+
+        /// <summary>True while the host app holds the LAN (see <see cref="LanHold"/>).</summary>
+        public static bool LanHeld
+        {
+            get
+            {
+                var hold = LanHold;
+                if (hold == null) return false;
+                try { return hold(); }
+                catch (Exception e) { Debug.LogWarning($"[NetPlatform] LAN hold check failed (treated as not held): {e.Message}"); return false; }
+            }
+        }
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        static void ResetLanHold() => LanHold = null;
+
 #if UNITY_ANDROID && !UNITY_EDITOR
         static AndroidJavaObject _multicastLock;
 
@@ -141,27 +175,91 @@ namespace DreamPark
         /// tunnel or a container bridge normally has none, and an interface type
         /// Mono cannot identify still scores correctly. Returns null if nothing
         /// suitable is found.
+        ///
+        /// Nov 2 2026 (flags-perf-nov2, mt-net): cached. A pick younger than
+        /// <see cref="IpCacheMs"/> is handed back as-is, so StartHosting's 2–3
+        /// back-to-back lookups enumerate the interfaces once. Periodic watchers
+        /// use <see cref="PeekLocalIPv4"/> instead, which never enumerates on the
+        /// calling (main) thread. <see cref="InvalidateLocalIPv4"/> on a real
+        /// network-change signal.
         /// </summary>
-        public static string GetLocalIPv4() => PickBest(out _);
+        public static string GetLocalIPv4()
+        {
+            lock (_ipLock)
+            {
+                if (_ipComputedAt != 0 && unchecked(Environment.TickCount - _ipComputedAt) < IpCacheMs)
+                    return _cachedIp;
+            }
+            var ip = PickBest(false, out _);
+            StoreIp(ip);
+            return ip;
+        }
+
+        /// <summary>
+        /// Watcher form (NetSessionArbiter 2 s LAN watch, BeaconBroadcaster 5 s
+        /// refresh): returns the last pick immediately and, when it is older than
+        /// <paramref name="maxAgeSeconds"/>, re-enumerates on a worker thread.
+        /// A change therefore shows up one poll later than before (≤ one watch
+        /// period) — in exchange the main thread never walks the interface list.
+        /// Falls back to a synchronous lookup only when nothing was ever cached.
+        /// </summary>
+        public static string PeekLocalIPv4(float maxAgeSeconds)
+        {
+            int computedAt;
+            string ip;
+            lock (_ipLock) { computedAt = _ipComputedAt; ip = _cachedIp; }
+            if (computedAt == 0) return GetLocalIPv4();
+            if (unchecked(Environment.TickCount - computedAt) >= (int)(maxAgeSeconds * 1000f)
+                && System.Threading.Interlocked.CompareExchange(ref _ipRefreshing, 1, 0) == 0)
+            {
+                System.Threading.Tasks.Task.Run(() =>
+                {
+                    try { StoreIp(PickBest(false, out _)); }
+                    catch (Exception e) { Debug.LogWarning($"[NetPlatform] Background LAN IP lookup failed: {e.Message}"); }
+                    finally { System.Threading.Interlocked.Exchange(ref _ipRefreshing, 0); }
+                });
+            }
+            return ip;
+        }
+
+        /// <summary>Forget the cached pick (network-change signal): the next lookup re-enumerates.</summary>
+        public static void InvalidateLocalIPv4()
+        {
+            lock (_ipLock) _ipComputedAt = 0;
+        }
+
+        const int IpCacheMs = 1000;
+        static readonly object _ipLock = new object();
+        static string _cachedIp;
+        static int _ipComputedAt;      // Environment.TickCount; 0 = never / invalidated
+        static int _ipRefreshing;
+
+        static void StoreIp(string ip)
+        {
+            int now = Environment.TickCount;
+            if (now == 0) now = 1;
+            lock (_ipLock) { _cachedIp = ip; _ipComputedAt = now; }
+        }
 
         /// <summary>
         /// Every candidate considered, with its score, formatted for one log
         /// line. Kept next to the pick so "why is it advertising THAT?" is
         /// answerable from the console instead of from a packet capture.
+        /// Only for log lines — it always re-enumerates and builds the strings.
         /// </summary>
         public static string DescribeCandidates()
         {
-            PickBest(out var described);
+            StoreIp(PickBest(true, out var described));
             return described;
         }
 
-        static string PickBest(out string description)
+        static string PickBest(bool describe, out string description)
         {
             description = "(no candidates — Wi-Fi down or AP-isolated?)";
             string bestIp = null;
             string anyAddress = null;   // last-resort: better a bad guess than no beacon
             int bestScore = int.MinValue;
-            var lines = new System.Collections.Generic.List<string>();
+            var lines = describe ? new System.Collections.Generic.List<string>() : null;
 
             try
             {
@@ -191,7 +289,14 @@ namespace DreamPark
                     // be able to take the whole enumeration down with it — the
                     // cost of losing it is a slightly worse guess, and the cost
                     // of throwing here is no beacon at all.
+                    //
+                    // Nov 2 2026 (flags-perf-nov2): not on Android. There Mono
+                    // reads /proc/net/route, which SELinux denies for apps — an
+                    // avc denial in logcat plus a thrown exception per interface,
+                    // every lookup, so the signal was never available on Quest
+                    // anyway. Scoring without it is exactly what Quest already did.
                     bool hasGateway = false;
+#if !(UNITY_ANDROID && !UNITY_EDITOR)
                     try
                     {
                         foreach (var gw in props.GatewayAddresses)
@@ -204,6 +309,7 @@ namespace DreamPark
                         }
                     }
                     catch { /* signal unavailable on this runtime — rank without it */ }
+#endif
 
                     foreach (var addr in props.UnicastAddresses)
                     {
@@ -220,7 +326,7 @@ namespace DreamPark
                         else if (ni.NetworkInterfaceType == NetworkInterfaceType.Ethernet) score += 10;
                         if (LooksVirtual(niName, ip)) score -= 200;
 
-                        lines.Add($"{niName}={ip} [{score}{(hasGateway ? " gw" : "")} {ni.NetworkInterfaceType}]");
+                        if (describe) lines.Add($"{niName}={ip} [{score}{(hasGateway ? " gw" : "")} {ni.NetworkInterfaceType}]");
 
                         if (score > bestScore)
                         {
@@ -235,7 +341,7 @@ namespace DreamPark
                 Debug.LogWarning($"[NetPlatform] LAN IP lookup failed partway: {e.Message}");
             }
 
-            if (lines.Count > 0) description = string.Join(", ", lines);
+            if (lines != null && lines.Count > 0) description = string.Join(", ", lines);
 
             // Ranking is an improvement on the old behaviour, not a precondition
             // for it. If enumeration died before it scored anything, hand back
@@ -277,5 +383,187 @@ namespace DreamPark
 
             return false;
         }
+    }
+
+    /// <summary>
+    /// QUEUED TRACE FILE (Nov 2 2026, round flags-perf-nov2): the always-on trace logs
+    /// (vps-trace, diorama-trace, title-switch-trace, netpose-trace, qr-trace,
+    /// content-load-trace) each did a FileInfo stat + File.AppendAllText — open, append,
+    /// close — per line ON THE CALLING THREAD, usually the main thread. This is BootTrace's
+    /// approach (QuestBootStandUp.cs) shared: Append only enqueues; one Task.Run drains the
+    /// queue (one stat + one append per batch), so line order is kept and the main thread
+    /// never touches the disk. Rotation is unchanged per file (checked per batch).
+    /// Every instance is drained synchronously on focus loss / pause and on quit.
+    ///
+    /// Lives in the SDK's Net folder (not core) because NetPoseTrace (SDK) uses it too.
+    /// </summary>
+    public sealed class QueuedTraceFile
+    {
+        public enum Overflow
+        {
+            /// Past MaxBytes the file becomes &lt;name&gt;.1.log (the previous .1 is deleted).
+            Rotate,
+            /// Past MaxBytes the file is deleted and starts again.
+            Delete,
+            /// Past MaxBytes only the newer half is kept.
+            KeepNewerHalf,
+        }
+
+        readonly string _fileName;
+        readonly string _rotatedName;
+        readonly long _maxBytes;
+        readonly Overflow _overflow;
+        readonly string _failTag;
+        readonly object _lock = new object();
+        readonly object _writeGate = new object();
+        readonly System.Collections.Generic.Queue<string> _pending = new System.Collections.Generic.Queue<string>();
+        readonly System.Text.StringBuilder _chunk = new System.Text.StringBuilder();
+        string _path;
+        bool _flushing;
+        volatile bool _failed;
+
+        static readonly System.Collections.Generic.List<QueuedTraceFile> s_all = new System.Collections.Generic.List<QueuedTraceFile>();
+
+        /// <param name="failTag">Non-null: the first write failure disables this trace with one
+        /// "&lt;failTag&gt; trace disabled" warning (the old per-trace s_failed rule). Null: failures are silent and
+        /// writing keeps trying (the old qr-trace / content-load-trace rule).</param>
+        public QueuedTraceFile(string fileName, long maxBytes, Overflow overflow, string rotatedName = null, string failTag = null)
+        {
+            _fileName = fileName;
+            _maxBytes = maxBytes;
+            _overflow = overflow;
+            _rotatedName = rotatedName;
+            _failTag = failTag;
+            lock (s_all) s_all.Add(this);
+        }
+
+        /// persistentDataPath/fileName, resolved on first use (persistentDataPath wants the main thread the first time).
+        public string PathOnDisk
+        {
+            get
+            {
+                if (_path == null)
+                {
+                    try { _path = System.IO.Path.Combine(Application.persistentDataPath, _fileName); }
+                    catch { _path = string.Empty; }
+                }
+                return _path;
+            }
+        }
+
+        public bool Failed => _failed;
+
+        /// Queue already-formatted text (end it with "\n"). Any thread; never blocks on IO.
+        public void Append(string text)
+        {
+            if (_failed || string.IsNullOrEmpty(text)) return;
+            if (string.IsNullOrEmpty(PathOnDisk)) return;
+            lock (_lock)
+            {
+                _pending.Enqueue(text);
+                if (_flushing) return;
+                _flushing = true;
+            }
+            System.Threading.Tasks.Task.Run(DrainWorker);
+        }
+
+        void DrainWorker()
+        {
+            while (true)
+            {
+                lock (_writeGate)
+                {
+                    string chunk = TakeChunk(true);
+                    if (chunk == null) return;
+                    WriteChunk(chunk);
+                }
+            }
+        }
+
+        /// Write everything queued now, on this thread (pause / quit).
+        public void FlushNow()
+        {
+            lock (_writeGate)
+            {
+                string chunk = TakeChunk(false);
+                if (chunk != null) WriteChunk(chunk);
+            }
+        }
+
+        /// Everything queued as one string, or null when empty (a worker then stops flushing).
+        string TakeChunk(bool worker)
+        {
+            lock (_lock)
+            {
+                if (_pending.Count == 0)
+                {
+                    if (worker) _flushing = false;
+                    return null;
+                }
+                _chunk.Clear();
+                while (_pending.Count > 0) _chunk.Append(_pending.Dequeue());
+                return _chunk.ToString();
+            }
+        }
+
+        void WriteChunk(string chunk)
+        {
+            if (_failed) return;
+            string path = _path;
+            if (string.IsNullOrEmpty(path)) return;
+            try
+            {
+                var info = new System.IO.FileInfo(path);
+                if (info.Exists && info.Length > _maxBytes)
+                {
+                    switch (_overflow)
+                    {
+                        case Overflow.Rotate:
+                            string old = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(path) ?? "",
+                                _rotatedName ?? System.IO.Path.GetFileNameWithoutExtension(_fileName) + ".1.log");
+                            if (System.IO.File.Exists(old)) System.IO.File.Delete(old);
+                            System.IO.File.Move(path, old);
+                            break;
+                        case Overflow.Delete:
+                            System.IO.File.Delete(path);
+                            break;
+                        case Overflow.KeepNewerHalf:
+                            string text = System.IO.File.ReadAllText(path);
+                            System.IO.File.WriteAllText(path, text.Substring(text.Length / 2));
+                            break;
+                    }
+                }
+                System.IO.File.AppendAllText(path, chunk);
+            }
+            catch (Exception e)
+            {
+                if (_failTag == null) return;   // silent traces keep trying, as before
+                _failed = true;                  // never spam or throw from a trace
+                lock (_lock) _pending.Clear();
+                Debug.LogWarning(_failTag + " trace disabled: " + e.Message);
+            }
+        }
+
+        public static void FlushAll()
+        {
+            QueuedTraceFile[] all;
+            lock (s_all) all = s_all.ToArray();
+            foreach (var t in all)
+            {
+                try { t.FlushNow(); } catch { }
+            }
+        }
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterAssembliesLoaded)]
+        static void HookLifecycle()
+        {
+            Application.quitting -= FlushAll;
+            Application.quitting += FlushAll;
+            Application.focusChanged -= OnFocus;
+            Application.focusChanged += OnFocus;
+        }
+
+        // Android/iOS pause and Quest doff arrive with focus loss first: drain then, the process may not come back.
+        static void OnFocus(bool focused) { if (!focused) FlushAll(); }
     }
 }

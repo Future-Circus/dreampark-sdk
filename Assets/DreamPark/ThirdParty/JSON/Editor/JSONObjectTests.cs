@@ -300,10 +300,20 @@ namespace Defective.JSON.Tests {
 		[TestCase("")]
 		[TestCase("æ")]
 		[TestCase("ø")]
-		[TestCase("\\u00e6")]
-		[TestCase("\\u00f8")]
 		public void EncodeAndParseString(string value) {
 			ValidateJsonString(string.Format(TestStrings.JsonFormatString, value));
+		}
+
+		// DreamPark (json-escape, Oct 20 2026): \uXXXX is decoded and backslashes are escaped on Print, so these
+		// round-trip by VALUE (upstream kept "\u00e6" as literal text and never escaped a backslash).
+		[TestCase("\\u00e6", "æ")]
+		[TestCase("\\u00f8", "ø")]
+		[TestCase("End with \\\"Follow me!\\\"", "End with \"Follow me!\"")]
+		[TestCase("C:\\\\path\\\\n", "C:\\path\\n")]
+		public void ParseEscapesAndPrintThemBack(string escaped, string value) {
+			var jsonObject = JSONObject.Create(string.Format(TestStrings.JsonFormatString, escaped));
+			Assert.That(jsonObject.GetField(TestStrings.FieldName).stringValue, Is.EqualTo(value));
+			Assert.That(JSONObject.Create(jsonObject.ToString()).GetField(TestStrings.FieldName).stringValue, Is.EqualTo(value));
 		}
 
 		[Test]

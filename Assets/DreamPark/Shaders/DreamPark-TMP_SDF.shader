@@ -100,6 +100,9 @@ Properties {
 	// Meta passthrough occlusion: forward bias applied to environment depth before the
 	// comparison (same meaning as DreamPark/Particles' _MetaDepthBias).
 	_MetaDepthBias		("Environment Depth Bias", Range(-0.02, 0.02)) = 0.0
+	// 1 on UI panel text drawn on top (MagicOnTop, Oct 22 2026): ONLY the player's real hand occludes it (Meta depth
+	// gated by the tracked-hand capsules, DreamParkHandOcclusion.hlsl); walls and furniture never do. 0 = unchanged.
+	_DPHandOnly			("Panel: only real hands occlude", Float) = 0
 }
 
 SubShader {
@@ -149,6 +152,7 @@ SubShader {
 		#include "../ThirdParty/TextMesh Pro/Shaders/TMPro_Properties.cginc"
 		#include "../ThirdParty/TextMesh Pro/Shaders/TMPro.cginc"
 		#include "Packages/com.meta.xr.sdk.core/Shaders/EnvironmentDepth/BiRP/EnvironmentOcclusionBiRP.cginc"
+		#include "Assets/DreamPark/Shaders/DreamParkHandOcclusion.hlsl"
 
 		struct vertex_t
 		{
@@ -190,6 +194,7 @@ SubShader {
         float _UIMaskSoftnessY;
         int _UIVertexColorAlwaysGammaSpace;
 		float _MetaDepthBias;
+		float _DPHandOnly;
 
 		pixel_t VertShader(vertex_t input)
 		{
@@ -352,7 +357,10 @@ SubShader {
 			// ── Meta passthrough environment occlusion ──────────────
 			// Premultiplied output: scale rgb AND alpha by the per-pixel real-world
 			// occlusion value (0/1 hard, smooth soft). No-op when neither keyword is on.
-			META_DEPTH_OCCLUDE_OUTPUT_PREMULTIPLY(input, result, _MetaDepthBias);
+			#if defined(HARD_OCCLUSION) || defined(SOFT_OCCLUSION)
+			if (_DPHandOnly > 0.5) result *= DPHandVisibility(input.posWorld, _MetaDepthBias);
+			else { META_DEPTH_OCCLUDE_OUTPUT_PREMULTIPLY(input, result, _MetaDepthBias); }
+			#endif
 
 			return result;
 		}

@@ -153,6 +153,9 @@ namespace DreamPark {
             IsPaused = false;
             s_pausedTotal += Math.Max(0.0, Time.timeAsDouble - s_pausedAt);
             int thawed = 0;
+            List<LevelObject> deferred;
+            s_resuming = true;
+            try {
             var frozen = new List<LevelObject>(s_frozen.Keys);
             foreach (var lo in frozen) {
                 if (!Thaw(lo)) continue;
@@ -163,9 +166,15 @@ namespace DreamPark {
                 lo.Enable(true);
             }
             s_frozen.Clear();
-            var deferred = new List<LevelObject>(s_deferred);
+            s_scoped.Clear();
+            deferred = new List<LevelObject>(s_deferred);
             s_deferred.Clear();
             foreach (var lo in deferred) if (lo != null && lo.gameObject != null) lo.Enable(true);
+            } finally { s_resuming = false; }
+            // Scoped holds outlive a pause: the roots still held (a playlist's future rounds) freeze again.
+            foreach (var root in new List<Transform>(s_scopeRoots)) {
+                if (root == null) s_scopeRoots.Remove(root); else HoldScope(root.gameObject);
+            }
             LevelObjectManager.Instance?.ResumeTemplateRootBodies();
             int rigs = ThawPlayers();
             Debug.Log($"[GamePause] RESUMED ({source ?? Current.source}) — thawed {thawed} object(s) and {rigs} player rig(s), replayed {deferred.Count} deferred enable(s)");
@@ -188,6 +197,70 @@ namespace DreamPark {
                        + (string.IsNullOrEmpty(i.reason) ? "" : " (" + i.reason + ")");
         }
 
+        // ── Scoped hold (Oct 18 2026, playlist stop intro) ─────────────
+        //
+        //  One attraction held for a few seconds (the playlist STOP INTRO: the goal card +
+        //  3-2-1) while the rest of the park and every player rig keep running: the same
+        //  per-object freeze as the pause, applied to the LevelObjects under one root only.
+        //  No onpause()/onresume() (the game is not paused; the stop just waits), rigs are
+        //  never touched. A global pause/resume in the middle simply takes these objects
+        //  over (Resume thaws them; the scope forgets them). The optimizer thaws a scoped
+        //  object before it parks it (LevelObject.Enable), exactly as during a pause.
+        //  The ROOT stays held until ReleaseScope (a playlist's future rounds stand held for
+        //  minutes): whatever under it registers or is unparked later (the optimizer parks
+        //  far rooms and wakes them as a player walks up) is frozen as it arrives, and a
+        //  global resume freezes the held roots again.
+
+        static readonly HashSet<LevelObject> s_scoped = new HashSet<LevelObject>();
+        static readonly HashSet<Transform> s_scopeRoots = new HashSet<Transform>();
+        static bool s_resuming;
+
+        /// <summary>Freeze every LevelObject under <paramref name="root"/> (not rigs). Returns how many.</summary>
+        public static int HoldScope(GameObject root) {
+            if (!Enabled || root == null) return 0;
+            var lom = LevelObjectManager.Instance;
+            if (lom == null) return 0;
+            int n = 0;
+            var t = root.transform;
+            s_scopeRoots.Add(t);
+            foreach (var lo in lom.levelObjects.ToArray()) {
+                if (lo == null || lo.gameObject == null || !lo.transform.IsChildOf(t)) continue;
+                if (TryFreeze(lo)) { s_scoped.Add(lo); n++; }
+            }
+            return n;
+        }
+
+        /// <summary>Thaw what <see cref="HoldScope"/> froze under <paramref name="root"/> (a global pause keeps them).</summary>
+        public static int ReleaseScope(GameObject root) {
+            if (root == null) return 0;
+            int n = 0;
+            var t = root.transform;
+            s_scopeRoots.Remove(t);   // first: the Enable(true) below must not freeze it again
+            foreach (var lo in new List<LevelObject>(s_scoped)) {
+                if (lo != null && lo.gameObject != null && !lo.transform.IsChildOf(t)) continue;
+                s_scoped.Remove(lo);
+                if (lo == null || IsPaused) continue;
+                if (Thaw(lo)) { lo.Enable(true); n++; }
+            }
+            return n;
+        }
+
+        public static bool IsScopeHeld(LevelObject lo) => lo != null && s_scoped.Contains(lo);
+
+        /// <summary>The object sits under a root that is held right now.</summary>
+        static bool UnderHeldRoot(LevelObject lo) {
+            if (s_scopeRoots.Count == 0 || lo == null || lo.gameObject == null) return false;
+            var t = lo.transform;
+            foreach (var root in s_scopeRoots) if (root != null && t.IsChildOf(root)) return true;
+            return false;
+        }
+
+        /// <summary>LevelObject.Enable(true) just woke a parked object: under a held root, it freezes again.</summary>
+        internal static void NoteEnabled(LevelObject lo) {
+            if (IsPaused || s_resuming || !UnderHeldRoot(lo)) return;
+            if (TryFreeze(lo)) s_scoped.Add(lo);
+        }
+
         // ── LevelObjectManager hooks ───────────────────────────────────
 
         /// <summary>LevelObject.Enable(true) on a PARKED object while paused: wait for the resume.</summary>
@@ -195,7 +268,10 @@ namespace DreamPark {
         internal static void ClearDeferred(LevelObject lo) { if (lo != null) s_deferred.Remove(lo); }
 
         /// <summary>A LevelObject registered while paused, live (not startDisabled): freeze it now.</summary>
-        internal static void NoteRegistered(LevelObject lo) { if (IsPaused) TryFreeze(lo); }
+        internal static void NoteRegistered(LevelObject lo) {
+            if (IsPaused) TryFreeze(lo);
+            else if (UnderHeldRoot(lo) && TryFreeze(lo)) s_scoped.Add(lo);   // arriving under a held root
+        }
 
         static bool TryFreeze(LevelObject lo) {
             if (lo == null || lo.isPriority || !lo.enabled || lo.gameObject == null) return false;

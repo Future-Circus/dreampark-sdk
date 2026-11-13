@@ -1,6 +1,5 @@
 ﻿namespace DreamPark.Easy
 {
-    using Oculus.Interaction.PoseDetection;
     using UnityEngine;
     using UnityEngine.AI;
 
@@ -31,6 +30,7 @@
             }
             if (hitpoints <= 0) {
                 isDead = true;
+                global::DreamPark.PlaylistAutoTaps.RaiseEnemyDied(gameObject);   // playlist auto-detection (PLAYLISTS.md § 13)
                 if (TryGetComponent<NavMeshAgent>(out var agent)) {
                     agent.enabled = false;
                 }

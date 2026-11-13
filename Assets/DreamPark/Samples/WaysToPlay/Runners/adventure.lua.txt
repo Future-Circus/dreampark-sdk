@@ -1,0 +1,76 @@
+-- Sample way to play (Docs/RUNNERS.md): three rooms, a vote, then a boss
+-- across the whole board. Works on 1, 2 and 4 tiles.
+DreamPark.runner {
+  name = "Adventure",
+  blurb = "Three rooms, a vote, then the Great Hall boss.",
+  cover = "Covers/adventure.png",
+  default = true,
+}
+
+local WORLD = { "Garden", "Workshop", "Library" }
+
+-- Everything that matters lives in dp.flow.state: a new leader resumes from it.
+local function S() return dp.flow.state end
+
+function onSessionStart(board)
+  S().tiles = board.tiles
+  S().cleared = 0
+  S().phase = "world"
+  local first = math.min(board.tiles, #WORLD)
+  for t = 1, first do dp.flow.load(WORLD[t], { tile = t }) end
+  S().nextRoom = first + 1
+  -- Between rooms 1 and 2: a gate, held shut until the group clears its first room.
+  if board.tiles >= 2 then
+    dp.edges.open(1, "right", "gate")
+    dp.edges.lock(1, "right", true)
+  end
+end
+
+function onResume(state)
+  dp.log("resumed: phase " .. tostring(S().phase) .. ", cleared " .. tostring(S().cleared))
+end
+
+local function bossTime()
+  S().phase = "boss"
+  dp.flow.transform("GreatHall")
+end
+
+dp.flow.onLevelComplete(function(level, info)
+  if S().phase == "boss" then dp.log("the boss is down: free play until the session ends") return end
+  if S().phase == "courtyard" then bossTime() return end
+  S().cleared = (S().cleared or 0) + 1
+  if S().cleared == 1 and (S().tiles or 1) >= 2 then dp.edges.lock(1, "right", false) end       -- the gate opens
+  if S().cleared == 2 and (S().tiles or 1) >= 4 then dp.edges.open(1, "back", "doorway") end    -- a doorway to the back row
+  local nextRoom = WORLD[S().nextRoom or 99]
+  if nextRoom then
+    S().nextRoom = S().nextRoom + 1
+    if (S().tiles or 1) == 1 then dp.flow.load(nextRoom, { tile = 1 })   -- seamless switch
+    else dp.flow.swapWhenClear(info.tile, nextRoom) end                   -- out of sight
+    return
+  end
+  if S().cleared >= #WORLD and S().phase == "world" then
+    S().phase = "vote"
+    -- Two zones in the middle of the room (board metres, +X right): stand left for the Courtyard, right for the Boss.
+    dp.flow.choose({ options = { "Courtyard", "Boss" }, zones = { { x = -1, z = 0, r = 1 }, { x = 1, z = 0, r = 1 } },
+                     seconds = 10, default = "Boss", tag = "world1" })
+  end
+end)
+
+-- The result arrives through onChoice (with its tag), so it also reaches a NEW leader
+-- if the old one left mid-vote (a callback passed to choose would be lost with it).
+dp.flow.onChoice(function(winner, tag)
+  if tag ~= "world1" then return end
+  if winner == "Courtyard" then
+    S().phase = "courtyard"
+    dp.flow.load("Courtyard", { nextUp = { title = "The Courtyard", subtitle = "World 1 bonus" } })
+  else
+    bossTime()
+  end
+end)
+
+dp.session.onEnding(function()
+  if S().phase ~= "boss" then
+    S().phase = "boss"
+    dp.flow.load("GreatHall", { span = "all", nextUp = { title = "The Great Hall", subtitle = "Final boss" } })
+  end
+end)

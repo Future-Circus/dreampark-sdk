@@ -7,6 +7,13 @@ namespace DreamPark {
     {
         public static Dictionary<string, PlayerRig> instances;
         public static PlayerRig Instance;
+        /// <summary>
+        /// Oct 23 2026 (platform-rig): may a rig be WORN on this device right now? Null = always. Core's PhoneRigGate
+        /// sets it on a phone: its Phone Player is worn only in camera / full-screen AR. A rig that may not be worn
+        /// still becomes <see cref="Instance"/> (the one to wear) but stays hidden until <see cref="Rewear"/>.
+        /// </summary>
+        public static System.Func<PlayerRig, bool> MayWear;
+        static bool Wearable(PlayerRig r) { try { return MayWear == null || MayWear(r); } catch { return true; } }
         [ReadOnly] public string gameId;
         /// <summary>The rig's RemoteRig child: what other players see of this player (RemoteRig.cs). Hidden here; cloned per peer by PlayerPresence.</summary>
         [System.NonSerialized] public Transform remoteRigTemplate;
@@ -77,6 +84,7 @@ namespace DreamPark {
             }
             if (Instance == null) {
                 Instance = this;
+                if (!Wearable(this)) gameObject.SetActive(false);
             } else {
                 gameObject.SetActive(false);
             }
@@ -102,10 +110,26 @@ namespace DreamPark {
                 Instance.Hide();
             }
             Instance = this;
+            if (!Wearable(this)) {
+                if (gameObject.activeSelf) gameObject.SetActive(false);
+                return;
+            }
             if (gameObject.activeSelf) {
                 return;
             }
             gameObject.SetActive(true);
+        }
+
+        /// <summary>
+        /// Oct 23 2026 (platform-rig): <see cref="MayWear"/> changed — wear the current rig (<see cref="Instance"/>) if
+        /// it may be worn now, else take it off. Returns whether a rig is worn afterwards.
+        /// </summary>
+        public static bool Rewear() {
+            var r = Instance;
+            if (r == null) return false;
+            bool wear = Wearable(r);
+            if (r.gameObject.activeSelf != wear) r.gameObject.SetActive(wear);
+            return wear && r.gameObject.activeInHierarchy;
         }
 
         public void Hide() {

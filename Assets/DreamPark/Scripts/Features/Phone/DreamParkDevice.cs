@@ -105,5 +105,25 @@ namespace DreamPark
         /// same rule as <see cref="IsHeadset"/>.
         /// </summary>
         public static string PeerWire => IsPhone ? "phone" : "headset";
+
+        /// <summary>
+        /// LIVE CAMERA (Nov 13 2026): this headset is a portal's live camera — a NON-PLAYER that still sees, draws
+        /// and records everything. The host app sets it (core: from Camera Mode, the per-headset MDM-lite switch).
+        /// A camera stays a headset everywhere it renders (<see cref="IsHeadset"/>, <see cref="PeerWire"/>), but
+        /// in multiplayer it is a spectator like a phone without a rig: it never leads or ranks, never writes a
+        /// title's shared state, its net_send / dp.set_state are dropped (DreamParkParticipation), and the room
+        /// sees it as "camera" in presence (<see cref="PresenceWire"/>) so players' headsets draw a camera tag
+        /// over it instead of a player (RemoteNameTag). Off by default; the SDK never sets it.
+        /// </summary>
+        public static bool IsCamera { get; set; }
+
+        /// <summary>Takes no part in any title's gameplay (a live camera). Phones decide per title (their rig).</summary>
+        public static bool NeverParticipates => IsCamera;
+
+        /// <summary>The presence "dv" this device sends: "camera" for a live camera, else <see cref="PeerWire"/>.</summary>
+        public static string PresenceWire => IsCamera ? CameraWire : PeerWire;
+
+        /// <summary>Presence device type of a live camera (RemotePlayer.device).</summary>
+        public const string CameraWire = "camera";
     }
 }

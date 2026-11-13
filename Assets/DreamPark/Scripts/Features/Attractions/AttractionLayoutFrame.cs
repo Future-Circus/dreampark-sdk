@@ -190,6 +190,9 @@ namespace DreamPark
         public Vector2 growMeters;
         public Vector2 shrinkScale;
         public Vector2 growScale;
+        /// True ground footprint at 1× / at shrink (AttractionPackingBake.Ground*; zero = not measured).
+        public Vector2 groundMeters;
+        public Vector2 groundShrinkMeters;
     }
 
     internal static class AttractionLayoutPaths

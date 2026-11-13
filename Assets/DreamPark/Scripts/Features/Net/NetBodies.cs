@@ -195,13 +195,13 @@ namespace DreamPark
         /// <summary>Lowest uid among live headset peers incl. self (phones never lead).</summary>
         public static string FallbackLeader()
         {
-            string best = DreamParkDevice.IsPhone ? null : PlayerPresence.MyId;
+            string best = DreamParkDevice.IsPhone || DreamParkDevice.IsCamera ? null : PlayerPresence.MyId;   // a live camera never leads (Nov 13 2026)
             var pres = PlayerPresence.Instance;
             if (pres != null)
             {
                 foreach (var kv in pres.Peers)
                 {
-                    if (kv.Value == null || kv.Value.device == "phone") continue;
+                    if (kv.Value == null || kv.Value.device == "phone" || kv.Value.device == DreamParkDevice.CameraWire) continue;
                     if (best == null || string.CompareOrdinal(kv.Key, best) < 0) best = kv.Key;
                 }
             }
@@ -605,6 +605,7 @@ namespace DreamPark
         public void OnContact(Collider other)
         {
             if (other == null || _pinned) return;
+            if (DreamParkDevice.IsCamera) return;   // a live camera's hands (whoever carries it) never take a prop (Nov 13 2026)
             if (!DreamParkLuaAPI.IsPlayer(other)) return;
             double now = Clock();
             if (IsMine && now < _leaseUntil - 2.5) return;   // already ours, lease fresh

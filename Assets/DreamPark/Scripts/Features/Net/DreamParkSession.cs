@@ -26,6 +26,14 @@ namespace DreamPark
     //            Within a title, devices WEARING the title's PlayerRig come
     //            first: while anyone wears it, a device standing in another
     //            title's zone (or between zones) never leads it or ranks in it.
+    //            A PHONE counts only while it wears the title's rig (its Phone
+    //            Player, worn in full-screen AR; Oct 23 2026, platform-rig):
+    //            otherwise it is a spectator (SessionEngine.Participates).
+    //            A LIVE CAMERA headset (Nov 13 2026, DreamParkDevice.IsCamera)
+    //            is a spectator too, always: it beats as a phone that wears
+    //            no rig ("dv":"phone","w":"","cm":1), so every build — old
+    //            ones included — ranks it after the headsets and never lets it
+    //            lead, rank in or write a title.
     //    RANK    the same order as a 1-based join-order slot (colours, queues).
     //    CLOCK   one timeline for the whole session (seconds). The leader beats
     //            its SYNCED clock value, everyone else slews toward it (mp_kit's
@@ -63,12 +71,13 @@ namespace DreamPark
     //
     //  Wire (session-level events, no netId — DreamBoxClient routes them to
     //  OnGlobalEvent):
-    //    "__dps"     {"i":id,"dv":"headset"|"phone","sy":0|1,"ld":0|1,
+    //    "__dps"     {"i":id,"dv":"headset"|"phone","cm":1,"sy":0|1,"ld":0|1,
     //                 "g":"title,title","w":"title,title","t":clock,"j":joinedAt,
     //                 "pg":pingMs,"sd":"seedhex","ag":age,"mg":1,"ra":1,"af":id}
     //                 ~1 Hz per device (t/j/sd/ag/ra/af once synced; mg while holding a solo timeline).
     //                 w = titles whose PlayerRig this device wears ("" = none;
     //                 absent on builds before Oct 8 2026 = unknown, old rule).
+    //                 cm = a live camera (Nov 13 2026; it also says dv "phone").
     //                 Parsed in C# as doubles — never through Lua's float32
     //                 json_parse — and the seed travels as hex text.
     //    "__dps_bye" {"i":id}                                   on quit
@@ -207,6 +216,8 @@ namespace DreamPark
         public NetSendBudget Budget { get; }
         readonly Func<double> _time;
         readonly Func<bool> _isPhone;
+        readonly Func<bool> _isCamera;
+        bool _wasCamera;
         readonly Func<IEnumerable<string>> _titles;
         readonly Func<IEnumerable<string>> _worn;
 
@@ -214,6 +225,7 @@ namespace DreamPark
         {
             public string id;
             public bool phone;
+            public bool camera;                   // "cm": a live camera (also "phone" on the wire)
             public bool synced;
             public double heard;
             public double joined = double.NaN;   // seniority: shared-clock time it joined
@@ -275,13 +287,14 @@ namespace DreamPark
         public event Action Reconnected;
 
         public SessionEngine(string localId, ISessionLink link, Func<double> time, Func<bool> isPhone,
-            Func<IEnumerable<string>> titles = null, Func<IEnumerable<string>> wornTitles = null)
+            Func<IEnumerable<string>> titles = null, Func<IEnumerable<string>> wornTitles = null, Func<bool> isCamera = null)
         {
             _worn = wornTitles;
             LocalId = localId ?? "";
             Link = link;
             _time = time ?? (() => Time.realtimeSinceStartupAsDouble);
             _isPhone = isPhone ?? (() => false);
+            _isCamera = isCamera ?? (() => false);
             _titles = titles;
             Budget = new NetSendBudget(_time);
             _createdAt = _time();
@@ -289,7 +302,13 @@ namespace DreamPark
         }
 
         public double LocalTime => _time();
-        public bool IsPhoneSelf => _isPhone();
+        /// <summary>This device ranks as a phone: a phone, or a live camera (Nov 13 2026), which is a spectator like one.</summary>
+        public bool IsPhoneSelf => PhoneLikeSelf();
+        /// <summary>This device is a live camera (DreamParkDevice.IsCamera): never a participant.</summary>
+        public bool IsCameraSelf => CameraSelf();
+
+        bool CameraSelf() { try { return _isCamera(); } catch (Exception) { return false; } }
+        bool PhoneLikeSelf() => _isPhone() || CameraSelf();
 
         // ── Public state ─────────────────────────────────────────────
 
@@ -322,11 +341,19 @@ namespace DreamPark
             return _peers.TryGetValue(id, out var p) && _time() - p.heard <= PeerTimeout;
         }
 
-        /// <summary>Phone per the peer's own beat (this device: DreamParkDevice). Unknown = headset.</summary>
+        /// <summary>Phone per the peer's own beat (this device: DreamParkDevice). Unknown = headset. A live camera counts as a phone here.</summary>
         public bool IsPhone(string id)
         {
-            if (id == LocalId) return _isPhone();
+            if (id == LocalId) return PhoneLikeSelf();
             return _peers.TryGetValue(id, out var p) && p.phone;
+        }
+
+        /// <summary>A live camera (Nov 13 2026) per its own beat ("cm"); this device: DreamParkDevice.IsCamera. Never a participant.</summary>
+        public bool IsCamera(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return false;
+            if (id == LocalId) return CameraSelf();
+            return _peers.TryGetValue(id, out var p) && p.camera;
         }
 
         public bool IsSyncedPeer(string id)
@@ -475,7 +502,7 @@ namespace DreamPark
         {
             into.Clear();
             if (!string.IsNullOrEmpty(LocalId) && RunsTitle(title))
-                into.Add(new Candidate(LocalId, _isPhone(), _synced && !forceSelfUnsynced, _joined));
+                into.Add(new Candidate(LocalId, PhoneLikeSelf(), _synced && !forceSelfUnsynced, _joined));
             double now = _time();
             foreach (var p in _peers.Values)
             {
@@ -494,6 +521,66 @@ namespace DreamPark
             bool anyWearer = false;
             for (int i = 0; i < into.Count && !anyWearer; i++) anyWearer = Wears(into[i].id, title) == true;
             if (anyWearer) into.RemoveAll(c => Wears(c.id, title) == false);
+            // Oct 23 2026 (platform-rig, Aidan's rig model): a PHONE that does not wear this title's rig (its
+            // Phone Player, worn only in full-screen AR) is a spectator — never a candidate, wearer or not, so it
+            // never leads, ranks or writes this title. Headsets keep the fallback above (between zones they count).
+            into.RemoveAll(c => c.phone && Wears(c.id, title) != true);
+        }
+
+        // ── Participation (Oct 23 2026, platform-rig) ────────────────
+
+        /// <summary>Does <paramref name="id"/> wear ANY title's PlayerRig right now? null = unknown.</summary>
+        public bool? WearsAny(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return null;
+            if (id == LocalId)
+            {
+                if (_worn == null) return null;
+                ScanWorn(_time());
+                return _myWorn.Count > 0;
+            }
+            if (!_peers.TryGetValue(id, out var p) || !p.wornKnown) return null;
+            return p.worn.Count > 0;
+        }
+
+        /// <summary>
+        /// Does <paramref name="id"/> take part in <paramref name="title"/>'s gameplay (Aidan's rig model, Oct 23 2026)?
+        /// A headset always does. A phone only while it WEARS the title's rig (its Phone Player, worn only in
+        /// full-screen AR); unknown = no. Empty title = any rig. A non-participant is a SPECTATOR: it watches live,
+        /// never leads, never writes the title's shared state, never sends its game traffic.
+        /// </summary>
+        public bool Participates(string id, string title)
+        {
+            if (string.IsNullOrEmpty(id)) return false;
+            if (IsCamera(id)) return false;   // a live camera never takes part (Nov 13 2026)
+            if (!IsPhone(id)) return true;
+            bool? w = string.IsNullOrEmpty(title) ? WearsAny(id) : Wears(id, title);
+            return w == true;
+        }
+
+        /// <summary>
+        /// Oct 23 2026 (platform-rig, Aidan: "the game should still be running!?"): does THIS device run
+        /// <paramref name="title"/>'s WORLD — creatures patrolling, bosses idling, platforms, ambient life? The title's
+        /// leader while anyone takes part; when NOBODY takes part (a phone alone, only spectators) every spectator runs it
+        /// locally as its own presentation. Gameplay (challenges, scores, claims, damage) still needs a participant, and a
+        /// spectator's sends stay blocked, so this never reaches anyone else. The moment a participant joins it leads and
+        /// the spectator follows it (it adopts the leader's world like a late joiner).
+        /// </summary>
+        public bool RunsWorld(string title)
+        {
+            string l = LeaderFor(string.IsNullOrEmpty(title) ? null : title);
+            return string.IsNullOrEmpty(l) || l == LocalId;
+        }
+
+        /// <summary>A phone that does not take part in <paramref name="title"/> (see <see cref="Participates"/>).</summary>
+        public bool IsSpectator(string id, string title) => !string.IsNullOrEmpty(id) && (IsPhone(id) || IsCamera(id)) && !Participates(id, title);
+
+        /// <summary>The rig was switched (PhoneRigGate): look at it now and tell the room on the next beat.</summary>
+        public void RescanWorn()
+        {
+            if (_worn == null) return;
+            _nextWornScan = -1;
+            ScanWorn(_time());
         }
 
         /// <summary>Does <paramref name="id"/> wear <paramref name="title"/>'s PlayerRig? null = unknown.</summary>
@@ -504,10 +591,26 @@ namespace DreamPark
             {
                 if (_worn == null) return null;
                 ScanWorn(_time());
-                return _myWorn.Contains(title);
+                return WornContains(_myWorn, title);
             }
             if (!_peers.TryGetValue(id, out var p) || !p.wornKnown) return null;
-            return p.worn.Contains(title);
+            return WornContains(p.worn, title);
+        }
+
+        /// <summary>
+        /// Oct 23 2026 (platform-rig): a title and its BETA twin are one title here ("WizardsWay" ~ "WizardsWayBeta"):
+        /// a rig authored as "WizardsWay" serves the "WizardsWayBeta" package (its Game Manager, its tables), and the two
+        /// never run side by side in one park.
+        /// </summary>
+        static bool WornContains(HashSet<string> worn, string title)
+            => worn.Contains(title) || worn.Contains(BetaTwin(title));
+
+        /// <summary>"X" ↔ "XBeta" (the other half of a title's Beta pair).</summary>
+        public static string BetaTwin(string title)
+        {
+            if (string.IsNullOrEmpty(title)) return title;
+            return title.Length > 4 && title.EndsWith("Beta", StringComparison.OrdinalIgnoreCase)
+                ? title.Substring(0, title.Length - 4) : title + "Beta";
         }
 
         /// <summary>
@@ -608,6 +711,18 @@ namespace DreamPark
 
             // Holding a solo timeline and no synced room spoke up: we are the room.
             if (_merging && now - _mergingSince >= SilenceWindowFollower) FinishMerge("no synced device in the room");
+
+            // Camera Mode flipped (Nov 13 2026): re-scope at once and tell the room on the next beat.
+            bool cam = CameraSelf();
+            if (cam != _wasCamera)
+            {
+                _wasCamera = cam;
+                _nextWornScan = -1;
+                _urgent = true;
+                NetLog.V($"[DreamParkSession] live camera {(cam ? "ON: a spectator from now on" : "off: a headset player again")}");
+                if (_worn != null) ScanWorn(now);
+                Recompute();
+            }
 
             if (_worn != null) ScanWorn(now);
 
@@ -718,8 +833,10 @@ namespace DreamPark
             if (_worn == null || now < _nextWornScan) return;
             _nextWornScan = now + 0.25;
             var set = new HashSet<string>(StringComparer.Ordinal);
-            try { foreach (var t in _worn()) if (!string.IsNullOrEmpty(t) && t.IndexOf(',') < 0) set.Add(t); }
-            catch (Exception e) { Debug.LogWarning("[DreamParkSession] worn-rig scan threw: " + e.Message); }
+            // A live camera wears no title's rig, whatever its Player shows (it is no title's player).
+            if (!CameraSelf())
+                try { foreach (var t in _worn()) if (!string.IsNullOrEmpty(t) && t.IndexOf(',') < 0) set.Add(t); }
+                catch (Exception e) { Debug.LogWarning("[DreamParkSession] worn-rig scan threw: " + e.Message); }
             if (set.SetEquals(_myWorn)) return;
             _myWorn.Clear();
             foreach (var t in set) _myWorn.Add(t);
@@ -776,7 +893,7 @@ namespace DreamPark
                     foreach (var p in _peers.Values)
                         if (p != peer && p.synced && !p.merging && now - p.heard <= PeerTimeout) { lone = false; break; }
                 }
-                if (lone && MergeWinner(myAge, _isPhone(), LocalId, peer.age, peer.phone, peer.id, MergeTieSeconds))
+                if (lone && MergeWinner(myAge, PhoneLikeSelf(), LocalId, peer.age, peer.phone, peer.id, MergeTieSeconds))
                 {
                     FinishMerge($"older than {peer.id}'s lone room ({myAge:F1} s vs {peer.age:F1} s)");
                     // Its beats speak for the timeline it is about to drop until
@@ -792,13 +909,13 @@ namespace DreamPark
                 if (_adoptedFrom == peer.id) return;               // we already took theirs
                 if (!RoomAlone(except: peer.id)) return;           // established room: they adopt ours
                 if (double.IsNaN(peer.age)) return;
-                if (!MergeWinner(myAge, _isPhone(), LocalId, peer.age, peer.phone, peer.id, MergeTieSeconds))
+                if (!MergeWinner(myAge, PhoneLikeSelf(), LocalId, peer.age, peer.phone, peer.id, MergeTieSeconds))
                     LoseMerge(peer.id, $"{peer.id} brought an older solo timeline ({peer.age:F1} s vs our {myAge:F1} s)");
             }
             else if (_merging && peer.merging)
             {
                 // Two solo devices met in a room with nobody synced in it.
-                if (!MergeWinner(myAge, _isPhone(), LocalId, peer.age, peer.phone, peer.id, MergeTieSeconds))
+                if (!MergeWinner(myAge, PhoneLikeSelf(), LocalId, peer.age, peer.phone, peer.id, MergeTieSeconds))
                     LoseMerge(peer.id, $"{peer.id}'s solo timeline is older");
             }
         }
@@ -859,8 +976,9 @@ namespace DreamPark
         {
             var ic = CultureInfo.InvariantCulture;
             var sb = new StringBuilder(192);
-            sb.Append("{\"i\":\"").Append(Esc(LocalId)).Append("\",\"dv\":\"").Append(_isPhone() ? "phone" : "headset")
-              .Append("\",\"sy\":").Append(_synced ? 1 : 0)
+            sb.Append("{\"i\":\"").Append(Esc(LocalId)).Append("\",\"dv\":\"").Append(PhoneLikeSelf() ? "phone" : "headset")
+              .Append(CameraSelf() ? "\",\"cm\":1" : "\"")
+              .Append(",\"sy\":").Append(_synced ? 1 : 0)
               .Append(",\"ld\":").Append(IsLeader ? 1 : 0);
             if (_myTitlesWire.Length > 0) sb.Append(",\"g\":\"").Append(Esc(_myTitlesWire)).Append('"');
             if (_worn != null) sb.Append(",\"w\":\"").Append(Esc(_myWornWire)).Append('"');
@@ -925,6 +1043,8 @@ namespace DreamPark
             if (isNew) { peer = new Peer { id = id }; _peers[id] = peer; }
             peer.heard = now;
             peer.phone = p.GetField("dv")?.stringValue == "phone";
+            peer.camera = Num(p, "cm") >= 1;
+            if (peer.camera) peer.phone = true;   // a camera ranks (and is gated) as a phone without a rig
             peer.synced = Num(p, "sy") >= 1;
             peer.joined = peer.synced && p.HasField("j") ? p.GetField("j").doubleValue : double.NaN;
             peer.titles.Clear();
@@ -942,7 +1062,7 @@ namespace DreamPark
             // A newcomer (or a peer that dropped back to unsynced) gets the
             // leader's beat at once instead of waiting out the interval.
             if ((isNew || !peer.synced) && _synced && IsLeader) _urgent = true;
-            if (isNew) NetLog.V($"[DreamParkSession] peer {id} ({(peer.phone ? "phone" : "headset")}, synced={peer.synced})");
+            if (isNew) NetLog.V($"[DreamParkSession] peer {id} ({(peer.camera ? "camera" : peer.phone ? "phone" : "headset")}, synced={peer.synced})");
 
             Recompute();
             ResolveMerge(peer);
@@ -1042,7 +1162,8 @@ namespace DreamPark
                 if (_engine == null)
                 {
                     _engine = new SessionEngine(PlayerPresence.MyId, new RelayLink(),
-                        () => Time.realtimeSinceStartupAsDouble, () => DreamParkDevice.IsPhone, LoadedTitles, WornTitles);
+                        () => Time.realtimeSinceStartupAsDouble, () => DreamParkDevice.IsPhone, LoadedTitles, WornTitles,
+                        () => DreamParkDevice.IsCamera);
                     DreamParkSessionDriver.Ensure();
                 }
                 return _engine;
@@ -1106,6 +1227,11 @@ namespace DreamPark
         /// <summary>1-based join-order rank of a device among those running <paramref name="title"/>; 0 = not here.</summary>
         public static int Rank(string id, string title = null) => Engine.Rank(id, title);
 
+        /// <summary>Does <paramref name="id"/> take part in <paramref name="title"/>'s gameplay (headset, or a phone wearing its rig)?</summary>
+        public static bool Participates(string id, string title) => Engine.Participates(id, title);
+        /// <summary>This device runs <paramref name="title"/>'s world: its leader, or a lone spectator with no participant here.</summary>
+        public static bool RunsWorld(string title) => Engine.RunsWorld(title);
+
         /// <summary>(oldLeaderId, newLeaderId).</summary>
         public static event Action<string, string> LeaderChanged
         {
@@ -1127,6 +1253,8 @@ namespace DreamPark
         public static NetSendBudget Budget => Engine.Budget;
         public static bool IsLive(string id) => Engine.IsLive(id);
         public static bool IsPhone(string id) => Engine.IsPhone(id);
+        /// <summary>A live camera (Nov 13 2026; this device: DreamParkDevice.IsCamera) — never a participant.</summary>
+        public static bool IsCamera(string id) => Engine.IsCamera(id);
 
         // ── Attraction-relative frames (wire + SharedState + physics) ──
         //

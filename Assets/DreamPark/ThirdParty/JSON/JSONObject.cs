@@ -1406,24 +1406,153 @@ namespace Defective.JSON {
 			Stringify(0, builder, pretty);
 		}
 
+		// DreamPark (repair Oct 20 2026): standard JSON string escaping. Upstream never escaped a backslash on Print
+		// and unescaped with chained Replace calls, so any string holding a backslash (Lua source, JSON-as-text fields
+		// like the playlist store's `dreamieJson`, Dreamie lines with \") came back changed or broke the whole document.
+		// Strings with nothing to escape are returned as-is (same output, no allocation); otherwise exactly one string
+		// is allocated (this runs on every SharedState / network message).
 		static string EscapeString(string input) {
-			var escaped = input.Replace("\b", "\\b");
-			escaped = escaped.Replace("\f", "\\f");
-			escaped = escaped.Replace("\n", "\\n");
-			escaped = escaped.Replace("\r", "\\r");
-			escaped = escaped.Replace("\t", "\\t");
-			escaped = escaped.Replace("\"", "\\\"");
-			return escaped;
+			if (string.IsNullOrEmpty(input))
+				return input;
+
+			var extra = 0;
+			for (var index = 0; index < input.Length; index++) {
+				var character = input[index];
+				if (character == '"' || character == '\\' || character == '\b' || character == '\f' || character == '\n'
+				    || character == '\r' || character == '\t')
+					extra += 1;
+				else if (character < ' ')
+					extra += 5;
+			}
+
+			if (extra == 0)
+				return input;
+
+			return string.Create(input.Length + extra, input, (output, source) => {
+				var at = 0;
+				foreach (var character in source) {
+					char escaped;
+					switch (character) {
+						case '"': escaped = '"'; break;
+						case '\\': escaped = '\\'; break;
+						case '\b': escaped = 'b'; break;
+						case '\f': escaped = 'f'; break;
+						case '\n': escaped = 'n'; break;
+						case '\r': escaped = 'r'; break;
+						case '\t': escaped = 't'; break;
+						default:
+							if (character < ' ') {
+								output[at++] = '\\';
+								output[at++] = 'u';
+								output[at++] = '0';
+								output[at++] = '0';
+								output[at++] = HexDigit(character >> 4);
+								output[at++] = HexDigit(character & 0xF);
+							} else {
+								output[at++] = character;
+							}
+
+							continue;
+					}
+
+					output[at++] = '\\';
+					output[at++] = escaped;
+				}
+			});
+		}
+
+		static char HexDigit(int value) {
+			return (char) (value < 10 ? '0' + value : 'a' + value - 10);
+		}
+
+		static bool TryParseHex4(string input, int start, out char code) {
+			code = '\0';
+			if (start + 4 > input.Length)
+				return false;
+
+			var value = 0;
+			for (var index = start; index < start + 4; index++) {
+				var character = input[index];
+				int digit;
+				if (character >= '0' && character <= '9') digit = character - '0';
+				else if (character >= 'a' && character <= 'f') digit = character - 'a' + 10;
+				else if (character >= 'A' && character <= 'F') digit = character - 'A' + 10;
+				else return false;
+				value = value * 16 + digit;
+			}
+
+			code = (char) value;
+			return true;
+		}
+
+		// One escape at input[index] == '\\': how many input chars it spans, and the char it stands for
+		// ('\0' + span 2 = not a JSON escape: kept verbatim, as upstream did).
+		static int ReadEscape(string input, int index, out char value) {
+			value = '\0';
+			if (index + 1 >= input.Length)
+				return 1;
+
+			switch (input[index + 1]) {
+				case '"': value = '"'; return 2;
+				case '\\': value = '\\'; return 2;
+				case '/': value = '/'; return 2;
+				case 'b': value = '\b'; return 2;
+				case 'f': value = '\f'; return 2;
+				case 'n': value = '\n'; return 2;
+				case 'r': value = '\r'; return 2;
+				case 't': value = '\t'; return 2;
+				case 'u':
+					char code;
+					if (TryParseHex4(input, index + 2, out code)) {
+						value = code;
+						return 6;
+					}
+
+					return 2;
+				default:
+					return 2;
+			}
 		}
 
 		static string UnEscapeString(string input) {
-			var unescaped = input.Replace("\\\"", "\"");
-			unescaped = unescaped.Replace("\\b", "\b");
-			unescaped = unescaped.Replace("\\f", "\f");
-			unescaped = unescaped.Replace("\\n", "\n");
-			unescaped = unescaped.Replace("\\r", "\r");
-			unescaped = unescaped.Replace("\\t", "\t");
-			return unescaped;
+			var first = input.IndexOf('\\');
+			if (first < 0)
+				return input;
+
+			var length = first;
+			for (var index = first; index < input.Length;) {
+				if (input[index] != '\\') {
+					length++;
+					index++;
+					continue;
+				}
+
+				char value;
+				var span = ReadEscape(input, index, out value);
+				length += value != '\0' || (span == 6) ? 1 : span;
+				index += span;
+			}
+
+			return string.Create(length, input, (output, source) => {
+				var at = 0;
+				for (var index = 0; index < source.Length;) {
+					if (source[index] != '\\') {
+						output[at++] = source[index++];
+						continue;
+					}
+
+					char value;
+					var span = ReadEscape(source, index, out value);
+					if (value != '\0' || span == 6) {
+						output[at++] = value;
+					} else {
+						for (var k = 0; k < span; k++)
+							output[at++] = source[index + k];
+					}
+
+					index += span;
+				}
+			});
 		}
 
 		public IEnumerable<string> PrintAsync(bool pretty = false) {

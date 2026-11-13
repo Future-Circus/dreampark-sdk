@@ -219,6 +219,8 @@ namespace DreamPark
             }
             if (text.GetComponentInParent<GameArea>(true) == null) return false;
             if (text.GetComponentInParent<PlayerRig>(true) != null) return false;
+            // UI panels draw over everything, real walls included (Aidan, Oct 21): their words stay unoccluded.
+            if (MagicUI.MagicOnTop.Under(text.transform)) return false;
             return true;
         }
 

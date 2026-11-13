@@ -27,11 +27,18 @@ namespace DreamPark
     ///
     /// Wire: type "pp", no netId (a session-level event), payload
     ///   {"i":id,"g":gameId,"n":seq,"h":[x,y,z,qx,qy,qz,qw],"l":[...],"r":[...],
-    ///    "a":"l"|"r","nm":"display name","av":"avatar url","dv":"phone"|"headset",
-    ///    "s":{state}}   —
-    ///    l / r absent when that hand is not tracked; nm, av, dv and s ride the
+    ///    "a":"l"|"r","nm":"display name","av":"avatar url","dv":"phone"|"headset"|"camera",
+    ///    "cm":bits,"bd":[{"i":badgeId,"u":iconUrl,"n":name}],"s":{state}}   —
+    ///    l / r absent when that hand is not tracked; nm, av, dv, bd and s ride the
     ///    periodic state resend. dv is optional (older clients omit it, and
-    ///    receivers treat its absence as "unknown").
+    ///    receivers treat its absence as "unknown"). bd (Oct 28 2026, the
+    ///    nameplate) = the player's pinned badges, [] when none; absent = an
+    ///    older client (receivers keep what they had). av is the profile picture,
+    ///    or a guest's headset picture (GuestAvatarProvider).
+    ///    LIVE CAMERA (Nov 13 2026; DreamParkDevice.IsCamera): dv "camera", "g" "",
+    ///    no hands, and "cm" on the state cadence = <see cref="CameraPresence"/> bits
+    ///    (1 LIVE: streaming, 2 REC: recording; 0 = neither). Receivers draw the
+    ///    camera tag over it (RemoteNameTag) and leave it out of dp.peers().
     ///
     /// Self-creating (RuntimeInitializeOnLoadMethod); nothing to put in a scene.
     /// Does nothing until a DreamBoxClient is connected.
@@ -132,6 +139,8 @@ namespace DreamPark
         Quaternion _lastHeadRot, _lastLeftRot, _lastRightRot;
         bool _lastLeftTracked, _lastRightTracked;
         string _lastActive = "";
+        int _lastCameraVersion = -1;
+        bool _lastCamera;
         string _lastFrameId;
         bool _lastPosesValid;
         int _lastEpoch;
@@ -166,6 +175,16 @@ namespace DreamPark
         }
 
         void OnApplicationQuit() => SendBye();
+
+        // Oct 16 2026: a Quest taken off (or put to sleep) pauses the app, and
+        // until now its peers only noticed when the reap timed it out (6 s).
+        // Say goodbye on the way out so the phone's AUTO recorder can stop
+        // within a second or two; the next pose after resume re-adds us.
+        // Best effort: the socket may already be going down.
+        void OnApplicationPause(bool paused)
+        {
+            if (paused) SendBye();
+        }
 
         void Unsubscribe()
         {
@@ -230,6 +249,16 @@ namespace DreamPark
             var right = HandAnchor("right", out bool rt);
             string active = ActiveHandSide();
             string game = CurrentGameId();
+            // A live camera (Nov 13 2026) is nobody's player: no title, no hands (whoever carries it, its hands
+            // never touch anyone's game), just the head — so players see where it stands — and its LIVE / REC bits.
+            bool camera = DreamParkDevice.IsCamera;
+            if (camera) { game = ""; lt = false; rt = false; }
+            if (camera != _lastCamera || (camera && CameraPresence.Version != _lastCameraVersion))
+            {
+                _lastCamera = camera;
+                _lastCameraVersion = CameraPresence.Version;
+                _stateDirty = true;
+            }
 
             // Park-local, because world space is per headset.
             Vector3 hp = ParkRoot.ToPark(head.position);
@@ -282,7 +311,9 @@ namespace DreamPark
             {
                 sb.Append(",\"nm\":\"").Append(Escape(LocalDisplayName())).Append('\"');
                 sb.Append(",\"av\":\"").Append(Escape(LocalAvatarUrl())).Append('\"');
-                sb.Append(",\"dv\":\"").Append(DreamParkDevice.PeerWire).Append('\"');
+                sb.Append(",\"bd\":").Append(LocalBadgesWire());
+                sb.Append(",\"dv\":\"").Append(DreamParkDevice.PresenceWire).Append('\"');
+                if (camera) sb.Append(",\"cm\":").Append(CameraPresence.Bits.ToString(CultureInfo.InvariantCulture));
                 sb.Append(",\"s\":").Append(_stateJson);
                 _stateDirty = false;
                 _lastStateSent = now;
@@ -327,13 +358,49 @@ namespace DreamPark
         // couple of seconds, and the fallback is stable per headset.
         static string _cachedName;
         static float _nextNameCheck;
+
+        /// <summary>
+        /// The name a GUEST on this device shows (no signed-in account), or null. Core sets it to the headset's park-given
+        /// name (web-setup headset names, Oct 27 2026); unset (the SDK, an old server) = the "Guest XXXX" fallback.
+        /// </summary>
+        public static Func<string> GuestNameProvider;
+
+        /// <summary>
+        /// The player's name while a guest plays a session, or null. Core sets it; it beats the profile's name, because a
+        /// guest session's profile snapshot holds its name from whenever it was read. Unset (the SDK) = no such name.
+        /// </summary>
+        [XLua.BlackList] public static Func<string> SessionGuestNameProvider;
+
+        /// <summary>The name or picture changed: the next state sent carries it (instead of waiting out the 5 s cache).</summary>
+        [XLua.BlackList]
+        public static void ForgetLocalIdentity()
+        {
+            _nextNameCheck = 0f;
+            _nextAvatarCheck = 0f;
+        }
+
+        /// <summary>
+        /// This device's player name for anything shown to people: a playing guest's name
+        /// (<see cref="SessionGuestNameProvider"/>), else the profile's display name, else the guest name
+        /// (<see cref="GuestNameProvider"/>), else null (the caller keeps its own fallback).
+        /// </summary>
+        public static string LocalPlayerName()
+        {
+            string n = null;
+            try { n = SessionGuestNameProvider?.Invoke(); } catch (Exception) { n = null; }
+            if (!string.IsNullOrEmpty(n)) return n;
+            try { n = API.ProfileAPI.DisplayName; } catch (Exception) { n = null; }
+            if (!string.IsNullOrEmpty(n)) return n;
+            try { n = GuestNameProvider?.Invoke(); } catch (Exception) { n = null; }
+            return string.IsNullOrEmpty(n) ? null : n;
+        }
+
         static string LocalDisplayName()
         {
             if (_cachedName == null || Time.realtimeSinceStartup >= _nextNameCheck)
             {
                 _nextNameCheck = Time.realtimeSinceStartup + 5f;
-                string n = null;
-                try { n = API.ProfileAPI.DisplayName; } catch (Exception) { n = null; }
+                string n = LocalPlayerName();
                 if (string.IsNullOrEmpty(n)) n = RemoteNameTag.FallbackName(MyId);
                 if (n.Length > 24) n = n.Substring(0, 24);
                 _cachedName = n;
@@ -351,17 +418,76 @@ namespace DreamPark
         // relay budget as everything else PlayerPresence sends.
         static string _cachedAvatarUrl;
         static float _nextAvatarCheck;
+
+        /// <summary>
+        /// The picture a GUEST on this device shows (no signed-in account), or null. Core sets it to the headset's park-given
+        /// picture (web-setup headset names, /identity headsetAvatarUrl); unset (the SDK, an old server) = no picture. Same
+        /// order as the DreamBand's avatar slot: the guest picture first, else the profile's.
+        /// </summary>
+        public static Func<string> GuestAvatarProvider;
+
         static string LocalAvatarUrl()
         {
             if (_cachedAvatarUrl == null || Time.realtimeSinceStartup >= _nextAvatarCheck)
             {
                 _nextAvatarCheck = Time.realtimeSinceStartup + 5f;
                 string u = null;
-                try { u = API.ProfileAPI.AvatarUrl; } catch (Exception) { u = null; }
+                try { u = GuestAvatarProvider?.Invoke(); } catch (Exception) { u = null; }
+                if (string.IsNullOrEmpty(u))
+                    try { u = API.ProfileAPI.AvatarUrl; } catch (Exception) { u = null; }
                 if (u != null && u.Length > 200) u = u.Substring(0, 200);
                 _cachedAvatarUrl = u ?? "";
             }
             return _cachedAvatarUrl ?? "";
+        }
+
+        // Pinned badges (the nameplate other players see when they look at this player's name): the profile's badge
+        // rows carrying `pinnedRank` (the server's /app/profile snapshot, Oct 28 2026), for a SIGNED-IN player only — a
+        // guest has none. Same 5 s poll-and-cache as the name. Older servers send no rank → "[]".
+        static string _cachedBadgesWire;
+        static float _nextBadgesCheck;
+        static string LocalBadgesWire()
+        {
+            if (_cachedBadgesWire == null || Time.realtimeSinceStartup >= _nextBadgesCheck)
+            {
+                _nextBadgesCheck = Time.realtimeSinceStartup + 5f;
+                List<NameplateBadge> pinned = null;
+                try
+                {
+                    if (API.ProfileAPI.IsBound && !API.ProfileAPI.IsAnonymous)
+                    {
+                        var rows = new List<NameplateRules.BadgeRow>();
+                        foreach (var b in API.ProfileAPI.Badges)
+                        {
+                            if (b == null) continue;
+                            var rank = b.raw != null ? b.raw.GetField("pinnedRank") : null;
+                            int r = rank != null && rank.type == JSONObject.Type.Number ? (int)rank.floatValue : 0;
+                            if (r > 0) rows.Add(new NameplateRules.BadgeRow { id = b.badgeId, name = b.name, iconUrl = b.iconUri, pinnedRank = r });
+                        }
+                        pinned = NameplateRules.Pinned(rows);
+                    }
+                }
+                catch (Exception) { pinned = null; }
+                _cachedBadgesWire = NameplateRules.BadgesWire(pinned);
+            }
+            return _cachedBadgesWire ?? "[]";
+        }
+
+        /// <summary>Presence "bd" → badges; null when absent or not an array (an older client: keep what we had).</summary>
+        public static List<NameplateBadge> ParseBadges(JSONObject bd)
+        {
+            if (bd == null || bd.type != JSONObject.Type.Array) return null;
+            var list = new List<NameplateBadge>();
+            if (bd.list == null) return list;
+            foreach (var e in bd.list)
+            {
+                if (e == null || e.type != JSONObject.Type.Object) continue;
+                string id = e.GetField("i")?.stringValue;
+                if (string.IsNullOrEmpty(id)) continue;
+                list.Add(new NameplateBadge { id = id, iconUrl = e.GetField("u")?.stringValue ?? "", name = e.GetField("n")?.stringValue ?? "" });
+                if (list.Count >= NameplateRules.MaxBadges) break;
+            }
+            return list;
         }
 
         /// <summary>The game whose rig this headset is wearing right now, or "" between zones.</summary>
@@ -433,8 +559,14 @@ namespace DreamPark
             if (anchor == null) anchor = DreamParkLuaAPI.Hand(side);   // Simulator / odd-rig fallback
             if (anchor == null) return null;
             var tracker = RigTracker();
+#if UNITY_IOS && !UNITY_EDITOR
+            // The iOS player has no OVRHand (Assets/Editor/IosQuestAssemblyFilter.cs), so
+            // this is the "no OVRHand refs" case below, as it always was in Main-iOS.unity.
+            tracked = anchor.gameObject.activeInHierarchy;
+#else
             OVRHand hand = tracker != null ? (side == "left" ? tracker.leftHand : tracker.rightHand) : null;
             tracked = hand != null ? hand.IsTracked : anchor.gameObject.activeInHierarchy;
+#endif
             return anchor;
         }
 
@@ -445,8 +577,10 @@ namespace DreamPark
             {
                 if (tracker.handPreference == HandTracker.HandPreference.Left) return "l";
                 if (tracker.handPreference == HandTracker.HandPreference.Right) return "r";
+#if !UNITY_IOS || UNITY_EDITOR
                 var active = tracker.ActiveHand;
                 if (active != null && tracker.leftHand != null && active == tracker.leftHand) return "l";
+#endif
             }
             return "r";
         }
@@ -499,6 +633,10 @@ namespace DreamPark
                 NetPoseTrace.Receiver(peer, FrameNow);
                 string device = p.GetField("dv")?.stringValue;
                 if (!string.IsNullOrEmpty(device)) peer.SetDevice(device);
+                var cmf = p.GetField("cm");
+                if (cmf != null && cmf.type == JSONObject.Type.Number) peer.cameraState = (int)cmf.floatValue;
+                else if (!string.IsNullOrEmpty(device) && device != DreamParkDevice.CameraWire) peer.cameraState = 0;
+                peer.SetBadges(ParseBadges(p.GetField("bd")));
             }
             catch (Exception e)
             {
@@ -553,6 +691,46 @@ namespace DreamPark
                 if (kv.Value == null || now - kv.Value.lastSeen > peerTimeoutSeconds) _stale.Add(kv.Key);
             for (int i = 0; i < _stale.Count; i++) Remove(_stale[i]);
         }
+    }
+
+    /// <summary>
+    /// LIVE CAMERA presence (Nov 13 2026): what a camera headset tells the players around it, so the camera tag over
+    /// it (RemoteNameTag) can say when it is LIVE (streaming to the portal's screen) or REC (recording). The host app
+    /// sets the bits; they ride presence ("cm") only while <see cref="DreamParkDevice.IsCamera"/> is on, and a
+    /// change goes out on the next pose (≤ 1/12 s). Thread-safe: the streamer may call from any thread.
+    /// Core: <c>global::DreamPark.CameraPresence.SetStreaming(bool)</c> / <c>SetRecording(bool)</c>.
+    /// </summary>
+    public static class CameraPresence
+    {
+        public const int LiveBit = 1, RecBit = 2;
+        static int s_bits, s_version;
+
+        /// <summary>LIVE: the camera's view is streaming to a viewer (the portal's screen / test page).</summary>
+        public static bool Streaming => (s_bits & LiveBit) != 0;
+        /// <summary>REC: the camera is recording.</summary>
+        public static bool Recording => (s_bits & RecBit) != 0;
+        /// <summary>The wire value ("cm"): <see cref="LiveBit"/> | <see cref="RecBit"/>.</summary>
+        public static int Bits => System.Threading.Volatile.Read(ref s_bits);
+        /// <summary>Bumps on every change (PlayerPresence resends its state on a change).</summary>
+        public static int Version => System.Threading.Volatile.Read(ref s_version);
+
+        public static void SetStreaming(bool on) => SetBit(LiveBit, on);
+        public static void SetRecording(bool on) => SetBit(RecBit, on);
+
+        static void SetBit(int bit, bool on)
+        {
+            while (true)
+            {
+                int cur = System.Threading.Volatile.Read(ref s_bits);
+                int next = on ? cur | bit : cur & ~bit;
+                if (next == cur) return;
+                if (System.Threading.Interlocked.CompareExchange(ref s_bits, next, cur) == cur) break;
+            }
+            System.Threading.Interlocked.Increment(ref s_version);
+        }
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        static void ResetStatics() { s_bits = 0; s_version = 0; }
     }
 
     /// <summary>How a remote player's frame relates to this device's (NetPoseRules.Agree).</summary>
@@ -630,45 +808,18 @@ namespace DreamPark
         public const float HeartbeatSeconds = 10f;
         public static bool Enabled = true;
 
-        static string s_path;
-        static bool s_failed;
+        // Nov 2 2026 (flags-perf-nov2): queued, written off the main thread (QueuedTraceFile, NetPlatform.cs).
+        static readonly QueuedTraceFile s_file = new QueuedTraceFile(
+            "netpose-trace.log", MaxBytes, QueuedTraceFile.Overflow.Rotate, "netpose-trace.1.log", "[NetPose]");
 
-        public static string PathOnDisk
-        {
-            get
-            {
-                if (s_path == null)
-                {
-                    try { s_path = System.IO.Path.Combine(Application.persistentDataPath, "netpose-trace.log"); }
-                    catch { s_path = string.Empty; }
-                }
-                return s_path;
-            }
-        }
+        public static string PathOnDisk => s_file.PathOnDisk;
 
         public static void Write(string line)
         {
             NetLog.V(line);
-            if (!Enabled || s_failed || string.IsNullOrEmpty(line)) return;
-            string path = PathOnDisk;
-            if (string.IsNullOrEmpty(path)) return;
-            try
-            {
-                var info = new System.IO.FileInfo(path);
-                if (info.Exists && info.Length > MaxBytes)
-                {
-                    string old = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(path) ?? "", "netpose-trace.1.log");
-                    if (System.IO.File.Exists(old)) System.IO.File.Delete(old);
-                    System.IO.File.Move(path, old);
-                }
-                System.IO.File.AppendAllText(path, DateTime.UtcNow.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture) + " " +
-                    Time.realtimeSinceStartup.ToString("0.00", CultureInfo.InvariantCulture) + " " + line + "\n");
-            }
-            catch (Exception e)
-            {
-                s_failed = true;   // never spam or throw from a trace
-                Debug.LogWarning("[NetPose] trace disabled: " + e.Message);
-            }
+            if (!Enabled || s_file.Failed || string.IsNullOrEmpty(line)) return;
+            s_file.Append(DateTime.UtcNow.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture) + " " +
+                Time.realtimeSinceStartup.ToString("0.00", CultureInfo.InvariantCulture) + " " + line + "\n");
         }
 
         static string s_sendKey;

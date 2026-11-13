@@ -20,8 +20,9 @@ namespace DreamPark
     ///
     /// COST CONTROL: nothing renders for a camera that sees no surface (frustum + facing); one render per (camera, eye,
     /// scene) however many surfaces share it; the hidden camera culls only the scene's layer with no shadows, no
-    /// post-processing, no depth/opaque textures and no render scale; textures are pooled by size and freed after
-    /// ~2 s unused; resolution falls off with distance (<see cref="PortalScene.fullResDistance"/>).
+    /// post-processing, no opaque texture, no depth texture unless that scene's own content samples it
+    /// (<see cref="SceneDepthDemand"/>) and no render scale; textures are pooled by size and freed after ~2 s unused;
+    /// resolution falls off with distance (<see cref="PortalScene.fullResDistance"/>).
     /// Meta occlusion keywords are switched off around each render (the scene is not in the room; the SURFACE is
     /// what real hands occlude).
     /// </summary>
@@ -370,6 +371,8 @@ namespace DreamPark
             bool k0 = Shader.IsKeywordEnabled(OcclusionKeywords[0]), k1 = Shader.IsKeywordEnabled(OcclusionKeywords[1]);
             if (k0) Shader.DisableKeyword(OcclusionKeywords[0]);
             if (k1) Shader.DisableKeyword(OcclusionKeywords[1]);
+            // depth texture only for a scene whose own content samples it (soft particles…), never for the eyes
+            _camData.requiresDepthOption = SceneDepthDemand.NeedsDepth(sc) ? CameraOverrideOption.On : CameraOverrideOption.Off;
             sc.Open();
             try { _cam.Render(); }
             catch (System.Exception ex) { Debug.LogWarning("[Portal] render failed: " + ex.Message); }

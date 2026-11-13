@@ -1,4 +1,5 @@
 using DreamPark;
+using System.Collections.Generic;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
@@ -148,8 +149,8 @@ public sealed class AttractionPackingTests
         Assert.That(attraction.PackingBake.ShrinkFootprintMeters.y,
             Is.EqualTo(0.75f).Within(0.01f));
         Assert.That(attraction.ApplyPackingVariant(attraction.PackingBake.ShrinkScale, false), Is.True);
-        Assert.That(floor.localScale.x * 10f, Is.EqualTo(0.36f).Within(0.01f));
-        Assert.That(floor.localScale.z * 10f, Is.EqualTo(0.75f).Within(0.01f));
+        // Never scaled to fit (Aidan, Oct 19 2026): a follower keeps its authored size; shrink only moves things.
+        Assert.That(floor.localScale, Is.EqualTo(new Vector3(0.36576f, 1f, 0.54864f)));
     }
 
     [Test]
@@ -465,16 +466,10 @@ public sealed class AttractionPackingTests
         Assert.That(attraction.PackingBake.ShrinkScale.y, Is.LessThan(0.3f));
 
         attraction.ApplyPackingVariant(attraction.PackingBake.ShrinkScale, false);
-        Assert.That(border.localScale.x * 10f,
-            Is.EqualTo(attraction.PackingBake.ShrinkFootprintMeters.x).Within(0.01f));
-        Assert.That(border.localScale.z * 10f,
-            Is.EqualTo(attraction.PackingBake.ShrinkFootprintMeters.y).Within(0.01f));
-        Assert.That(border.localScale.y, Is.EqualTo(1f).Within(0.001f));
+        // Never scaled to fit (Aidan, Oct 19 2026): the follower keeps its authored size at any shrink.
+        Assert.That(border.localScale, Is.EqualTo(new Vector3(0.6096f, 1f, 0.6096f)));
         Vector3[] gradeCorners = anchor.GetPrecalculatedCornersWorld();
-        Assert.That(Vector3.Distance(gradeCorners[0], gradeCorners[1]),
-            Is.EqualTo(attraction.PackingBake.ShrinkFootprintMeters.x).Within(0.01f));
-        Assert.That(Vector3.Distance(gradeCorners[1], gradeCorners[2]),
-            Is.EqualTo(attraction.PackingBake.ShrinkFootprintMeters.y).Within(0.01f));
+        Assert.That(Vector3.Distance(gradeCorners[0], gradeCorners[1]), Is.EqualTo(6.096f).Within(0.01f));
         attraction.ResetPackingVariant();
         Assert.That(border.localScale.x, Is.EqualTo(0.6096f).Within(0.001f));
     }
@@ -510,10 +505,9 @@ public sealed class AttractionPackingTests
         AttractionPackingBaker.Bake(attraction, false);
         attraction.ApplyPackingVariant(attraction.PackingBake.ShrinkScale, false);
 
-        Assert.That(planar.localScale.x, Is.EqualTo(planar.localScale.z).Within(0.001f));
-        Assert.That(planar.localScale.y, Is.EqualTo(1f).Within(0.001f));
-        Assert.That(spatial.localScale.x, Is.EqualTo(spatial.localScale.z).Within(0.001f));
-        Assert.That(spatial.localScale.y, Is.EqualTo(spatial.localScale.x).Within(0.001f));
+        // Never scaled to fit, whatever the follower's mode (Aidan, Oct 19 2026).
+        Assert.That(planar.localScale, Is.EqualTo(Vector3.one));
+        Assert.That(spatial.localScale, Is.EqualTo(Vector3.one));
     }
 
     [Test]
@@ -560,15 +554,125 @@ public sealed class AttractionPackingTests
         border.GetComponent<AttractionPackingFollower>().avoidNewPropOverlaps = false;
 
         AttractionPackingBaker.Bake(attraction, false);
+        // Never scaled to fit — neither grown nor shrunk (Aidan, Oct 19 2026).
         attraction.ApplyPackingVariant(attraction.PackingBake.GrowScale, false);
-        Assert.That(border.localScale.x, Is.EqualTo(0.6096f * 1.5f).Within(0.001f));
-        Assert.That(border.localScale.z, Is.EqualTo(0.6096f * 1.2f).Within(0.001f));
-
+        Assert.That(border.localScale, Is.EqualTo(new Vector3(0.6096f, 1f, 0.6096f)));
         attraction.ApplyPackingVariant(attraction.PackingBake.EssentialShrinkScale, true);
-        Assert.That(border.localScale.x * 10f,
-            Is.EqualTo(attraction.PackingBake.EssentialShrinkFootprintMeters.x).Within(0.01f));
-        Assert.That(border.localScale.z * 10f,
-            Is.EqualTo(attraction.PackingBake.EssentialShrinkFootprintMeters.y).Within(0.01f));
+        Assert.That(border.localScale, Is.EqualTo(new Vector3(0.6096f, 1f, 0.6096f)));
+    }
+
+    /// Oct 19 2026: the bake records each layout's TRUE ground bounds (renderers whose bottom is ≤ 0.5 m, at 1×
+    /// and at shrink) so the planner can reserve floor content that overhangs the declared footprint. Airborne
+    /// and [nopack] renderers do not count, and measuring leaves the attraction exactly as it was.
+    [Test]
+    public void Bake_RecordsTrueGroundBoundsPastTheDeclaredFootprint()
+    {
+        AttractionTemplate attraction = CreateAttraction();   // declared 20 x 20 ft (6.096 m)
+        CreateProp("Left", -1f);
+        CreateProp("Right", 1f);
+        AddSlab("LavaRim", new Vector3(0f, 0f, 0f), new Vector3(9f, 0.1f, 3f));       // ground, overhangs on X
+        AddSlab("Banner", new Vector3(0f, 3f, 0f), new Vector3(20f, 0.1f, 1f));       // airborne: may overhang
+        AddSlab("Overlay [nopack]", Vector3.zero, new Vector3(30f, 0.01f, 30f));      // debug overlay
+        int children = _root.transform.childCount;
+
+        Assert.That(AttractionPackingBaker.Bake(attraction, false), Is.True);
+
+        AttractionPackingBake bake = attraction.PackingBake;
+        Assert.That(bake.GroundFootprintMeters.x, Is.EqualTo(9f).Within(0.01f), "the rim overhangs the declared 6.1 m");
+        Assert.That(bake.GroundFootprintMeters.y, Is.EqualTo(3f).Within(0.01f));
+        Assert.That(bake.GroundShrinkFootprintMeters.x, Is.GreaterThan(0.01f), "measured at the shrink layout too");
+        Assert.That(_root.transform.childCount, Is.EqualTo(children), "measuring leaves the hierarchy as it was");
+        Assert.That(_root.transform.Find("LavaRim").localPosition, Is.EqualTo(Vector3.zero));
+
+        // The manifest/planner envelope carries it.
+        var envelopes = attraction.GetFrameEnvelopes();
+        if (envelopes.Count > 0) Assert.That(envelopes[0].groundMeters.x, Is.EqualTo(9f).Within(0.01f));
+    }
+
+    /// Oct 19 2026 (A_LittleLava Minimum: declared 1.60 m at shrink, rigid content 1.85 m): a layout's runtime footprint
+    /// is never smaller than its baked TRUE ground at that scale — interpolated between the ground at shrink and at 1×,
+    /// growing past 1× — so its floor, bounds and seat cover what it draws. No ground baked = the declared size.
+    [Test]
+    public void RuntimeFootprint_NeverShrinksBelowTheBakedGround()
+    {
+        AttractionTemplate attraction = CreateAttraction();
+        CreateProp("Left", -1f);
+        CreateProp("Right", 1f);
+        Assert.That(AttractionPackingBaker.Bake(attraction, false), Is.True);
+        AttractionPackingBake bake = attraction.PackingBake;
+        Vector2 shrink = bake.ShrinkFootprintMeters, authored = bake.AuthoredFootprintMeters;
+
+        // No ground past the declared sizes (two 1 m props): the declared shrink stands.
+        bake.SetGroundFootprints(Vector2.zero, Vector2.zero);
+        attraction.ApplyLayout(AttractionTemplate.BaseFrameId, bake.ShrinkScale);
+        Assert.That(attraction.RuntimeFootprintMeters.x, Is.EqualTo(shrink.x).Within(0.01f));
+
+        // Rigid ground that does not shrink as far: the footprint stops at it, per axis.
+        Vector2 groundShrink = new Vector2(shrink.x + 1f, shrink.y);
+        bake.SetGroundFootprints(new Vector2(authored.x, authored.y), groundShrink);
+        attraction.ApplyLayout(AttractionTemplate.BaseFrameId, bake.ShrinkScale);
+        Assert.That(attraction.RuntimeFootprintMeters.x, Is.EqualTo(groundShrink.x).Within(0.01f));
+        Assert.That(attraction.RuntimeFootprintMeters.y, Is.EqualTo(shrink.y).Within(0.01f));
+        Assert.That(AttractionTemplate.GroundAtScale(bake, Vector2.one).x, Is.EqualTo(authored.x).Within(0.01f));
+        Assert.That(AttractionTemplate.GroundAtScale(bake, new Vector2(2f, 2f)).x, Is.EqualTo(authored.x * 2f).Within(0.01f));
+    }
+
+    /// Oct 19 2026 (A_LavaCoinField's LevelFloor +0.3/+0.2 m past every frame): a generated floor built for another
+    /// footprint than the applied one is stale, and the next layout refresh rebuilds it.
+    [Test]
+    public void GeneratedFloor_IsStaleWhenBuiltForAnotherFootprint()
+    {
+        AttractionTemplate attraction = CreateAttraction();
+        attraction.generateFloor = true;
+        attraction.runtimePlane = new GameObject("LevelFloor");
+        attraction.runtimePlane.transform.SetParent(_root.transform, false);
+        Vector2 dims = attraction.RuntimeFootprintMeters;
+        attraction.gridWidth = dims.x; attraction.gridHeight = dims.y;
+        Assert.That(attraction.GeneratedFloorIsStale, Is.False);
+        attraction.gridWidth = dims.x + 0.3f;
+        Assert.That(attraction.GeneratedFloorIsStale, Is.True);
+    }
+
+    /// WE NEVER SCALE OUR ASSETS TO FIT (Aidan, Oct 19 2026): after ApplyLayout / ApplyPackingVariant at ANY shrink or
+    /// grow, every authored renderer's lossyScale is exactly what it was — props and followers only move.
+    [Test]
+    public void Layout_NeverScalesAnyAuthoredRenderer()
+    {
+        AttractionTemplate attraction = CreateAttraction();
+        CreateProp("Left", -1f);
+        CreateProp("Right", 1f);
+        AddSlab("Rock", new Vector3(1.5f, 0f, 1.5f), new Vector3(0.5f, 0.6f, 0.5f));
+        Transform decal = CreateFollower("Path Decal", AttractionPackingScaleMode.XZIndependent);
+        decal.GetComponent<AttractionPackingFollower>().avoidNewPropOverlaps = false;
+        var quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
+        Object.DestroyImmediate(quad.GetComponent<Collider>());
+        quad.transform.SetParent(decal, false); quad.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
+        Transform plant = CreateFollower("Plant", AttractionPackingScaleMode.XYZUniform);
+        var leaf = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        Object.DestroyImmediate(leaf.GetComponent<Collider>());
+        leaf.transform.SetParent(plant, false);
+        Assert.That(AttractionPackingBaker.Bake(attraction, false), Is.True);
+
+        var before = new Dictionary<Renderer, Vector3>();
+        foreach (Renderer r in _root.GetComponentsInChildren<Renderer>(true)) before[r] = r.transform.lossyScale;
+        AttractionPackingBake bake = attraction.PackingBake;
+        foreach (Vector2 s in new[] { bake.ShrinkScale, (bake.ShrinkScale + Vector2.one) * 0.5f, bake.GrowScale, Vector2.one })
+        {
+            attraction.ApplyLayout(AttractionTemplate.BaseFrameId, s);
+            foreach (var kv in before)
+                Assert.That((kv.Key.transform.lossyScale - kv.Value).sqrMagnitude, Is.LessThan(1e-8f),
+                    $"{kv.Key.name} rescaled at layout scale {s}");
+        }
+    }
+
+    private void AddSlab(string name, Vector3 position, Vector3 scale)
+    {
+        GameObject go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        Object.DestroyImmediate(go.GetComponent<Collider>());
+        go.name = name;
+        go.transform.SetParent(_root.transform, false);
+        go.transform.localPosition = position;
+        go.transform.localScale = scale;
     }
 
     private AttractionTemplate CreateAttraction()

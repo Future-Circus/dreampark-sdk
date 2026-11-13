@@ -38,15 +38,18 @@ namespace XLua.CSObjectWrap
 			Utils.EndObjectRegister(type, L, translator, null, null,
 			    null, null, null);
 
-		    Utils.BeginClassRegister(type, L, __CreateInstance, 1, 2, 2);
-			
+		    Utils.BeginClassRegister(type, L, __CreateInstance, 2, 3, 3);
+			Utils.RegisterFunc(L, Utils.CLS_IDX, "Rewear", _m_Rewear_xlua_st_);
+            
 			
             
 			Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "instances", _g_get_instances);
             Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "Instance", _g_get_Instance);
+            Utils.RegisterFunc(L, Utils.CLS_GETTER_IDX, "MayWear", _g_get_MayWear);
             
 			Utils.RegisterFunc(L, Utils.CLS_SETTER_IDX, "instances", _s_set_instances);
             Utils.RegisterFunc(L, Utils.CLS_SETTER_IDX, "Instance", _s_set_Instance);
+            Utils.RegisterFunc(L, Utils.CLS_SETTER_IDX, "MayWear", _s_set_MayWear);
             
 			
 			Utils.EndClassRegister(type, L, translator);
@@ -101,6 +104,30 @@ namespace XLua.CSObjectWrap
                     
                     
                     return 0;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_Rewear_xlua_st_(RealStatePtr L)
+        {
+		    try {
+            
+            
+            
+                
+                {
+                    
+                        var gen_ret = DreamPark.PlayerRig.Rewear(  );
+                        LuaAPI.lua_pushboolean(L, gen_ret);
+                    
+                    
+                    
+                    return 1;
                 }
                 
             } catch(System.Exception gen_e) {
@@ -191,6 +218,18 @@ namespace XLua.CSObjectWrap
         }
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_MayWear(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			    translator.Push(L, DreamPark.PlayerRig.MayWear);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
         static int _g_get_gameId(RealStatePtr L)
         {
 		    try {
@@ -239,6 +278,19 @@ namespace XLua.CSObjectWrap
 		    try {
                 ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			    DreamPark.PlayerRig.Instance = (DreamPark.PlayerRig)translator.GetObject(L, 1, typeof(DreamPark.PlayerRig));
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_MayWear(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			    DreamPark.PlayerRig.MayWear = translator.GetDelegate<System.Func<DreamPark.PlayerRig, bool>>(L, 1);
             
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);

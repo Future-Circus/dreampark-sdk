@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────
-//  ParkSimPeerBuiltins.cs — the six standard multiplayer scenarios
+//  ParkSimPeerBuiltins.cs — the standard multiplayer scenarios (six game ones + two live-camera ones)
 //
 //  Every one of these broke a shipped game. Each is game-agnostic by default
 //  (presence, leadership, budget, errors) and becomes a real test of YOUR game
@@ -39,6 +39,11 @@
 //                  pos_near ("local", a peer, or an object path)
 //    roster / roster_count / elsewhere  other_title: Lua expression counting the players the game thinks are
 //                  in it; how many that should be; an object path where an extra same-title peer stands
+//    camera / camera_local (Nov 13 2026, live camera): a live-camera headset is a non-player — never the leader (it joins
+//                  first with the lowest id, and still never leads), never ranked, its shared-state requests and writes
+//                  dropped (the game's state is untouched by them; camera_local: nothing it sends reaches B), it still sees
+//                  everyone, players draw its camera tag (LIVE on/off) and leave it out of dp.peers(). camera_local makes
+//                  the EDITOR the camera (DreamParkDevice.IsCamera) next to a player B, and turns it back at the end.
 // ─────────────────────────────────────────────────────────────────────
 
 using System.Collections.Generic;
@@ -55,9 +60,75 @@ namespace DreamPark.ParkSim
             ["shared_prop"] = SharedProp,
             ["budget"] = Budget,
             ["other_title"] = OtherTitle,
+            ["camera"] = Camera,
+            ["camera_local"] = CameraLocal,
         };
 
-        public static readonly string[] Order = { "late_join", "simultaneous_start", "leader_leaves", "shared_prop", "budget", "other_title" };
+        public static readonly string[] Order = { "late_join", "simultaneous_start", "leader_leaves", "shared_prop", "budget", "other_title", "camera", "camera_local" };
+
+        const string Camera = @"{
+  ""name"": ""camera"",
+  ""description"": ""A live-camera headset C joins first, with the lowest id, then player B. C must never lead or rank (title or session), its shared-state requests and writes must be dropped, it must still see everyone, and the Editor must draw its camera tag with LIVE on and off and leave it out of dp.peers()."",
+  ""params"": { ""misalign"": 35, ""target"": """", ""script"": """", ""start"": """", ""healthy"": """", ""state"": """", ""peer_request"": """", ""peer_body"": {}, ""camera_request"": ""hit"", ""camera_body"": { ""n"": 5 }, ""ignore"": [] },
+  ""steps"": [
+    { ""do"": ""misalign"", ""yaw"": ""${misalign}"", ""if"": ""${misalign}"" },
+    { ""do"": ""peer_add"", ""name"": ""C"", ""rank"": ""low"", ""device"": ""camera"", ""leader_capable"": true },
+    { ""do"": ""wait"", ""seconds"": 2 },
+    { ""do"": ""peer_add"", ""name"": ""B"", ""rank"": ""high"" },
+    { ""expect"": ""local_peers"", ""count"": 2, ""within"": 8, ""label"": ""the Editor sees B and the camera"" },
+    { ""expect"": ""sees"", ""peer"": ""C"", ""who"": ""local"", ""within"": 5, ""label"": ""the camera sees the Editor"" },
+    { ""expect"": ""sees"", ""peer"": ""C"", ""who"": ""B"", ""within"": 5, ""label"": ""the camera sees B"" },
+    { ""expect"": ""leader"", ""is"": ""local"", ""target"": ""${target}"", ""script"": ""${script}"", ""within"": 6, ""label"": ""a headset player leads, not the camera (lowest id, first in), and every peer agrees"" },
+    { ""expect"": ""leader"", ""is"": ""local"", ""within"": 6, ""label"": ""the session-wide leader is a headset player too"" },
+    { ""expect"": ""spectator"", ""who"": ""C"", ""target"": ""${target}"", ""script"": ""${script}"", ""within"": 4, ""label"": ""everyone sees the camera as a spectator: never leader, never ranked"" },
+    { ""do"": ""wait"", ""seconds"": ""${warmup}"", ""if"": ""${warmup}"" },
+    { ""do"": ""local_lua"", ""target"": ""${target}"", ""script"": ""${script}"", ""code"": ""${start}"", ""if"": ""${start}"" },
+    { ""expect"": ""lua"", ""target"": ""${target}"", ""script"": ""${script}"", ""code"": ""${healthy}"", ""within"": 4, ""hold"": 1, ""if"": ""${healthy}"", ""label"": ""a player starts the game with the camera there"" },
+    { ""do"": ""wait"", ""seconds"": 1 },
+    { ""do"": ""snap_state"", ""state"": ""${state}"", ""as"": ""before"", ""if"": ""${state}"" },
+    { ""do"": ""together"", ""steps"": [
+        { ""do"": ""peer_request"", ""name"": ""C"", ""state"": ""${state}"", ""kind"": ""${camera_request}"", ""body"": ""${camera_body}"", ""if"": ""${state}"" },
+        { ""do"": ""peer_request"", ""name"": ""C"", ""state"": ""${state}"", ""kind"": ""${peer_request}"", ""body"": ""${peer_body}"", ""if"": ""${peer_request}"" },
+        { ""do"": ""peer_set"", ""name"": ""C"", ""state"": ""${state}"", ""key"": ""cam_probe"", ""value"": 1, ""if"": ""${state}"" } ] },
+    { ""do"": ""wait"", ""seconds"": 2 },
+    { ""expect"": ""state_same"", ""as"": ""before"", ""hold"": 1, ""if"": ""${state}"", ""label"": ""the camera's requests and writes were dropped: the game's state is untouched"" },
+    { ""expect"": ""state_agrees"", ""peer"": ""C"", ""within"": 4, ""label"": ""the camera still mirrors the game's state (it sees everything)"" },
+    { ""expect"": ""camera_tag"", ""who"": ""C"", ""live"": false, ""within"": 4, ""label"": ""the Editor draws C as a camera (not LIVE), not in dp.peers()"" },
+    { ""do"": ""peer_camera"", ""name"": ""C"", ""live"": true },
+    { ""expect"": ""camera_tag"", ""who"": ""C"", ""live"": true, ""within"": 4, ""label"": ""the camera tag says LIVE once it streams"" },
+    { ""do"": ""peer_camera"", ""name"": ""C"", ""live"": false },
+    { ""expect"": ""camera_tag"", ""who"": ""C"", ""live"": false, ""within"": 4, ""label"": ""and stops saying LIVE when it stops"" },
+    { ""expect"": ""leader"", ""is"": ""local"", ""target"": ""${target}"", ""script"": ""${script}"", ""label"": ""still a player leading at the end"" },
+    { ""expect"": ""no_errors"", ""ignore"": ""${ignore}"" }
+  ]
+}";
+
+        const string CameraLocal = @"{
+  ""name"": ""camera_local"",
+  ""description"": ""The Editor is the live camera, next to player B. B leads; the Editor is a spectator everywhere; its own start request is dropped (B's copy never starts); a write by B (the writer) still reaches it."",
+  ""params"": { ""misalign"": 35, ""target"": """", ""script"": """", ""start"": """", ""activity"": """", ""state"": """", ""ignore"": [] },
+  ""steps"": [
+    { ""do"": ""misalign"", ""yaw"": ""${misalign}"", ""if"": ""${misalign}"" },
+    { ""do"": ""local_camera"", ""on"": true },
+    { ""do"": ""peer_add"", ""name"": ""B"", ""rank"": ""high"" },
+    { ""expect"": ""local_peers"", ""count"": 1, ""within"": 8 },
+    { ""expect"": ""sees"", ""peer"": ""B"", ""who"": ""local"", ""within"": 5, ""label"": ""B still sees the camera (it sends presence)"" },
+    { ""expect"": ""leader"", ""is"": ""B"", ""target"": ""${target}"", ""script"": ""${script}"", ""within"": 8, ""label"": ""B leads; the camera never does"" },
+    { ""expect"": ""leader"", ""is"": ""B"", ""within"": 8, ""label"": ""B leads the session too"" },
+    { ""expect"": ""spectator"", ""who"": ""local"", ""target"": ""${target}"", ""script"": ""${script}"", ""within"": 4, ""label"": ""the camera is a spectator on the Editor and on B"" },
+    { ""do"": ""wait"", ""seconds"": ""${warmup}"", ""if"": ""${warmup}"" },
+    { ""do"": ""wait"", ""seconds"": 1 },
+    { ""do"": ""mark"", ""name"": ""cam"" },
+    { ""do"": ""local_lua"", ""target"": ""${target}"", ""script"": ""${script}"", ""code"": ""${start}"", ""if"": ""${start}"" },
+    { ""do"": ""local_lua"", ""target"": ""${target}"", ""script"": ""${script}"", ""code"": ""${activity}"", ""if"": ""${activity}"" },
+    { ""do"": ""wait"", ""seconds"": 2 },
+    { ""expect"": ""no_recv"", ""peer"": ""B"", ""kind"": ""__ss"", ""target"": ""${target}"", ""since"": ""cam"", ""if"": ""${state}"", ""label"": ""the camera's own start / hit requests were dropped at the source (nothing reached B)"" },
+    { ""do"": ""peer_set"", ""name"": ""B"", ""state"": ""${state}"", ""key"": ""cam_probe"", ""value"": 7, ""if"": ""${state}"" },
+    { ""expect"": ""state_agrees"", ""peer"": ""B"", ""within"": 4, ""if"": ""${state}"", ""label"": ""the camera mirrors B's write (it still receives everything)"" },
+    { ""expect"": ""no_errors"", ""ignore"": ""${ignore}"" },
+    { ""do"": ""local_camera"", ""on"": false }
+  ]
+}";
 
         const string LateJoin = @"{
   ""name"": ""late_join"",

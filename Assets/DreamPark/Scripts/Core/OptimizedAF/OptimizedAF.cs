@@ -21,15 +21,52 @@ namespace DreamPark {
 
             OVRManager.display.displayFrequency = 90.0f;
             OVRPlugin.systemDisplayFrequency = 90.0f;
-            OVRManager.foveatedRenderingLevel = OVRManager.FoveatedRenderingLevel.High;
+            // Fixed foveation, High (Nov 11 2026). Under OpenXR the project uses the SRP Foveation API (OpenXR
+            // settings + Unity's Foveated Rendering feature, kept on by DreamParkQuestPerformanceSettings); its
+            // strength is XRDisplaySubsystem.foveatedRenderingLevel, 0..1, which Quest maps to its levels (1 = High).
+            // OVRManager.foveatedRenderingLevel is the Legacy (Meta) API and does nothing under SRP Foveation.
+            var xrDisplays = new List<XRDisplaySubsystem>();
+            SubsystemManager.GetSubsystems(xrDisplays);
+            foreach (var xrDisplay in xrDisplays)
+                xrDisplay.foveatedRenderingLevel = 1f;
+            Debug.Log($"[OptimizedAF] foveation level 1 (High) on {xrDisplays.Count} XR display(s), caps {SystemInfo.foveatedRenderingCaps}");
+            // Physics stays at ProjectSettings' 0.02 s (50 Hz): the director, Nov 11 2026, "50 physics steps was working
+            // fine, the frame rate low is even worse for physics and interaction" (the Nov 2 1/90 s override is gone).
+            // Catch-up after a hitch is capped at 0.05 s so one slow frame can't run a long chain of physics steps
+            // and drop the next frame too.
+            Time.maximumDeltaTime = 0.05f;
+            // Incremental GC gets ~1 ms of each 11.1 ms frame (Nov 2 2026, flags-perf-nov2): under OpenXR Unity can't
+            // see the frame's spare time, so set the slice explicitly instead of its larger default.
+            UnityEngine.Scripting.GarbageCollector.incrementalTimeSliceNanoseconds = 1_000_000UL;
         #endif
 
             Application.targetFrameRate = -1;
             QualitySettings.vSyncCount = 0;
             QualitySettings.antiAliasing = 0;
 
-            if (showFPS)
-                gameObject.AddComponent<FPSDisplay>();
+            ApplyFpsCounter();
+        #if DREAMPARKCORE
+            HeadsetFlags.Changed += ApplyFpsCounter;
+        #endif
+        }
+
+        void OnDestroy()
+        {
+        #if DREAMPARKCORE
+            HeadsetFlags.Changed -= ApplyFpsCounter;
+        #endif
+        }
+
+        // The head-locked FPS readout: the inspector's showFPS, or (core) the park flag `fps_counter` (Nov 2 2026).
+        void ApplyFpsCounter()
+        {
+            bool want = showFPS;
+        #if DREAMPARKCORE
+            want |= HeadsetFlags.Has(HeadsetFlags.FpsCounter);
+        #endif
+            var display = GetComponent<FPSDisplay>();
+            if (want && display == null) gameObject.AddComponent<FPSDisplay>();
+            else if (!want && display != null) Destroy(display);
         }
 
         public static void SignalLoadEvent()
@@ -100,7 +137,8 @@ namespace DreamPark {
             #if DREAMPARKCORE
             if (NativeInterfaceManager.Instance?.buildMode == true) return;
             #endif
-            if (++frameSkip < settings.frameInterval) return;
+            // frameInterval is in 50 Hz steps (the sweep's period, 0.6 s): keep that period at any fixed rate.
+            if (++frameSkip < Mathf.Max(1, Mathf.RoundToInt(settings.frameInterval * 0.02f / Time.fixedDeltaTime))) return;
             frameSkip = 0;
 
             RunOptimizedFrame();

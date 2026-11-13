@@ -25,7 +25,7 @@
 //  JSON type). A step with "if" is skipped when that resolves empty/false/0.
 //
 //  DO steps
-//    peer_add      name, rank high|low, id, device headset|phone, game <gameId>, brain platform|wire, leader_capable,
+//    peer_add      name, rank high|low, id, device headset|phone|camera, game <gameId>, brain platform|wire, leader_capable,
 //                  near "local"|path, at [x,y,z] park-local, yaw, sway
 //    misalign      yaw (35), offset [x,y,z]          make the Editor's world ≠ the park frame, as on every headset
 //    peer_remove   name, mode quit|crash
@@ -38,6 +38,10 @@
 //    peer_request  name, state, kind, body           s.request(kind, body) from that player's replica (leader applies)
 //    peer_set      name, state, key, value           s.set(key, value) from that player's replica
 //    local_rejoin  seconds (0.5)                     the Editor's session leaves and rejoins as the room's newest member
+//    peer_camera   name, live true|false, rec true|false   a camera peer's LIVE / REC bits (presence "cm")
+//    snap_state    name (state), as (label)          remember the Editor's copy of a dp.shared_state (rev + values) for state_same
+//    local_camera  on true|false                     the Editor becomes / stops being a live camera (DreamParkDevice.IsCamera;
+//                                                     core's own Camera Mode guards follow Spectator.CameraModeState, not this)
 //    peer_push     name, target (a dp.net_body prop), by [x,y,z] (attraction frame), seconds   = that player's hand pushing it
 //    local_lua     target path (optional), script, code           runs in that script's scope (global env without target)
 //    wait          seconds
@@ -61,6 +65,12 @@
 //    budget        since, max_rate (60), max_drops (0)
 //    net_body      target, owner "any"|"none"|"local"|peerName, max_speed (3)   a dp.net_body prop's owner and calm
 //    no_errors     since, ignore [..substrings]
+//    spectator     who "local"|peerName, target       a live camera / riglessphone: the Editor AND every platform peer see it as a
+//                                                     spectator of target's title (and of the whole session's titles) and never as its leader
+//    camera_tag    who peerName, live, rec            the Editor draws that peer as a live camera (RemotePlayer.IsCamera) with those bits,
+//                                                     and leaves it out of dp.peers()
+//    replica_value peer, state, key, equals|not_equals (JSON text)   that peer's replica of a dp.shared_state
+//    state_same    as (a snap_state label)           the Editor's copy is exactly what it was (nothing written since)
 // ─────────────────────────────────────────────────────────────────────
 
 using System;
@@ -96,6 +106,11 @@ namespace DreamPark.ParkSim
         readonly List<JObject> _results = new List<JObject>();
         readonly List<string> _log = new List<string>();
         readonly Dictionary<string, double> _marks = new Dictionary<string, double>();
+        readonly Dictionary<string, KeyValuePair<string, string>> _snaps = new Dictionary<string, KeyValuePair<string, string>>();   // label → (state name, rev|values)
+
+        static SharedState EditorState(string name) => DreamParkSession.Engine.SharedStates.FirstOrDefault(x => x != null && !x.Disposed
+            && !string.IsNullOrEmpty(x.BusKey) && (string.IsNullOrEmpty(name) || x.Name == name));
+        static string Fingerprint(SharedState x) => x.Rev + "|" + string.Join(",", x.Keys.OrderBy(k => k, StringComparer.Ordinal).Select(k => k + "=" + x.GetJson(k)));
         readonly Dictionary<string, int> _dropMarks = new Dictionary<string, int>();
         readonly List<string> _errors = new List<string>();
         readonly List<double> _errorTimes = new List<double>();
@@ -405,6 +420,31 @@ namespace DreamPark.ParkSim
                     Note($"local_rejoin: the Editor's session left; back as the newest member in {away:0.##} s");
                     break;
                 }
+                case "peer_camera":
+                {
+                    var p = Peer(name, ref err);
+                    if (p == null) break;
+                    if (!p.IsCamera) { err = $"{name} is not a camera peer (peer_add … \"device\": \"camera\")"; break; }
+                    p.SetCamera(Truthy(st["live"]), Truthy(st["rec"]));
+                    Note($"peer_camera {name} live={Truthy(st["live"])} rec={Truthy(st["rec"])}");
+                    break;
+                }
+                case "snap_state":
+                {
+                    string stName = (string)st["state"];
+                    var x = EditorState(stName);
+                    if (x == null) { err = $"the Editor holds no dp.shared_state{(string.IsNullOrEmpty(stName) ? "" : " '" + stName + "'")}"; break; }
+                    _snaps[(string)st["as"] ?? "snap"] = new KeyValuePair<string, string>(x.Name, Fingerprint(x));
+                    Note($"snap_state '{x.Name}' rev {x.Rev} as '{(string)st["as"] ?? "snap"}'");
+                    break;
+                }
+                case "local_camera":
+                {
+                    bool on = st["on"] == null || Truthy(st["on"]);
+                    DreamParkDevice.IsCamera = on;
+                    Note($"local_camera: the Editor is {(on ? "a LIVE CAMERA (a non-player)" : "a player")}");
+                    break;
+                }
                 case "mark":
                     _marks[name ?? "mark"] = SimPeers.Now;
                     _dropMarks[name ?? "mark"] = SimPeers.Relay?.RateLimitedMessageCount ?? 0;
@@ -619,6 +659,69 @@ namespace DreamPark.ParkSim
                     }
                     detail = $"leader {leader} ({NameOf(leader)}), want {who} ({want})" + (disagree.Count > 0 ? "; DISAGREE: " + string.Join(", ", disagree) : "; peers agree");
                     return leader == want && disagree.Count == 0;
+                }
+                case "spectator":
+                {
+                    string who = (string)st["who"] ?? "local";
+                    string id = who == "local" ? PlayerPresence.MyId : SimPeers.FindAny(who)?.Id;
+                    if (id == null) { detail = $"no peer '{who}'"; return false; }
+                    string target = (string)st["target"], title = null;
+                    if (!string.IsNullOrEmpty(target))
+                        title = LuaEval(target, (string)st["script"], "dp_title_of ~= nil and dp_title_of(self.gameObject) or ''", out _) as string;
+                    var eng = DreamParkSession.Engine;
+                    var issues = new List<string>();
+                    if (!eng.IsSpectator(id, title)) issues.Add("the Editor sees it as a participant");
+                    if (!string.IsNullOrEmpty(title) && eng.LeaderFor(title) == id) issues.Add("the Editor names it the title's leader");
+                    if (eng.Rank(id, title) != 0 && !string.IsNullOrEmpty(title)) issues.Add($"the Editor ranks it {eng.Rank(id, title)}");
+                    foreach (var p in SimPeers.Live)
+                    {
+                        if (p.Engine == null || !p.Engine.Synced || p.Id == id) continue;
+                        if (!p.Engine.IsSpectator(id, title)) issues.Add($"{p.Name} sees it as a participant");
+                        if (!string.IsNullOrEmpty(title) && p.Engine.LeaderFor(title) == id) issues.Add($"{p.Name} names it the leader");
+                    }
+                    detail = issues.Count == 0
+                        ? $"{who} ({id}) is a spectator of '{title ?? "(any)"}' everywhere; title leader {NameOf(string.IsNullOrEmpty(title) ? eng.LeaderId : eng.LeaderFor(title))}, session leader {NameOf(eng.LeaderId)}"
+                        : string.Join("; ", issues);
+                    return issues.Count == 0;
+                }
+                case "camera_tag":
+                {
+                    string who = (string)st["who"];
+                    var sp = SimPeers.FindAny(who);
+                    if (sp == null) { detail = $"no peer '{who}'"; return false; }
+                    var rp = PlayerPresence.Instance != null ? PlayerPresence.Instance.GetPeer(sp.Id) : null;
+                    if (rp == null) { detail = $"the Editor has no RemotePlayer for {who}"; return false; }
+                    bool live = Truthy(st["live"]), rec = Truthy(st["rec"]);
+                    bool inPeers = false;
+                    var lua = LuaEval(null, null, $"local n=0 for _,p in ipairs(dp.peers()) do if p.id=='{sp.Id}' then n=n+1 end end return n", out string lerr);
+                    if (lerr == null && lua != null && Convert.ToDouble(lua, CultureInfo.InvariantCulture) > 0) inPeers = true;
+                    detail = $"{who}: device '{rp.device}', LIVE {rp.CameraLive}, REC {rp.CameraRecording}, in dp.peers() {inPeers}" + (lerr != null ? $" (dp.peers check: {lerr})" : "");
+                    return rp.IsCamera && rp.CameraLive == live && rp.CameraRecording == rec && !inPeers;
+                }
+                case "state_same":
+                {
+                    string label = (string)st["as"] ?? "snap";
+                    if (!_snaps.TryGetValue(label, out var snap)) { detail = $"SKIP: no snap_state '{label}' (the game opened no dp.shared_state?)"; return false; }
+                    var x = EditorState(snap.Key);
+                    if (x == null) { detail = $"'{snap.Key}' is gone"; return false; }
+                    string now = Fingerprint(x);
+                    detail = now == snap.Value ? $"'{x.Name}' unchanged (rev {x.Rev}, writer {NameOf(x.LeaderId)})" : $"'{x.Name}' changed: {Trim(snap.Value, 160)} → {Trim(now, 160)}";
+                    return now == snap.Value;
+                }
+                case "replica_value":
+                {
+                    var sp = SimPeers.FindAny((string)st["peer"]);
+                    if (sp == null) { detail = $"no peer '{(string)st["peer"]}'"; return false; }
+                    string stateName = (string)st["state"];
+                    var r = sp.Replicas.FirstOrDefault(x => stateName == null || x.Name == stateName);
+                    if (r == null) { detail = $"{sp.Name} holds no '{stateName}'"; return false; }
+                    string key = (string)st["key"];
+                    string v = r.GetJson(key);
+                    string eq = st["equals"]?.ToString(Newtonsoft.Json.Formatting.None), ne = st["not_equals"]?.ToString(Newtonsoft.Json.Formatting.None);
+                    detail = $"{sp.Name}'s '{r.Name}'.{key} = {v ?? "nil"} (rev {r.Rev}, writer {NameOf(r.LeaderId)})";
+                    if (eq != null) return v == eq;
+                    if (ne != null) return v != ne;
+                    return v != null;
                 }
                 case "state_agrees":
                 {

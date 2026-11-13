@@ -247,6 +247,21 @@ public class LevelTemplateEditor : Editor {
         /// generateFloor = false never creates, so that path cannot reach a floorless
         /// template at all.
         /// </summary>
+        /// <summary>
+        /// True when the generated floor was built for another footprint than the one now applied (Oct 19 2026:
+        /// A_LavaCoinField's LevelFloor stood +0.3/+0.2 m past its frame). A Sequence floor spans its room on
+        /// purpose and is never stale here.
+        /// </summary>
+        public bool GeneratedFloorIsStale
+        {
+            get
+            {
+                if (runtimePlane == null || !generateFloor || sequenceFloorGridDensity > 0) return false;
+                Vector2 dims = RuntimeFootprintMeters;
+                return Mathf.Abs(gridWidth - dims.x) > 0.01f || Mathf.Abs(gridHeight - dims.y) > 0.01f;
+            }
+        }
+
         public void RegenerateFloor()
         {
             if (!generateFloor) return;

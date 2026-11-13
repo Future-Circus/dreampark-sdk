@@ -1,9 +1,36 @@
 -- Shared Dream Sequence control script. Safe to customize through the control prefabs.
+-- Oct 18 2026 (playlists, PLAYLISTS.md § 14.7): while a playlist runs, the GameMaster queue owns navigation, so
+-- BACK / FORWARD are hidden and do nothing, and START begins the playlist's leg (dp.playlist.begin) instead.
 local armed = true
+local hidden, nextCheck = false, 0
+
+local function playlist_active()
+    local ok, v = pcall(function() return dp.playlist ~= nil and dp.playlist.active() end)
+    return ok and v == true
+end
+
+local function set_visible(on)
+    pcall(function()
+        local rs = self.gameObject:GetComponentsInChildren(typeof(CS.UnityEngine.Renderer), true)
+        for i = 0, rs.Length - 1 do dp.set_enabled(rs[i], on) end
+    end)
+end
+
+function update()
+    local t = CS.UnityEngine.Time.time
+    if t < nextCheck then return end
+    nextCheck = t + 0.5
+    local hide = action ~= 'start' and playlist_active()
+    if hide ~= hidden then hidden = hide; set_visible(not hide) end
+end
 
 function ontriggerenter(other)
     if not armed or not dp.is_player(other) or not dp.button_press() then return end
     armed = false
+    if playlist_active() then
+        if action == 'start' then pcall(function() dp.playlist.begin() end) end
+        return
+    end
     local c = dp.game_manager()
     if action == 'start' and c ~= nil and c.start_game ~= nil then c.start_game()
     elseif action == 'back' and c ~= nil and c.previous_level ~= nil then c.previous_level()

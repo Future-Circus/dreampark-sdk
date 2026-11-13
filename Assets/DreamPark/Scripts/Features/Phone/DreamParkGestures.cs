@@ -124,7 +124,10 @@ namespace DreamPark
                 string hook = g.kind == DreamParkGestureKind.Tap ? "ontap"
                     : g.kind == DreamParkGestureKind.TouchDown || g.kind == DreamParkGestureKind.TouchUp ? "ontouch"
                     : null;
-                if (hook != null) routed.handled = CallObjectHooks(routed, hook);
+                // A phone TAP is a deliberate action: what its ontap does runs as a spectator action
+                // (DreamParkParticipation, Oct 23 2026 — the start circle, a hunt's start coin).
+                if (hook == "ontap") { using (DreamParkParticipation.SpectatorAction()) routed.handled = CallObjectHooks(routed, hook); }
+                else if (hook != null) routed.handled = CallObjectHooks(routed, hook);
             }
 
             try { Routed?.Invoke(routed); }

@@ -152,6 +152,12 @@ namespace DreamPark
         // growth), so staleness checks compare these instead.
         [SerializeField] private Vector2 requestedFootprintMeters;
         [SerializeField] private Vector2 requestedGrowScale;
+        // TRUE GROUND (Oct 19 2026, "bake accuracy into the data"): the symmetric XZ footprint of every renderer of this
+        // layout whose bottom is within 0.5 m of the floor (followers included; airborne parts may overhang), measured
+        // with the layout applied at 1× and at its shrink scale. Zero = not measured (older bakes): the declared
+        // footprints stand. Packers reserve max(declared, ground), so content never draws onto a neighbour.
+        [SerializeField] private Vector2 groundFootprintMeters;
+        [SerializeField] private Vector2 groundShrinkFootprintMeters;
 
         public int Version => version;
         public bool IsValid => version >= 8 && version <= CurrentVersion
@@ -169,6 +175,16 @@ namespace DreamPark
             followers ?? (IReadOnlyList<AttractionPackingFollowerPose>)Array.Empty<AttractionPackingFollowerPose>();
         public bool MirrorsMinimumFrame => mirrorsMinimumFrame;
         public Vector2 LayoutFootprintMeters => layoutFootprintMeters;
+        /// <summary>True ground footprint at 1× (zero = not measured).</summary>
+        public Vector2 GroundFootprintMeters => groundFootprintMeters;
+        /// <summary>True ground footprint at the shrink scale (zero = not measured).</summary>
+        public Vector2 GroundShrinkFootprintMeters => groundShrinkFootprintMeters;
+        /// <summary>Editor/baker hook: record the measured true ground footprints.</summary>
+        public void SetGroundFootprints(Vector2 atAuthored, Vector2 atShrink)
+        {
+            groundFootprintMeters = atAuthored;
+            groundShrinkFootprintMeters = atShrink;
+        }
         public string LayoutIssue => layoutIssue ?? "";
         /// <summary>The size this bake was requested for (older bakes: the authored footprint).</summary>
         public Vector2 RequestedFootprintMeters =>
@@ -498,8 +514,32 @@ namespace DreamPark
             Vector2 clampedScale = new Vector2(
                 Mathf.Clamp(packingScale.x, minimum.x, maximum.x),
                 Mathf.Clamp(packingScale.y, minimum.y, maximum.y));
-            Vector2 result = Vector2.Scale(authored, clampedScale);
+            Vector2 result = Vector2.Max(Vector2.Scale(authored, clampedScale),
+                essentialOnly ? Vector2.zero : GroundAtScale(packingBake, clampedScale));
             return result;
+        }
+
+        /// <summary>
+        /// TRUE GROUND at a layout scale (Oct 19 2026): the baked ground box at shrink (GroundShrinkFootprintMeters,
+        /// at ShrinkScale) and at 1× (GroundFootprintMeters), interpolated per axis between them, and growing with
+        /// the layout past 1×. Zero when the bake measured none (older content). A layout's runtime footprint is never
+        /// smaller than this: rigid content that spills past a shrunk declared size (A_LittleLava's Minimum at
+        /// 0.437 on Z: declared 1.60 m, ground 1.85 m) is still covered by the floor, the bounds and every seat —
+        /// the planner reserves the same (SpaceMapPacker.WithGround).
+        /// </summary>
+        public static Vector2 GroundAtScale(AttractionPackingBake bake, Vector2 scale)
+        {
+            if (bake == null) return Vector2.zero;
+            Vector2 g1 = bake.GroundFootprintMeters, gs = bake.GroundShrinkFootprintMeters, s0 = bake.ShrinkScale;
+            if (!(g1.x > 0.01f && g1.y > 0.01f)) return Vector2.zero;
+            float Axis(float sc, float lo, float at1, float atShrink)
+            {
+                if (!(atShrink > 0.01f)) atShrink = at1 * lo;
+                if (sc >= 1f) return at1 * sc;
+                float t = 1f - lo > 1e-4f ? Mathf.Clamp01((sc - lo) / (1f - lo)) : 1f;
+                return Mathf.Lerp(atShrink, at1, t);
+            }
+            return new Vector2(Axis(scale.x, s0.x, g1.x, gs.x), Axis(scale.y, s0.y, g1.y, gs.y));
         }
 
         [Obsolete("Safe area is independent metadata. Use GetPackingFootprintMeters(Vector2, bool) and GetSafeFootprintMeters(float) separately.")]
@@ -548,7 +588,15 @@ namespace DreamPark
         /// authored active state when that mode is left.
         /// </summary>
         public bool ApplyPackingVariant(Vector2 packingScale, bool essentialOnly)
-            => ApplyPackingVariantInternal(packingScale, essentialOnly, false);
+        {
+            packingDrivenByPark = true;
+            return ApplyPackingVariantInternal(packingScale, essentialOnly, false);
+        }
+
+        /// The park (or any caller outside the editor preview) chose this attraction's layout: an editor packing /
+        /// layout PREVIEW saved in the prefab must never override it in Play Mode (Oct 19 2026: A_SnowBallAlley's
+        /// stale 1.08×1 preview re-applied every LateUpdate over its planned shrink and drew it 5.5 m long).
+        [NonSerialized] private bool packingDrivenByPark;
 
         private bool ApplyPackingVariantInternal(
             Vector2 packingScale,
@@ -563,6 +611,7 @@ namespace DreamPark
                 return ApplyLayoutInternal(frameId, frameScale, replaceGeneratedSurfacesImmediately);
             }
             if (!HasPackingBake) return false;
+            List<JointPose> joints = SnapshotJoints();
 
             bool useEssential = essentialOnly && packingBake.HasEssentialProps;
             Vector2 nextFootprint = GetPackingFootprintMeters(packingScale, useEssential);
@@ -570,7 +619,11 @@ namespace DreamPark
                 || (runtimePackingFootprintMeters - nextFootprint).sqrMagnitude > 0.000001f;
             runtimePackingFootprintMeters = nextFootprint;
             hasRuntimePackingFootprint = true;
-            SetCurrentLayout(BaseFrameId, DivideFootprint(nextFootprint, packingBake.AuthoredFootprintMeters));
+            // The layout's own scale (not footprint ÷ authored: the footprint may be widened to its true ground).
+            Vector2 minScale = useEssential ? packingBake.EssentialShrinkScale : packingBake.ShrinkScale;
+            SetCurrentLayout(BaseFrameId, new Vector2(
+                Mathf.Clamp(packingScale.x, minScale.x, packingBake.GrowScale.x),
+                Mathf.Clamp(packingScale.y, minScale.y, packingBake.GrowScale.y)));
             var poses = packingBake.Props;
             for (int i = 0; i < poses.Count; i++)
             {
@@ -592,7 +645,7 @@ namespace DreamPark
                 if (follower == null) continue;
                 Vector3 position = GetFollowerPosition(packingBake, pose, packingScale, useEssential);
                 Vector3 worldPosition = transform.TransformPoint(position);
-                Vector3 localScale = GetFollowerLocalScale(packingBake, pose, packingScale, useEssential);
+                Vector3 localScale = FollowerScale(pose);   // never scaled to fit: only moved
                 bool changed = (follower.position - worldPosition).sqrMagnitude > 0.0000001f
                     || (follower.localScale - localScale).sqrMagnitude > 0.0000001f;
                 if (!changed) continue;
@@ -607,8 +660,94 @@ namespace DreamPark
             if (anchorsToRecache != null)
                 for (int i = 0; i < anchorsToRecache.Count; i++)
                     anchorsToRecache[i].RecacheCorners();
+            RebuildMovedJoints(joints);
             NotifyLayoutApplied();
             return true;
+        }
+
+        // ── Joints follow the layout (Oct 19, sal-mole-fix) ─────────────────────────────────────────────
+        // PhysX builds a joint's frames from its bodies' poses AND scales when the joint is created (on Awake).
+        // A layout frame that rescales or moves content afterwards leaves every joint at the AUTHORED scale:
+        // ragdolls tear apart (0.14–0.48 m gaps at Compact/Minimum) and jointed trunks stand at full height.
+        // So ApplyLayout snapshots each live joint's body pose before it writes transforms and, after, rebuilds
+        // exactly the joints whose body / connected body moved or rescaled (nothing else: a ragdoll mid-fall is
+        // never re-based by a re-layout that did not touch it). The rebuild is idempotent; a title's own Lua
+        // rebuild afterwards (SAL sal-core / physics-settle `rebuild_joints`) is harmless.
+
+        /// Off only for tests that show the tear without the rebuild.
+        public static bool RebuildJointsOnLayout = true;
+
+        private struct JointPose
+        {
+            public Joint joint;
+            public Matrix4x4 body, connected;
+            public bool hasConnected;
+        }
+
+        private static readonly List<Joint> s_jointScratch = new List<Joint>();
+
+        private List<JointPose> SnapshotJoints()
+        {
+            if (!RebuildJointsOnLayout) return null;
+            s_jointScratch.Clear();
+            GetComponentsInChildren(true, s_jointScratch);
+            if (s_jointScratch.Count == 0) return null;
+            var list = new List<JointPose>(s_jointScratch.Count);
+            foreach (Joint j in s_jointScratch)
+            {
+                if (j == null) continue;
+                Rigidbody cb = j.connectedBody;
+                list.Add(new JointPose
+                {
+                    joint = j,
+                    body = j.transform.localToWorldMatrix,
+                    hasConnected = cb != null,
+                    connected = cb != null ? cb.transform.localToWorldMatrix : Matrix4x4.identity,
+                });
+            }
+            s_jointScratch.Clear();
+            return list;
+        }
+
+        private static bool Moved(Matrix4x4 a, Matrix4x4 b)
+        {
+            for (int i = 0; i < 16; i++) if (Mathf.Abs(a[i] - b[i]) > 0.0001f) return true;
+            return false;
+        }
+
+        private static void RebuildMovedJoints(List<JointPose> before)
+        {
+            if (before == null || before.Count == 0) return;
+            bool synced = false;
+            foreach (JointPose p in before)
+            {
+                Joint j = p.joint;
+                if (j == null) continue;
+                Rigidbody cb = j.connectedBody;
+                bool moved = Moved(p.body, j.transform.localToWorldMatrix)
+                    || (cb != null && (!p.hasConnected || Moved(p.connected, cb.transform.localToWorldMatrix)));
+                if (!moved) continue;
+                if (!synced) { Physics.SyncTransforms(); synced = true; }   // bodies at the new poses first
+                RebuildJoint(j, p.body);
+            }
+        }
+
+        /// Re-creates the PhysX joint at the bodies' current poses and scales (same recipe as SAL's Lua
+        /// `rebuild_joints`: drop the connected body, touch the anchor, reconnect). A manual world-space connected
+        /// anchor (no connected body, auto-configure off) moves with its body.
+        public static void RebuildJoint(Joint j, Matrix4x4? bodyBefore = null)
+        {
+            if (j == null) return;
+            Rigidbody cb = j.connectedBody;
+            Vector3 anchor = j.anchor, connectedAnchor = j.connectedAnchor;
+            bool auto = j.autoConfigureConnectedAnchor;
+            if (!auto && cb == null && bodyBefore.HasValue)
+                connectedAnchor = j.transform.localToWorldMatrix.MultiplyPoint3x4(bodyBefore.Value.inverse.MultiplyPoint3x4(connectedAnchor));
+            j.connectedBody = null;
+            j.anchor = anchor + new Vector3(0f, 0.0001f, 0f);
+            j.anchor = anchor;
+            j.connectedBody = cb;
+            if (!auto) j.connectedAnchor = connectedAnchor;
         }
 
         private void RefreshPackingDependentSystems(
@@ -621,7 +760,9 @@ namespace DreamPark
             // The shipping loader applies packing before Start, so its first floor
             // is already the right size. This branch covers editor slider changes
             // and fallback/legacy callers that select a variant after startup.
-            if (!footprintChanged || !Application.isPlaying) return;
+            // The floor follows the APPLIED footprint, also when this apply did not change it but the floor was
+            // built for another one (an earlier layout, or before the layout was applied).
+            if (!Application.isPlaying || (!footprintChanged && !GeneratedFloorIsStale)) return;
 #if UNITY_EDITOR
             if (replaceGeneratedSurfacesImmediately)
             {
@@ -684,6 +825,15 @@ namespace DreamPark
                 essentialOnly ? pose.EssentialShrunkPosition : pose.ShrunkPosition,
                 pose.GrownPosition, scale, minimum, bake.GrowScale);
         }
+
+        /// <summary>
+        /// WE NEVER SCALE OUR ASSETS TO FIT (Aidan, Oct 19 2026: "we only compact/remove/add to fit the space better";
+        /// scaling is "an artistic decision, not a decision for smaller layouts"). Layout shrink / grow only MOVES
+        /// followers (compaction): every follower keeps its authored scale. (The platform's generated LevelFloor is not
+        /// an authored piece and still matches the footprint.) The bake's follower scale poses are kept for older data
+        /// but never applied.
+        /// </summary>
+        private static Vector3 FollowerScale(AttractionPackingFollowerPose pose) => pose.AuthoredLocalScale;
 
         private static Vector3 GetFollowerLocalScale(AttractionPackingBake bake,
             AttractionPackingFollowerPose pose, Vector2 packingScale, bool essentialOnly)
@@ -784,7 +934,7 @@ namespace DreamPark
 #if UNITY_EDITOR
         private void Awake()
         {
-            if (!Application.isPlaying) return;
+            if (!Application.isPlaying || packingDrivenByPark) return;
             if (UsesLayoutPipeline)
             {
                 // Same rule as the legacy (1,1) default: an unset layout preview
@@ -799,7 +949,7 @@ namespace DreamPark
 
         private void LateUpdate()
         {
-            if (!Application.isPlaying) return;
+            if (!Application.isPlaying || packingDrivenByPark) return;
             if (UsesLayoutPipeline)
             {
                 if (HasLayoutPreview) ApplyLayoutPreview();
@@ -1002,7 +1152,10 @@ namespace DreamPark
         /// baked layout could be applied (the authored hierarchy is still restored).
         /// </summary>
         public bool ApplyLayout(string frameId, Vector2 frameScale)
-            => ApplyLayoutInternal(frameId, frameScale, false);
+        {
+            packingDrivenByPark = true;
+            return ApplyLayoutInternal(frameId, frameScale, false);
+        }
 
         /// <summary>TrySelectFrame + ApplyLayout. The fallback frame is applied even when nothing fits.</summary>
         public bool ApplyFootprint(Vector2 targetMeters)
@@ -1019,8 +1172,8 @@ namespace DreamPark
             {
                 AttractionLayoutFrame frame = FindFrame(frameId);
                 if (FrameHasValidBake(frame))
-                    return Vector2.Scale(frame.Bake.AuthoredFootprintMeters,
-                        ClampScale(frameScale, frame.Bake.ShrinkScale, frame.Bake.GrowScale));
+                    return Vector2.Max(GroundAtScale(frame.Bake, ClampScale(frameScale, frame.Bake.ShrinkScale, frame.Bake.GrowScale)), Vector2.Scale(frame.Bake.AuthoredFootprintMeters,
+                        ClampScale(frameScale, frame.Bake.ShrinkScale, frame.Bake.GrowScale)));
             }
             return GetBaseFootprintMeters(frameScale, false);
         }
@@ -1116,6 +1269,7 @@ namespace DreamPark
                 if (!IsBaseFrameId(frameId)) WarnUnknownFrameOnce(frameId);
                 return ApplyPackingVariantInternal(frameScale, false, replaceGeneratedSurfacesImmediately);
             }
+            List<JointPose> joints = SnapshotJoints();
 
             AttractionLayoutFrame frame = null;
             if (!IsBaseFrameId(frameId))
@@ -1240,7 +1394,7 @@ namespace DreamPark
                 Transform follower = pose?.Follower;
                 if (follower == null) continue;
                 Vector3 worldPosition = root.TransformPoint(GetFollowerPosition(bake, pose, scale, false));
-                Vector3 localScale = GetFollowerLocalScale(bake, pose, scale, false);
+                Vector3 localScale = FollowerScale(pose);   // never scaled to fit: only moved
                 if (follower.position != worldPosition) follower.position = worldPosition;
                 if (!follower.localScale.Equals(localScale)) follower.localScale = localScale;
                 bool changed = (followerBefore[i * 2] - worldPosition).sqrMagnitude > 0.0000001f
@@ -1261,12 +1415,14 @@ namespace DreamPark
                 runtimeFootprintFromFrame = false;
                 SetCurrentLayout(BaseFrameId, Vector2.one);
                 RefreshPackingDependentSystems(wasPacked, replaceGeneratedSurfacesImmediately);
+                RebuildMovedJoints(joints);
                 NotifyLayoutApplied();
                 NotifyWallsApplied();
                 return false;
             }
 
-            Vector2 nextFootprint = Vector2.Scale(bake.AuthoredFootprintMeters, scale);
+            // Never below the layout's TRUE ground at this scale (its floor, bounds and seat cover what it draws).
+            Vector2 nextFootprint = Vector2.Max(Vector2.Scale(bake.AuthoredFootprintMeters, scale), GroundAtScale(bake, scale));
             bool footprintChanged = !hasRuntimePackingFootprint
                 || (runtimePackingFootprintMeters - nextFootprint).sqrMagnitude > 0.000001f;
             runtimePackingFootprintMeters = nextFootprint;
@@ -1277,6 +1433,7 @@ namespace DreamPark
             if (anchorsToRecache != null)
                 for (int i = 0; i < anchorsToRecache.Count; i++)
                     anchorsToRecache[i].RecacheCorners();
+            RebuildMovedJoints(joints);
             NotifyLayoutApplied();
             NotifyWallsApplied();
             return true;
@@ -1335,6 +1492,8 @@ namespace DreamPark
             growMeters = bake.GrowFootprintMeters,
             shrinkScale = bake.ShrinkScale,
             growScale = bake.GrowScale,
+            groundMeters = bake.GroundFootprintMeters,
+            groundShrinkMeters = bake.GroundShrinkFootprintMeters,
         };
 
         private static int SmallestShrinkIndex(List<AttractionFrameEnvelope> ladder)
@@ -1540,6 +1699,7 @@ namespace DreamPark
         {
             currentWalls = walls;
             parkWalls = walls;
+            packingDrivenByPark = true;
             return ApplyLayoutInternal(frameId, frameScale, false);
         }
 

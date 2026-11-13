@@ -35,8 +35,9 @@ namespace XLua.CSObjectWrap
 			Utils.EndObjectRegister(type, L, translator, null, null,
 			    null, null, null);
 
-		    Utils.BeginClassRegister(type, L, __CreateInstance, 3, 1, 1);
+		    Utils.BeginClassRegister(type, L, __CreateInstance, 4, 1, 1);
 			Utils.RegisterFunc(L, Utils.CLS_IDX, "Attach", _m_Attach_xlua_st_);
+            Utils.RegisterFunc(L, Utils.CLS_IDX, "NameFor", _m_NameFor_xlua_st_);
             Utils.RegisterFunc(L, Utils.CLS_IDX, "FallbackName", _m_FallbackName_xlua_st_);
             
 			
@@ -94,6 +95,33 @@ namespace XLua.CSObjectWrap
                     
                         var gen_ret = DreamPark.RemoteNameTag.Attach( _peer );
                         translator.Push(L, gen_ret);
+                    
+                    
+                    
+                    return 1;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_NameFor_xlua_st_(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+            
+                
+                {
+                    DreamPark.RemotePlayer _peer = (DreamPark.RemotePlayer)translator.GetObject(L, 1, typeof(DreamPark.RemotePlayer));
+                    
+                        var gen_ret = DreamPark.RemoteNameTag.NameFor( _peer );
+                        LuaAPI.lua_pushstring(L, gen_ret);
                     
                     
                     

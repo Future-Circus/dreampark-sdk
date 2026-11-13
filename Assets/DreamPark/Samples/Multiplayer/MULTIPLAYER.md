@@ -38,6 +38,27 @@ parks distant objects).
 
 ---
 
+## 0.5 Spectators: the rig is the gate (Oct 23 2026)
+
+A device takes part in a title's gameplay only while it **wears the title's rig** (headset: Player; phone: the
+title's Phone Player, worn only in full-screen AR). A phone without it is a **spectator**: it receives everything and
+draws it, but the platform never lets it change the game.
+
+| | Headset | Phone wearing its Phone Player | Phone without a rig (spectator) |
+|---|---|---|---|
+| `dp.leader()` / `dp.rank()` / SharedState writer | yes | yes (after headsets) | never |
+| `s.set` / `s.request` / merge cells on a title's table | yes | yes | dropped; the writer refuses them |
+| `net_send` | yes | yes | no-op, except asks (`…_req`, `…_request`, `…_rq`, `…_hi`, `…_hello`) |
+| `dp.set_state`, `dp.event`, `stop.*`, `dp.playlist.score / time_limit / signal` | yes | yes | no-op |
+| Taps, `dp.spectator_action(fn)` | — | yes | yes (deliberate) |
+| Playlist / queue control (Play, switch, skip, What's Next) | — | yes | **yes, always** |
+| World simulation (`dp.runs_world()`: patrols, boss idles, platforms, ambient) | when it leads | when it leads | **locally, while nobody plays**; follows the leader once a player is here |
+
+`dp.participating()` tells a script which one it is. Code that runs on every device (Game Manager, Game Container)
+must skip gameplay work when it is false — otherwise the phone runs leader-only code LOCALLY and shows a different
+game. Guard for older apps: `dp.participating == nil or dp.participating()`. A title-side `leader()` helper must use
+`dp.leader()`/`dp.is_leader()` (false on a spectator), never "no bus → true".
+
 ## 1. Use these
 
 | You need | Call | Notes |

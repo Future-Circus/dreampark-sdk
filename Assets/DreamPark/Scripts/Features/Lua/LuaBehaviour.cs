@@ -95,7 +95,7 @@ public class GameObjectListInjection {
 }
 
 [LuaCallCSharp]
-public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
+public class LuaBehaviour : MonoBehaviour, ILuaInjectable, LuaUpdateDispatcher.IMember {
 
     public TextAsset          luaScript;
     public Injection[]        injections;
@@ -360,7 +360,15 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
     // Set by OnValidate when the Inspector mutates this component. Lets designers keep
     // live-tweak during play without re-marshaling every field into Lua every frame.
     private bool _injectionDirty;
-    void OnValidate() => _injectionDirty = true;
+    void OnValidate() {
+        _injectionDirty = true;
+        // The re-inject runs on the next update tick (TickUpdate). A script with no
+        // update() is not on the ticker, so put it there for the one frame it takes.
+        // Never from edit mode, and never by creating the dispatcher from inside
+        // OnValidate (AddComponent there is refused) — in play it already exists.
+        if (Application.isPlaying && isActiveAndEnabled && LuaUpdateDispatcher.IsRunning)
+            LuaUpdateDispatcher.Register(this);
+    }
 #endif
 
     /// <summary>
@@ -579,6 +587,11 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
             // Whether a message actually went out is dp.relay().connected.
             bool warnedNoClient = false;
             scriptScopeTable.Set("net_send", new Action<string, string>((eventType, payload) => {
+                // The rig is the gate (Oct 23 2026, platform-rig): a spectator phone (no rig for this title)
+                // sends nothing that changes the game — only asks ("…_req"), so its view still catches up.
+                if (!DreamPark.DreamParkParticipation.MaySend(gameObject, eventType)) return;
+                // Playlist auto-detection (PLAYLISTS.md § 13): what the title says, from where — also solo.
+                DreamPark.PlaylistAutoTaps.RaiseNetSent(gameObject, eventType, payload);
                 var client = DreamBoxClient.Instance;
                 if (client == null) {
                     if (!warnedNoClient) {
@@ -681,7 +694,17 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
     // the first frame the script actually runs, whichever path booted it.
     private bool startDispatched;
 
-    void Start() => DispatchStart();
+    // Unity's own Start has run for this component. Unity never calls Update before
+    // Start, so the dispatcher skips an instance until this is set (an object spawned
+    // mid-frame gets its first update() on the frame after, exactly as before).
+    internal bool unityStarted;
+
+    void Start() {
+        unityStarted = true;
+        DispatchStart();
+        // Booted and started with no update(): nothing left for the ticker to do.
+        if (!NeedsTick) LuaUpdateDispatcher.Unregister(this);
+    }
 
     void DispatchStart() {
         if (startDispatched || !booted) return;
@@ -779,16 +802,58 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
         // keeping the relays in lockstep with this component's enabled state, so a
         // disabled LuaBehaviour doesn't keep firing FixedUpdate/OnTrigger* via them.
         EnsureBooted();
+        // Before luaOnEnable: a handler that disables this object again must find it
+        // registered, so its OnDisable takes it back off.
+        if (NeedsTick) LuaUpdateDispatcher.Register(this);
         LuaMessageRelays.SetEnabled(luaRelays, true);
         if (OptimizerToggleDepth == 0) luaOnEnable?.Invoke();
     }
 
     void OnDisable() {
+        LuaUpdateDispatcher.Unregister(this);
         if (OptimizerToggleDepth == 0) luaOnDisable?.Invoke();
         LuaMessageRelays.SetEnabled(luaRelays, false);
     }
 
-    void Update() {
+    // ── update() is opt-in, like every other message (Nov 11 2026, pf-lua) ──────────
+    //
+    // Director: "I thought we designed the Lua system to only assign update when
+    // needed? ... similar to how MonoBehaviour works". Every other optional message
+    // (lateupdate, fixedupdate, ontrigger*, oncollision*, …) already was — a relay
+    // component exists only when the script defines the function (LuaMessageRelays).
+    // update() was the exception: LuaBehaviour declared Update() itself, so Unity
+    // called into C# on EVERY instance every frame (SAL: 8,925 LuaBehaviours, most
+    // with no update()) just to find luaUpdate == null.
+    //
+    // LuaBehaviour no longer declares Update. An instance sits on the one
+    // LuaUpdateDispatcher list only while it has something to do there:
+    //   • it has not booted yet (parked at spawn and never disabled — the player rig —
+    //     or luaScript assigned after AddComponent): boots on the first frame it runs;
+    //   • it booted but start() is still owed (Unity's Start ran while parked);
+    //   • its script defines update().
+    // Same phase (a MonoBehaviour Update at the default execution order), same
+    // enabled/active rule (on the list only between OnEnable and OnDisable), never
+    // before Unity's Start, an exception is logged against this object and the rest
+    // still run — exactly what Unity did with the old per-instance Update.
+    //
+    // update is read ONCE, after the file scope runs (as it always was): define it at
+    // file scope, conditionally if you like (`if AS_STEP then update = step_update end`,
+    // block.lua's `if rb ~= nil then function fixedupdate() … end`). Defining or
+    // clearing it later from awake()/start()/a handler did not change ticking before
+    // and does not now — gate inside update() instead.
+    internal bool NeedsTick =>
+        !booted || !startDispatched || luaUpdate != null
+#if UNITY_EDITOR
+        || _injectionDirty
+#endif
+        ;
+
+    // Slot on LuaUpdateDispatcher's list (-1 = not on it). Owned by that list.
+    [NonSerialized] int tickSlot = -1;
+    int LuaUpdateDispatcher.IMember.TickSlot { get => tickSlot; set => tickSlot = value; }
+
+    /// <summary>One frame of what Unity's Update used to run on this component.</summary>
+    internal void TickUpdate() {
         // Content that was parked at spawn boots the first frame it genuinely runs.
         // This is the path for objects the park never disables - the player rig - which
         // get no OnEnable when Build Mode ends.
@@ -811,15 +876,12 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
 #endif
 
         luaUpdate?.Invoke();
-
-        // Lua GC — important, don't skip this
-        if (Time.time - LuaBehaviour.lastGCTime > GCInterval) {
-            luaEnv.Tick();
-            LuaBehaviour.lastGCTime = Time.time;
-        }
+        // The Lua GC step (luaEnv.Tick, once per GCInterval) moved to
+        // LuaUpdateDispatcher: it must run even when no script defines update().
     }
 
     void OnDestroy() {
+        LuaUpdateDispatcher.Unregister(this);
         if (wallsSource != null) wallsSource.WallsApplied -= OnWallsApplied;
         wallsSource = null;
         luaOnWalls = null;
@@ -839,5 +901,152 @@ public class LuaBehaviour : MonoBehaviour, ILuaInjectable {
         luaStart = null;
         injections = null;
         scriptInjections = null;
+    }
+}
+
+/// <summary>
+/// The one MonoBehaviour that runs update() for every LuaBehaviour whose script
+/// defines it (Nov 11 2026, pf-lua — see LuaBehaviour.NeedsTick).
+///
+/// Unity only sends a message to a component that declares the method; this gives
+/// update() the same rule. A LuaBehaviour with no update() costs nothing per frame,
+/// and the ones with one cost a managed loop step instead of a native-to-managed
+/// Update call each. Lives at the default execution order, so it runs in the same
+/// phase and at the same place relative to scripts with an explicit order as each
+/// LuaBehaviour.Update did. Also owns the Lua GC step (luaEnv.Tick), which used to
+/// ride on whichever LuaBehaviour updated first after GCInterval.
+///
+/// Created on demand (hidden, DontDestroyOnLoad); the list is static, so if the
+/// object is ever destroyed the next registration brings it back with the list
+/// intact. Defined here, not in its own file: it is only ever AddComponent'd (like
+/// the relays in LuaMessageRelays.cs), and a new file under Assets/ would mint a
+/// .meta.
+/// </summary>
+[AddComponentMenu("")]
+public sealed class LuaUpdateDispatcher : MonoBehaviour {
+
+    /// <summary>What the list needs from a member: a slot it owns.</summary>
+    public interface IMember { int TickSlot { get; set; } }
+
+    /// <summary>
+    /// Ordered registration list with O(1) add/remove that tolerates changes during a
+    /// pass. A pass visits the members present when it began, in registration order;
+    /// a member removed mid-pass is skipped (its slot goes null), one added mid-pass
+    /// waits for the next pass. Holes are compacted at the end of the pass. No engine
+    /// calls, so it is tested offline (Tools/lua-update-offline).
+    /// </summary>
+    public sealed class TickList<T> where T : class, IMember {
+        readonly List<T> items = new List<T>();
+        int holes;
+
+        public int Count => items.Count - holes;
+        /// <summary>Slots to visit this pass (includes holes).</summary>
+        public int Slots => items.Count;
+        public T this[int slot] => items[slot];
+
+        public bool Add(T m) {
+            if (m.TickSlot >= 0) return false;
+            m.TickSlot = items.Count;
+            items.Add(m);
+            return true;
+        }
+
+        public bool Remove(T m) {
+            int i = m.TickSlot;
+            if (i < 0) return false;
+            m.TickSlot = -1;
+            if (i < items.Count && ReferenceEquals(items[i], m)) { items[i] = null; holes++; }
+            return true;
+        }
+
+        public bool Contains(T m) {
+            int i = m.TickSlot;
+            return i >= 0 && i < items.Count && ReferenceEquals(items[i], m);
+        }
+
+        /// <summary>Close the holes, keeping order. Call between passes only.</summary>
+        public void Compact() {
+            if (holes == 0) return;
+            int w = 0;
+            for (int r = 0; r < items.Count; r++) {
+                T m = items[r];
+                if (m == null) continue;
+                if (w != r) { items[w] = m; m.TickSlot = w; }
+                w++;
+            }
+            items.RemoveRange(w, items.Count - w);
+            holes = 0;
+        }
+
+        public void Clear() {
+            for (int i = 0; i < items.Count; i++) if (items[i] != null) items[i].TickSlot = -1;
+            items.Clear();
+            holes = 0;
+        }
+    }
+
+    static readonly TickList<LuaBehaviour> s_list = new TickList<LuaBehaviour>();
+    static LuaUpdateDispatcher s_instance;
+    static bool s_quitting, s_quitHooked;
+
+    /// <summary>The dispatcher object exists (play mode, at least one registration so far).</summary>
+    public static bool IsRunning => s_instance != null;
+    /// <summary>LuaBehaviours on the update list right now (diagnostics / tests).</summary>
+    public static int RegisteredCount => s_list.Count;
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    static void ResetStatics() {
+        s_list.Clear();
+        s_instance = null;
+        s_quitting = false;
+    }
+
+    internal static void Register(LuaBehaviour lb) {
+        if (!Application.isPlaying || lb == null) return;
+        if (s_instance == null && !s_quitting) {
+            var go = new GameObject("[LuaUpdateDispatcher]") { hideFlags = HideFlags.HideInHierarchy };   // not DontSave: that would outlive play mode
+            DontDestroyOnLoad(go);
+            s_instance = go.AddComponent<LuaUpdateDispatcher>();
+            if (!s_quitHooked) { s_quitHooked = true; Application.quitting += () => s_quitting = true; }
+        }
+        s_list.Add(lb);
+    }
+
+    internal static void Unregister(LuaBehaviour lb) {
+        if ((object)lb != null) s_list.Remove(lb);
+    }
+
+    void OnDestroy() {
+        if (s_instance == this) s_instance = null;
+    }
+
+    void Update() {
+        int slots = s_list.Slots;
+        for (int i = 0; i < slots; i++) {
+            LuaBehaviour lb = s_list[i];
+            if ((object)lb == null) continue;
+            // Destroyed without OnDestroy (never reached here in practice): drop it.
+            if (lb == null) { s_list.Remove(lb); continue; }
+            // Unity never ran Update before Start; neither does this.
+            if (!lb.unityStarted) continue;
+            try {
+                lb.TickUpdate();
+            }
+            catch (Exception e) {
+                // What Unity did with an exception out of LuaBehaviour.Update: log it
+                // against the object and carry on with the next one.
+                Debug.LogException(e, lb);
+            }
+            // Still in this slot (not disabled/destroyed by its own update) and nothing
+            // left to do: booted, started, no update(). Off the list until re-enabled.
+            if (((IMember)lb).TickSlot == i && !lb.NeedsTick) s_list.Remove(lb);
+        }
+        s_list.Compact();
+
+        // Lua GC — important, don't skip this
+        if (Time.time - LuaBehaviour.lastGCTime > LuaBehaviour.GCInterval) {
+            LuaBehaviour.luaEnv.Tick();
+            LuaBehaviour.lastGCTime = Time.time;
+        }
     }
 }

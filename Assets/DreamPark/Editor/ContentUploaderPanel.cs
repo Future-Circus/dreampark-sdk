@@ -6,6 +6,7 @@ using DreamPark.API;
 using DreamPark.Editor;
 using DreamPark.ParkSim;
 using DreamPark.Badges;
+using DreamPark.ThemeMusic;
 using System;
 using UnityEditor.AddressableAssets;
 using UnityEditor.AddressableAssets.Build;
@@ -217,6 +218,7 @@ namespace DreamPark {
         // without leaking owner identity.
         private bool? isContentAccessibleByMe = null;
         private const string LogoPrefKeyPrefix = "DreamPark.ContentUploader.LogoPath.";
+        private const string ThemePrefKeyPrefix = "DreamPark.ContentUploader.ThemePath.";
         private const string ContentIdPrefKey = "DreamPark.ContentUploader.LastContentId";
         private const string BuildAndroidPrefKey = "DreamPark.ContentUploader.Build.Android";
         private const string BuildIosPrefKey = "DreamPark.ContentUploader.Build.iOS";
@@ -364,6 +366,17 @@ namespace DreamPark {
         // Layout pass rather than on every keystroke.
         private bool badgesDirty;
         private bool isPushingBadges;
+        // ── Theme music ── the App Page's theme track (ThemeMusicUploader;
+        // DreamPark-Web docs/contracts/title-theme.md). The selection is
+        // remembered per content id like the logo; the status line shows what
+        // the App Page has NOW, which the dashboard may have changed since.
+        private AudioClip themeClip;
+        private bool isPushingTheme;
+        private string themePushError;
+        private ThemeMusicUploader.ServerStatus themeServerStatus;
+        private string themeStatusFor;
+        private GUIStyle themeStatusStyle;
+        private GUIStyle themeStatusErrorStyle;
         // ── Items ── the catalog twin of the Badges group; its state, scan,
         // draft (.items.json) and push live in DreamPark.Items.ItemsSection.
         private readonly DreamPark.Items.ItemsSection itemsSection = new DreamPark.Items.ItemsSection();
@@ -485,6 +498,8 @@ namespace DreamPark {
             LoadSectionFoldoutPrefs();
 
             LoadLogoSelection();
+
+            LoadThemeSelection();
             FetchContentMetadata();
             FetchContentUsers();
             RefreshPatchEstimate();
@@ -540,6 +555,8 @@ namespace DreamPark {
             Undo.undoRedoPerformed -= OnSequenceUndoRedo;
             EditorApplication.update -= PumpAdvisoryPreUploadScan;
             preUploadAdvisoryScheduled = false;
+            EditorApplication.update -= WatchThemePreview;
+            ThemePreview.Stop();
         }
 
         private void OnManifestUpdated() => Repaint();
@@ -663,6 +680,7 @@ namespace DreamPark {
             contentName = "";
             contentDescription = "";
             LoadLogoSelection();
+            LoadThemeSelection();
             FetchContentMetadata();
             FetchContentUsers();
             RefreshPatchEstimate();
@@ -838,6 +856,7 @@ namespace DreamPark {
                 contentDescription = "";
                 SaveContentIdSelection();
                 LoadLogoSelection();
+                LoadThemeSelection();
                 FetchContentMetadata();
                 FetchContentUsers();
                 RefreshPatchEstimate();
@@ -979,6 +998,7 @@ namespace DreamPark {
                     GUILayout.MinHeight(52),
                     GUILayout.ExpandWidth(true));
                 logoTexture = (Texture2D)EditorGUILayout.ObjectField("Logo", logoTexture, typeof(Texture2D), false);
+                DrawThemeMusicField();
                 if (isLoadingMetadata)
                 {
                     EditorGUILayout.HelpBox("Loading content metadata from backend...", MessageType.Info);
@@ -1233,6 +1253,9 @@ namespace DreamPark {
                     MessageType.None);
             }
 
+            DrawPlaylistsReleaseSummary();
+            GUILayout.Space(4);
+
             GUI.enabled = canLaunch;
             string compileLabel = shippable
                 ? "Upload Release"
@@ -1240,6 +1263,7 @@ namespace DreamPark {
             if (GUILayout.Button(compileLabel, GUILayout.Height(34)))
             {
                 SaveLogoSelection();
+                WarnIfNoPlaylists();
                 // Fresh version check at click time — the passive sdkOutOfDate
                 // gate above reads the once-per-session manifest cache, which
                 // goes stale if the editor stays open across an SDK release.
@@ -4255,6 +4279,19 @@ namespace DreamPark {
                         Debug.LogWarning("[Dimensions] auto-push failed to start: " + dimEx.Message);
                     }
 
+                    // The release's Game Graph (Docs/GAME-GRAPH.md): attractions → objects → Lua,
+                    // stored PRIVATELY with this version so backend agents can read the game
+                    // without the bundles. Silent and fire-and-forget like the pushes above.
+                    try
+                    {
+                        EditorCoroutineUtility.StartCoroutineOwnerless(
+                            DreamPark.Editor.GameGraph.GameGraphExporter.UploadRoutine(uploadContentId, contentId, versionNumber));
+                    }
+                    catch (Exception ggEx)
+                    {
+                        Debug.LogWarning("[GameGraph] auto-push failed to start: " + ggEx.Message);
+                    }
+
                     string targetName = activeUploadTarget == ContentUploadTarget.Beta ? "beta" : "release";
                     CompleteUploadStatus(true,
                         $"'{contentName}' uploaded successfully to {targetName} target '{uploadContentId}' as {GetVersionSummaryAfterUpload(versionNumber)}.");
@@ -4427,6 +4464,30 @@ namespace DreamPark {
             // commitUpload; nesting this only under `uploader` is insufficient.
             JSONObject packages = uploader.GetField("packages");
             if (packages != null) manifestSummary.AddField("packages", packages);
+            AttachRunners(manifestSummary);
+        }
+
+        // Ways to play (contract ways-to-play.md §3; ways-web handoff §1): each Runners/<id>.lua.txt's
+        // DreamPark.runner{} header → a top-level `runners` array on commitUpload (ContentAPI forwards it).
+        // Covers go up first (POST /api/content/:id/runners/cover) so their URLs ride in the array. Never
+        // fails the upload: a broken runner is a pre-upload finding (WaysToPlayCheck), a failed cover ships null.
+        private void AttachRunners(JSONObject manifestSummary)
+        {
+            try
+            {
+                string runnersRoot = "Assets/Content/" + contentId;
+                if (!Directory.Exists(DreamPark.WaysToPlay.RunnerCatalog.RunnersFolder(runnersRoot))) return;
+                string upId = string.IsNullOrEmpty(ActiveUploadContentId) ? contentId : ActiveUploadContentId;
+                var covers = DreamPark.WaysToPlay.RunnerCatalog.UploadCovers(upId, runnersRoot, AuthAPI.GetUserAuthFor(upId), DreamParkAPI.baseUrl);
+                JSONObject runners = DreamPark.WaysToPlay.RunnerCatalog.BuildExportJson(runnersRoot, out List<string> runnerProblems, covers);
+                foreach (string problem in runnerProblems) Debug.LogWarning("[WaysToPlay] " + problem);
+                if (runners != null)
+                {
+                    manifestSummary.AddField("runners", runners);
+                    Debug.Log($"[WaysToPlay] exporting {runners.count} way(s) to play: {runners.Print()}");
+                }
+            }
+            catch (Exception e) { Debug.LogWarning("[WaysToPlay] runners not exported: " + e.Message); }
         }
 
         // Oct 10 2026: build metadata on every version (BuildInfoCollector).
@@ -4558,6 +4619,10 @@ namespace DreamPark {
                 packages.AddField("adventure", BuildPublishedPackageJson(manifest.adventure, contentId));
             if (!DreamParkPackageManifest.IsAbsent(manifest.sequence))
                 packages.AddField("sequence", BuildPublishedPackageJson(manifest.sequence, contentId));
+            // Additive (Docs/PLAYLISTS.md § 5): packages.schemaVersion is unchanged
+            // and a Web that predates playlists ignores the key.
+            JSONObject playlists = BuildPublishedPlaylistsJson(manifest);
+            if (playlists != null) packages.AddField("playlists", playlists);
             return packages;
         }
 
@@ -5068,6 +5133,9 @@ namespace DreamPark {
 
         private void DrawContentPreviewSection()
         {
+            // Playlists are the title's experience (PLAYLISTS.md); the old organizers stay, as legacy packages.
+            DrawPlaylistsSection();
+            GUILayout.Space(10f);
             DrawPackagesSection();
             GUILayout.Space(10f);
 
@@ -5133,13 +5201,22 @@ namespace DreamPark {
             if (anyUnresolved || AssetPreview.IsLoadingAssetPreviews()) Repaint();
         }
 
+        // The legacy organizers fold away by default once the title has playlists (PLAYLIST-STUDIO.md § Migration).
+        private const string LegacyPackagesFoldPrefKey = "DreamPark.ContentUploader.LegacyPackagesFold";
+        private string legacyFoldLoadedFor;
+
         private void DrawPackagesSection()
         {
+            if (legacyFoldLoadedFor != contentId)
+            {
+                legacyFoldLoadedFor = contentId;
+                packagesFold = EditorPrefs.GetBool(LegacyPackagesFoldPrefKey + "." + contentId, !ContentPlaylistStore.Exists(contentId));
+            }
             EnsureContainerDeferred();
             Rect headerRect = GUILayoutUtility.GetRect(0f,
                 EditorGUIUtility.singleLineHeight + 4f, GUILayout.ExpandWidth(true));
             bool expanded = DrawOrganizerSectionHeader(headerRect, headerRect,
-                packagesFold, "Packages");
+                packagesFold, "Legacy packages · Arena / Sequence / Adventure");
             IEnumerable<string> packageGuids = organizerMode == OrganizerMode.Arena
                 ? contentRoots.Where(e => e.kind != ContentRootKind.Player).Select(e => e.guid)
                 : ContentSequenceStore.Flatten(sequenceLayout);
@@ -5149,6 +5226,7 @@ namespace DreamPark {
             {
                 packagesFold = expanded;
                 EditorPrefs.SetBool(PackagesFoldPrefKey, packagesFold);
+                EditorPrefs.SetBool(LegacyPackagesFoldPrefKey + "." + contentId, packagesFold);
             }
             if (!packagesFold) return;
 
@@ -8600,6 +8678,173 @@ namespace DreamPark {
             return list;
         }
 
+        // ─── Theme music ───────────────────────────────────────────────
+        private void LoadThemeSelection()
+        {
+            ThemePreview.Stop();
+            themeClip = null;
+            themePushError = null;
+            themeServerStatus = null;
+            themeStatusFor = null;
+            if (string.IsNullOrEmpty(contentId)) return;
+            string savedPath = EditorPrefs.GetString(ThemePrefKeyPrefix + contentId, "");
+            if (!string.IsNullOrEmpty(savedPath))
+                themeClip = AssetDatabase.LoadAssetAtPath<AudioClip>(savedPath);
+            FetchThemeStatus();
+        }
+
+        private void SaveThemeSelection()
+        {
+            if (string.IsNullOrEmpty(contentId)) return;
+            string path = themeClip != null ? AssetDatabase.GetAssetPath(themeClip) : null;
+            if (string.IsNullOrEmpty(path)) EditorPrefs.DeleteKey(ThemePrefKeyPrefix + contentId);
+            else EditorPrefs.SetString(ThemePrefKeyPrefix + contentId, path);
+        }
+
+        private void FetchThemeStatus()
+        {
+            string id = contentId;
+            if (string.IsNullOrEmpty(id) || !AuthAPI.isLoggedIn) return;
+            themeStatusFor = id;
+            ThemeMusicUploader.FetchStatus(id, status =>
+            {
+                if (themeStatusFor != id) return;   // the selection moved on
+                themeServerStatus = status;
+                Repaint();
+            });
+        }
+
+        private void DrawThemeMusicField()
+        {
+            // Self-heals a panel opened before sign-in: one fetch per content id.
+            if (themeServerStatus == null && themeStatusFor != contentId && AuthAPI.isLoggedIn)
+                FetchThemeStatus();
+            EditorGUILayout.BeginHorizontal();
+            EditorGUI.BeginChangeCheck();
+            var picked = (AudioClip)EditorGUILayout.ObjectField(
+                new GUIContent("Theme Music",
+                    "Plays in the DreamPark app when players open your game's page or pick it in Play, and keeps "
+                    + "playing while it loads. Pick an audio file from your project (MP3, M4A, WAV, AIFF, OGG or "
+                    + "FLAC). DreamPark evens out the volume and uses the first 3 minutes. It is pushed to your App "
+                    + "Page with every upload when the file has changed, and can be replaced on the developer dashboard."),
+                themeClip, typeof(AudioClip), false);
+            if (EditorGUI.EndChangeCheck())
+            {
+                ThemePreview.Stop();
+                themeClip = picked;
+                themePushError = null;
+                SaveThemeSelection();
+            }
+            bool playing = ThemePreview.IsPlaying(themeClip);
+            using (new EditorGUI.DisabledScope(themeClip == null))
+            {
+                var icon = EditorGUIUtility.IconContent(playing ? "d_PauseButton" : "d_PlayButton");
+                var content = new GUIContent(icon.image, playing ? "Stop the preview" : "Preview the theme music");
+                if (GUILayout.Button(content, GUILayout.Width(28), GUILayout.Height(18)))
+                {
+                    if (playing)
+                    {
+                        ThemePreview.Stop();
+                    }
+                    else
+                    {
+                        ThemePreview.Play(themeClip);
+                        EditorApplication.update -= WatchThemePreview;
+                        EditorApplication.update += WatchThemePreview;
+                    }
+                }
+            }
+            EditorGUILayout.EndHorizontal();
+
+            // One fixed-height status line + the push button, always drawn so
+            // nothing below moves when the state changes. The full text is in
+            // the tooltip when it is cut short.
+            if (themeStatusStyle == null)
+            {
+                themeStatusStyle = new GUIStyle(EditorStyles.miniLabel) { wordWrap = false, clipping = TextClipping.Clip };
+                themeStatusErrorStyle = new GUIStyle(themeStatusStyle);
+                themeStatusErrorStyle.normal.textColor = new Color(0.95f, 0.45f, 0.35f);
+            }
+            bool isError;
+            string line = ThemeStatusLine(out isError);
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.Space(EditorGUIUtility.labelWidth + 2);
+            GUILayout.Label(new GUIContent(line, line), isError ? themeStatusErrorStyle : themeStatusStyle,
+                GUILayout.Height(18), GUILayout.MinWidth(40), GUILayout.ExpandWidth(true));
+            using (new EditorGUI.DisabledScope(isPushingTheme || isUploading || UploadsBlocked
+                                               || string.IsNullOrEmpty(contentId) || themeClip == null))
+            {
+                if (GUILayout.Button(new GUIContent(
+                        isPushingTheme ? "Pushing..." : "Push Theme to App Page",
+                        "Uploads the selected theme music to your App Page now (POST /api/content/:id/theme). "
+                            + "No build required."),
+                        GUILayout.Width(170), GUILayout.Height(18)))
+                {
+                    PushTheme();
+                }
+            }
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private string ThemeStatusLine(out bool isError)
+        {
+            isError = false;
+            if (isPushingTheme) return "Pushing to your App Page…";
+            if (!string.IsNullOrEmpty(themePushError)) { isError = true; return "Not pushed: " + themePushError; }
+            string warning = ThemeMusicUploader.Warning(themeClip);
+            if (warning != null)
+            {
+                // A format/size problem blocks the push; a long track only gets trimmed.
+                isError = ThemeMusicUploader.SourcePath(themeClip, out _, out _) == null;
+                return warning;
+            }
+            var st = themeServerStatus;
+            if (st == null) return "";
+            if (!st.ok) return string.IsNullOrEmpty(st.error) ? "" : "App Page unavailable: " + st.error;
+            if (!st.hasTheme)
+                return themeClip != null
+                    ? "Not on your App Page yet. It goes up with your next upload, or push it now."
+                    : "No theme music on your App Page.";
+            string name = string.IsNullOrEmpty(st.sourceName) ? "Theme" : st.sourceName;
+            return $"On your App Page: {name} · {ThemeMusicUploader.FormatDuration(st.durationSec)}"
+                   + (st.hasLoop ? " · loop set" : "");
+        }
+
+        private void WatchThemePreview()
+        {
+            if (ThemePreview.IsPlaying(themeClip)) return;
+            EditorApplication.update -= WatchThemePreview;
+            Repaint();
+        }
+
+        private void PushTheme()
+        {
+            if (string.IsNullOrEmpty(contentId) || themeClip == null || isPushingTheme) return;
+            string id = contentId;
+            isPushingTheme = true;
+            themePushError = null;
+            ThemeMusicUploader.Push(id, themeClip, r => OnThemePushed(id, r));
+        }
+
+        // Fire-and-forget from the upload flow, like UploadLogoImage: it never
+        // fails or delays the upload, and the button above repairs it.
+        private void PushThemeSilently(string idForUpload)
+        {
+            if (themeClip == null || string.IsNullOrEmpty(idForUpload) || isPushingTheme) return;
+            if (ThemeMusicUploader.SourcePath(themeClip, out _, out _) == null) return;
+            isPushingTheme = true;
+            themePushError = null;
+            ThemeMusicUploader.PushSilently(idForUpload, themeClip, r => OnThemePushed(idForUpload, r));
+        }
+
+        private void OnThemePushed(string id, ThemeMusicUploader.Result r)
+        {
+            isPushingTheme = false;
+            themePushError = r != null && !r.ok ? r.error : null;
+            if (r != null && r.ok && !r.skipped && id == contentId) FetchThemeStatus();
+            Repaint();
+        }
+
         private void LoadLogoSelection()
         {
             if (string.IsNullOrEmpty(contentId))
@@ -10322,6 +10567,11 @@ namespace DreamPark {
                             // fails the upload — repair via Troubleshooting).
                             try { UploadLogoImage(uploadContentId, interactive: false); }
                             catch (Exception e) { Debug.LogWarning("[Logo] upload skipped: " + e.Message); }
+                            // Theme music rides along for the same reason (App
+                            // Page metadata, not bundle payload). Skipped when the
+                            // file is unchanged since the last push, so a theme
+                            // replaced on the dashboard is not overwritten.
+                            PushThemeSilently(uploadContentId);
                             // Badges ride alongside the logo, and for the same
                             // reason: they are backend metadata on the content
                             // doc, not bundle payload, so this is the moment the
@@ -10371,6 +10621,7 @@ namespace DreamPark {
                                 // land on the backend too (fire-and-forget).
                                 try { UploadLogoImage(sourceContentId, interactive: false); }
                                 catch (Exception e) { Debug.LogWarning("[Logo] upload skipped: " + e.Message); }
+                                PushThemeSilently(sourceContentId);
                                 // First upload: the content doc has just been
                                 // created, so this is the earliest point at which
                                 // /admin/content/:id/badges/save can authorize us

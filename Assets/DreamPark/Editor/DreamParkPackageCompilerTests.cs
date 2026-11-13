@@ -901,6 +901,36 @@ public sealed class CatalogPackingUploadTests
 {
     private const float Ft = 0.3048f;
 
+    /// Oct 19 2026: the manifest carries each layout's entries / exits, so the app planner turns the REAL entry to
+    /// the approach (a frame that overrides its portals carries its own; the others carry Base's).
+    [Test]
+    public void ManifestCarriesEachLayoutsPortals()
+    {
+        AttractionLayoutFrame wide = Custom("fwide0001", "Wide", 30f, 20f);
+        wide.overridePortals = true;
+        wide.portals = new List<AttractionPortal> { new AttractionPortal(AttractionPortalKind.Entry, 0.25f) };
+        GameObject root = FramedAttraction(out AttractionTemplate attraction, wide, Custom("fsmall001", "Small", 10f, 10f));
+        try
+        {
+            attraction.SetPortals(new List<AttractionPortal>
+            {
+                new AttractionPortal(AttractionPortalKind.Entry, 0f), new AttractionPortal(AttractionPortalKind.Exit, 0.5f),
+            });
+            List<PackagePortal> basePortals = DreamParkPackageCompiler.PortalsOf(attraction, AttractionTemplate.BaseFrameId);
+            Assert.That(basePortals.Select(p => (p.kind, p.position)), Is.EqualTo(new[] { (0, 0f), (1, 0.5f) }));
+            List<PackageFrameEnvelope> envelopes = DreamParkPackageCompiler.FrameEnvelopesFor(attraction);
+            PackageFrameEnvelope w = envelopes.Single(e => e.frameId == "fwide0001");
+            Assert.That(w.portals.Select(p => (p.kind, p.position)), Is.EqualTo(new[] { (0, 0.25f) }), "the frame's override");
+            PackageFrameEnvelope small = envelopes.Single(e => e.frameId == "fsmall001");
+            Assert.That(small.portals.Count, Is.EqualTo(2), "no override: Base's portals");
+            Assert.That(small.portals[0].IsEntry && !small.portals[1].IsEntry, Is.True);
+        }
+        finally
+        {
+            Object.DestroyImmediate(root);
+        }
+    }
+
     [Test]
     public void FrameNamesAreJsonSafeAndCappedAt200Characters()
     {

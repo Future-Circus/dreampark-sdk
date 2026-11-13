@@ -1,0 +1,30 @@
+-- Sample way to play: short rounds in one room; the group votes the next room.
+-- Next up only every third round (the end of a "world"); otherwise seamless.
+DreamPark.runner {
+  name = "Quick rounds",
+  blurb = "Short rounds; the group votes the next room.",
+  cover = "Covers/quick.png",
+}
+
+local ROOMS = { "Garden", "Workshop", "Library" }
+
+function onSessionStart(board)
+  dp.flow.state.round = 1
+  dp.flow.load(ROOMS[1], { tile = 1 })
+end
+
+function onResume(state) end
+
+dp.flow.onLevelComplete(function(level, info)
+  local s = dp.flow.state
+  s.round = (s.round or 1) + 1
+  local a, b = ROOMS[(s.round % 3) + 1], ROOMS[((s.round + 1) % 3) + 1]
+  dp.flow.choose({ options = { a, b }, zones = { { x = -1, z = 0, r = 1 }, { x = 1, z = 0, r = 1 } }, seconds = 8, default = a, tag = "next" })
+end)
+
+dp.flow.onChoice(function(winner, tag)
+  if tag ~= "next" then return end
+  local s = dp.flow.state
+  local endOfWorld = s.round % 3 == 0
+  dp.flow.load(winner, { tile = 1, nextUp = endOfWorld and { title = winner, subtitle = "Round " .. s.round } or nil })
+end)

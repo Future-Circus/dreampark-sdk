@@ -508,6 +508,15 @@ namespace DreamPark.API
                 callback?.Invoke(false, new DreamParkAPI.APIResponse(false, 0, foreignMsg));
                 return;
             }
+            SortedSet<string> foreignFolders = DetectForeignContentFolders(contentId, files.Select(kv => kv.Value));
+            if (foreignFolders.Count > 0)
+            {
+                string msg = $"This build's catalog contains assets of other titles' folders (Assets/Content/{string.Join(", Assets/Content/", foreignFolders)}). " +
+                             "Another editor on this project probably saved Addressables group settings during the build. Rebuild with only this title's groups and upload again.";
+                Debug.LogError($"[ContentUploader] {msg}");
+                callback?.Invoke(false, new DreamParkAPI.APIResponse(false, 0, msg));
+                return;
+            }
             if (skipFileKeys != null && skipFileKeys.Count > 0)
             {
                 var replayedKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -1592,6 +1601,30 @@ namespace DreamPark.API
             return ids;
         }
 
+        /// The OTHER titles' content folders this build's catalog names ("Assets/Content/<X>/…" with X not this title): a
+        /// title built in a project shared with other titles must never ship their assets (release round Oct 26 2026:
+        /// LaserTagBeta v24 carried Critters' and Zombiez's Lua because another editor re-saved their group settings
+        /// mid-build). Folders = what follows Assets/Content/ (JSON may escape '/').
+        public static SortedSet<string> DetectForeignContentFolders(string contentId, IEnumerable<UploadContentData> files)
+        {
+            var found = new SortedSet<string>(StringComparer.Ordinal);
+            if (string.IsNullOrEmpty(contentId) || files == null) return found;
+            string source = contentId.EndsWith("Beta", StringComparison.Ordinal) && contentId.Length > 4 ? contentId.Substring(0, contentId.Length - 4) : contentId;
+            const string sep = @"(?:\\/|/)";
+            string pattern = "Assets" + sep + "Content" + sep + @"([^/\\""]+)" + sep;
+            foreach (var file in files)
+            {
+                if (file == null || file.data == null || !IsCatalogFileName(file.fileName)) continue;
+                string text = System.Text.Encoding.UTF8.GetString(file.data);
+                foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(text, pattern))
+                {
+                    string folder = m.Groups[1].Value;
+                    if (!string.Equals(folder, source, StringComparison.Ordinal) && !string.Equals(folder, contentId, StringComparison.Ordinal)) found.Add(folder);
+                }
+            }
+            return found;
+        }
+
         private static bool IsCatalogFileName(string fileName)
         {
             if (string.IsNullOrEmpty(fileName)) return false;
@@ -1925,6 +1958,9 @@ namespace DreamPark.API
                 // the version (older backends ignore unknown root fields).
                 JSONObject buildInfo = manifestSummary.GetField("buildInfo");
                 if (buildInfo != null) commitBody.AddField("buildInfo", buildInfo);
+                // Oct 25 2026: ways to play — Web reads `runners` from the request root (ways-web handoff §1).
+                JSONObject runners = manifestSummary.GetField("runners");
+                if (runners != null) commitBody.AddField("runners", runners);
             }
 
             // 🔹 Commit upload version metadata to server
