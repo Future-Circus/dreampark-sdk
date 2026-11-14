@@ -12,11 +12,6 @@ using XLua;
 using System.Collections.Generic;
 
 
-// HAND-EDITED after generation (Oct 14 2026): the ActiveHand / leftHand / rightHand
-// accessors are guarded because HandTracker has no OVRHand members in the iOS player
-// (no Meta assemblies there, Assets/Editor/IosQuestAssemblyFilter.cs). On iOS they read
-// nil and ignore writes. If XLua regenerates this file, re-apply the guards or the iOS
-// player will not compile ('HandTracker' does not contain a definition for 'leftHand').
 namespace XLua.CSObjectWrap
 {
     using Utils = XLua.Utils;
@@ -161,11 +156,7 @@ namespace XLua.CSObjectWrap
                 ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			
                 HandTracker gen_to_be_invoked = (HandTracker)translator.FastGetCSObj(L, 1);
-#if UNITY_IOS && !UNITY_EDITOR
-                LuaAPI.lua_pushnil(L);
-#else
                 translator.Push(L, gen_to_be_invoked.ActiveHand);
-#endif
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
@@ -249,11 +240,7 @@ namespace XLua.CSObjectWrap
                 ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			
                 HandTracker gen_to_be_invoked = (HandTracker)translator.FastGetCSObj(L, 1);
-#if UNITY_IOS && !UNITY_EDITOR
-                LuaAPI.lua_pushnil(L);
-#else
                 translator.Push(L, gen_to_be_invoked.leftHand);
-#endif
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
@@ -267,11 +254,7 @@ namespace XLua.CSObjectWrap
                 ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			
                 HandTracker gen_to_be_invoked = (HandTracker)translator.FastGetCSObj(L, 1);
-#if UNITY_IOS && !UNITY_EDITOR
-                LuaAPI.lua_pushnil(L);
-#else
                 translator.Push(L, gen_to_be_invoked.rightHand);
-#endif
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
@@ -359,9 +342,7 @@ namespace XLua.CSObjectWrap
                 ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			
                 HandTracker gen_to_be_invoked = (HandTracker)translator.FastGetCSObj(L, 1);
-#if !UNITY_IOS || UNITY_EDITOR
                 gen_to_be_invoked.leftHand = (OVRHand)translator.GetObject(L, 2, typeof(OVRHand));
-#endif
             
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
@@ -376,9 +357,7 @@ namespace XLua.CSObjectWrap
                 ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			
                 HandTracker gen_to_be_invoked = (HandTracker)translator.FastGetCSObj(L, 1);
-#if !UNITY_IOS || UNITY_EDITOR
                 gen_to_be_invoked.rightHand = (OVRHand)translator.GetObject(L, 2, typeof(OVRHand));
-#endif
             
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);

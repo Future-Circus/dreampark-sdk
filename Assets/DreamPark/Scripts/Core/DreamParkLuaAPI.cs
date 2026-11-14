@@ -2026,6 +2026,7 @@ end
                 // Props at runtime (dp.spawn_prop / preload_prop / despawn_prop / on_prop_*). DreamParkLuaProps.cs.
                 DreamParkLuaProps.Register(env);
                 DreamParkLobby.Register(env);    // dp.lobby (DreamParkLuaLobby.cs)
+                DreamParkLuaPortals.Register(env);   // dp.portal_cross (Features/Portals/PortalLua.cs)
                 // Ways to play (dp.level.complete for gameplay Lua + the director bridges). Runners/RunnerLua.cs.
                 RunnerLua.RegisterGlobal(env);
             }

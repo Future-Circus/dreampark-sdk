@@ -21,10 +21,13 @@ namespace XLua.CSObjectWrap
         {
 			ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
 			System.Type type = typeof(DreamPark.PortalScene);
-			Utils.BeginObjectRegister(type, L, translator, 0, 2, 18, 15);
+			Utils.BeginObjectRegister(type, L, translator, 0, 5, 19, 16);
 			
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "Follow", _m_Follow);
 			Utils.RegisterFunc(L, Utils.METHOD_IDX, "Refresh", _m_Refresh);
+			Utils.RegisterFunc(L, Utils.METHOD_IDX, "AddCrosser", _m_AddCrosser);
+			Utils.RegisterFunc(L, Utils.METHOD_IDX, "RemoveCrosser", _m_RemoveCrosser);
+			Utils.RegisterFunc(L, Utils.METHOD_IDX, "IsCrossing", _m_IsCrossing);
 			
 			
 			Utils.RegisterFunc(L, Utils.GETTER_IDX, "Members", _g_get_Members);
@@ -45,6 +48,7 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "minDistanceScale", _g_get_minDistanceScale);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "crossers", _g_get_crossers);
             Utils.RegisterFunc(L, Utils.GETTER_IDX, "playVolumes", _g_get_playVolumes);
+            Utils.RegisterFunc(L, Utils.GETTER_IDX, "openingCrossers", _g_get_openingCrossers);
             
 			Utils.RegisterFunc(L, Utils.SETTER_IDX, "source", _s_set_source);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "followSource", _s_set_followSource);
@@ -61,13 +65,15 @@ namespace XLua.CSObjectWrap
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "minDistanceScale", _s_set_minDistanceScale);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "crossers", _s_set_crossers);
             Utils.RegisterFunc(L, Utils.SETTER_IDX, "playVolumes", _s_set_playVolumes);
+            Utils.RegisterFunc(L, Utils.SETTER_IDX, "openingCrossers", _s_set_openingCrossers);
             
 			
 			Utils.EndObjectRegister(type, L, translator, null, null,
 			    null, null, null);
 
-		    Utils.BeginClassRegister(type, L, __CreateInstance, 2, 0, 0);
-			
+		    Utils.BeginClassRegister(type, L, __CreateInstance, 3, 0, 0);
+			Utils.RegisterFunc(L, Utils.CLS_IDX, "Cross", _m_Cross_xlua_st_);
+            
 			
             Utils.RegisterObject(L, translator, Utils.CLS_IDX, "Active", DreamPark.PortalScene.Active);
             
@@ -158,6 +164,155 @@ namespace XLua.CSObjectWrap
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
             }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_AddCrosser(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+                DreamPark.PortalScene gen_to_be_invoked = (DreamPark.PortalScene)translator.FastGetCSObj(L, 1);
+            
+            
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 3&& translator.Assignable<UnityEngine.Transform>(L, 2)&& translator.Assignable<UnityEngine.Transform>(L, 3)) 
+                {
+                    UnityEngine.Transform _crosser = (UnityEngine.Transform)translator.GetObject(L, 2, typeof(UnityEngine.Transform));
+                    UnityEngine.Transform _opening = (UnityEngine.Transform)translator.GetObject(L, 3, typeof(UnityEngine.Transform));
+                    
+                    gen_to_be_invoked.AddCrosser( _crosser, _opening );
+                    
+                    
+                    
+                    return 0;
+                }
+                if(gen_param_count == 3&& translator.Assignable<UnityEngine.Transform>(L, 2)&& translator.Assignable<DreamPark.PortalSurface>(L, 3)) 
+                {
+                    UnityEngine.Transform _crosser = (UnityEngine.Transform)translator.GetObject(L, 2, typeof(UnityEngine.Transform));
+                    DreamPark.PortalSurface _opening = (DreamPark.PortalSurface)translator.GetObject(L, 3, typeof(DreamPark.PortalSurface));
+                    
+                    gen_to_be_invoked.AddCrosser( _crosser, _opening );
+                    
+                    
+                    
+                    return 0;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to DreamPark.PortalScene.AddCrosser!");
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_RemoveCrosser(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+                DreamPark.PortalScene gen_to_be_invoked = (DreamPark.PortalScene)translator.FastGetCSObj(L, 1);
+            
+            
+                
+                {
+                    UnityEngine.Transform _crosser = (UnityEngine.Transform)translator.GetObject(L, 2, typeof(UnityEngine.Transform));
+                    
+                        var gen_ret = gen_to_be_invoked.RemoveCrosser( _crosser );
+                        LuaAPI.lua_pushboolean(L, gen_ret);
+                    
+                    
+                    
+                    return 1;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_IsCrossing(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+                DreamPark.PortalScene gen_to_be_invoked = (DreamPark.PortalScene)translator.FastGetCSObj(L, 1);
+            
+            
+                
+                {
+                    UnityEngine.Transform _crosser = (UnityEngine.Transform)translator.GetObject(L, 2, typeof(UnityEngine.Transform));
+                    
+                        var gen_ret = gen_to_be_invoked.IsCrossing( _crosser );
+                        LuaAPI.lua_pushboolean(L, gen_ret);
+                    
+                    
+                    
+                    return 1;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _m_Cross_xlua_st_(RealStatePtr L)
+        {
+		    try {
+            
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+            
+            
+            
+			    int gen_param_count = LuaAPI.lua_gettop(L);
+            
+                if(gen_param_count == 4&& translator.Assignable<UnityEngine.GameObject>(L, 1)&& translator.Assignable<UnityEngine.GameObject>(L, 2)&& LuaTypes.LUA_TBOOLEAN == LuaAPI.lua_type(L, 3)&& translator.Assignable<DreamPark.PortalScene>(L, 4)) 
+                {
+                    UnityEngine.GameObject _crosser = (UnityEngine.GameObject)translator.GetObject(L, 1, typeof(UnityEngine.GameObject));
+                    UnityEngine.GameObject _opening = (UnityEngine.GameObject)translator.GetObject(L, 2, typeof(UnityEngine.GameObject));
+                    bool _on = LuaAPI.lua_toboolean(L, 3);
+                    DreamPark.PortalScene _scene = (DreamPark.PortalScene)translator.GetObject(L, 4, typeof(DreamPark.PortalScene));
+                    
+                        var gen_ret = DreamPark.PortalScene.Cross( _crosser, _opening, _on, _scene );
+                        LuaAPI.lua_pushboolean(L, gen_ret);
+                    
+                    
+                    
+                    return 1;
+                }
+                if(gen_param_count == 3&& translator.Assignable<UnityEngine.GameObject>(L, 1)&& translator.Assignable<UnityEngine.GameObject>(L, 2)&& LuaTypes.LUA_TBOOLEAN == LuaAPI.lua_type(L, 3)) 
+                {
+                    UnityEngine.GameObject _crosser = (UnityEngine.GameObject)translator.GetObject(L, 1, typeof(UnityEngine.GameObject));
+                    UnityEngine.GameObject _opening = (UnityEngine.GameObject)translator.GetObject(L, 2, typeof(UnityEngine.GameObject));
+                    bool _on = LuaAPI.lua_toboolean(L, 3);
+                    
+                        var gen_ret = DreamPark.PortalScene.Cross( _crosser, _opening, _on );
+                        LuaAPI.lua_pushboolean(L, gen_ret);
+                    
+                    
+                    
+                    return 1;
+                }
+                
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            
+            return LuaAPI.luaL_error(L, "invalid arguments to DreamPark.PortalScene.Cross!");
             
         }
         
@@ -416,6 +571,20 @@ namespace XLua.CSObjectWrap
             return 1;
         }
         
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _g_get_openingCrossers(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                DreamPark.PortalScene gen_to_be_invoked = (DreamPark.PortalScene)translator.FastGetCSObj(L, 1);
+                translator.Push(L, gen_to_be_invoked.openingCrossers);
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 1;
+        }
+        
         
         
         [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
@@ -639,6 +808,21 @@ namespace XLua.CSObjectWrap
 			
                 DreamPark.PortalScene gen_to_be_invoked = (DreamPark.PortalScene)translator.FastGetCSObj(L, 1);
                 gen_to_be_invoked.playVolumes = (System.Collections.Generic.List<UnityEngine.Transform>)translator.GetObject(L, 2, typeof(System.Collections.Generic.List<UnityEngine.Transform>));
+            
+            } catch(System.Exception gen_e) {
+                return LuaAPI.luaL_error(L, "c# exception:" + gen_e);
+            }
+            return 0;
+        }
+        
+        [MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]
+        static int _s_set_openingCrossers(RealStatePtr L)
+        {
+		    try {
+                ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+			
+                DreamPark.PortalScene gen_to_be_invoked = (DreamPark.PortalScene)translator.FastGetCSObj(L, 1);
+                gen_to_be_invoked.openingCrossers = (System.Collections.Generic.List<DreamPark.PortalScene.OpeningCrosser>)translator.GetObject(L, 2, typeof(System.Collections.Generic.List<DreamPark.PortalScene.OpeningCrosser>));
             
             } catch(System.Exception gen_e) {
                 return LuaAPI.luaL_error(L, "c# exception:" + gen_e);

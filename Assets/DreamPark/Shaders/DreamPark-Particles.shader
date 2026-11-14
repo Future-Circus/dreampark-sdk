@@ -291,6 +291,8 @@ Shader "DreamPark/Particles"
 
             #include "Packages/com.meta.xr.sdk.core/Shaders/EnvironmentDepth/URP/EnvironmentOcclusionURP.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareDepthTexture.hlsl"
+            // Portal crossers: the opening clip + the offset-scene mapping (PortalScene.AddCrosser). Off = one uniform branch.
+            #include "DreamParkPortalCross.hlsl"
 
             CBUFFER_START(UnityPerMaterial)
                 float4 _BaseMap_ST;
@@ -391,6 +393,7 @@ Shader "DreamPark/Particles"
                 // `float3 posWorld : TEXCOORD3;` when HARD_OCCLUSION/SOFT_OCCLUSION
                 // is on, and to nothing otherwise.
                 META_DEPTH_VERTEX_OUTPUT(3)
+                float3 crossWS     : TEXCOORD4;   // world position for the portal-crosser opening clip
                 UNITY_VERTEX_INPUT_INSTANCE_ID
                 UNITY_VERTEX_OUTPUT_STEREO
             };
@@ -403,6 +406,13 @@ Shader "DreamPark/Particles"
                 UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(OUT);
 
                 VertexPositionInputs vp = GetVertexPositionInputs(IN.positionOS.xyz);
+                // a portal crosser drawn by the portal of an offset scene: its particles mapped into the scene (no-op otherwise)
+                [branch] if (_DPCross.y > 0.5)
+                {
+                    vp.positionWS = DPCrossMapPositionWS(vp.positionWS);
+                    vp.positionCS = TransformWorldToHClip(vp.positionWS);
+                }
+                OUT.crossWS     = vp.positionWS;
                 OUT.positionHCS = vp.positionCS;
                 OUT.uv          = TRANSFORM_TEX(IN.uv, _BaseMap);
                 OUT.color       = IN.color;
@@ -417,6 +427,7 @@ Shader "DreamPark/Particles"
             half4 Frag(Varyings IN) : SV_Target
             {
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(IN);
+                DPCrossClipWS(IN.crossWS);      // portal crosser: only this render's side of its opening
 
                 // ── UV distortion ────────────────────────────────────────
                 // Sample a distortion map's RG channels (mapped to -1..1) and

@@ -373,7 +373,7 @@ namespace DreamPark
             if (k1) Shader.DisableKeyword(OcclusionKeywords[1]);
             // depth texture only for a scene whose own content samples it (soft particles…), never for the eyes
             _camData.requiresDepthOption = SceneDepthDemand.NeedsDepth(sc) ? CameraOverrideOption.On : CameraOverrideOption.Off;
-            sc.Open();
+            sc.Open(true);
             try { _cam.Render(); }
             catch (System.Exception ex) { Debug.LogWarning("[Portal] render failed: " + ex.Message); }
             finally
@@ -399,7 +399,7 @@ namespace DreamPark
             {
                 if (pc == null || pc.cam != cam) continue;
                 foreach (PortalScene sc in PortalScene.Active)
-                    if (sc != null && pc.Sees(sc)) { sc.Open(); _opened.Add(sc); }
+                    if (sc != null && pc.Sees(sc)) { sc.Open(false); _opened.Add(sc); }
             }
             if (PortalSurface.Active.Count == 0) return;
             int frame = Time.frameCount;

@@ -127,7 +127,7 @@
         },
         {
             "name": "DreamPark_PortalSceneWrap.cs",
-            "sha256": "0ee1282d998e81136d4697358007daaea24ad8729245785eb181693063396008"
+            "sha256": "96ed85df6b5d8b2e188076b56f56672904beeb6dd871800bf66b1f1417b1ca4b"
         },
         {
             "name": "DreamPark_PortalSurfaceWrap.cs",
@@ -215,7 +215,7 @@
         },
         {
             "name": "HandTrackerWrap.cs",
-            "sha256": "7e079a6ab187acfceaba244ebcf6281538decec5343092e7993adb569612540e"
+            "sha256": "44e5cefc0655bdaa80c406765162184a03dcbf0bd8964b66c47089488b29ba78"
         },
         {
             "name": "LuaBehaviourWrap.cs",
